@@ -1,0 +1,17 @@
+{
+  "cr_test_template": {
+    "stripe_price_id": "price_fixture_template",
+    "amount_minor": 2500,
+    "currency": "aud"
+  },
+  "cr_test_bundle": {
+    "stripe_price_id": "price_fixture_bundle",
+    "amount_minor": 5000,
+    "currency": "aud"
+  },
+  "cr_test_free": {
+    "stripe_price_id": "price_fixture_free",
+    "amount_minor": 0,
+    "currency": "aud"
+  }
+}
