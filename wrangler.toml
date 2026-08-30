@@ -1,0 +1,8 @@
+name = "cartray-test"
+main = "src/cartray/worker.py"
+compatibility_date = "2026-08-30"
+compatibility_flags = ["python_workers"]
+workers_dev = true
+
+[vars]
+CARTRAY_ENVIRONMENT = "test"

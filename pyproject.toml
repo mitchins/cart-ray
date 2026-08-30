@@ -8,6 +8,7 @@ version = "0.0.1"
 description = "A small, Stripe-first commerce kernel for static storefronts."
 readme = "README.md"
 requires-python = ">=3.12"
+dependencies = ["kinglet>=1.8.3,<2"]
 license = { file = "LICENSE" }
 authors = [{ name = "CartRay contributors" }]
 classifiers = [

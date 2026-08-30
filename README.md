@@ -18,3 +18,6 @@ See [the Milestone 0 contract](docs/milestone-0-contract.md). Run the test suite
 ```sh
 uv run pytest
 ```
+
+The in-progress [Milestone 1 contract](docs/milestone-1-contract.md) adds a test-mode-only
+Stripe adapter. It does not deploy a Worker or use live Stripe credentials.
