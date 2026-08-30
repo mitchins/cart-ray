@@ -32,3 +32,22 @@ def test_catalogue_rejects_duplicate_headers_before_dict_reader_collapses_them(t
 
     with pytest.raises(CatalogueValidationError, match="headers"):
         load_catalogue_sources(source)
+
+
+@pytest.mark.parametrize(
+    "contents",
+    (
+        "product_key,title,stripe_lookup_key,fulfilment_type,fulfilment_version,max_quantity,active\n"
+        "TEST-ITEM,Title,lookup,download,test-v1,1,true,unexpected\n",
+        "product_key,title,stripe_lookup_key,fulfilment_type,fulfilment_version,max_quantity,active\n"
+        "TEST-ITEM,Title,lookup,download,test-v1,1\n",
+        "product_key,title,stripe_lookup_key,fulfilment_type,fulfilment_version,max_quantity,active\n"
+        "TEST-ITEM,,lookup,download,test-v1,1,true\n",
+    ),
+)
+def test_catalogue_rejects_extra_or_missing_row_values_before_conversion(tmp_path, contents):
+    source = tmp_path / "invalid-row.csv"
+    source.write_text(contents)
+
+    with pytest.raises(CatalogueValidationError, match="invalid row"):
+        load_catalogue_sources(source)

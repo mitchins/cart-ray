@@ -98,6 +98,8 @@ def load_catalogue_sources(path: Path) -> tuple[CatalogSource, ...]:
 
     sources: list[CatalogSource] = []
     for row in rows:
+        if None in row or any(not isinstance(row.get(header), str) or not row[header].strip() for header in headers):
+            raise CatalogueValidationError(f"invalid row: {row!r}")
         try:
             active = {"true": True, "false": False}[row["active"].lower()]
             source = CatalogSource(
