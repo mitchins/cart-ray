@@ -53,6 +53,16 @@ CREATE TABLE IF NOT EXISTS outbox (
   UNIQUE(order_id, event_type)
 );
 
+CREATE TABLE IF NOT EXISTS stripe_events (
+  stripe_event_id TEXT PRIMARY KEY,
+  event_type TEXT NOT NULL,
+  session_id TEXT,
+  payload_json TEXT NOT NULL,
+  received_at INTEGER NOT NULL,
+  processed_at INTEGER,
+  processing_error TEXT
+);
+
 CREATE TRIGGER IF NOT EXISTS orders_are_immutable
 BEFORE UPDATE ON orders
 BEGIN
