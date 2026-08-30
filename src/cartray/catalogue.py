@@ -79,7 +79,9 @@ class Catalogue:
 
 def load_catalogue_sources(path: Path) -> tuple[CatalogSource, ...]:
     with path.open(newline="") as handle:
-        rows = list(csv.DictReader(handle))
+        reader = csv.DictReader(handle)
+        headers = reader.fieldnames or []
+        rows = list(reader)
     expected = {
         "product_key",
         "title",
@@ -89,8 +91,10 @@ def load_catalogue_sources(path: Path) -> tuple[CatalogSource, ...]:
         "max_quantity",
         "active",
     }
-    if not rows or set(rows[0]) != expected:
+    if len(headers) != len(expected) or set(headers) != expected:
         raise CatalogueValidationError("catalogue CSV headers do not match the contract")
+    if not rows:
+        raise CatalogueValidationError("catalogue CSV must contain at least one product")
 
     sources: list[CatalogSource] = []
     for row in rows:

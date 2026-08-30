@@ -1,4 +1,7 @@
-from cartray.errors import CheckoutValidationError
+import pytest
+
+from cartray.catalogue import load_catalogue_sources
+from cartray.errors import CatalogueValidationError, CheckoutValidationError
 
 
 def test_public_and_private_manifests_have_separate_concerns(fixture_catalogue):
@@ -17,3 +20,15 @@ def test_catalogue_rejects_unknown_product(fixture_catalogue):
         assert "unknown" in str(error)
     else:
         raise AssertionError("expected product validation failure")
+
+
+def test_catalogue_rejects_duplicate_headers_before_dict_reader_collapses_them(tmp_path):
+    source = tmp_path / "duplicate-header.csv"
+    source.write_text(
+        "product_key,title,stripe_lookup_key,fulfilment_type,fulfilment_version,"
+        "max_quantity,active,stripe_lookup_key\n"
+        "TEST-ITEM,Title,first,download,test-v1,1,true,overwritten\n"
+    )
+
+    with pytest.raises(CatalogueValidationError, match="headers"):
+        load_catalogue_sources(source)
