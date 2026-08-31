@@ -65,13 +65,6 @@ class CheckoutRequest:
             if any(not isinstance(item, dict) or set(item) != {"product_key", "quantity"} for item in raw_items):
                 raise TypeError
             items = tuple(CanonicalItem(item["product_key"], item["quantity"]) for item in raw_items)
-            if any(
-                not isinstance(item.product_key, str)
-                or not isinstance(item.quantity, int)
-                or isinstance(item.quantity, bool)
-                for item in items
-            ):
-                raise TypeError
             return cls(
                 checkout_request_id=request_id,
                 manifest_version=manifest_version,
