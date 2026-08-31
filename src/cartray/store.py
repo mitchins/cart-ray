@@ -63,7 +63,6 @@ CREATE TABLE IF NOT EXISTS stripe_events (
   processing_error TEXT
 );
 
-CREATE INDEX IF NOT EXISTS checkout_sessions_external_session_id ON checkout_sessions(external_session_id);
 CREATE INDEX IF NOT EXISTS outbox_undelivered ON outbox(delivered_at, id);
 
 CREATE TRIGGER IF NOT EXISTS orders_are_immutable

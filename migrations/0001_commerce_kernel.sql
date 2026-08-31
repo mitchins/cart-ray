@@ -52,7 +52,6 @@ CREATE TABLE stripe_events (
   processing_error TEXT
 );
 
-CREATE INDEX checkout_sessions_external_session_id ON checkout_sessions(external_session_id);
 CREATE INDEX outbox_undelivered ON outbox(delivered_at, id);
 
 CREATE TRIGGER orders_are_immutable
