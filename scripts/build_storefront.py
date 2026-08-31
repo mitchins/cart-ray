@@ -31,7 +31,15 @@ def _configuration(mode: str) -> dict[str, object]:
     if not api_base_url:
         raise ValueError("CARTRAY_STOREFRONT_API_BASE_URL is required for production builds")
     parsed = urlparse(api_base_url)
-    if parsed.scheme != "https" or not parsed.netloc or parsed.params or parsed.query or parsed.fragment:
+    if (
+        parsed.scheme != "https"
+        or not parsed.netloc
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.params
+        or parsed.query
+        or parsed.fragment
+    ):
         raise ValueError("CARTRAY_STOREFRONT_API_BASE_URL must be an absolute https URL")
     return {"checkoutEnabled": True, "apiBaseUrl": api_base_url.rstrip("/"), "previewCatalogue": None}
 
