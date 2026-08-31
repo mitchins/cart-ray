@@ -1,3 +1,4 @@
+import asyncio
 import sqlite3
 
 import pytest
@@ -20,9 +21,13 @@ def valid_request(catalogue, request_id: str = "request-1"):
     )
 
 
+def checkout(service, request):
+    return asyncio.run(service.checkout(request))
+
+
 def test_mixed_cart_creates_immutable_order_and_trusted_gateway_spec(checkout_service):
     service, gateway = checkout_service
-    redirect = service.checkout(valid_request(service.catalogue))
+    redirect = checkout(service, valid_request(service.catalogue))
 
     assert redirect.url.startswith("https://checkout.invalid/")
     assert len(gateway.requests) == 1
@@ -52,8 +57,8 @@ def test_mixed_cart_creates_immutable_order_and_trusted_gateway_spec(checkout_se
 def test_same_request_reuses_the_logical_checkout_and_changed_body_conflicts(checkout_service):
     service, gateway = checkout_service
     request = valid_request(service.catalogue)
-    first = service.checkout(request)
-    second = service.checkout(request)
+    first = checkout(service, request)
+    second = checkout(service, request)
     assert second == first
     assert len(gateway.requests) == 1
 
@@ -63,7 +68,7 @@ def test_same_request_reuses_the_logical_checkout_and_changed_body_conflicts(che
         items=(CanonicalItem("TEST-FREE", 1),),
     )
     with pytest.raises(IdempotencyConflict):
-        service.checkout(changed)
+        checkout(service, changed)
 
 
 def test_expired_creation_lease_reuses_the_persisted_immutable_order(checkout_service):
@@ -73,7 +78,7 @@ def test_expired_creation_lease_reuses_the_persisted_immutable_order(checkout_se
     service.store.start_or_load(abandoned, nonce="original-nonce", now=0)
     service.catalogue = Catalogue("sha256:changed-catalogue", {})
 
-    redirect = service.checkout(request)
+    redirect = checkout(service, request)
     spec = gateway.requests[0]
     assert redirect.session_id == "cr_test_000001"
     assert spec.order_id == abandoned.order_id
@@ -95,16 +100,17 @@ def test_browser_payload_cannot_carry_financial_or_fulfilment_facts(checkout_ser
 def test_stale_manifest_unknown_item_duplicate_and_quantity_are_rejected(checkout_service):
     service, _ = checkout_service
     with pytest.raises(CheckoutValidationError, match="refresh"):
-        service.checkout(CheckoutRequest("stale", "sha256:stale", (CanonicalItem("TEST-TEMPLATE", 1),)))
+        checkout(service, CheckoutRequest("stale", "sha256:stale", (CanonicalItem("TEST-TEMPLATE", 1),)))
     with pytest.raises(CheckoutValidationError, match="unknown"):
-        service.checkout(CheckoutRequest("unknown", service.catalogue.version, (CanonicalItem("UNKNOWN", 1),)))
+        checkout(service, CheckoutRequest("unknown", service.catalogue.version, (CanonicalItem("UNKNOWN", 1),)))
     with pytest.raises(CheckoutValidationError, match="duplicate"):
-        service.checkout(
+        checkout(
+            service,
             CheckoutRequest(
                 "duplicates",
                 service.catalogue.version,
                 (CanonicalItem("TEST-TEMPLATE", 1), CanonicalItem("TEST-TEMPLATE", 1)),
-            )
+            ),
         )
     with pytest.raises(CheckoutValidationError, match="quantity"):
-        service.checkout(CheckoutRequest("quantity", service.catalogue.version, (CanonicalItem("TEST-TEMPLATE", 2),)))
+        checkout(service, CheckoutRequest("quantity", service.catalogue.version, (CanonicalItem("TEST-TEMPLATE", 2),)))

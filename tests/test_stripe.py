@@ -84,6 +84,54 @@ def test_stripe_checkout_is_sealed_after_session_creation_and_before_redirect():
     assert session_metadata["metadata[cr_signature]"][0]
 
 
+def test_stripe_checkout_keeps_session_metadata_canonical_when_no_payment_intent_exists():
+    transport = RecordingTransport(
+        [
+            (
+                200,
+                {
+                    "id": "cs_test_free",
+                    "url": "https://checkout.stripe.test/c/pay/cs_test_free",
+                    "payment_intent": None,
+                },
+            ),
+            (200, {"id": "cs_test_free"}),
+        ]
+    )
+    metadata = projection_metadata(
+        order_id="cr_order_free",
+        catalogue_version="sha256:catalogue",
+        items=(CanonicalItem("TEST-FREE", 1),),
+        nonce="nonce-free",
+    )
+    gateway = StripeCheckoutGateway(
+        StripeApiClient("rk_test_fixture", transport),
+        CheckoutMetadataSealer(environment="test", key_id="test-key-1", signer=FixtureSigner()),
+    )
+
+    redirect = asyncio.run(
+        gateway.create_checkout(
+            CheckoutSpec(
+                order_id="cr_order_free",
+                idempotency_key="cartray-checkout-v1:cr_order_free",
+                line_items=(("price_test_free", 1),),
+                success_url="https://store.invalid/success",
+                cancel_url="https://store.invalid/cancel",
+                metadata=metadata,
+            )
+        )
+    )
+
+    assert redirect.session_id == "cs_test_free"
+    assert [request[1] for request in transport.requests] == [
+        "/v1/checkout/sessions",
+        "/v1/checkout/sessions/cs_test_free",
+    ]
+    session_metadata = parse_qs(transport.requests[1][3] or "")
+    assert session_metadata["metadata[cr_order_id]"] == ["cr_order_free"]
+    assert session_metadata["metadata[cr_signature]"][0]
+
+
 def test_stripe_price_resolver_requires_one_active_one_off_price():
     transport = RecordingTransport(
         [(200, {"data": [{"id": "price_test_template", "unit_amount": 2500, "currency": "aud", "recurring": None}]})]

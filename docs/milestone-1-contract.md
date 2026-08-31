@@ -20,7 +20,8 @@ this order:
 
 An error in steps 3-5 is a checkout failure: an unsealed Checkout Session URL is never returned.
 Checkout Session metadata is canonical. PaymentIntent metadata is redundant diagnostic data only,
-because free checkouts have no PaymentIntent.
+because free checkouts have no PaymentIntent. If the Session creation response has no PaymentIntent,
+CartRay returns the sealed Session URL without attempting a mirror.
 
 ## Projection signature
 

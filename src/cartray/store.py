@@ -80,6 +80,13 @@ BEFORE DELETE ON order_items
 BEGIN
   SELECT RAISE(ABORT, 'order_items are immutable');
 END;
+
+CREATE TRIGGER IF NOT EXISTS order_items_cannot_be_added_to_sealed_order
+BEFORE INSERT ON order_items
+WHEN EXISTS (SELECT 1 FROM checkout_sessions WHERE order_id = NEW.order_id)
+BEGIN
+  SELECT RAISE(ABORT, 'order_items are immutable');
+END;
 """
 
 
