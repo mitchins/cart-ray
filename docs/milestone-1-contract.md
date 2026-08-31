@@ -48,5 +48,6 @@ The development account contains only these CartRay test objects:
 
 `migrations/0001_commerce_kernel.sql` is the first deployable D1 schema. It separates immutable
 `orders` and `order_items` from mutable `checkout_sessions`, `outbox`, and `stripe_events`.
-`stripe_events.stripe_event_id` is the webhook idempotency key. A D1 binding is intentionally not
-configured until a named test database is created.
+`stripe_events.stripe_event_id` is the webhook idempotency key. The Worker is bound to the named,
+test-only `cartray-test` database; the migration has not been applied remotely and the Worker has
+not been deployed.
