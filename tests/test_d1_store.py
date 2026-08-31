@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 from kinglet import MockD1Database
 
-from cartray.canonical import CanonicalItem
+from cartray.canonical import CanonicalItem, parse_projection_items
 from cartray.checkout import CheckoutService
 from cartray.errors import CheckoutInProgress, IdempotencyConflict
 from cartray.gateway import FakePaymentGateway
@@ -39,6 +39,28 @@ def test_d1_store_persists_an_idempotent_checkout_and_outbox(fixture_catalogue, 
     assert len(gateway.requests) == 1
     events = asyncio.run(database.prepare("SELECT event_type FROM outbox ORDER BY id").all())
     assert [event["event_type"] for event in events.results] == ["OrderCreated", "CheckoutRedirectIssued"]
+
+
+def test_d1_store_persists_the_maximum_quantity_and_stripe_projection(fixture_catalogue, d1_database):
+    gateway = FakePaymentGateway()
+    service = CheckoutService(fixture_catalogue, D1OrderStore(d1_database), gateway)
+    request = CheckoutRequest(
+        "d1-support-hours-five",
+        fixture_catalogue.version,
+        (CanonicalItem("TEST-SUPPORT-HOURS", 5),),
+    )
+
+    asyncio.run(service.checkout(request))
+
+    spec = gateway.requests[0]
+    assert spec.line_items == (("price_fixture_support_hours", 5),)
+    assert parse_projection_items(spec.metadata) == (CanonicalItem("TEST-SUPPORT-HOURS", 5),)
+    items = asyncio.run(
+        d1_database.prepare("SELECT product_key, quantity FROM order_items WHERE order_id = ?")
+        .bind(spec.order_id)
+        .all()
+    )
+    assert items.results == [{"product_key": "TEST-SUPPORT-HOURS", "quantity": 5}]
 
 
 def test_d1_store_enforces_leases_and_recovers_expired_leases(fixture_catalogue, d1_database):

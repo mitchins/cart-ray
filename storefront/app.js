@@ -6,6 +6,11 @@ export function checkoutPayload(catalogueVersion, cart, checkoutRequestId) {
   };
 }
 
+export function addToCart(cart, product) {
+  const quantity = Math.min((cart.get(product.product_key) || 0) + 1, product.max_quantity);
+  cart.set(product.product_key, quantity);
+}
+
 export async function startCheckout(configuration, payload, fetchImpl = fetch) {
   if (!configuration.checkoutEnabled) {
     return null;
@@ -90,7 +95,7 @@ async function boot() {
     add.type = "button";
     add.textContent = "Add to cart";
     add.addEventListener("click", () => {
-      cart.set(product.product_key, Math.min((cart.get(product.product_key) || 0) + 1, product.max_quantity));
+      addToCart(cart, product);
       renderCart();
     });
     card.append(title, price, add);

@@ -3,13 +3,25 @@ from __future__ import annotations
 from .models import CatalogSource
 
 TEST_CATALOGUE_SOURCES = (
-    CatalogSource("TEST-TEMPLATE", "Test template", "cr_test_template", "download", "test-template-v1", 10, True),
-    CatalogSource("TEST-BUNDLE", "Test bundle", "cr_test_bundle", "download", "test-bundle-v1", 10, True),
-    CatalogSource("TEST-FREE", "Test free resource", "cr_test_free", "download", "test-free-v1", 10, True),
+    CatalogSource(
+        "TEST-TEMPLATE", "Test Digital Template", "cr_test_template", "download", "test-template-v1", 1, True
+    ),
+    CatalogSource("TEST-BUNDLE", "Test Resource Bundle", "cr_test_bundle", "bundle", "test-bundle-v1", 1, True),
+    CatalogSource("TEST-FREE", "Test Free Resource", "cr_test_free", "download", "test-free-v1", 1, True),
+    CatalogSource(
+        "TEST-SUPPORT-HOURS",
+        "Test Support Hours",
+        "cr_test_support_hours",
+        "service",
+        "test-support-hours-v1",
+        5,
+        True,
+    ),
 )
 
 TEST_FULFILMENT_EXPANSIONS = {
-    "test-template-v1": ("test-resource-template-v1",),
-    "test-bundle-v1": ("test-resource-bundle-a-v1", "test-resource-bundle-b-v1"),
-    "test-free-v1": ("test-resource-free-v1",),
+    "test-template-v1": ("TEST-RESOURCE-TEMPLATE",),
+    "test-bundle-v1": ("TEST-RESOURCE-A", "TEST-RESOURCE-B"),
+    "test-free-v1": ("TEST-RESOURCE-FREE",),
+    "test-support-hours-v1": ("TEST-RESOURCE-SUPPORT-HOURS",),
 }

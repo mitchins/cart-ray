@@ -42,6 +42,24 @@ items[]: product_key, quantity
 
 All Stripe/financial/fulfilment decisions remain server-authored.
 
+## Quantity policy
+
+`max_quantity` is a per-product catalogue policy, enforced by the storefront cart and reconstructed
+again by the Worker. The synthetic catalogue deliberately contains singleton digital products and
+`TEST-SUPPORT-HOURS`, whose maximum is five. CI proves the latter remains quantity five through the
+browser payload, Worker validation, immutable D1 order item, Stripe Checkout line item, and compact
+`cr_items_01=TEST-SUPPORT-HOURS:5` projection.
+
+The Worker source and preview fixture must describe the exact same synthetic catalogue; CI compares
+them so a local preview cannot silently use a different quantity policy. The fourth Stripe object is
+test-only: activation requires a test-mode Price with lookup key `cr_test_support_hours` and the
+documented AUD 100.00 unit amount. No live Stripe object is implied or configured by this repository.
+
+Quantity is carried forward as a commerce fact. A later signed-webhook/Valet slice will define each
+entitlement type's semantics (for example, whether five support hours create a quantity-based service
+entitlement while a repeated media item still produces one access grant). This storefront slice does
+not implement that downstream interpretation.
+
 ## Pages storefront
 
 `storefront/` is a dependency-free static Pages application. Its build writes only static assets

@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 
-import { checkoutPayload, loadCatalogue, startCheckout } from "../storefront/app.js";
+import { addToCart, checkoutPayload, loadCatalogue, startCheckout } from "../storefront/app.js";
 
 async function builtConfiguration() {
   const source = await readFile(new URL("../storefront-dist/storefront-config.js", import.meta.url), "utf8");
@@ -39,6 +39,21 @@ test("checkout payload contains only the CartRay browser contract", () => {
     checkout_request_id: "checkout_1",
     manifest_version: "sha256:catalogue",
     items: [{ product_key: "TEST-TEMPLATE", quantity: 1 }],
+  });
+});
+
+test("cart interaction reaches the synthetic product maximum and preserves it in the payload", () => {
+  const cart = new Map();
+  const product = { product_key: "TEST-SUPPORT-HOURS", max_quantity: 5 };
+  for (let index = 0; index < 6; index += 1) {
+    addToCart(cart, product);
+  }
+
+  assert.equal(cart.get(product.product_key), 5);
+  assert.deepEqual(checkoutPayload("sha256:catalogue", cart, "checkout_support_hours"), {
+    checkout_request_id: "checkout_support_hours",
+    manifest_version: "sha256:catalogue",
+    items: [{ product_key: "TEST-SUPPORT-HOURS", quantity: 5 }],
   });
 });
 

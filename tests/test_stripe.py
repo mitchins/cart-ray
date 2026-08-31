@@ -71,7 +71,7 @@ def test_stripe_checkout_is_sealed_after_session_creation_and_before_redirect():
     metadata = projection_metadata(
         order_id="cr_order_123",
         catalogue_version="sha256:catalogue",
-        items=(CanonicalItem("TEST-TEMPLATE", 1),),
+        items=(CanonicalItem("TEST-SUPPORT-HOURS", 5),),
         nonce="nonce-123",
     )
     gateway = StripeCheckoutGateway(
@@ -83,7 +83,7 @@ def test_stripe_checkout_is_sealed_after_session_creation_and_before_redirect():
             CheckoutSpec(
                 order_id="cr_order_123",
                 idempotency_key="cartray-checkout-v1:cr_order_123",
-                line_items=(("price_test_template", 1),),
+                line_items=(("price_test_support_hours", 5),),
                 success_url="https://store.invalid/success",
                 cancel_url="https://store.invalid/cancel",
                 metadata=metadata,
@@ -99,12 +99,14 @@ def test_stripe_checkout_is_sealed_after_session_creation_and_before_redirect():
     ]
     created_form = parse_qs(transport.requests[0][3] or "")
     assert not any(key.startswith("metadata[") for key in created_form)
-    assert created_form["line_items[0][price]"] == ["price_test_template"]
+    assert created_form["line_items[0][price]"] == ["price_test_support_hours"]
+    assert created_form["line_items[0][quantity]"] == ["5"]
     assert transport.requests[0][2]["Idempotency-Key"] == "cartray-checkout-v1:cr_order_123"
 
     session_metadata = parse_qs(transport.requests[1][3] or "")
     payment_intent_metadata = parse_qs(transport.requests[2][3] or "")
     assert session_metadata == payment_intent_metadata
+    assert session_metadata["metadata[cr_items_01]"] == ["TEST-SUPPORT-HOURS:5"]
     assert session_metadata["metadata[cr_kid]"] == ["test-key-1"]
     assert session_metadata["metadata[cr_signature]"][0]
 

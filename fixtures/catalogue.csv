@@ -2,3 +2,4 @@ product_key,title,stripe_lookup_key,fulfilment_type,fulfilment_version,max_quant
 TEST-TEMPLATE,Test Digital Template,cr_test_template,download,test-template-v1,1,true
 TEST-BUNDLE,Test Resource Bundle,cr_test_bundle,bundle,test-bundle-v1,1,true
 TEST-FREE,Test Free Resource,cr_test_free,download,test-free-v1,1,true
+TEST-SUPPORT-HOURS,Test Support Hours,cr_test_support_hours,service,test-support-hours-v1,5,true

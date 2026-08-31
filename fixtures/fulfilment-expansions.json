@@ -1,5 +1,6 @@
 {
   "test-template-v1": ["TEST-RESOURCE-TEMPLATE"],
   "test-bundle-v1": ["TEST-RESOURCE-A", "TEST-RESOURCE-B"],
-  "test-free-v1": ["TEST-RESOURCE-FREE"]
+  "test-free-v1": ["TEST-RESOURCE-FREE"],
+  "test-support-hours-v1": ["TEST-RESOURCE-SUPPORT-HOURS"]
 }
