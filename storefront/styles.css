@@ -1,0 +1,27 @@
+:root {
+  color: #18221d;
+  font-family: system-ui, sans-serif;
+  line-height: 1.5;
+}
+
+body {
+  margin: 0 auto;
+  max-width: 46rem;
+  padding: 2rem;
+}
+
+#products {
+  display: grid;
+  gap: 1rem;
+}
+
+.product {
+  border: 1px solid #b7c4bc;
+  border-radius: 0.5rem;
+  padding: 1rem;
+}
+
+button {
+  cursor: pointer;
+  padding: 0.6rem 1rem;
+}

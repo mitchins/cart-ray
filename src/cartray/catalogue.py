@@ -50,16 +50,17 @@ class Catalogue:
     def public_manifest(self) -> dict[str, object]:
         return {
             "version": self.version,
-            "products": {
-                key: {
+            "products": [
+                {
+                    "product_key": key,
                     "title": product.source.title,
                     "amount_minor": product.price.amount_minor,
                     "currency": product.price.currency,
                     "max_quantity": product.source.max_quantity,
-                    "active": product.source.active,
                 }
-                for key, product in self.products.items()
-            },
+                for key, product in sorted(self.products.items())
+                if product.source.active
+            ],
         }
 
     def private_manifest(self) -> dict[str, object]:
