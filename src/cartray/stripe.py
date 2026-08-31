@@ -7,12 +7,16 @@ from dataclasses import dataclass
 from typing import Protocol
 from urllib.parse import urlencode
 
-from .errors import CatalogueValidationError, CheckoutValidationError
+from .errors import CatalogueValidationError
 from .models import CheckoutRedirect, CheckoutSpec, ResolvedPrice
 
 
-class StripeApiError(CheckoutValidationError):
+class StripeApiError(RuntimeError):
     """A Stripe response could not be used to create a trusted checkout."""
+
+
+class ProjectionSealError(RuntimeError):
+    """A server-authored CartRay projection could not be sealed safely."""
 
 
 class AsyncStripeTransport(Protocol):
@@ -27,7 +31,7 @@ class AsyncStripeTransport(Protocol):
 
 
 class ProjectionSigner(Protocol):
-    def sign(self, payload: bytes) -> bytes: ...
+    async def sign(self, payload: bytes) -> bytes: ...
 
 
 def signature_payload(*, session_id: str, environment: str, metadata: Mapping[str, str]) -> bytes:
@@ -44,10 +48,10 @@ def signature_payload(*, session_id: str, environment: str, metadata: Mapping[st
         "cr_kid",
     }
     if set(metadata) & {"cr_signature"}:
-        raise CheckoutValidationError("the unsigned projection must not contain a signature")
+        raise ProjectionSealError("the unsigned projection must not contain a signature")
     missing = required - set(metadata)
     if missing:
-        raise CheckoutValidationError(f"the projection cannot be signed without: {sorted(missing)!r}")
+        raise ProjectionSealError(f"the projection cannot be signed without: {sorted(missing)!r}")
     payload = {
         "catalogue_version": metadata["cr_catalogue_version"],
         "environment": environment,
@@ -69,17 +73,17 @@ class CheckoutMetadataSealer:
     key_id: str
     signer: ProjectionSigner
 
-    def seal(self, *, session_id: str, metadata: Mapping[str, str]) -> dict[str, str]:
+    async def seal(self, *, session_id: str, metadata: Mapping[str, str]) -> dict[str, str]:
         if not session_id.startswith("cs_"):
-            raise CheckoutValidationError("Stripe returned an invalid Checkout Session ID")
+            raise ProjectionSealError("Stripe returned an invalid Checkout Session ID")
         unsigned = dict(metadata)
         if "cr_kid" in unsigned and unsigned["cr_kid"] != self.key_id:
-            raise CheckoutValidationError("the projection key ID does not match the active signing key")
+            raise ProjectionSealError("the projection key ID does not match the active signing key")
         unsigned["cr_kid"] = self.key_id
         payload = signature_payload(session_id=session_id, environment=self.environment, metadata=unsigned)
-        signature = self.signer.sign(payload)
+        signature = await self.signer.sign(payload)
         if not signature:
-            raise CheckoutValidationError("the CartRay signing key returned an empty signature")
+            raise ProjectionSealError("the CartRay signing key returned an empty signature")
         unsigned["cr_signature"] = base64.urlsafe_b64encode(signature).rstrip(b"=").decode("ascii")
         return unsigned
 
@@ -170,7 +174,7 @@ class StripeCheckoutGateway:
         if not isinstance(session_id, str) or not isinstance(url, str):
             raise StripeApiError("Stripe did not return a Checkout Session URL")
 
-        sealed_metadata = self.sealer.seal(session_id=session_id, metadata=spec.metadata)
+        sealed_metadata = await self.sealer.seal(session_id=session_id, metadata=spec.metadata)
         metadata_form = {f"metadata[{key}]": value for key, value in sealed_metadata.items()}
         await self.client.post(f"/v1/checkout/sessions/{session_id}", metadata_form)
 

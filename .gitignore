@@ -1,7 +1,12 @@
 __pycache__/
 *.py[cod]
 .venv/
+.venv-workers/
+node_modules/
+python_modules/
+pylock.toml
 dist/
+.wrangler/
 .env
 .env.*
 .dev.vars

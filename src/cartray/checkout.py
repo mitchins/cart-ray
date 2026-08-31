@@ -28,14 +28,14 @@ class CheckoutService:
     async def checkout(self, request: CheckoutRequest) -> CheckoutRedirect:
         requested_items = canonical_items(request.items)
         fingerprint = request_fingerprint(request.manifest_version, requested_items)
-        order = self.store.find_order_by_request(request.checkout_request_id, fingerprint)
+        order = await self.store.find_order_by_request(request.checkout_request_id, fingerprint)
         if order is None:
             order = self._reconstruct_order(request, requested_items, fingerprint)
-        start = self.store.start_or_load(order, nonce=uuid4().hex)
+        start = await self.store.start_or_load(order, nonce=uuid4().hex)
         if start.redirect is not None:
             return start.redirect
         if start.order_id != order.order_id:
-            order = self.store.load_order(start.order_id)
+            order = await self.store.load_order(start.order_id)
 
         spec = CheckoutSpec(
             order_id=order.order_id,
@@ -51,7 +51,7 @@ class CheckoutService:
             ),
         )
         redirect = await self.gateway.create_checkout(spec)
-        self.store.attach_redirect(start.order_id, redirect)
+        await self.store.attach_redirect(start.order_id, redirect)
         return redirect
 
     def _reconstruct_order(

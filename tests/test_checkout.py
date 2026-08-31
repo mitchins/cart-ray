@@ -75,7 +75,7 @@ def test_expired_creation_lease_reuses_the_persisted_immutable_order(checkout_se
     service, gateway = checkout_service
     request = valid_request(service.catalogue, "recoverable-request")
     abandoned = service._reconstruct_order(request)
-    service.store.start_or_load(abandoned, nonce="original-nonce", now=0)
+    asyncio.run(service.store.start_or_load(abandoned, nonce="original-nonce", now=0))
     service.catalogue = Catalogue("sha256:changed-catalogue", {})
 
     redirect = checkout(service, request)

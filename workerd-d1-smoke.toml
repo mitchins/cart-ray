@@ -1,0 +1,13 @@
+name = "cartray-workerd-smoke"
+main = "tests/workerd_d1_smoke.py"
+compatibility_date = "2026-08-31"
+compatibility_flags = ["python_workers"]
+
+[build]
+command = "uv run python scripts/sync_worker_source.py"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "cartray-workerd-smoke"
+database_id = "00000000-0000-0000-0000-000000000002"
+migrations_dir = "migrations"
