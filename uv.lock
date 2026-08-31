@@ -6,6 +6,9 @@ requires-python = ">=3.12"
 name = "cart-ray"
 version = "0.0.1"
 source = { editable = "." }
+dependencies = [
+    { name = "kinglet" },
+]
 
 [package.dev-dependencies]
 dev = [
@@ -14,6 +17,7 @@ dev = [
 ]
 
 [package.metadata]
+requires-dist = [{ name = "kinglet", specifier = ">=1.8.3,<2" }]
 
 [package.metadata.requires-dev]
 dev = [
@@ -37,6 +41,15 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/72/34/14ca021ce8e5dfedc35312d08ba8bf51fdd999c576889fc2c24cb97f4f10/iniconfig-2.3.0.tar.gz", hash = "sha256:c76315c77db068650d49c5b56314774a7804df16fee4402c1f19d6d15d8c4730", size = 20503, upload-time = "2025-10-18T21:55:43.219Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/cb/b1/3846dd7f199d53cb17f49cba7e651e9ce294d8497c8c150530ed11865bb8/iniconfig-2.3.0-py3-none-any.whl", hash = "sha256:f631c04d2c48c52b84d0d0549c99ff3859c98df65b3101406327ecc7d53fbf12", size = 7484, upload-time = "2025-10-18T21:55:41.639Z" },
+]
+
+[[package]]
+name = "kinglet"
+version = "1.8.3"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/8e/8e/793ac81b0e315faf74880035b410f15c5b22718bb09adb96161305b46a28/kinglet-1.8.3.tar.gz", hash = "sha256:220d9e151e9cfc353c8869570bb3fc0d85c1c8eb4d89dca850ee763307058224", size = 209440, upload-time = "2025-12-16T08:40:34.956Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/3e/63/92741a75bbc3ee93ea65129cdf07d7c4a97b31e839f3b109b897bdab4d30/kinglet-1.8.3-py3-none-any.whl", hash = "sha256:3b03ca4f68c2ebb6a822651471739a4dcfff12e7ec6ca290a5ceb48c84772c10", size = 99817, upload-time = "2025-12-16T08:40:33.223Z" },
 ]
 
 [[package]]

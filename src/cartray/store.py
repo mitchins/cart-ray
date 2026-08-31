@@ -53,6 +53,16 @@ CREATE TABLE IF NOT EXISTS outbox (
   UNIQUE(order_id, event_type)
 );
 
+CREATE TABLE IF NOT EXISTS stripe_events (
+  stripe_event_id TEXT PRIMARY KEY,
+  event_type TEXT NOT NULL,
+  session_id TEXT,
+  payload_json TEXT NOT NULL,
+  received_at INTEGER NOT NULL,
+  processed_at INTEGER,
+  processing_error TEXT
+);
+
 CREATE TRIGGER IF NOT EXISTS orders_are_immutable
 BEFORE UPDATE ON orders
 BEGIN
@@ -67,6 +77,13 @@ END;
 
 CREATE TRIGGER IF NOT EXISTS order_items_cannot_be_deleted
 BEFORE DELETE ON order_items
+BEGIN
+  SELECT RAISE(ABORT, 'order_items are immutable');
+END;
+
+CREATE TRIGGER IF NOT EXISTS order_items_cannot_be_added_to_sealed_order
+BEFORE INSERT ON order_items
+WHEN EXISTS (SELECT 1 FROM checkout_sessions WHERE order_id = NEW.order_id)
 BEGIN
   SELECT RAISE(ABORT, 'order_items are immutable');
 END;

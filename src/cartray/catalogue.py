@@ -14,7 +14,7 @@ from .models import CatalogProduct, CatalogSource, ResolvedPrice
 
 
 class PriceResolver(Protocol):
-    def resolve(self, lookup_key: str) -> ResolvedPrice: ...
+    async def resolve(self, lookup_key: str) -> ResolvedPrice: ...
 
 
 @dataclass(frozen=True)
@@ -26,7 +26,7 @@ class FixturePriceResolver:
         raw = json.loads(path.read_text())
         return cls({key: ResolvedPrice(**value) for key, value in raw.items()})
 
-    def resolve(self, lookup_key: str) -> ResolvedPrice:
+    async def resolve(self, lookup_key: str) -> ResolvedPrice:
         try:
             return self.prices[lookup_key]
         except KeyError as error:
@@ -125,14 +125,14 @@ def load_catalogue_sources(path: Path) -> tuple[CatalogSource, ...]:
     return tuple(sources)
 
 
-def build_catalogue(
+async def build_catalogue(
     sources: tuple[CatalogSource, ...],
     price_resolver: PriceResolver,
     fulfilment_expansions: Mapping[str, tuple[str, ...]],
 ) -> Catalogue:
     products: dict[str, CatalogProduct] = {}
     for source in sources:
-        price = price_resolver.resolve(source.stripe_lookup_key)
+        price = await price_resolver.resolve(source.stripe_lookup_key)
         if not price.stripe_price_id or price.amount_minor < 0 or len(price.currency) != 3:
             raise CatalogueValidationError(f"invalid resolved price: {source.product_key}")
         try:

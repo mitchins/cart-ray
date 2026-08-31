@@ -7,7 +7,7 @@ from .models import CheckoutRedirect, CheckoutSpec
 
 
 class PaymentGateway(Protocol):
-    def create_checkout(self, spec: CheckoutSpec) -> CheckoutRedirect: ...
+    async def create_checkout(self, spec: CheckoutSpec) -> CheckoutRedirect: ...
 
 
 @dataclass
@@ -17,7 +17,7 @@ class FakePaymentGateway:
     requests: list[CheckoutSpec] = field(default_factory=list)
     redirects: dict[str, CheckoutRedirect] = field(default_factory=dict)
 
-    def create_checkout(self, spec: CheckoutSpec) -> CheckoutRedirect:
+    async def create_checkout(self, spec: CheckoutSpec) -> CheckoutRedirect:
         self.requests.append(spec)
         return self.redirects.setdefault(
             spec.idempotency_key,

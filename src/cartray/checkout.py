@@ -25,7 +25,7 @@ class CheckoutService:
     success_url: str = "https://store.invalid/purchase-complete/"
     cancel_url: str = "https://store.invalid/checkout-cancelled/"
 
-    def checkout(self, request: CheckoutRequest) -> CheckoutRedirect:
+    async def checkout(self, request: CheckoutRequest) -> CheckoutRedirect:
         requested_items = canonical_items(request.items)
         fingerprint = request_fingerprint(request.manifest_version, requested_items)
         order = self.store.find_order_by_request(request.checkout_request_id, fingerprint)
@@ -50,7 +50,7 @@ class CheckoutService:
                 nonce=start.nonce,
             ),
         )
-        redirect = self.gateway.create_checkout(spec)
+        redirect = await self.gateway.create_checkout(spec)
         self.store.attach_redirect(start.order_id, redirect)
         return redirect
 

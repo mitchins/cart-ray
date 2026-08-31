@@ -4,4 +4,6 @@ __pycache__/
 dist/
 .env
 .env.*
+.dev.vars
+.dev.vars.*
 !.env.example

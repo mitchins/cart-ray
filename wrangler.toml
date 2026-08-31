@@ -1,0 +1,15 @@
+name = "cartray-test"
+account_id = "33623e6d0b4793842a1832c5512aeb49"
+main = "src/cartray/worker.py"
+compatibility_date = "2026-08-31"
+compatibility_flags = ["python_workers"]
+workers_dev = true
+
+[vars]
+CARTRAY_ENVIRONMENT = "test"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "cartray-test"
+database_id = "1c5c2dab-e81c-43e4-b361-dee9a5249e3d"
+migrations_dir = "migrations"

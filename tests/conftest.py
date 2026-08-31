@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 from pathlib import Path
 
@@ -19,7 +20,7 @@ def fixture_catalogue():
     expansions = {
         key: tuple(value) for key, value in json.loads((root / "fulfilment-expansions.json").read_text()).items()
     }
-    return build_catalogue(sources, resolver, expansions)
+    return asyncio.run(build_catalogue(sources, resolver, expansions))
 
 
 @pytest.fixture
