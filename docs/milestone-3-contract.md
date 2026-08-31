@@ -47,13 +47,16 @@ All Stripe/financial/fulfilment decisions remain server-authored.
 `storefront/` is a dependency-free static Pages application. Its build writes only static assets
 to the ignored `storefront-dist/` directory.
 
-By default, and for every preview build, the generated configuration is:
+By default, and for every preview build, the generated configuration has checkout disabled and a
+synthetic public fixture catalogue:
 
 ```json
-{"checkoutEnabled": false, "apiBaseUrl": null}
+{"checkoutEnabled": false, "apiBaseUrl": null, "previewCatalogue": {"version": "sha256:preview-fixtures-v1", "products": [...]}}
 ```
 
 Preview checkout performs no POST request, even when an API-base environment variable is present.
+It still renders its fixture products and supports local cart interactions, so the UI can be
+reviewed by hand at `npm run preview:storefront` without a Worker, Stripe, or remote deployment.
 A production Pages build requires both `CARTRAY_STOREFRONT_MODE=production` and an HTTPS
 `CARTRAY_STOREFRONT_API_BASE_URL`; that public build setting points to the Worker. No API URL is
 committed. The Worker origin setting and Pages production build setting are configured separately

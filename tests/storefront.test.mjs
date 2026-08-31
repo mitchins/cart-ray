@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 
-import { checkoutPayload, startCheckout } from "../storefront/app.js";
+import { checkoutPayload, loadCatalogue, startCheckout } from "../storefront/app.js";
 
 async function builtConfiguration() {
   const source = await readFile(new URL("../storefront-dist/storefront-config.js", import.meta.url), "utf8");
@@ -12,11 +12,24 @@ async function builtConfiguration() {
 test("generated storefront configuration is safe for its declared build mode", async () => {
   const configuration = await builtConfiguration();
   if (process.env.CARTRAY_STOREFRONT_EXPECTED_MODE === "preview") {
-    assert.deepEqual(configuration, { checkoutEnabled: false, apiBaseUrl: null });
+    assert.equal(configuration.checkoutEnabled, false);
+    assert.equal(configuration.apiBaseUrl, null);
+    assert.equal(configuration.previewCatalogue.version, "sha256:preview-fixtures-v1");
+    assert.deepEqual(Object.keys(configuration.previewCatalogue.products[0]).sort(), [
+      "amount_minor",
+      "currency",
+      "max_quantity",
+      "product_key",
+      "title",
+    ]);
     return;
   }
   assert.equal(process.env.CARTRAY_STOREFRONT_EXPECTED_MODE, "production");
-  assert.deepEqual(configuration, { checkoutEnabled: true, apiBaseUrl: "https://api.test.invalid" });
+  assert.deepEqual(configuration, {
+    checkoutEnabled: true,
+    apiBaseUrl: "https://api.test.invalid",
+    previewCatalogue: null,
+  });
 });
 
 test("checkout payload contains only the CartRay browser contract", () => {
@@ -38,6 +51,16 @@ test("preview configuration cannot submit checkout", async () => {
       null,
     );
   });
+});
+
+test("preview catalogue is loaded locally without a network request", async () => {
+  const previewCatalogue = { version: "sha256:preview", products: [{ product_key: "TEST-TEMPLATE" }] };
+  assert.equal(
+    await loadCatalogue({ checkoutEnabled: false, apiBaseUrl: null, previewCatalogue }, () => {
+      throw new Error("preview catalogue must not fetch");
+    }),
+    previewCatalogue,
+  );
 });
 
 test("production checkout posts exactly the trusted browser payload", async () => {

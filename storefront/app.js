@@ -25,6 +25,20 @@ export async function startCheckout(configuration, payload, fetchImpl = fetch) {
   return result.checkout_url;
 }
 
+export async function loadCatalogue(configuration, fetchImpl = fetch) {
+  if (configuration.previewCatalogue) {
+    return configuration.previewCatalogue;
+  }
+  if (!configuration.apiBaseUrl) {
+    throw new Error("Storefront configuration has no catalogue source.");
+  }
+  const response = await fetchImpl(`${configuration.apiBaseUrl}/catalogue`);
+  if (!response.ok) {
+    throw new Error("Catalogue could not be loaded.");
+  }
+  return response.json();
+}
+
 function money(amountMinor, currency) {
   return new Intl.NumberFormat(undefined, { style: "currency", currency }).format(amountMinor / 100);
 }
@@ -40,16 +54,14 @@ async function boot() {
   const cartElement = document.querySelector("#cart");
   const checkoutButton = document.querySelector("#checkout");
   const cart = new Map();
-  if (!configuration?.checkoutEnabled || !configuration.apiBaseUrl) {
-    status.textContent = "Checkout is disabled for this preview deployment.";
+  if (!configuration) {
+    status.textContent = "Storefront configuration is missing. Run the storefront build before serving this page.";
     return;
   }
 
   let catalogue;
   try {
-    const response = await fetch(`${configuration.apiBaseUrl}/catalogue`);
-    if (!response.ok) throw new Error("catalogue request failed");
-    catalogue = await response.json();
+    catalogue = await loadCatalogue(configuration);
   } catch {
     status.textContent = "Catalogue is currently unavailable.";
     return;
@@ -64,7 +76,7 @@ async function boot() {
       line.textContent = `${product.title} × ${quantity}`;
       cartElement.append(line);
     }
-    checkoutButton.disabled = cart.size === 0;
+    checkoutButton.disabled = !configuration.checkoutEnabled || cart.size === 0;
   }
 
   for (const product of catalogue.products) {
@@ -84,8 +96,13 @@ async function boot() {
     card.append(title, price, add);
     productsElement.append(card);
   }
-  status.textContent = "";
+  status.textContent = configuration.checkoutEnabled
+    ? ""
+    : "Preview catalogue: cart interactions are enabled; checkout is disabled.";
   renderCart();
+  if (!configuration.checkoutEnabled) {
+    return;
+  }
   checkoutButton.addEventListener("click", async () => {
     checkoutButton.disabled = true;
     try {
