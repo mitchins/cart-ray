@@ -9,7 +9,13 @@ import pytest
 from cartray.canonical import CanonicalItem, projection_metadata
 from cartray.errors import CatalogueValidationError
 from cartray.models import CheckoutSpec
-from cartray.stripe import CheckoutMetadataSealer, StripeApiClient, StripeCheckoutGateway, StripePriceResolver
+from cartray.stripe import (
+    CheckoutMetadataSealer,
+    ProjectionSealError,
+    StripeApiClient,
+    StripeCheckoutGateway,
+    StripePriceResolver,
+)
 
 
 @dataclass
@@ -24,8 +30,27 @@ class RecordingTransport:
 
 @dataclass(frozen=True)
 class FixtureSigner:
-    def sign(self, payload: bytes) -> bytes:
+    async def sign(self, payload: bytes) -> bytes:
         return b"fixture-signature:" + payload[-8:]
+
+
+@dataclass(frozen=True)
+class EmptySigner:
+    async def sign(self, _payload: bytes) -> bytes:
+        return b""
+
+
+def test_metadata_sealing_rejects_an_upstream_failure_without_a_checkout_redirect():
+    metadata = projection_metadata(
+        order_id="cr_order_123",
+        catalogue_version="sha256:catalogue",
+        items=(CanonicalItem("TEST-TEMPLATE", 1),),
+        nonce="nonce-123",
+    )
+    sealer = CheckoutMetadataSealer(environment="test", key_id="test-key-1", signer=EmptySigner())
+
+    with pytest.raises(ProjectionSealError, match="empty"):
+        asyncio.run(sealer.seal(session_id="cs_test_123", metadata=metadata))
 
 
 def test_stripe_checkout_is_sealed_after_session_creation_and_before_redirect():

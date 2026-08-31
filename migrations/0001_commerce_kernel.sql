@@ -79,3 +79,12 @@ WHEN EXISTS (SELECT 1 FROM checkout_sessions WHERE order_id = NEW.order_id)
 BEGIN
   SELECT RAISE(ABORT, 'order_items are immutable');
 END;
+
+CREATE TRIGGER checkout_redirect_issued_outbox
+AFTER UPDATE OF state ON checkout_sessions
+WHEN NEW.state = 'redirect_issued' AND OLD.redirect_url IS NULL
+BEGIN
+  INSERT OR IGNORE INTO outbox(order_id, event_type, payload_json, created_at)
+  VALUES (NEW.order_id, 'CheckoutRedirectIssued',
+          json_object('order_id', NEW.order_id, 'session_id', NEW.external_session_id), NEW.updated_at);
+END;

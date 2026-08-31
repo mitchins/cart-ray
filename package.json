@@ -1,0 +1,7 @@
+{
+  "name": "cart-ray-worker-tooling",
+  "private": true,
+  "devDependencies": {
+    "wrangler": "4.127.1"
+  }
+}

@@ -20,7 +20,36 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+      - run: npm ci --ignore-scripts
       - run: uv sync --all-groups
       - run: uv run ruff check .
       - run: uv run pytest
+      - name: Smoke-test the local Python Worker
+        run: |
+          uv run pywrangler dev --local --port 8796 --log-level=error &
+          worker_pid=$!
+          trap 'kill "$worker_pid"' EXIT
+          for attempt in $(seq 1 30); do
+            if curl --fail --silent --show-error http://127.0.0.1:8796/health; then
+              exit 0
+            fi
+            sleep 1
+          done
+          exit 1
+      - name: Smoke-test Workerd D1 and Web Crypto boundaries
+        run: |
+          uv run pywrangler d1 migrations apply cartray-workerd-smoke --local --config workerd-d1-smoke.toml
+          uv run pywrangler dev --config workerd-d1-smoke.toml --local --port 8797 --log-level=error &
+          worker_pid=$!
+          trap 'kill "$worker_pid"' EXIT
+          for attempt in $(seq 1 30); do
+            if curl --fail --silent --show-error http://127.0.0.1:8797/; then
+              exit 0
+            fi
+            sleep 1
+          done
+          exit 1
       - run: uv build

@@ -5,8 +5,13 @@ compatibility_date = "2026-08-31"
 compatibility_flags = ["python_workers"]
 workers_dev = true
 
+[build]
+command = "uv run python scripts/sync_worker_source.py"
+
 [vars]
 CARTRAY_ENVIRONMENT = "test"
+CARTRAY_SUCCESS_URL = "https://cart-ray.invalid/purchase-complete/"
+CARTRAY_CANCEL_URL = "https://cart-ray.invalid/checkout-cancelled/"
 
 [[d1_databases]]
 binding = "DB"

@@ -1,9 +1,14 @@
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 
 from .canonical import CanonicalItem
 from .errors import CheckoutValidationError
+
+CHECKOUT_REQUEST_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,128}$")
+MANIFEST_VERSION_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
+MAX_CHECKOUT_ITEMS = 100
 
 
 @dataclass(frozen=True)
@@ -39,6 +44,8 @@ class CheckoutRequest:
 
     @classmethod
     def from_payload(cls, payload: dict[str, object]) -> CheckoutRequest:
+        if not isinstance(payload, dict):
+            raise CheckoutValidationError("checkout request must be a JSON object")
         allowed = {"checkout_request_id", "manifest_version", "items"}
         unknown = set(payload) - allowed
         if unknown:
@@ -47,16 +54,27 @@ class CheckoutRequest:
             raw_items = payload["items"]
             if not isinstance(raw_items, list):
                 raise TypeError
-            items = tuple(
-                CanonicalItem(str(item["product_key"]), item["quantity"])
-                for item in raw_items
-                if isinstance(item, dict)
-            )
-            if len(items) != len(raw_items):
+            if not 1 <= len(raw_items) <= MAX_CHECKOUT_ITEMS:
+                raise TypeError
+            if not isinstance(payload["checkout_request_id"], str) or not isinstance(payload["manifest_version"], str):
+                raise TypeError
+            request_id = payload["checkout_request_id"]
+            manifest_version = payload["manifest_version"]
+            if not CHECKOUT_REQUEST_ID_RE.fullmatch(request_id) or not MANIFEST_VERSION_RE.fullmatch(manifest_version):
+                raise TypeError
+            if any(not isinstance(item, dict) or set(item) != {"product_key", "quantity"} for item in raw_items):
+                raise TypeError
+            items = tuple(CanonicalItem(item["product_key"], item["quantity"]) for item in raw_items)
+            if any(
+                not isinstance(item.product_key, str)
+                or not isinstance(item.quantity, int)
+                or isinstance(item.quantity, bool)
+                for item in items
+            ):
                 raise TypeError
             return cls(
-                checkout_request_id=str(payload["checkout_request_id"]),
-                manifest_version=str(payload["manifest_version"]),
+                checkout_request_id=request_id,
+                manifest_version=manifest_version,
                 items=items,
             )
         except (KeyError, TypeError) as error:
