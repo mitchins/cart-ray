@@ -12,7 +12,6 @@ from cartray.stripe import ProjectionSealError
 from cartray.worker import app, create_app
 
 STOREFRONT_ORIGIN = "https://cartray-store-test.pages.dev"
-STORE_ENV = {"CARTRAY_STOREFRONT_ORIGIN": STOREFRONT_ORIGIN}
 
 
 def test_health_endpoint_declares_test_only_mode():
@@ -37,6 +36,19 @@ class FailingCheckoutService:
 
     async def checkout(self, _request):
         raise self.error
+
+
+@dataclass
+class FixtureRateLimiter:
+    allowed: bool
+    calls: int = 0
+
+    async def limit(self, _options):
+        self.calls += 1
+        return {"success": self.allowed}
+
+
+STORE_ENV = {"CARTRAY_STOREFRONT_ORIGIN": STOREFRONT_ORIGIN, "CHECKOUT_RATE_LIMITER": FixtureRateLimiter(True)}
 
 
 @dataclass
@@ -132,6 +144,32 @@ def test_checkout_route_maps_domain_validation_to_bad_request(fixture_catalogue)
     assert status == 400
     assert json.loads(body) == {"error": "catalogue refresh required"}
     assert headers["Access-Control-Allow-Origin"] == STOREFRONT_ORIGIN
+
+
+def test_checkout_rate_limit_rejects_before_invoking_the_checkout_service(fixture_catalogue):
+    service = RecordingCheckoutService()
+    limiter = FixtureRateLimiter(False)
+
+    async def factory(_env):
+        return service
+
+    client = TestClient(create_app(factory), env={**STORE_ENV, "CHECKOUT_RATE_LIMITER": limiter})
+    status, headers, body = client.request(
+        "POST",
+        "/checkout",
+        json_data={
+            "checkout_request_id": "worker-rate-limited",
+            "manifest_version": fixture_catalogue.version,
+            "items": [{"product_key": "TEST-TEMPLATE", "quantity": 1}],
+        },
+        headers={"origin": STOREFRONT_ORIGIN},
+    )
+
+    assert status == 429
+    assert json.loads(body) == {"error": "checkout rate limit exceeded"}
+    assert headers["Access-Control-Allow-Origin"] == STOREFRONT_ORIGIN
+    assert limiter.calls == 1
+    assert service.redirects == 0
 
 
 def test_checkout_route_fails_closed_for_unavailable_configuration(fixture_catalogue):
