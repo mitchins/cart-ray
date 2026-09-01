@@ -188,9 +188,9 @@ class StripeApiClient:
         authorization = base64.b64encode(f"{self.secret_key}:".encode()).decode("ascii")
         request_headers = {
             "Authorization": f"Basic {authorization}",
-            "Stripe-Version": STRIPE_API_VERSION,
         }
         request_headers.update(headers or {})
+        request_headers["Stripe-Version"] = STRIPE_API_VERSION
         status, payload = await self.transport.request(method, path, headers=request_headers, body=body)
         if not 200 <= status < 300:
             message = payload.get("error", "Stripe request failed")

@@ -228,6 +228,14 @@ def test_stripe_price_resolver_requires_one_active_one_off_price():
     assert transport.requests[0][1] == "/v1/prices?active=true&lookup_keys%5B%5D=cr_test_template&limit=2"
 
 
+def test_stripe_api_version_pin_cannot_be_overridden_by_a_request_caller():
+    transport = RecordingTransport([(200, {})])
+    client = StripeApiClient("rk_test_fixture", transport)
+
+    assert asyncio.run(client._request("GET", "/v1/test", headers={"Stripe-Version": "2020-08-27"})) == {}
+    assert transport.requests[0][2]["Stripe-Version"] == STRIPE_API_VERSION
+
+
 @pytest.mark.parametrize(
     "prices",
     [[], [{"id": "price_1", "unit_amount": 1, "currency": "aud", "recurring": None}] * 2],
