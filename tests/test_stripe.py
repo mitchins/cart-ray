@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 from dataclasses import dataclass, field
 from urllib.parse import parse_qs
 
@@ -11,10 +12,14 @@ from cartray.errors import CatalogueValidationError
 from cartray.models import CheckoutSpec
 from cartray.stripe import (
     CheckoutMetadataSealer,
+    CheckoutMetadataVerifier,
     ProjectionSealError,
     StripeApiClient,
+    StripeApiError,
     StripeCheckoutGateway,
+    StripeCheckoutSessionRetriever,
     StripePriceResolver,
+    signature_payload,
 )
 
 
@@ -40,6 +45,14 @@ class EmptySigner:
         return b""
 
 
+@dataclass(frozen=True)
+class ExpectedVerifier:
+    expected_payload: bytes
+
+    async def verify(self, payload: bytes, signature: bytes) -> bool:
+        return payload == self.expected_payload and signature == b"fixture-verifier-signature"
+
+
 def test_metadata_sealing_rejects_an_upstream_failure_without_a_checkout_redirect():
     metadata = projection_metadata(
         order_id="cr_order_123",
@@ -51,6 +64,48 @@ def test_metadata_sealing_rejects_an_upstream_failure_without_a_checkout_redirec
 
     with pytest.raises(ProjectionSealError, match="empty"):
         asyncio.run(sealer.seal(session_id="cs_test_123", metadata=metadata))
+
+
+def test_metadata_verification_rejects_unknown_cart_ray_fields():
+    metadata = projection_metadata(
+        order_id="cr_order_123",
+        catalogue_version="sha256:catalogue",
+        items=(CanonicalItem("TEST-TEMPLATE", 1),),
+        nonce="nonce-123",
+    )
+    metadata["cr_kid"] = "fixture-key"
+    payload = signature_payload(session_id="cs_test_123", environment="test", metadata=metadata)
+    metadata["cr_signature"] = base64.urlsafe_b64encode(b"fixture-verifier-signature").rstrip(b"=").decode()
+    verifier = CheckoutMetadataVerifier("test", {"fixture-key": ExpectedVerifier(payload)})
+
+    assert asyncio.run(verifier.verify(session_id="cs_test_123", metadata=metadata)) == (
+        CanonicalItem("TEST-TEMPLATE", 1),
+    )
+    with_unknown_field = {**metadata, "cr_unexpected": "nope"}
+    with pytest.raises(ProjectionSealError, match="unknown"):
+        asyncio.run(verifier.verify(session_id="cs_test_123", metadata=with_unknown_field))
+
+
+def test_metadata_verification_rejects_a_signed_noncanonical_rechunking():
+    metadata = projection_metadata(
+        order_id="cr_order_123",
+        catalogue_version="sha256:catalogue",
+        items=(CanonicalItem("TEST-BUNDLE", 1), CanonicalItem("TEST-TEMPLATE", 1)),
+        nonce="nonce-123",
+    )
+    metadata["cr_kid"] = "fixture-key"
+    payload = signature_payload(session_id="cs_test_123", environment="test", metadata=metadata)
+    metadata["cr_signature"] = base64.urlsafe_b64encode(b"fixture-verifier-signature").rstrip(b"=").decode()
+    rechunked = {
+        **metadata,
+        "cr_chunk_count": "2",
+        "cr_items_01": "TEST-BUNDLE:1",
+        "cr_items_02": "TEST-TEMPLATE:1",
+    }
+    verifier = CheckoutMetadataVerifier("test", {"fixture-key": ExpectedVerifier(payload)})
+
+    with pytest.raises(ProjectionSealError, match="non-canonical"):
+        asyncio.run(verifier.verify(session_id="cs_test_123", metadata=rechunked))
 
 
 def test_stripe_checkout_is_sealed_after_session_creation_and_before_redirect():
@@ -180,3 +235,102 @@ def test_stripe_price_resolver_rejects_missing_or_ambiguous_lookup_keys(prices):
 
     with pytest.raises(CatalogueValidationError, match="exactly one"):
         asyncio.run(resolver.resolve("cr_test_missing"))
+
+
+def test_checkout_session_retrieval_reconciles_every_line_item_page():
+    transport = RecordingTransport(
+        [
+            (
+                200,
+                {
+                    "id": "cs_test_retrieve",
+                    "livemode": False,
+                    "mode": "payment",
+                    "status": "complete",
+                    "payment_status": "paid",
+                    "amount_total": 7500,
+                    "currency": "aud",
+                    "metadata": {"cr_order_id": "cr_order_123"},
+                },
+            ),
+            (
+                200,
+                {
+                    "data": [
+                        {
+                            "id": "li_one",
+                            "quantity": 1,
+                            "price": {"id": "price_one", "unit_amount": 2500, "currency": "aud"},
+                        }
+                    ],
+                    "has_more": True,
+                },
+            ),
+            (
+                200,
+                {
+                    "data": [
+                        {
+                            "id": "li_two",
+                            "quantity": 5,
+                            "price": {"id": "price_two", "unit_amount": 1000, "currency": "aud"},
+                        }
+                    ],
+                    "has_more": False,
+                },
+            ),
+        ]
+    )
+
+    session = asyncio.run(
+        StripeCheckoutSessionRetriever(StripeApiClient("rk_test_fixture", transport)).retrieve("cs_test_retrieve")
+    )
+
+    assert [(item.price_id, item.quantity) for item in session.line_items] == [
+        ("price_one", 1),
+        ("price_two", 5),
+    ]
+    assert transport.requests[-1][1].endswith("line_items?limit=100&starting_after=li_one")
+
+
+def test_checkout_session_retrieval_rejects_duplicate_line_ids_in_one_page():
+    transport = RecordingTransport(
+        [
+            (
+                200,
+                {
+                    "id": "cs_test_duplicates",
+                    "livemode": False,
+                    "mode": "payment",
+                    "status": "complete",
+                    "payment_status": "paid",
+                    "amount_total": 5000,
+                    "currency": "aud",
+                    "metadata": {},
+                },
+            ),
+            (
+                200,
+                {
+                    "data": [
+                        {
+                            "id": "li_duplicate",
+                            "quantity": 1,
+                            "price": {"id": "price_one", "unit_amount": 2500, "currency": "aud"},
+                        },
+                        {
+                            "id": "li_duplicate",
+                            "quantity": 1,
+                            "price": {"id": "price_two", "unit_amount": 2500, "currency": "aud"},
+                        },
+                    ],
+                    "has_more": False,
+                },
+            ),
+        ]
+    )
+
+    with pytest.raises(StripeApiError, match="duplicates"):
+        asyncio.run(
+            StripeCheckoutSessionRetriever(StripeApiClient("rk_test_fixture", transport)).retrieve("cs_test_duplicates")
+        )

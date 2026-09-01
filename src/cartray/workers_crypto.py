@@ -32,3 +32,32 @@ class WorkersEd25519Signer:
                 raise RuntimeError("CARTRAY_SIGNING_PRIVATE_KEY_PKCS8_B64 is not an Ed25519 PKCS#8 key") from error
         signature = await crypto.subtle.sign("Ed25519", self._key, bytes_to_arraybuffer(payload))
         return arraybuffer_to_bytes(signature)
+
+
+@dataclass
+class WorkersEd25519Verifier:
+    """Ed25519 verifier backed by a public SPKI key configured on the Worker."""
+
+    public_key_spki_b64: str
+    _key: object | None = field(default=None, init=False, repr=False)
+
+    async def verify(self, payload: bytes, signature: bytes) -> bool:
+        try:
+            from js import crypto
+        except ImportError as error:
+            raise RuntimeError("WorkersEd25519Verifier is available only in a Cloudflare Python Worker") from error
+        if self._key is None:
+            try:
+                encoded = base64.b64decode(self.public_key_spki_b64, validate=True)
+            except (ValueError, TypeError) as error:
+                raise RuntimeError("CartRay projection public key is not valid base64") from error
+            try:
+                self._key = await crypto.subtle.importKey(
+                    "spki", bytes_to_arraybuffer(encoded), {"name": "Ed25519"}, False, to_js(["verify"])
+                )
+            except Exception as error:
+                raise RuntimeError("CartRay projection public key is not an Ed25519 SPKI key") from error
+        valid = await crypto.subtle.verify(
+            "Ed25519", self._key, bytes_to_arraybuffer(signature), bytes_to_arraybuffer(payload)
+        )
+        return bool(valid)

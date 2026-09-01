@@ -8,12 +8,28 @@ from kinglet import Kinglet, Response
 
 from cartray.catalogue import build_catalogue
 from cartray.checkout import CheckoutService
-from cartray.errors import CheckoutInProgress, CheckoutValidationError, IdempotencyConflict
+from cartray.errors import (
+    CheckoutInProgress,
+    CheckoutValidationError,
+    IdempotencyConflict,
+    SettlementInconsistency,
+    WebhookValidationError,
+)
 from cartray.models import CheckoutRequest
+from cartray.settlement import StripeSettlementService
 from cartray.store import D1OrderStore
-from cartray.stripe import CheckoutMetadataSealer, StripeApiClient, StripeCheckoutGateway, StripePriceResolver
+from cartray.stripe import (
+    CheckoutMetadataSealer,
+    CheckoutMetadataVerifier,
+    ProjectionSealError,
+    StripeApiClient,
+    StripeCheckoutGateway,
+    StripeCheckoutSessionRetriever,
+    StripePriceResolver,
+)
 from cartray.test_catalogue import TEST_CATALOGUE_SOURCES, TEST_FULFILMENT_EXPANSIONS
-from cartray.workers_crypto import WorkersEd25519Signer
+from cartray.webhook import MAX_WEBHOOK_BODY_BYTES, StripeWebhookEvent, StripeWebhookSignatureVerifier
+from cartray.workers_crypto import WorkersEd25519Signer, WorkersEd25519Verifier
 from cartray.workers_transport import WorkersFetchTransport
 
 MAX_CHECKOUT_BODY_BYTES = 16_384
@@ -40,10 +56,11 @@ class CorsPolicy:
         }
 
 
-def create_app(service_factory=None, catalogue_factory=None):
+def create_app(service_factory=None, catalogue_factory=None, settlement_service_factory=None):
     app = Kinglet(auto_wrap_exceptions=False)
     service_factory = service_factory or checkout_service_from_environment
     catalogue_factory = catalogue_factory or catalogue_from_environment
+    settlement_service_factory = settlement_service_factory or settlement_service_from_environment
 
     @app.get("/health")
     async def health(request):
@@ -94,6 +111,31 @@ def create_app(service_factory=None, catalogue_factory=None):
             headers=cors.response_headers(),
         )
 
+    @app.post("/stripe/webhook")
+    async def stripe_webhook(request):
+        declared_size = request.header("content-length")
+        if declared_size is None:
+            return Response({"error": "Stripe webhook content length is required"}, status=400)
+        if not declared_size.isdigit() or int(declared_size) > MAX_WEBHOOK_BODY_BYTES:
+            return Response({"error": "Stripe webhook body is too large"}, status=400)
+        raw_body = await request.bytes()
+        try:
+            endpoint_secret = _required_env(request.env, "STRIPE_WEBHOOK_SECRET")
+        except RuntimeError:
+            return Response({"error": "Stripe webhook unavailable"}, status=503)
+        try:
+            StripeWebhookSignatureVerifier(endpoint_secret).verify(raw_body, request.header("stripe-signature"))
+            event = StripeWebhookEvent.from_raw(raw_body)
+        except WebhookValidationError as error:
+            return Response({"error": str(error)}, status=400)
+        try:
+            await (await settlement_service_factory(request.env)).settle(event)
+        except (SettlementInconsistency, ProjectionSealError, WebhookValidationError):
+            return Response({"error": "Stripe webhook rejected"}, status=409)
+        except Exception:
+            return Response({"error": "Stripe webhook unavailable"}, status=503)
+        return Response(status=200)
+
     @app.route("/catalogue", methods=["OPTIONS"])
     @app.route("/checkout", methods=["OPTIONS"])
     async def preflight(request):
@@ -130,6 +172,16 @@ async def catalogue_from_environment(env):
     return await build_catalogue(TEST_CATALOGUE_SOURCES, StripePriceResolver(client), TEST_FULFILMENT_EXPANSIONS)
 
 
+async def settlement_service_from_environment(env) -> StripeSettlementService:
+    environment = _test_environment(env)
+    client = StripeApiClient(_required_env(env, "STRIPE_API_KEY"), WorkersFetchTransport())
+    return StripeSettlementService(
+        D1OrderStore(env.DB),
+        StripeCheckoutSessionRetriever(client),
+        CheckoutMetadataVerifier(environment, _projection_verifiers(env)),
+    )
+
+
 async def _checkout_payload(request) -> CheckoutRequest:
     content_type = request.header("content-type", "")
     if content_type.split(";", 1)[0].strip().lower() != "application/json":
@@ -159,6 +211,22 @@ def _test_environment(env) -> str:
     if environment != "test":
         raise RuntimeError("CartRay Worker accepts only the test environment in this milestone")
     return environment
+
+
+def _projection_verifiers(env) -> dict[str, WorkersEd25519Verifier]:
+    raw_keyring = _required_env(env, "CARTRAY_PROJECTION_PUBLIC_KEYS_JSON")
+    try:
+        keyring = json.loads(raw_keyring)
+    except json.JSONDecodeError as error:
+        raise RuntimeError("CARTRAY_PROJECTION_PUBLIC_KEYS_JSON must be a JSON object") from error
+    if not isinstance(keyring, dict) or not keyring:
+        raise RuntimeError("CARTRAY_PROJECTION_PUBLIC_KEYS_JSON must be a non-empty JSON object")
+    if any(
+        not isinstance(key_id, str) or not key_id or not isinstance(key, str) or not key
+        for key_id, key in keyring.items()
+    ):
+        raise RuntimeError("CARTRAY_PROJECTION_PUBLIC_KEYS_JSON must map key IDs to public keys")
+    return {key_id: WorkersEd25519Verifier(key) for key_id, key in keyring.items()}
 
 
 def _https_url(value: str, name: str) -> str:

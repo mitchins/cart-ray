@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import base64
 import json
+import re
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Protocol
 from urllib.parse import urlencode
 
-from .errors import CatalogueValidationError
+from .canonical import MAX_METADATA_CHUNKS, CanonicalItem, build_item_chunks, parse_projection_items
+from .errors import CatalogueValidationError, CheckoutValidationError
 from .models import CheckoutRedirect, CheckoutSpec, ResolvedPrice
 
 
@@ -17,6 +19,11 @@ class StripeApiError(RuntimeError):
 
 class ProjectionSealError(RuntimeError):
     """A server-authored CartRay projection could not be sealed safely."""
+
+
+MAX_STRIPE_LINE_ITEMS = 100
+MAX_STRIPE_LINE_ITEM_PAGES = 10
+_STRIPE_SESSION_ID_RE = re.compile(r"^cs_[A-Za-z0-9_]+$")
 
 
 class AsyncStripeTransport(Protocol):
@@ -32,6 +39,10 @@ class AsyncStripeTransport(Protocol):
 
 class ProjectionSigner(Protocol):
     async def sign(self, payload: bytes) -> bytes: ...
+
+
+class ProjectionVerifier(Protocol):
+    async def verify(self, payload: bytes, signature: bytes) -> bool: ...
 
 
 def signature_payload(*, session_id: str, environment: str, metadata: Mapping[str, str]) -> bytes:
@@ -74,7 +85,7 @@ class CheckoutMetadataSealer:
     signer: ProjectionSigner
 
     async def seal(self, *, session_id: str, metadata: Mapping[str, str]) -> dict[str, str]:
-        if not session_id.startswith("cs_"):
+        if not _STRIPE_SESSION_ID_RE.fullmatch(session_id):
             raise ProjectionSealError("Stripe returned an invalid Checkout Session ID")
         unsigned = dict(metadata)
         if "cr_kid" in unsigned and unsigned["cr_kid"] != self.key_id:
@@ -86,6 +97,60 @@ class CheckoutMetadataSealer:
             raise ProjectionSealError("the CartRay signing key returned an empty signature")
         unsigned["cr_signature"] = base64.urlsafe_b64encode(signature).rstrip(b"=").decode("ascii")
         return unsigned
+
+
+@dataclass(frozen=True)
+class CheckoutMetadataVerifier:
+    environment: str
+    verifiers: Mapping[str, ProjectionVerifier]
+
+    async def verify(self, *, session_id: str, metadata: Mapping[str, str]) -> tuple[CanonicalItem, ...]:
+        required = {
+            "cr_schema",
+            "cr_source",
+            "cr_order_id",
+            "cr_catalogue_version",
+            "cr_item_count",
+            "cr_chunk_count",
+            "cr_items_digest",
+            "cr_nonce",
+            "cr_kid",
+            "cr_signature",
+        }
+        if metadata.get("cr_schema") != "1" or metadata.get("cr_source") != "cartray":
+            raise ProjectionSealError("Stripe Session has an unsupported CartRay projection")
+        allowed_keys = required | {f"cr_items_{index:02d}" for index in range(1, MAX_METADATA_CHUNKS + 1)}
+        if any(key.startswith("cr_") and key not in allowed_keys for key in metadata):
+            raise ProjectionSealError("Stripe Session has unknown CartRay projection fields")
+        if not required <= set(metadata):
+            raise ProjectionSealError("Stripe Session has an incomplete CartRay projection")
+        try:
+            verifier = self.verifiers[metadata["cr_kid"]]
+            signature = _base64url_decode(metadata["cr_signature"])
+        except (KeyError, ValueError, TypeError) as error:
+            raise ProjectionSealError("Stripe Session has an untrusted CartRay projection key") from error
+        unsigned = {key: value for key, value in metadata.items() if key != "cr_signature"}
+        try:
+            items = parse_projection_items(unsigned)
+            payload = signature_payload(session_id=session_id, environment=self.environment, metadata=unsigned)
+        except (CheckoutValidationError, ProjectionSealError) as error:
+            raise ProjectionSealError("Stripe Session has an invalid CartRay projection") from error
+        expected_chunks = build_item_chunks(items)
+        if (
+            unsigned["cr_item_count"] != str(len(items))
+            or unsigned["cr_chunk_count"] != str(len(expected_chunks))
+            or any(unsigned[f"cr_items_{index:02d}"] != chunk for index, chunk in enumerate(expected_chunks, start=1))
+        ):
+            raise ProjectionSealError("Stripe Session has a non-canonical CartRay projection")
+        if not await verifier.verify(payload, signature):
+            raise ProjectionSealError("Stripe Session has an invalid CartRay projection signature")
+        return items
+
+
+def _base64url_decode(value: str) -> bytes:
+    if not isinstance(value, str) or not value:
+        raise ValueError
+    return base64.urlsafe_b64decode(value + "=" * (-len(value) % 4))
 
 
 @dataclass(frozen=True)
@@ -156,6 +221,141 @@ class StripePriceResolver:
         ):
             raise CatalogueValidationError(f"Stripe Price is invalid for lookup key: {lookup_key}")
         return ResolvedPrice(stripe_price_id=price_id, amount_minor=amount, currency=currency)
+
+
+@dataclass(frozen=True)
+class StripeLineItem:
+    line_item_id: str
+    price_id: str
+    quantity: int
+    unit_amount_minor: int
+    currency: str
+
+
+@dataclass(frozen=True)
+class StripeCheckoutSession:
+    session_id: str
+    livemode: bool
+    mode: str
+    status: str
+    payment_status: str
+    amount_total_minor: int
+    currency: str
+    metadata: Mapping[str, str]
+    line_items: tuple[StripeLineItem, ...]
+
+
+@dataclass(frozen=True)
+class StripeCheckoutSessionRetriever:
+    client: StripeApiClient
+
+    async def retrieve(self, session_id: str) -> StripeCheckoutSession:
+        if not _STRIPE_SESSION_ID_RE.fullmatch(session_id):
+            raise StripeApiError("Stripe webhook identified an invalid Checkout Session ID")
+        session = await self.client.get(f"/v1/checkout/sessions/{session_id}", {})
+        if session.get("id") != session_id:
+            raise StripeApiError("Stripe returned a different Checkout Session")
+        line_items = await self._line_items(session_id)
+        try:
+            metadata = session["metadata"]
+            livemode = session["livemode"]
+            mode = session["mode"]
+            status = session["status"]
+            payment_status = session["payment_status"]
+            amount_total_minor = session["amount_total"]
+            currency = session["currency"]
+        except KeyError as error:
+            raise StripeApiError("Stripe Checkout Session is incomplete") from error
+        if (
+            not isinstance(metadata, dict)
+            or any(not isinstance(key, str) or not isinstance(value, str) for key, value in metadata.items())
+            or not isinstance(livemode, bool)
+            or not isinstance(mode, str)
+            or not isinstance(status, str)
+            or not isinstance(payment_status, str)
+            or not isinstance(amount_total_minor, int)
+            or isinstance(amount_total_minor, bool)
+            or not isinstance(currency, str)
+            or amount_total_minor < 0
+            or len(currency) != 3
+        ):
+            raise StripeApiError("Stripe Checkout Session is invalid")
+        return StripeCheckoutSession(
+            session_id,
+            livemode,
+            mode,
+            status,
+            payment_status,
+            amount_total_minor,
+            currency,
+            metadata,
+            line_items,
+        )
+
+    async def _line_items(self, session_id: str) -> tuple[StripeLineItem, ...]:
+        line_items: list[StripeLineItem] = []
+        line_item_ids: set[str] = set()
+        cursors: set[str] = set()
+        starting_after: str | None = None
+        for _page in range(MAX_STRIPE_LINE_ITEM_PAGES):
+            query = {"limit": "100"}
+            if starting_after is not None:
+                query["starting_after"] = starting_after
+            page = await self.client.get(f"/v1/checkout/sessions/{session_id}/line_items", query)
+            raw_items = page.get("data")
+            has_more = page.get("has_more")
+            if not isinstance(raw_items, list) or not isinstance(has_more, bool) or not raw_items:
+                raise StripeApiError("Stripe Checkout Session line items are invalid")
+            page_items = tuple(_line_item(item) for item in raw_items)
+            page_line_item_ids = {item.line_item_id for item in page_items}
+            if len(page_line_item_ids) != len(page_items) or page_line_item_ids & line_item_ids:
+                raise StripeApiError("Stripe Checkout Session line items contain duplicates")
+            line_item_ids.update(page_line_item_ids)
+            line_items.extend(page_items)
+            if len(line_items) > MAX_STRIPE_LINE_ITEMS:
+                raise StripeApiError("Stripe Checkout Session has too many line items")
+            if not has_more:
+                return tuple(line_items)
+            starting_after = page_items[-1].line_item_id
+            if starting_after in cursors:
+                raise StripeApiError("Stripe Checkout Session line-item pagination repeated a cursor")
+            cursors.add(starting_after)
+        raise StripeApiError("Stripe Checkout Session line-item pagination exceeded its limit")
+
+
+def _line_item(payload: object) -> StripeLineItem:
+    if not isinstance(payload, dict):
+        raise StripeApiError("Stripe Checkout Session line item is invalid")
+    try:
+        line_item_id = payload["id"]
+        price = payload["price"]
+        quantity = payload["quantity"]
+    except KeyError as error:
+        raise StripeApiError("Stripe Checkout Session line item is incomplete") from error
+    if not isinstance(price, dict):
+        raise StripeApiError("Stripe Checkout Session line item price is invalid")
+    try:
+        price_id = price["id"]
+        unit_amount_minor = price["unit_amount"]
+        currency = price["currency"]
+    except KeyError as error:
+        raise StripeApiError("Stripe Checkout Session line item price is incomplete") from error
+    if (
+        not isinstance(line_item_id, str)
+        or not line_item_id
+        or not isinstance(price_id, str)
+        or not price_id.startswith("price_")
+        or not isinstance(quantity, int)
+        or isinstance(quantity, bool)
+        or quantity < 1
+        or not isinstance(unit_amount_minor, int)
+        or isinstance(unit_amount_minor, bool)
+        or unit_amount_minor < 0
+        or not isinstance(currency, str)
+        or len(currency) != 3
+    ):
+        raise StripeApiError("Stripe Checkout Session line item is invalid")
+    return StripeLineItem(line_item_id, price_id, quantity, unit_amount_minor, currency)
 
 
 @dataclass(frozen=True)

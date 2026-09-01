@@ -5,9 +5,10 @@ import pytest
 
 
 def test_d1_migration_preserves_immutable_and_idempotent_boundaries():
-    migration = Path(__file__).parents[1] / "migrations" / "0001_commerce_kernel.sql"
+    migrations = sorted((Path(__file__).parents[1] / "migrations").glob("*.sql"))
     connection = sqlite3.connect(":memory:")
-    connection.executescript(migration.read_text())
+    for migration in migrations:
+        connection.executescript(migration.read_text())
     connection.execute(
         "INSERT INTO orders VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
         ("cr_1", "request_1", "digest_1", "catalogue_1", "items_1", "aud", 2500, 1),
@@ -17,7 +18,10 @@ def test_d1_migration_preserves_immutable_and_idempotent_boundaries():
         ("cr_1", "TEST-TEMPLATE", 1, "price_test", 2500, "[]"),
     )
     connection.execute(
-        "INSERT INTO checkout_sessions VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        """INSERT INTO checkout_sessions
+           (order_id, state, external_session_id, redirect_url, projection_nonce, lease_expires_at,
+            creation_attempt, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
         ("cr_1", "creating", None, None, "nonce_1", 2, 1, 1),
     )
     connection.execute(
