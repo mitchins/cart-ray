@@ -10,11 +10,29 @@ command = "uv run python scripts/sync_worker_source.py"
 
 [vars]
 CARTRAY_ENVIRONMENT = "test"
-CARTRAY_SUCCESS_URL = "https://cart-ray.invalid/purchase-complete/"
-CARTRAY_CANCEL_URL = "https://cart-ray.invalid/checkout-cancelled/"
+CARTRAY_SIGNING_KEY_ID = "cartray-test-2026-09-01"
+CARTRAY_STOREFRONT_ORIGIN = "https://cartray-store-test.pages.dev"
+CARTRAY_SUCCESS_URL = "https://cartray-store-test.pages.dev/?checkout=complete"
+CARTRAY_CANCEL_URL = "https://cartray-store-test.pages.dev/?checkout=cancelled"
+
+[secrets]
+required = [
+  "STRIPE_API_KEY",
+  "STRIPE_WEBHOOK_SECRET",
+  "CARTRAY_SIGNING_PRIVATE_KEY_PKCS8_B64",
+  "CARTRAY_PROJECTION_PUBLIC_KEYS_JSON",
+]
 
 [[d1_databases]]
 binding = "DB"
 database_name = "cartray-test"
 database_id = "1c5c2dab-e81c-43e4-b361-dee9a5249e3d"
 migrations_dir = "migrations"
+
+[[ratelimits]]
+name = "CHECKOUT_RATE_LIMITER"
+namespace_id = "20260901"
+
+  [ratelimits.simple]
+  limit = 20
+  period = 60

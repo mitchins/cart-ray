@@ -12,4 +12,5 @@ storefront-dist/
 .env.*
 .dev.vars
 .dev.vars.*
+.m4b-bootstrap.env
 !.env.example

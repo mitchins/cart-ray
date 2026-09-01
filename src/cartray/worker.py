@@ -92,6 +92,12 @@ def create_app(service_factory=None, catalogue_factory=None, settlement_service_
         except RuntimeError:
             return Response({"error": "checkout unavailable"}, status=503)
         try:
+            checkout_allowed = await _checkout_rate_limit(request.env)
+        except Exception:
+            return Response({"error": "checkout unavailable"}, status=503, headers=cors.response_headers())
+        if not checkout_allowed:
+            return Response({"error": "checkout rate limit exceeded"}, status=429, headers=cors.response_headers())
+        try:
             request_data = await _checkout_payload(request)
         except CheckoutValidationError as error:
             return Response({"error": str(error)}, status=400, headers=cors.response_headers())
@@ -239,6 +245,15 @@ def _https_url(value: str, name: str) -> str:
 def _d1_success(result) -> bool:
     success = getattr(result, "success", result.get("success") if isinstance(result, dict) else False)
     return bool(success)
+
+
+async def _checkout_rate_limit(env) -> bool:
+    limiter = getattr(env, "CHECKOUT_RATE_LIMITER", None)
+    if limiter is None:
+        raise RuntimeError("missing checkout rate-limit binding")
+    result = await limiter.limit({"key": "cartray-test:checkout"})
+    success = result.get("success") if isinstance(result, dict) else getattr(result, "success", None)
+    return success is True
 
 
 def _cors_policy(env, request, *, method: str) -> CorsPolicy:
