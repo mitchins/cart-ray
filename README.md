@@ -19,5 +19,9 @@ See [the Milestone 0 contract](docs/milestone-0-contract.md). Run the test suite
 uv run pytest
 ```
 
-The in-progress [Milestone 1 contract](docs/milestone-1-contract.md) adds a test-mode-only
-Stripe adapter. It does not deploy a Worker or use live Stripe credentials.
+The [Milestone 1 contract](docs/milestone-1-contract.md) adds a test-mode-only Stripe adapter,
+and the [Milestone 2 contract](docs/milestone-2-contract.md) adds the local Worker/D1 checkout
+runtime. Neither deploys a Worker or uses live Stripe credentials.
+
+The in-progress [Milestone 3 contract](docs/milestone-3-contract.md) adds a static Pages test
+storefront, an active-only public catalogue endpoint, and exact-origin browser CORS.

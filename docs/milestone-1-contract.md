@@ -40,6 +40,7 @@ The development account contains only these CartRay test objects:
 | `cr_test_template` | AUD 25.00 |
 | `cr_test_bundle` | AUD 50.00 |
 | `cr_test_free` | AUD 0.00 |
+| `cr_test_support_hours` | AUD 100.00 |
 
 `CRTEST100` is an active, once-only 100% **sandbox** promotion code. It exercises a checkout with
 `payment_status=no_payment_required`; it is never a live discount.

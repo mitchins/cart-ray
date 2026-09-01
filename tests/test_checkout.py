@@ -54,6 +54,34 @@ def test_mixed_cart_creates_immutable_order_and_trusted_gateway_spec(checkout_se
         service.store.connection.execute("UPDATE orders SET currency = 'usd' WHERE order_id = ?", (spec.order_id,))
 
 
+def test_maximum_quantity_is_preserved_from_checkout_through_the_immutable_order(checkout_service):
+    service, gateway = checkout_service
+    redirect = checkout(
+        service,
+        CheckoutRequest(
+            "support-hours-five",
+            service.catalogue.version,
+            (CanonicalItem("TEST-SUPPORT-HOURS", 5),),
+        ),
+    )
+
+    spec = gateway.requests[0]
+    assert redirect.session_id == "cr_test_000001"
+    assert spec.line_items == (("price_fixture_support_hours", 5),)
+    assert parse_projection_items(spec.metadata) == (CanonicalItem("TEST-SUPPORT-HOURS", 5),)
+    assert service.store.order_row(spec.order_id)["subtotal_minor"] == 50000
+    assert [dict(item) for item in service.store.order_items(spec.order_id)] == [
+        {
+            "order_id": spec.order_id,
+            "product_key": "TEST-SUPPORT-HOURS",
+            "quantity": 5,
+            "stripe_price_id": "price_fixture_support_hours",
+            "unit_amount_minor": 10000,
+            "fulfilment_resources_json": '["TEST-RESOURCE-SUPPORT-HOURS"]',
+        }
+    ]
+
+
 def test_same_request_reuses_the_logical_checkout_and_changed_body_conflicts(checkout_service):
     service, gateway = checkout_service
     request = valid_request(service.catalogue)

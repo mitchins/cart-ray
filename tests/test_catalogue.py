@@ -1,16 +1,47 @@
+import json
+from dataclasses import replace
+from pathlib import Path
+
 import pytest
 
 from cartray.catalogue import load_catalogue_sources
 from cartray.errors import CatalogueValidationError, CheckoutValidationError
+from cartray.test_catalogue import TEST_CATALOGUE_SOURCES, TEST_FULFILMENT_EXPANSIONS
+
+
+def test_worker_and_preview_use_the_same_synthetic_catalogue_policy():
+    root = Path(__file__).parents[1] / "fixtures"
+    assert TEST_CATALOGUE_SOURCES == load_catalogue_sources(root / "catalogue.csv")
+    assert TEST_FULFILMENT_EXPANSIONS == {
+        key: tuple(value) for key, value in json.loads((root / "fulfilment-expansions.json").read_text()).items()
+    }
 
 
 def test_public_and_private_manifests_have_separate_concerns(fixture_catalogue):
     public = fixture_catalogue.public_manifest()
     private = fixture_catalogue.private_manifest()
-    assert public["products"]["TEST-TEMPLATE"]["amount_minor"] == 2500
-    assert "stripe_price_id" not in public["products"]["TEST-TEMPLATE"]
+    template = next(product for product in public["products"] if product["product_key"] == "TEST-TEMPLATE")
+    assert template == {
+        "product_key": "TEST-TEMPLATE",
+        "title": "Test Digital Template",
+        "amount_minor": 2500,
+        "currency": "aud",
+        "max_quantity": 1,
+    }
+    assert "stripe_price_id" not in template
     assert private["products"]["TEST-TEMPLATE"]["stripe_price_id"] == "price_fixture_template"
-    assert "fulfilment_resources" not in public["products"]["TEST-BUNDLE"]
+    assert "fulfilment_resources" not in json.dumps(public)
+
+    hidden = replace(
+        fixture_catalogue.products["TEST-BUNDLE"],
+        source=replace(fixture_catalogue.products["TEST-BUNDLE"].source, active=False),
+    )
+    inactive_catalogue = replace(fixture_catalogue, products={**fixture_catalogue.products, "TEST-BUNDLE": hidden})
+    assert {product["product_key"] for product in inactive_catalogue.public_manifest()["products"]} == {
+        "TEST-FREE",
+        "TEST-SUPPORT-HOURS",
+        "TEST-TEMPLATE",
+    }
 
 
 def test_catalogue_rejects_unknown_product(fixture_catalogue):

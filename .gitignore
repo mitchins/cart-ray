@@ -7,6 +7,7 @@ python_modules/
 pylock.toml
 dist/
 .wrangler/
+storefront-dist/
 .env
 .env.*
 .dev.vars

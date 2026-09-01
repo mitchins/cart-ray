@@ -13,5 +13,10 @@
     "stripe_price_id": "price_fixture_free",
     "amount_minor": 0,
     "currency": "aud"
+  },
+  "cr_test_support_hours": {
+    "stripe_price_id": "price_fixture_support_hours",
+    "amount_minor": 10000,
+    "currency": "aud"
   }
 }
