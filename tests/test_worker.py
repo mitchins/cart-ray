@@ -1,9 +1,12 @@
+import hmac
 import json
+import time
 from dataclasses import dataclass
+from hashlib import sha256
 
 from kinglet import TestClient
 
-from cartray.errors import CheckoutValidationError
+from cartray.errors import CheckoutValidationError, SettlementInconsistency
 from cartray.models import CheckoutRedirect
 from cartray.stripe import ProjectionSealError
 from cartray.worker import app, create_app
@@ -34,6 +37,27 @@ class FailingCheckoutService:
 
     async def checkout(self, _request):
         raise self.error
+
+
+@dataclass
+class RecordingSettlementService:
+    events: list = None
+    error: Exception | None = None
+
+    def __post_init__(self):
+        self.events = [] if self.events is None else self.events
+
+    async def settle(self, event):
+        if self.error is not None:
+            raise self.error
+        self.events.append(event)
+        return False
+
+
+def _webhook_headers(body: bytes, secret: str, *, timestamp: int | None = None) -> dict[str, str]:
+    timestamp = int(time.time()) if timestamp is None else timestamp
+    signature = hmac.new(secret.encode(), f"{timestamp}.".encode() + body, sha256).hexdigest()
+    return {"stripe-signature": f"t={timestamp},v1={signature}", "content-length": str(len(body))}
 
 
 def test_checkout_route_accepts_only_valid_json_and_returns_a_redirect(fixture_catalogue):
@@ -188,3 +212,82 @@ def test_cors_preflight_is_route_and_header_specific():
     )
     assert status == 403
     assert "Access-Control-Allow-Origin" not in headers
+
+
+def test_stripe_webhook_requires_a_valid_signature_and_never_applies_browser_cors():
+    secret = "whsec_fixture"
+    service = RecordingSettlementService()
+
+    async def settlement_factory(_env):
+        return service
+
+    client = TestClient(
+        create_app(settlement_service_factory=settlement_factory), env={"STRIPE_WEBHOOK_SECRET": secret}
+    )
+    payload = {
+        "id": "evt_worker_1",
+        "type": "checkout.session.completed",
+        "livemode": False,
+        "data": {"object": {"id": "cs_worker_1"}},
+    }
+    body_text = json.dumps(payload, separators=(",", ":"))
+    body = body_text.encode()
+    status, headers, _body = client.request(
+        "POST", "/stripe/webhook", data=body_text, headers=_webhook_headers(body, secret)
+    )
+
+    assert status == 200
+    assert len(service.events) == 1
+    assert "Access-Control-Allow-Origin" not in headers
+
+    status, _headers, _body = client.request(
+        "POST", "/stripe/webhook", data=body_text, headers={"stripe-signature": "t=1,v1=" + "0" * 64}
+    )
+    assert status == 400
+    assert len(service.events) == 1
+
+
+def test_stripe_webhook_fails_closed_on_a_settlement_inconsistency():
+    secret = "whsec_fixture"
+    service = RecordingSettlementService(error=SettlementInconsistency("mismatch"))
+
+    async def settlement_factory(_env):
+        return service
+
+    client = TestClient(
+        create_app(settlement_service_factory=settlement_factory), env={"STRIPE_WEBHOOK_SECRET": secret}
+    )
+    body_text = json.dumps(
+        {
+            "id": "evt_worker_2",
+            "type": "checkout.session.completed",
+            "livemode": False,
+            "data": {"object": {"id": "cs_worker_2"}},
+        },
+        separators=(",", ":"),
+    )
+    body = body_text.encode()
+    status, _headers, _body = client.request(
+        "POST", "/stripe/webhook", data=body_text, headers=_webhook_headers(body, secret)
+    )
+
+    assert status == 409
+
+
+def test_stripe_webhook_treats_missing_server_secret_as_unavailable():
+    body_text = json.dumps(
+        {
+            "id": "evt_worker_3",
+            "type": "checkout.session.completed",
+            "livemode": False,
+            "data": {"object": {"id": "cs_worker_3"}},
+        },
+        separators=(",", ":"),
+    )
+    body = body_text.encode()
+    status, _headers, response_body = TestClient(create_app()).request(
+        "POST", "/stripe/webhook", data=body_text, headers=_webhook_headers(body, "whsec_fixture")
+    )
+
+    assert status == 503
+    assert json.loads(response_body) == {"error": "Stripe webhook unavailable"}

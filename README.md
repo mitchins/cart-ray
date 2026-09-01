@@ -25,3 +25,7 @@ runtime. Neither deploys a Worker or uses live Stripe credentials.
 
 The in-progress [Milestone 3 contract](docs/milestone-3-contract.md) adds a static Pages test
 storefront, an active-only public catalogue endpoint, and exact-origin browser CORS.
+
+The in-progress [Milestone 4a contract](docs/milestone-4-contract.md) adds the test-only signed
+Stripe webhook settlement kernel and its D1 `OrderConfirmed` outbox boundary. It deliberately does
+not deploy the Worker or configure a Stripe webhook endpoint; those operational steps are M4b.

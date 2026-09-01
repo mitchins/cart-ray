@@ -8,7 +8,7 @@ from kinglet import MockD1Database
 
 from cartray.canonical import CanonicalItem, parse_projection_items
 from cartray.checkout import CheckoutService
-from cartray.errors import CheckoutInProgress, IdempotencyConflict
+from cartray.errors import CheckoutInProgress, IdempotencyConflict, SettlementInconsistency
 from cartray.gateway import FakePaymentGateway
 from cartray.models import CheckoutRedirect, CheckoutRequest
 from cartray.store import D1OrderStore
@@ -17,8 +17,8 @@ from cartray.store import D1OrderStore
 @pytest.fixture
 def d1_database():
     database = MockD1Database()
-    migration = Path(__file__).parents[1] / "migrations" / "0001_commerce_kernel.sql"
-    database.conn.executescript(migration.read_text())
+    for migration in sorted((Path(__file__).parents[1] / "migrations").glob("*.sql")):
+        database.conn.executescript(migration.read_text())
     return database
 
 
@@ -154,3 +154,48 @@ def test_d1_store_rejects_reused_request_id_with_a_different_cart(fixture_catalo
 
     with pytest.raises(IdempotencyConflict):
         asyncio.run(store.start_or_load(service._reconstruct_order(conflicting_request), nonce="second", now=101))
+
+
+def test_d1_store_confirms_once_and_rejects_a_conflicting_event_payload(fixture_catalogue, d1_database):
+    store = D1OrderStore(d1_database)
+    gateway = FakePaymentGateway()
+    service = CheckoutService(fixture_catalogue, store, gateway)
+    request = CheckoutRequest(
+        "d1-settlement-request",
+        fixture_catalogue.version,
+        (CanonicalItem("TEST-TEMPLATE", 1),),
+    )
+    asyncio.run(service.checkout(request))
+    order_id = gateway.requests[0].order_id
+    asyncio.run(
+        d1_database.prepare("UPDATE checkout_sessions SET external_session_id = ? WHERE order_id = ?")
+        .bind("cs_d1_settlement", order_id)
+        .run()
+    )
+
+    kwargs = {
+        "order_id": order_id,
+        "session_id": "cs_d1_settlement",
+        "event_id": "evt_d1_settlement",
+        "payload": {"id": "evt_d1_settlement"},
+        "payload_sha256": "sha256:d1-fixture",
+        "payment_status": "paid",
+        "amount_total_minor": 2_500,
+        "now": 123,
+    }
+    begin_kwargs = {key: kwargs[key] for key in ("event_id", "session_id", "payload", "payload_sha256")}
+    assert asyncio.run(store.begin_settlement_event(**begin_kwargs, now=122)) is False
+    assert asyncio.run(store.begin_settlement_event(**begin_kwargs, now=123)) is False
+    assert asyncio.run(store.confirm_settlement(**kwargs)) is False
+    assert asyncio.run(store.confirm_settlement(**kwargs)) is True
+    changed = {**kwargs, "payload_sha256": "sha256:changed"}
+    with pytest.raises(SettlementInconsistency, match="payload hash"):
+        asyncio.run(store.confirm_settlement(**changed))
+
+    event_query = d1_database.prepare("SELECT event_type FROM outbox WHERE order_id = ? ORDER BY id").bind(order_id)
+    events = asyncio.run(event_query.all())
+    assert [event["event_type"] for event in events.results] == [
+        "OrderCreated",
+        "CheckoutRedirectIssued",
+        "OrderConfirmed",
+    ]

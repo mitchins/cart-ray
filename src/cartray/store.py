@@ -5,7 +5,7 @@ import sqlite3
 import time
 from dataclasses import dataclass
 
-from .errors import CheckoutInProgress, IdempotencyConflict
+from .errors import CheckoutInProgress, IdempotencyConflict, SettlementInconsistency
 from .models import CheckoutOrder, CheckoutRedirect, OrderItem
 
 SCHEMA = """
@@ -40,7 +40,13 @@ CREATE TABLE IF NOT EXISTS checkout_sessions (
   projection_nonce TEXT NOT NULL,
   lease_expires_at INTEGER,
   creation_attempt INTEGER NOT NULL DEFAULT 1,
-  updated_at INTEGER NOT NULL
+  updated_at INTEGER NOT NULL,
+  settlement_state TEXT NOT NULL DEFAULT 'pending' CHECK(settlement_state IN ('pending', 'confirmed')),
+  settlement_session_id TEXT,
+  settlement_event_id TEXT,
+  settled_at INTEGER,
+  stripe_payment_status TEXT,
+  stripe_amount_total_minor INTEGER
 );
 
 CREATE TABLE IF NOT EXISTS outbox (
@@ -60,10 +66,16 @@ CREATE TABLE IF NOT EXISTS stripe_events (
   payload_json TEXT NOT NULL,
   received_at INTEGER NOT NULL,
   processed_at INTEGER,
-  processing_error TEXT
+  processing_error TEXT,
+  payload_sha256 TEXT NOT NULL DEFAULT '',
+  processing_state TEXT NOT NULL DEFAULT 'received'
+    CHECK(processing_state IN ('received', 'ignored', 'confirmed', 'failed'))
 );
 
 CREATE INDEX IF NOT EXISTS outbox_undelivered ON outbox(delivered_at, id);
+CREATE UNIQUE INDEX IF NOT EXISTS checkout_sessions_settlement_session_id
+ON checkout_sessions(settlement_session_id)
+WHERE settlement_session_id IS NOT NULL;
 
 CREATE TRIGGER IF NOT EXISTS orders_are_immutable
 BEFORE UPDATE ON orders
@@ -98,6 +110,13 @@ BEGIN
   VALUES (NEW.order_id, 'CheckoutRedirectIssued',
           json_object('order_id', NEW.order_id, 'session_id', NEW.external_session_id), NEW.updated_at);
 END;
+
+CREATE TRIGGER IF NOT EXISTS checkout_session_settlement_is_monotonic
+BEFORE UPDATE OF settlement_state ON checkout_sessions
+WHEN NOT (OLD.settlement_state = 'pending' AND NEW.settlement_state = 'confirmed')
+BEGIN
+  SELECT RAISE(ABORT, 'checkout settlement transition is invalid');
+END;
 """
 
 
@@ -108,6 +127,15 @@ class CheckoutStart:
     state: str
     nonce: str
     redirect: CheckoutRedirect | None
+
+
+@dataclass(frozen=True)
+class SettlementContext:
+    order: CheckoutOrder
+    nonce: str
+    checkout_session_id: str
+    settlement_state: str
+    settlement_session_id: str | None
 
 
 class SqliteOrderStore:
@@ -264,6 +292,148 @@ class SqliteOrderStore:
     def outbox_events(self, order_id: str) -> list[sqlite3.Row]:
         return self.connection.execute("SELECT * FROM outbox WHERE order_id = ? ORDER BY id", (order_id,)).fetchall()
 
+    async def settlement_context(self, order_id: str) -> SettlementContext:
+        row = self.connection.execute(
+            """SELECT projection_nonce, external_session_id, settlement_state, settlement_session_id
+               FROM checkout_sessions WHERE order_id = ?""",
+            (order_id,),
+        ).fetchone()
+        if row is None or not isinstance(row["external_session_id"], str):
+            raise SettlementInconsistency("CartRay order has no Checkout Session")
+        return SettlementContext(
+            await self.load_order(order_id),
+            row["projection_nonce"],
+            row["external_session_id"],
+            row["settlement_state"],
+            row["settlement_session_id"],
+        )
+
+    async def begin_settlement_event(
+        self,
+        *,
+        event_id: str,
+        session_id: str,
+        payload: dict[str, object],
+        payload_sha256: str,
+        now: int | None = None,
+    ) -> bool:
+        """Return true only when this exact event is already confirmed."""
+        now = int(time.time()) if now is None else now
+        with self.connection:
+            existing = self.connection.execute(
+                "SELECT payload_sha256, processing_state, session_id FROM stripe_events WHERE stripe_event_id = ?",
+                (event_id,),
+            ).fetchone()
+            if existing is not None:
+                if existing["payload_sha256"] != payload_sha256:
+                    raise SettlementInconsistency("Stripe event ID has a different payload hash")
+                if existing["session_id"] != session_id:
+                    raise SettlementInconsistency("Stripe event ID is bound to a different Checkout Session")
+                if existing["processing_state"] == "confirmed":
+                    return True
+                if existing["processing_state"] != "received":
+                    raise SettlementInconsistency("Stripe event has an inconsistent settlement record")
+                return False
+            self.connection.execute(
+                """INSERT INTO stripe_events
+                   (stripe_event_id, event_type, session_id, payload_json, received_at,
+                    payload_sha256, processing_state)
+                   VALUES (?, 'checkout.session.completed', ?, ?, ?, ?, 'received')""",
+                (event_id, session_id, json.dumps(payload, separators=(",", ":")), now, payload_sha256),
+            )
+        return False
+
+    async def record_ignored_event(
+        self,
+        *,
+        event_id: str,
+        event_type: str,
+        payload: dict[str, object],
+        payload_sha256: str,
+        now: int | None = None,
+    ) -> bool:
+        now = int(time.time()) if now is None else now
+        with self.connection:
+            existing = self.connection.execute(
+                "SELECT payload_sha256, processing_state FROM stripe_events WHERE stripe_event_id = ?", (event_id,)
+            ).fetchone()
+            if existing is not None:
+                if existing["payload_sha256"] != payload_sha256:
+                    raise SettlementInconsistency("Stripe event ID has a different payload hash")
+                return existing["processing_state"] == "ignored"
+            self.connection.execute(
+                """INSERT INTO stripe_events
+                   (stripe_event_id, event_type, session_id, payload_json, received_at, processed_at,
+                    payload_sha256, processing_state)
+                   VALUES (?, ?, NULL, ?, ?, ?, ?, 'ignored')""",
+                (event_id, event_type, json.dumps(payload, separators=(",", ":")), now, now, payload_sha256),
+            )
+        return False
+
+    async def confirm_settlement(
+        self,
+        *,
+        order_id: str,
+        session_id: str,
+        event_id: str,
+        payload: dict[str, object],
+        payload_sha256: str,
+        payment_status: str,
+        amount_total_minor: int,
+        now: int | None = None,
+    ) -> bool:
+        now = int(time.time()) if now is None else now
+        with self.connection:
+            existing = self.connection.execute(
+                "SELECT payload_sha256, processing_state, session_id FROM stripe_events WHERE stripe_event_id = ?",
+                (event_id,),
+            ).fetchone()
+            resume = False
+            if existing is not None:
+                if existing["payload_sha256"] != payload_sha256:
+                    raise SettlementInconsistency("Stripe event ID has a different payload hash")
+                if existing["processing_state"] == "confirmed":
+                    return True
+                if existing["processing_state"] != "received" or existing["session_id"] != session_id:
+                    raise SettlementInconsistency("Stripe event has an inconsistent unfinished settlement record")
+                resume = True
+            context = await self.settlement_context(order_id)
+            if context.checkout_session_id != session_id or (
+                context.settlement_session_id is not None and context.settlement_session_id != session_id
+            ):
+                raise SettlementInconsistency("CartRay order is bound to a different Checkout Session")
+            if resume:
+                self.connection.execute(
+                    """UPDATE stripe_events SET event_type = 'checkout.session.completed', payload_json = ?,
+                       processed_at = ?, processing_error = NULL, processing_state = 'confirmed'
+                       WHERE stripe_event_id = ? AND processing_state = 'received'""",
+                    (json.dumps(payload, separators=(",", ":")), now, event_id),
+                )
+            else:
+                self.connection.execute(
+                    """INSERT INTO stripe_events
+                       (stripe_event_id, event_type, session_id, payload_json, received_at, processed_at,
+                        payload_sha256, processing_state)
+                       VALUES (?, 'checkout.session.completed', ?, ?, ?, ?, ?, 'confirmed')""",
+                    (event_id, session_id, json.dumps(payload, separators=(",", ":")), now, now, payload_sha256),
+                )
+            if context.settlement_state == "confirmed":
+                return True
+            self.connection.execute(
+                """UPDATE checkout_sessions
+                   SET settlement_state = 'confirmed', settlement_session_id = ?, settlement_event_id = ?,
+                       settled_at = ?, stripe_payment_status = ?, stripe_amount_total_minor = ?, updated_at = ?
+                   WHERE order_id = ? AND settlement_state = 'pending'""",
+                (session_id, event_id, now, payment_status, amount_total_minor, now, order_id),
+            )
+            self._insert_outbox(
+                order_id,
+                "OrderConfirmed",
+                {"order_id": order_id, "session_id": session_id, "items_digest": context.order.items_digest},
+                now,
+            )
+            return False
+
     def _insert_outbox(self, order_id: str, event_type: str, payload: dict[str, str], now: int) -> None:
         self.connection.execute(
             """INSERT OR IGNORE INTO outbox(order_id, event_type, payload_json, created_at)
@@ -375,6 +545,196 @@ class D1OrderStore:
         if row["request_fingerprint"] != request_fingerprint:
             raise IdempotencyConflict("checkout request ID was reused with a different cart")
         return await self.load_order(row["order_id"])
+
+    async def settlement_context(self, order_id: str) -> SettlementContext:
+        row = await self._first(
+            """SELECT projection_nonce, external_session_id, settlement_state, settlement_session_id
+               FROM checkout_sessions WHERE order_id = ?""",
+            order_id,
+        )
+        if row is None or not isinstance(row["external_session_id"], str):
+            raise SettlementInconsistency("CartRay order has no Checkout Session")
+        return SettlementContext(
+            await self.load_order(order_id),
+            row["projection_nonce"],
+            row["external_session_id"],
+            row["settlement_state"],
+            row["settlement_session_id"],
+        )
+
+    async def begin_settlement_event(
+        self,
+        *,
+        event_id: str,
+        session_id: str,
+        payload: dict[str, object],
+        payload_sha256: str,
+        now: int | None = None,
+    ) -> bool:
+        """Return true only when this exact event is already confirmed."""
+        now = int(time.time()) if now is None else now
+        existing = await self._first(
+            "SELECT payload_sha256, processing_state, session_id FROM stripe_events WHERE stripe_event_id = ?", event_id
+        )
+        if existing is not None:
+            if existing["payload_sha256"] != payload_sha256:
+                raise SettlementInconsistency("Stripe event ID has a different payload hash")
+            if existing["session_id"] != session_id:
+                raise SettlementInconsistency("Stripe event ID is bound to a different Checkout Session")
+            if existing["processing_state"] == "confirmed":
+                return True
+            if existing["processing_state"] != "received":
+                raise SettlementInconsistency("Stripe event has an inconsistent settlement record")
+            return False
+        statement = self.database.prepare(
+            """INSERT INTO stripe_events
+               (stripe_event_id, event_type, session_id, payload_json, received_at,
+                payload_sha256, processing_state)
+               VALUES (?, 'checkout.session.completed', ?, ?, ?, ?, 'received')"""
+        ).bind(event_id, session_id, json.dumps(payload, separators=(",", ":")), now, payload_sha256)
+        try:
+            await statement.run()
+        except Exception:
+            duplicate = await self._first(
+                "SELECT payload_sha256, processing_state, session_id FROM stripe_events WHERE stripe_event_id = ?",
+                event_id,
+            )
+            if duplicate is None:
+                raise
+            if duplicate["payload_sha256"] != payload_sha256 or duplicate["session_id"] != session_id:
+                raise SettlementInconsistency("Stripe event ID has an inconsistent duplicate record")
+            if duplicate["processing_state"] == "confirmed":
+                return True
+            if duplicate["processing_state"] == "received":
+                return False
+            raise SettlementInconsistency("Stripe event has an inconsistent settlement record")
+        return False
+
+    async def record_ignored_event(
+        self,
+        *,
+        event_id: str,
+        event_type: str,
+        payload: dict[str, object],
+        payload_sha256: str,
+        now: int | None = None,
+    ) -> bool:
+        now = int(time.time()) if now is None else now
+        existing = await self._first(
+            "SELECT payload_sha256, processing_state FROM stripe_events WHERE stripe_event_id = ?", event_id
+        )
+        if existing is not None:
+            if existing["payload_sha256"] != payload_sha256:
+                raise SettlementInconsistency("Stripe event ID has a different payload hash")
+            return existing["processing_state"] == "ignored"
+        statement = self.database.prepare(
+            """INSERT INTO stripe_events
+               (stripe_event_id, event_type, session_id, payload_json, received_at, processed_at,
+                payload_sha256, processing_state)
+               VALUES (?, ?, NULL, ?, ?, ?, ?, 'ignored')"""
+        ).bind(event_id, event_type, json.dumps(payload, separators=(",", ":")), now, now, payload_sha256)
+        try:
+            await statement.run()
+        except Exception:
+            duplicate = await self._first(
+                "SELECT payload_sha256, processing_state FROM stripe_events WHERE stripe_event_id = ?", event_id
+            )
+            if (
+                duplicate is not None
+                and duplicate["payload_sha256"] == payload_sha256
+                and duplicate["processing_state"] == "ignored"
+            ):
+                return True
+            raise
+        return False
+
+    async def confirm_settlement(
+        self,
+        *,
+        order_id: str,
+        session_id: str,
+        event_id: str,
+        payload: dict[str, object],
+        payload_sha256: str,
+        payment_status: str,
+        amount_total_minor: int,
+        now: int | None = None,
+    ) -> bool:
+        now = int(time.time()) if now is None else now
+        existing = await self._first(
+            "SELECT payload_sha256, processing_state, session_id FROM stripe_events WHERE stripe_event_id = ?", event_id
+        )
+        resume = False
+        if existing is not None:
+            if existing["payload_sha256"] != payload_sha256:
+                raise SettlementInconsistency("Stripe event ID has a different payload hash")
+            if existing["processing_state"] == "confirmed":
+                return True
+            if existing["processing_state"] != "received" or existing["session_id"] != session_id:
+                raise SettlementInconsistency("Stripe event has an inconsistent unfinished settlement record")
+            resume = True
+        context = await self.settlement_context(order_id)
+        if context.checkout_session_id != session_id or (
+            context.settlement_session_id is not None and context.settlement_session_id != session_id
+        ):
+            raise SettlementInconsistency("CartRay order is bound to a different Checkout Session")
+        if resume:
+            statements = [
+                self.database.prepare(
+                    """UPDATE stripe_events SET event_type = 'checkout.session.completed', payload_json = ?,
+                       processed_at = ?, processing_error = NULL, processing_state = 'confirmed'
+                       WHERE stripe_event_id = ? AND processing_state = 'received'"""
+                ).bind(json.dumps(payload, separators=(",", ":")), now, event_id)
+            ]
+        else:
+            statements = [
+                self.database.prepare(
+                    """INSERT INTO stripe_events
+                       (stripe_event_id, event_type, session_id, payload_json, received_at, processed_at,
+                        payload_sha256, processing_state)
+                       VALUES (?, 'checkout.session.completed', ?, ?, ?, ?, ?, 'confirmed')"""
+                ).bind(event_id, session_id, json.dumps(payload, separators=(",", ":")), now, now, payload_sha256)
+            ]
+        if context.settlement_state == "pending":
+            statements.extend(
+                [
+                    self.database.prepare(
+                        """UPDATE checkout_sessions
+                           SET settlement_state = 'confirmed', settlement_session_id = ?, settlement_event_id = ?,
+                               settled_at = ?, stripe_payment_status = ?, stripe_amount_total_minor = ?, updated_at = ?
+                           WHERE order_id = ? AND settlement_state = 'pending'"""
+                    ).bind(session_id, event_id, now, payment_status, amount_total_minor, now, order_id),
+                    self.database.prepare(
+                        "INSERT INTO outbox(order_id, event_type, payload_json, created_at) VALUES (?, ?, ?, ?)"
+                    ).bind(
+                        order_id,
+                        "OrderConfirmed",
+                        json.dumps(
+                            {
+                                "order_id": order_id,
+                                "session_id": session_id,
+                                "items_digest": context.order.items_digest,
+                            },
+                            separators=(",", ":"),
+                        ),
+                        now,
+                    ),
+                ]
+            )
+        try:
+            await self.database.batch(statements)
+        except Exception:
+            duplicate = await self._first(
+                "SELECT payload_sha256, processing_state FROM stripe_events WHERE stripe_event_id = ?", event_id
+            )
+            if (
+                duplicate is not None
+                and duplicate["payload_sha256"] == payload_sha256
+                and duplicate["processing_state"] == "confirmed"
+            ):
+                return True
+            raise
+        return context.settlement_state == "confirmed"
 
     async def load_order(self, order_id: str) -> CheckoutOrder:
         order = await self._first("SELECT * FROM orders WHERE order_id = ?", order_id)

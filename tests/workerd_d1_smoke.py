@@ -13,10 +13,11 @@ from workers import Response, WorkerEntrypoint
 from cartray.errors import CheckoutInProgress
 from cartray.models import CheckoutOrder, CheckoutRedirect, OrderItem
 from cartray.store import D1OrderStore, _results
-from cartray.workers_crypto import WorkersEd25519Signer
+from cartray.workers_crypto import WorkersEd25519Signer, WorkersEd25519Verifier
 
 TEST_PRIVATE_KEY_PKCS8_B64 = "MC4CAQAwBQYDK2VwBCIEIJZ4orlcGRX4w6SOrvHeEh5ZpFSC0FR4Onu1OKF/Lt87"
 TEST_PUBLIC_KEY_RAW_B64 = "mjCIMxYDlWSJsqHfrQZ+nVkoUEXEiajZ00z2jNxrijg="
+TEST_PUBLIC_KEY_SPKI_B64 = "MCowBQYDK2VwAyEAmjCIMxYDlWSJsqHfrQZ+nVkoUEXEiajZ00z2jNxrijg="
 TEST_PAYLOAD = b"cartray-worker-webcrypto-smoke-v1"
 
 
@@ -50,6 +51,16 @@ class Default(WorkerEntrypoint):
             lease_rejected = True
         redirect = CheckoutRedirect(f"cs_smoke_{token}", "https://checkout.stripe.test/smoke")
         await store.attach_redirect(order.order_id, redirect, now=11)
+        confirmed = await store.confirm_settlement(
+            order_id=order.order_id,
+            session_id=redirect.session_id,
+            event_id=f"evt_smoke_{token}",
+            payload={"id": f"evt_smoke_{token}"},
+            payload_sha256="sha256:smoke",
+            payment_status="paid",
+            amount_total_minor=1,
+            now=12,
+        )
         outbox = (
             await self.env.DB.prepare("SELECT event_type FROM outbox WHERE order_id = ? ORDER BY id")
             .bind(order.order_id)
@@ -75,21 +86,27 @@ class Default(WorkerEntrypoint):
         signature_verified = await crypto.subtle.verify(
             "Ed25519", public_key, bytes_to_arraybuffer(signature), bytes_to_arraybuffer(TEST_PAYLOAD)
         )
+        verifier = WorkersEd25519Verifier(TEST_PUBLIC_KEY_SPKI_B64)
+        verifier_accepted = await verifier.verify(TEST_PAYLOAD, signature)
         session_rows = _results(session)
         result = {
             "d1_batch_owner": first.owner,
+            "first_confirmation": confirmed is False,
             "lease_rejected": lease_rejected,
             "outbox_events": [row["event_type"] for row in _results(outbox)],
             "redirect_persisted": len(session_rows) == 1
             and session_rows[0]["external_session_id"] == redirect.session_id
             and session_rows[0]["redirect_url"] == redirect.url,
             "signature_verified": bool(signature_verified),
+            "verifier_accepted": verifier_accepted,
         }
         expected = {
             "d1_batch_owner": True,
+            "first_confirmation": True,
             "lease_rejected": True,
-            "outbox_events": ["OrderCreated", "CheckoutRedirectIssued"],
+            "outbox_events": ["OrderCreated", "CheckoutRedirectIssued", "OrderConfirmed"],
             "redirect_persisted": True,
             "signature_verified": True,
+            "verifier_accepted": True,
         }
         return Response.json(result, status=200 if result == expected else 500)

@@ -16,3 +16,11 @@ class IdempotencyConflict(CartRayError):
 
 class CheckoutInProgress(CartRayError):
     pass
+
+
+class WebhookValidationError(CartRayError):
+    pass
+
+
+class SettlementInconsistency(CartRayError):
+    pass
