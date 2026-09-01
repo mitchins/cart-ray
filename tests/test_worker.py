@@ -240,8 +240,12 @@ def test_stripe_webhook_requires_a_valid_signature_and_never_applies_browser_cor
     assert len(service.events) == 1
     assert "Access-Control-Allow-Origin" not in headers
 
+    invalid_signature_headers = _webhook_headers(body, secret)
+    invalid_signature_headers["stripe-signature"] = invalid_signature_headers["stripe-signature"].rsplit("=", 1)[0] + (
+        "=" + "0" * 64
+    )
     status, _headers, _body = client.request(
-        "POST", "/stripe/webhook", data=body_text, headers={"stripe-signature": "t=1,v1=" + "0" * 64}
+        "POST", "/stripe/webhook", data=body_text, headers=invalid_signature_headers
     )
     assert status == 400
     assert len(service.events) == 1

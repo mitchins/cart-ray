@@ -705,7 +705,8 @@ class D1OrderStore:
                            WHERE order_id = ? AND settlement_state = 'pending'"""
                     ).bind(session_id, event_id, now, payment_status, amount_total_minor, now, order_id),
                     self.database.prepare(
-                        "INSERT INTO outbox(order_id, event_type, payload_json, created_at) VALUES (?, ?, ?, ?)"
+                        "INSERT OR IGNORE INTO outbox(order_id, event_type, payload_json, created_at) "
+                        "VALUES (?, ?, ?, ?)"
                     ).bind(
                         order_id,
                         "OrderConfirmed",
