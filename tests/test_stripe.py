@@ -11,6 +11,7 @@ from cartray.canonical import CanonicalItem, projection_metadata
 from cartray.errors import CatalogueValidationError
 from cartray.models import CheckoutSpec
 from cartray.stripe import (
+    STRIPE_API_VERSION,
     CheckoutMetadataSealer,
     CheckoutMetadataVerifier,
     ProjectionSealError,
@@ -209,6 +210,7 @@ def test_stripe_checkout_keeps_session_metadata_canonical_when_no_payment_intent
         "/v1/checkout/sessions",
         "/v1/checkout/sessions/cs_test_free",
     ]
+    assert {request[2]["Stripe-Version"] for request in transport.requests} == {STRIPE_API_VERSION}
     session_metadata = parse_qs(transport.requests[1][3] or "")
     assert session_metadata["metadata[cr_order_id]"] == ["cr_order_free"]
     assert session_metadata["metadata[cr_signature]"][0]

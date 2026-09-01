@@ -82,6 +82,11 @@ endpoint signing secret as `STRIPE_WEBHOOK_SECRET` after the endpoint exists. Th
 and that exact destination secret are required for signature verification; a Stripe CLI listener
 secret is not interchangeable with a Dashboard/Workbench destination secret.
 
+CartRay pins its outgoing Stripe API calls to `2023-08-16`, the minimum Stripe API version that
+supports native no-cost Checkout Sessions. Configure the sandbox destination to that same API
+version. This is a destination-level test configuration change, not an account-wide Stripe API
+upgrade.
+
 ```sh
 CLOUDFLARE_ACCOUNT_ID=33623e6d0b4793842a1832c5512aeb49 \
   nvm exec 24.20.0 uv run pywrangler secret put STRIPE_WEBHOOK_SECRET --config wrangler.toml
