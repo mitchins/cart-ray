@@ -23,7 +23,7 @@ class ProjectionSealError(RuntimeError):
 
 MAX_STRIPE_LINE_ITEMS = 100
 MAX_STRIPE_LINE_ITEM_PAGES = 10
-STRIPE_API_VERSION = "2023-08-16"
+STRIPE_API_VERSION = "2025-09-30.clover"
 _STRIPE_SESSION_ID_RE = re.compile(r"^cs_[A-Za-z0-9_]+$")
 
 

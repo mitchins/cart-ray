@@ -229,6 +229,8 @@ def test_stripe_price_resolver_requires_one_active_one_off_price():
 
 
 def test_stripe_api_version_pin_cannot_be_overridden_by_a_request_caller():
+    assert STRIPE_API_VERSION == "2025-09-30.clover"
+
     transport = RecordingTransport([(200, {})])
     client = StripeApiClient("rk_test_fixture", transport)
 
