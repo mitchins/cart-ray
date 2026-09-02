@@ -57,6 +57,13 @@ The event ledger retains a SHA-256 of the raw body and processing state. An iden
 unfinished processing and is a no-op only after processing completes. Reuse of an event ID with a
 different raw-body hash is a hard inconsistency.
 
+For an authenticated event that is rejected during settlement, the internal event record may retain
+one fixed, non-secret operator diagnostic naming the failed stage. It is written only while the
+same event ID, Session ID, payload hash, and `received` processing state still match; it neither
+changes the retryable state nor appears in the webhook response. A later successful confirmation
+clears it. The codes are private operational evidence, not a customer-facing contract; future
+operators must tolerate unknown codes.
+
 ## CartRay projection
 
 The retrieved Checkout Session metadata is the canonical Stripe-carried CartRay projection. Its

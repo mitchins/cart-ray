@@ -4,6 +4,7 @@ import json
 import sqlite3
 import time
 from dataclasses import dataclass
+from enum import StrEnum
 
 from .errors import CheckoutInProgress, IdempotencyConflict, SettlementInconsistency
 from .models import CheckoutOrder, CheckoutRedirect, OrderItem
@@ -136,6 +137,17 @@ class SettlementContext:
     checkout_session_id: str
     settlement_state: str
     settlement_session_id: str | None
+
+
+class SettlementRejection(StrEnum):
+    """Non-secret, operator-only stages for a retryable settlement rejection."""
+
+    SESSION = "session_rejected"
+    PROJECTION = "projection_rejected"
+    ORDER_CONTEXT = "order_context_rejected"
+    RECONCILIATION = "reconciliation_rejected"
+    PREDICATE = "settlement_predicate_rejected"
+    CONFIRMATION = "confirmation_rejected"
 
 
 class SqliteOrderStore:
@@ -342,6 +354,24 @@ class SqliteOrderStore:
                 (event_id, session_id, json.dumps(payload, separators=(",", ":")), now, payload_sha256),
             )
         return False
+
+    async def record_settlement_rejection(
+        self,
+        *,
+        event_id: str,
+        session_id: str,
+        payload_sha256: str,
+        rejection: SettlementRejection,
+    ) -> None:
+        if not isinstance(rejection, SettlementRejection):
+            raise ValueError("settlement rejection must be a known operator diagnostic")
+        with self.connection:
+            self.connection.execute(
+                """UPDATE stripe_events SET processing_error = ?
+                   WHERE stripe_event_id = ? AND session_id = ? AND payload_sha256 = ?
+                     AND processing_state = 'received'""",
+                (rejection.value, event_id, session_id, payload_sha256),
+            )
 
     async def record_ignored_event(
         self,
@@ -609,6 +639,26 @@ class D1OrderStore:
                 return False
             raise SettlementInconsistency("Stripe event has an inconsistent settlement record")
         return False
+
+    async def record_settlement_rejection(
+        self,
+        *,
+        event_id: str,
+        session_id: str,
+        payload_sha256: str,
+        rejection: SettlementRejection,
+    ) -> None:
+        if not isinstance(rejection, SettlementRejection):
+            raise ValueError("settlement rejection must be a known operator diagnostic")
+        await (
+            self.database.prepare(
+                """UPDATE stripe_events SET processing_error = ?
+                   WHERE stripe_event_id = ? AND session_id = ? AND payload_sha256 = ?
+                     AND processing_state = 'received'"""
+            )
+            .bind(rejection.value, event_id, session_id, payload_sha256)
+            .run()
+        )
 
     async def record_ignored_event(
         self,

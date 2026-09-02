@@ -309,11 +309,12 @@ def test_stripe_webhook_fails_closed_on_a_settlement_inconsistency():
         separators=(",", ":"),
     )
     body = body_text.encode()
-    status, _headers, _body = client.request(
+    status, _headers, response_body = client.request(
         "POST", "/stripe/webhook", data=body_text, headers=_webhook_headers(body, secret)
     )
 
     assert status == 409
+    assert json.loads(response_body) == {"error": "Stripe webhook rejected"}
 
 
 def test_stripe_webhook_treats_missing_server_secret_as_unavailable():

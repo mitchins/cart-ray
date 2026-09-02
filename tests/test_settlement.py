@@ -9,7 +9,8 @@ from cartray.canonical import CanonicalItem, parse_projection_items
 from cartray.errors import SettlementInconsistency, WebhookValidationError
 from cartray.models import CheckoutRequest
 from cartray.settlement import StripeSettlementService
-from cartray.stripe import StripeCheckoutSession, StripeLineItem
+from cartray.store import SettlementRejection
+from cartray.stripe import ProjectionSealError, StripeCheckoutSession, StripeLineItem
 from cartray.webhook import StripeWebhookEvent
 
 
@@ -45,6 +46,22 @@ class FixtureProjectionVerifier:
     async def verify(self, *, session_id: str, metadata: dict[str, str]):
         assert session_id.startswith("cs_")
         return parse_projection_items(metadata)
+
+
+class RejectingProjectionVerifier:
+    async def verify(self, *, session_id: str, metadata: dict[str, str]):
+        raise ProjectionSealError("fixture projection rejection")
+
+
+class DiagnosticWriteFailureStore:
+    def __init__(self, store) -> None:
+        self.store = store
+
+    def __getattr__(self, name):
+        return getattr(self.store, name)
+
+    async def record_settlement_rejection(self, **_kwargs) -> None:
+        raise RuntimeError("diagnostic persistence failed")
 
 
 def _checkout_session(service, gateway, request, *, payment_status: str, amount_total_minor: int):
@@ -92,6 +109,12 @@ def _checkout_session(service, gateway, request, *, payment_status: str, amount_
 
 def _service(store, session):
     return StripeSettlementService(store, StaticRetriever(session), FixtureProjectionVerifier())
+
+
+def _processing_error(store, event: StripeWebhookEvent) -> str | None:
+    return store.connection.execute(
+        "SELECT processing_error FROM stripe_events WHERE stripe_event_id = ?", (event.event_id,)
+    ).fetchone()["processing_error"]
 
 
 def test_paid_settlement_confirms_a_quantity_five_order_once(checkout_service):
@@ -153,6 +176,112 @@ def test_settlement_rejects_unsettled_checkout_sessions(checkout_service, amount
     with pytest.raises(SettlementInconsistency, match="not settled"):
         unsettled_session = StripeCheckoutSession(**{**session.__dict__, "status": status})
         asyncio.run(_service(checkout.store, unsettled_session).settle(event))
+    assert _processing_error(checkout.store, event) == SettlementRejection.PREDICATE
+
+
+def test_session_rejection_records_a_fixed_operator_diagnostic(checkout_service):
+    checkout, gateway = checkout_service
+    _spec, session, event = _checkout_session(
+        checkout,
+        gateway,
+        CheckoutRequest("settlement-session", checkout.catalogue.version, (CanonicalItem("TEST-TEMPLATE", 1),)),
+        payment_status="paid",
+        amount_total_minor=5_000,
+    )
+
+    with pytest.raises(SettlementInconsistency, match="identity"):
+        asyncio.run(
+            _service(checkout.store, StripeCheckoutSession(**{**session.__dict__, "livemode": True})).settle(event)
+        )
+    assert _processing_error(checkout.store, event) == SettlementRejection.SESSION
+
+
+def test_diagnostic_write_failure_does_not_replace_a_settlement_rejection(checkout_service):
+    checkout, gateway = checkout_service
+    _spec, session, event = _checkout_session(
+        checkout,
+        gateway,
+        CheckoutRequest(
+            "settlement-diagnostic-write", checkout.catalogue.version, (CanonicalItem("TEST-TEMPLATE", 1),)
+        ),
+        payment_status="paid",
+        amount_total_minor=5_000,
+    )
+    service = _service(
+        DiagnosticWriteFailureStore(checkout.store), StripeCheckoutSession(**{**session.__dict__, "livemode": True})
+    )
+
+    with pytest.raises(SettlementInconsistency, match="identity"):
+        asyncio.run(service.settle(event))
+
+
+def test_projection_rejection_records_a_fixed_operator_diagnostic(checkout_service):
+    checkout, gateway = checkout_service
+    _spec, session, event = _checkout_session(
+        checkout,
+        gateway,
+        CheckoutRequest("settlement-projection", checkout.catalogue.version, (CanonicalItem("TEST-TEMPLATE", 1),)),
+        payment_status="paid",
+        amount_total_minor=5_000,
+    )
+    service = StripeSettlementService(checkout.store, StaticRetriever(session), RejectingProjectionVerifier())
+
+    with pytest.raises(ProjectionSealError, match="fixture"):
+        asyncio.run(service.settle(event))
+    assert _processing_error(checkout.store, event) == SettlementRejection.PROJECTION
+
+
+def test_order_context_rejection_records_a_fixed_operator_diagnostic(checkout_service):
+    checkout, gateway = checkout_service
+    spec, session, event = _checkout_session(
+        checkout,
+        gateway,
+        CheckoutRequest("settlement-context", checkout.catalogue.version, (CanonicalItem("TEST-TEMPLATE", 1),)),
+        payment_status="paid",
+        amount_total_minor=5_000,
+    )
+    checkout.store.connection.execute(
+        "UPDATE checkout_sessions SET external_session_id = NULL WHERE order_id = ?", (spec.order_id,)
+    )
+
+    with pytest.raises(SettlementInconsistency, match="no Checkout Session"):
+        asyncio.run(_service(checkout.store, session).settle(event))
+    assert _processing_error(checkout.store, event) == SettlementRejection.ORDER_CONTEXT
+
+
+def test_reconciliation_rejection_records_a_fixed_operator_diagnostic(checkout_service):
+    checkout, gateway = checkout_service
+    _spec, session, event = _checkout_session(
+        checkout,
+        gateway,
+        CheckoutRequest("settlement-reconciliation", checkout.catalogue.version, (CanonicalItem("TEST-TEMPLATE", 1),)),
+        payment_status="paid",
+        amount_total_minor=5_000,
+    )
+    changed_nonce = StripeCheckoutSession(**{**session.__dict__, "metadata": {**session.metadata, "cr_nonce": "other"}})
+
+    with pytest.raises(SettlementInconsistency, match="projection"):
+        asyncio.run(_service(checkout.store, changed_nonce).settle(event))
+    assert _processing_error(checkout.store, event) == SettlementRejection.RECONCILIATION
+
+
+def test_confirmation_rejection_records_a_fixed_operator_diagnostic(checkout_service):
+    checkout, gateway = checkout_service
+    spec, session, event = _checkout_session(
+        checkout,
+        gateway,
+        CheckoutRequest("settlement-confirmation", checkout.catalogue.version, (CanonicalItem("TEST-TEMPLATE", 1),)),
+        payment_status="paid",
+        amount_total_minor=5_000,
+    )
+    checkout.store.connection.execute(
+        "UPDATE checkout_sessions SET settlement_session_id = ? WHERE order_id = ?",
+        ("cs_settlement_other", spec.order_id),
+    )
+
+    with pytest.raises(SettlementInconsistency, match="different Checkout Session"):
+        asyncio.run(_service(checkout.store, session).settle(event))
+    assert _processing_error(checkout.store, event) == SettlementRejection.CONFIRMATION
 
 
 def test_settlement_rejects_a_different_session(checkout_service):
@@ -192,12 +321,10 @@ def test_transient_retrieval_failure_resumes_the_same_received_event(checkout_se
 
     with pytest.raises(RuntimeError, match="temporary Stripe"):
         asyncio.run(service.settle(event))
-    assert (
-        checkout.store.connection.execute(
-            "SELECT processing_state FROM stripe_events WHERE stripe_event_id = ?", (event.event_id,)
-        ).fetchone()["processing_state"]
-        == "received"
-    )
+    processing_row = checkout.store.connection.execute(
+        "SELECT processing_state, processing_error FROM stripe_events WHERE stripe_event_id = ?", (event.event_id,)
+    ).fetchone()
+    assert dict(processing_row) == {"processing_state": "received", "processing_error": None}
 
     assert asyncio.run(service.settle(event)) is False
     assert retriever.attempts == 2
@@ -206,6 +333,41 @@ def test_transient_retrieval_failure_resumes_the_same_received_event(checkout_se
         "CheckoutRedirectIssued",
         "OrderConfirmed",
     ]
+
+
+def test_exact_retry_clears_a_rejection_diagnostic_when_it_confirms(checkout_service):
+    checkout, gateway = checkout_service
+    spec, session, event = _checkout_session(
+        checkout,
+        gateway,
+        CheckoutRequest(
+            "settlement-retry-diagnostic", checkout.catalogue.version, (CanonicalItem("TEST-TEMPLATE", 1),)
+        ),
+        payment_status="paid",
+        amount_total_minor=5_000,
+    )
+    unpaid = StripeCheckoutSession(**{**session.__dict__, "payment_status": "unpaid"})
+
+    with pytest.raises(SettlementInconsistency, match="not settled"):
+        asyncio.run(_service(checkout.store, unpaid).settle(event))
+    assert _processing_error(checkout.store, event) == SettlementRejection.PREDICATE
+
+    assert asyncio.run(_service(checkout.store, session).settle(event)) is False
+    assert _processing_error(checkout.store, event) is None
+    assert [row["event_type"] for row in checkout.store.outbox_events(spec.order_id)] == [
+        "OrderCreated",
+        "CheckoutRedirectIssued",
+        "OrderConfirmed",
+    ]
+    asyncio.run(
+        checkout.store.record_settlement_rejection(
+            event_id=event.event_id,
+            session_id=session.session_id,
+            payload_sha256=event.payload_sha256,
+            rejection=SettlementRejection.PROJECTION,
+        )
+    )
+    assert _processing_error(checkout.store, event) is None
 
 
 @pytest.mark.parametrize(
