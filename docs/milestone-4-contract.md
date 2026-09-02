@@ -51,7 +51,9 @@ mode Checkout Session. The test-only Stripe API key used to retrieve the Session
 that account-scoped retrieval, together with the endpoint secret, is the direct-account binding for
 this milestone. A future Connect-aware adapter must add an explicit connected-account comparison.
 
-Verified unknown event types are recorded as ignored and return success. Unverified events do not.
+Verified unknown event types are recorded as ignored and return success. For those events, the Stripe
+event ID and event type are the retry identity; a reserialized retry remains ignored and preserves
+the first payload/hash. Unverified events do not enter the ledger.
 
 The event ledger retains the first delivery's SHA-256 raw-body hash and processing state as
 forensic evidence. For an authenticated `checkout.session.completed` delivery, the Stripe event ID,

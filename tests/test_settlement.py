@@ -567,11 +567,25 @@ def test_verified_unknown_event_is_recorded_as_ignored(checkout_service):
     service = StripeSettlementService(checkout.store, None, None)
 
     assert asyncio.run(service.settle(event)) is False
-    assert asyncio.run(service.settle(event)) is True
+    reserialized = StripeWebhookEvent(
+        **{
+            **event.__dict__,
+            "payload": {"id": event.event_id, "type": event.event_type, "reserialized": True},
+            "payload_sha256": "sha256:reserialized",
+        }
+    )
+    assert asyncio.run(service.settle(reserialized)) is True
     row = checkout.store.connection.execute(
-        "SELECT event_type, processing_state FROM stripe_events WHERE stripe_event_id = ?", (event.event_id,)
+        "SELECT event_type, payload_json, payload_sha256, processing_state "
+        "FROM stripe_events WHERE stripe_event_id = ?",
+        (event.event_id,),
     ).fetchone()
-    assert dict(row) == {"event_type": "customer.created", "processing_state": "ignored"}
+    assert dict(row) == {
+        "event_type": "customer.created",
+        "payload_json": '{"id":"evt_ignored","type":"customer.created"}',
+        "payload_sha256": "sha256:ignored",
+        "processing_state": "ignored",
+    }
 
 
 def test_live_mode_unknown_event_is_rejected_before_it_can_enter_the_ledger():

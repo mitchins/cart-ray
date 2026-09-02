@@ -164,6 +164,45 @@ def test_d1_store_rejects_an_event_id_bound_to_a_different_type(d1_database):
         )
 
 
+def test_d1_store_ignores_a_reserialized_unknown_event(d1_database):
+    store = D1OrderStore(d1_database)
+    event_id = "evt_d1_ignored"
+    assert (
+        asyncio.run(
+            store.record_ignored_event(
+                event_id=event_id,
+                event_type="customer.created",
+                payload={"id": event_id, "type": "customer.created"},
+                payload_sha256="sha256:first-delivery",
+            )
+        )
+        is False
+    )
+    assert (
+        asyncio.run(
+            store.record_ignored_event(
+                event_id=event_id,
+                event_type="customer.created",
+                payload={"id": event_id, "type": "customer.created", "reserialized": True},
+                payload_sha256="sha256:changed",
+            )
+        )
+        is True
+    )
+    row = asyncio.run(
+        d1_database.prepare(
+            "SELECT payload_json, payload_sha256, processing_state FROM stripe_events WHERE stripe_event_id = ?"
+        )
+        .bind(event_id)
+        .all()
+    ).results[0]
+    assert row == {
+        "payload_json": '{"id":"evt_d1_ignored","type":"customer.created"}',
+        "payload_sha256": "sha256:first-delivery",
+        "processing_state": "ignored",
+    }
+
+
 def test_d1_store_enforces_leases_and_recovers_expired_leases(fixture_catalogue, d1_database):
     database = d1_database
     service = CheckoutService(fixture_catalogue, D1OrderStore(database, lease_seconds=10), FakePaymentGateway())

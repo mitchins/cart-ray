@@ -384,11 +384,11 @@ class SqliteOrderStore:
         now = int(time.time()) if now is None else now
         with self.connection:
             existing = self.connection.execute(
-                "SELECT payload_sha256, processing_state FROM stripe_events WHERE stripe_event_id = ?", (event_id,)
+                "SELECT event_type, processing_state FROM stripe_events WHERE stripe_event_id = ?", (event_id,)
             ).fetchone()
             if existing is not None:
-                if existing["payload_sha256"] != payload_sha256:
-                    raise SettlementInconsistency("Stripe event ID has a different payload hash")
+                if existing["event_type"] != event_type:
+                    raise SettlementInconsistency("Stripe event ID is bound to a different event type")
                 return existing["processing_state"] == "ignored"
             self.connection.execute(
                 """INSERT INTO stripe_events
@@ -672,11 +672,11 @@ class D1OrderStore:
     ) -> bool:
         now = int(time.time()) if now is None else now
         existing = await self._first(
-            "SELECT payload_sha256, processing_state FROM stripe_events WHERE stripe_event_id = ?", event_id
+            "SELECT event_type, processing_state FROM stripe_events WHERE stripe_event_id = ?", event_id
         )
         if existing is not None:
-            if existing["payload_sha256"] != payload_sha256:
-                raise SettlementInconsistency("Stripe event ID has a different payload hash")
+            if existing["event_type"] != event_type:
+                raise SettlementInconsistency("Stripe event ID is bound to a different event type")
             return existing["processing_state"] == "ignored"
         statement = self.database.prepare(
             """INSERT INTO stripe_events
@@ -688,14 +688,13 @@ class D1OrderStore:
             await statement.run()
         except Exception:
             duplicate = await self._first(
-                "SELECT payload_sha256, processing_state FROM stripe_events WHERE stripe_event_id = ?", event_id
+                "SELECT event_type, processing_state FROM stripe_events WHERE stripe_event_id = ?", event_id
             )
-            if (
-                duplicate is not None
-                and duplicate["payload_sha256"] == payload_sha256
-                and duplicate["processing_state"] == "ignored"
-            ):
-                return True
+            if duplicate is not None:
+                if duplicate["event_type"] != event_type:
+                    raise SettlementInconsistency("Stripe event ID is bound to a different event type")
+                if duplicate["processing_state"] == "ignored":
+                    return True
             raise
         return False
 
