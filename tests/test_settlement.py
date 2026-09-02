@@ -335,7 +335,7 @@ def test_transient_retrieval_failure_resumes_the_same_received_event(checkout_se
     ]
 
 
-def test_exact_retry_clears_a_rejection_diagnostic_when_it_confirms(checkout_service):
+def test_reserialized_retry_clears_a_rejection_diagnostic_when_it_confirms(checkout_service):
     checkout, gateway = checkout_service
     spec, session, event = _checkout_session(
         checkout,
@@ -352,7 +352,14 @@ def test_exact_retry_clears_a_rejection_diagnostic_when_it_confirms(checkout_ser
         asyncio.run(_service(checkout.store, unpaid).settle(event))
     assert _processing_error(checkout.store, event) == SettlementRejection.PREDICATE
 
-    assert asyncio.run(_service(checkout.store, session).settle(event)) is False
+    changed = StripeWebhookEvent(
+        **{
+            **event.__dict__,
+            "payload": {"id": event.event_id, "reserialized": True},
+            "payload_sha256": "sha256:changed",
+        }
+    )
+    assert asyncio.run(_service(checkout.store, session).settle(changed)) is False
     assert _processing_error(checkout.store, event) is None
     assert [row["event_type"] for row in checkout.store.outbox_events(spec.order_id)] == [
         "OrderCreated",
@@ -363,7 +370,6 @@ def test_exact_retry_clears_a_rejection_diagnostic_when_it_confirms(checkout_ser
         checkout.store.record_settlement_rejection(
             event_id=event.event_id,
             session_id=session.session_id,
-            payload_sha256=event.payload_sha256,
             rejection=SettlementRejection.PROJECTION,
         )
     )
@@ -470,21 +476,82 @@ def test_settlement_rejects_modified_stripe_lines_without_persisting_an_event(ch
     assert event_row["processing_state"] == "received"
 
 
-def test_same_event_id_with_a_different_payload_hash_is_an_inconsistency(checkout_service):
+def test_reserialized_retry_for_the_same_event_confirms_once_and_preserves_first_delivery(checkout_service):
     checkout, gateway = checkout_service
-    _spec, session, event = _checkout_session(
+    spec, session, event = _checkout_session(
         checkout,
         gateway,
         CheckoutRequest("settlement-event-hash", checkout.catalogue.version, (CanonicalItem("TEST-TEMPLATE", 1),)),
         payment_status="paid",
         amount_total_minor=5_000,
     )
+    retriever = FailOnceRetriever(session)
+    service = StripeSettlementService(checkout.store, retriever, FixtureProjectionVerifier())
+    with pytest.raises(RuntimeError, match="temporary Stripe"):
+        asyncio.run(service.settle(event))
+    changed = StripeWebhookEvent(
+        **{
+            **event.__dict__,
+            "payload": {"id": event.event_id, "reserialized": True},
+            "payload_sha256": "sha256:changed",
+        }
+    )
+
+    assert asyncio.run(service.settle(changed)) is False
+    assert asyncio.run(StripeSettlementService(checkout.store, FailingRetriever(), None).settle(changed)) is True
+    event_row = checkout.store.connection.execute(
+        "SELECT payload_json, payload_sha256, processing_state FROM stripe_events WHERE stripe_event_id = ?",
+        (event.event_id,),
+    ).fetchone()
+    assert dict(event_row) == {
+        "payload_json": f'{{"id":"{event.event_id}"}}',
+        "payload_sha256": event.payload_sha256,
+        "processing_state": "confirmed",
+    }
+    assert [row["event_type"] for row in checkout.store.outbox_events(spec.order_id)] == [
+        "OrderCreated",
+        "CheckoutRedirectIssued",
+        "OrderConfirmed",
+    ]
+
+
+def test_same_event_id_with_a_different_checkout_session_is_an_inconsistency(checkout_service):
+    checkout, gateway = checkout_service
+    _spec, session, event = _checkout_session(
+        checkout,
+        gateway,
+        CheckoutRequest("settlement-event-session", checkout.catalogue.version, (CanonicalItem("TEST-TEMPLATE", 1),)),
+        payment_status="paid",
+        amount_total_minor=5_000,
+    )
     service = _service(checkout.store, session)
     assert asyncio.run(service.settle(event)) is False
-    changed = StripeWebhookEvent(**{**event.__dict__, "payload_sha256": "sha256:changed"})
+    changed = StripeWebhookEvent(**{**event.__dict__, "session_id": "cs_other", "payload_sha256": "sha256:changed"})
 
-    with pytest.raises(SettlementInconsistency, match="payload hash"):
+    with pytest.raises(SettlementInconsistency, match="different Checkout Session"):
         asyncio.run(service.settle(changed))
+
+
+def test_same_event_id_bound_to_another_type_is_an_inconsistency(checkout_service):
+    checkout, gateway = checkout_service
+    _spec, session, event = _checkout_session(
+        checkout,
+        gateway,
+        CheckoutRequest("settlement-event-type", checkout.catalogue.version, (CanonicalItem("TEST-TEMPLATE", 1),)),
+        payment_status="paid",
+        amount_total_minor=5_000,
+    )
+    asyncio.run(
+        checkout.store.record_ignored_event(
+            event_id=event.event_id,
+            event_type="customer.created",
+            payload={"id": event.event_id, "type": "customer.created"},
+            payload_sha256="sha256:ignored",
+        )
+    )
+
+    with pytest.raises(SettlementInconsistency, match="different event type"):
+        asyncio.run(_service(checkout.store, session).settle(event))
 
 
 def test_verified_unknown_event_is_recorded_as_ignored(checkout_service):
@@ -500,11 +567,25 @@ def test_verified_unknown_event_is_recorded_as_ignored(checkout_service):
     service = StripeSettlementService(checkout.store, None, None)
 
     assert asyncio.run(service.settle(event)) is False
-    assert asyncio.run(service.settle(event)) is True
+    reserialized = StripeWebhookEvent(
+        **{
+            **event.__dict__,
+            "payload": {"id": event.event_id, "type": event.event_type, "reserialized": True},
+            "payload_sha256": "sha256:reserialized",
+        }
+    )
+    assert asyncio.run(service.settle(reserialized)) is True
     row = checkout.store.connection.execute(
-        "SELECT event_type, processing_state FROM stripe_events WHERE stripe_event_id = ?", (event.event_id,)
+        "SELECT event_type, payload_json, payload_sha256, processing_state "
+        "FROM stripe_events WHERE stripe_event_id = ?",
+        (event.event_id,),
     ).fetchone()
-    assert dict(row) == {"event_type": "customer.created", "processing_state": "ignored"}
+    assert dict(row) == {
+        "event_type": "customer.created",
+        "payload_json": '{"id":"evt_ignored","type":"customer.created"}',
+        "payload_sha256": "sha256:ignored",
+        "processing_state": "ignored",
+    }
 
 
 def test_live_mode_unknown_event_is_rejected_before_it_can_enter_the_ledger():

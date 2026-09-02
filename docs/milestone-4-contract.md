@@ -51,15 +51,20 @@ mode Checkout Session. The test-only Stripe API key used to retrieve the Session
 that account-scoped retrieval, together with the endpoint secret, is the direct-account binding for
 this milestone. A future Connect-aware adapter must add an explicit connected-account comparison.
 
-Verified unknown event types are recorded as ignored and return success. Unverified events do not.
+Verified unknown event types are recorded as ignored and return success. For those events, the Stripe
+event ID and event type are the retry identity; a reserialized retry remains ignored and preserves
+the first payload/hash. Unverified events do not enter the ledger.
 
-The event ledger retains a SHA-256 of the raw body and processing state. An identical retry resumes
-unfinished processing and is a no-op only after processing completes. Reuse of an event ID with a
-different raw-body hash is a hard inconsistency.
+The event ledger retains the first delivery's SHA-256 raw-body hash and processing state as
+forensic evidence. For an authenticated `checkout.session.completed` delivery, the Stripe event ID,
+event type, and Checkout Session ID are the retry identity: a reserialized delivery of that same
+logical event resumes unfinished processing and is a no-op after confirmation. CartRay preserves
+the first recorded payload and hash; it does not replace them with a retry's representation. Reuse
+of an event ID with a different event type or Checkout Session ID is a hard inconsistency.
 
 For an authenticated event that is rejected during settlement, the internal event record may retain
 one fixed, non-secret operator diagnostic naming the failed stage. It is written only while the
-same event ID, Session ID, payload hash, and `received` processing state still match; it neither
+same event ID, event type, Session ID, and `received` processing state still match; it neither
 changes the retryable state nor appears in the webhook response. A later successful confirmation
 clears it. The codes are private operational evidence, not a customer-facing contract; future
 operators must tolerate unknown codes.
@@ -105,7 +110,9 @@ into the outbox in the same transaction. No outbox consumer exists in M4a.
 
 There are two idempotency boundaries:
 
-1. An event-level ledger keyed by `stripe_event_id` and raw-body hash.
+1. An event-level ledger keyed by `stripe_event_id`, event type, and Checkout Session ID for
+   authenticated `checkout.session.completed` retries; the first raw-body hash is retained for
+   forensic evidence.
 2. A business-level confirmation keyed by CartRay order and Stripe Session.
 
 An already-confirmed order for the same Session succeeds as a no-op. An attempt to confirm the
