@@ -81,7 +81,6 @@ class StripeSettlementService:
             await self.store.record_settlement_rejection(
                 event_id=event.event_id,
                 session_id=event.session_id,
-                payload_sha256=event.payload_sha256,
                 rejection=rejection,
             )
         except Exception:

@@ -22,6 +22,34 @@ def d1_database():
     return database
 
 
+def _pending_settlement(fixture_catalogue, d1_database, *, request_id: str, session_id: str, event_id: str):
+    store = D1OrderStore(d1_database)
+    gateway = FakePaymentGateway()
+    service = CheckoutService(fixture_catalogue, store, gateway)
+    request = CheckoutRequest(request_id, fixture_catalogue.version, (CanonicalItem("TEST-TEMPLATE", 1),))
+    asyncio.run(service.checkout(request))
+    order_id = gateway.requests[0].order_id
+    asyncio.run(
+        d1_database.prepare("UPDATE checkout_sessions SET external_session_id = ? WHERE order_id = ?")
+        .bind(session_id, order_id)
+        .run()
+    )
+    return (
+        store,
+        order_id,
+        {
+            "order_id": order_id,
+            "session_id": session_id,
+            "event_id": event_id,
+            "payload": {"id": event_id},
+            "payload_sha256": "sha256:first-delivery",
+            "payment_status": "paid",
+            "amount_total_minor": 2_500,
+            "now": 123,
+        },
+    )
+
+
 def test_d1_store_persists_an_idempotent_checkout_and_outbox(fixture_catalogue, d1_database):
     database = d1_database
     gateway = FakePaymentGateway()
@@ -63,7 +91,7 @@ def test_d1_store_persists_the_maximum_quantity_and_stripe_projection(fixture_ca
     assert items.results == [{"product_key": "TEST-SUPPORT-HOURS", "quantity": 5}]
 
 
-def test_d1_store_records_only_known_diagnostics_on_the_exact_received_event(d1_database):
+def test_d1_store_records_only_known_diagnostics_for_a_logical_received_event(d1_database):
     store = D1OrderStore(d1_database)
     event_id = "evt_diagnostic"
     session_id = "cs_diagnostic"
@@ -80,7 +108,6 @@ def test_d1_store_records_only_known_diagnostics_on_the_exact_received_event(d1_
         store.record_settlement_rejection(
             event_id=event_id,
             session_id=session_id,
-            payload_sha256=payload_sha256,
             rejection=SettlementRejection.PROJECTION,
         )
     )
@@ -88,7 +115,6 @@ def test_d1_store_records_only_known_diagnostics_on_the_exact_received_event(d1_
         store.record_settlement_rejection(
             event_id=event_id,
             session_id="cs_other",
-            payload_sha256=payload_sha256,
             rejection=SettlementRejection.RECONCILIATION,
         )
     )
@@ -96,7 +122,6 @@ def test_d1_store_records_only_known_diagnostics_on_the_exact_received_event(d1_
         store.record_settlement_rejection(
             event_id=event_id,
             session_id=session_id,
-            payload_sha256="sha256:other",
             rejection=SettlementRejection.RECONCILIATION,
         )
     )
@@ -105,14 +130,36 @@ def test_d1_store_records_only_known_diagnostics_on_the_exact_received_event(d1_
         .bind(event_id)
         .all()
     ).results[0]
-    assert row == {"processing_state": "received", "processing_error": SettlementRejection.PROJECTION}
+    assert row == {"processing_state": "received", "processing_error": SettlementRejection.RECONCILIATION}
     with pytest.raises(ValueError, match="known operator diagnostic"):
         asyncio.run(
             store.record_settlement_rejection(
                 event_id=event_id,
                 session_id=session_id,
-                payload_sha256=payload_sha256,
                 rejection="arbitrary diagnostic",  # type: ignore[arg-type]
+            )
+        )
+
+
+def test_d1_store_rejects_an_event_id_bound_to_a_different_type(d1_database):
+    store = D1OrderStore(d1_database)
+    event_id = "evt_type_conflict"
+    asyncio.run(
+        store.record_ignored_event(
+            event_id=event_id,
+            event_type="customer.created",
+            payload={"id": event_id, "type": "customer.created"},
+            payload_sha256="sha256:ignored",
+        )
+    )
+
+    with pytest.raises(SettlementInconsistency, match="different event type"):
+        asyncio.run(
+            store.begin_settlement_event(
+                event_id=event_id,
+                session_id="cs_type_conflict",
+                payload={"id": event_id},
+                payload_sha256="sha256:settlement",
             )
         )
 
@@ -210,7 +257,9 @@ def test_d1_store_rejects_reused_request_id_with_a_different_cart(fixture_catalo
         asyncio.run(store.start_or_load(service._reconstruct_order(conflicting_request), nonce="second", now=101))
 
 
-def test_d1_store_confirms_once_and_rejects_a_conflicting_event_payload(fixture_catalogue, d1_database):
+def test_d1_store_confirms_once_and_preserves_the_first_delivery_for_a_reserialized_retry(
+    fixture_catalogue, d1_database
+):
     store = D1OrderStore(d1_database)
     gateway = FakePaymentGateway()
     service = CheckoutService(fixture_catalogue, store, gateway)
@@ -239,28 +288,30 @@ def test_d1_store_confirms_once_and_rejects_a_conflicting_event_payload(fixture_
     }
     begin_kwargs = {key: kwargs[key] for key in ("event_id", "session_id", "payload", "payload_sha256")}
     assert asyncio.run(store.begin_settlement_event(**begin_kwargs, now=122)) is False
-    assert asyncio.run(store.begin_settlement_event(**begin_kwargs, now=123)) is False
+    changed = {
+        **kwargs,
+        "payload": {"id": "evt_d1_settlement", "reserialized": True},
+        "payload_sha256": "sha256:changed",
+    }
+    changed_begin = {key: changed[key] for key in ("event_id", "session_id", "payload", "payload_sha256")}
+    assert asyncio.run(store.begin_settlement_event(**changed_begin, now=123)) is False
     asyncio.run(
         store.record_settlement_rejection(
             event_id=kwargs["event_id"],
             session_id=kwargs["session_id"],
-            payload_sha256=kwargs["payload_sha256"],
             rejection=SettlementRejection.PROJECTION,
         )
     )
-    assert asyncio.run(store.confirm_settlement(**kwargs)) is False
-    assert asyncio.run(store.confirm_settlement(**kwargs)) is True
+    assert asyncio.run(store.confirm_settlement(**changed)) is False
+    assert asyncio.run(store.confirm_settlement(**changed)) is True
     asyncio.run(
         store.record_settlement_rejection(
             event_id=kwargs["event_id"],
             session_id=kwargs["session_id"],
-            payload_sha256=kwargs["payload_sha256"],
             rejection=SettlementRejection.RECONCILIATION,
         )
     )
-    changed = {**kwargs, "payload_sha256": "sha256:changed"}
-    with pytest.raises(SettlementInconsistency, match="payload hash"):
-        asyncio.run(store.confirm_settlement(**changed))
+    assert asyncio.run(store.confirm_settlement(**changed)) is True
 
     event_query = d1_database.prepare("SELECT event_type FROM outbox WHERE order_id = ? ORDER BY id").bind(order_id)
     events = asyncio.run(event_query.all())
@@ -270,8 +321,156 @@ def test_d1_store_confirms_once_and_rejects_a_conflicting_event_payload(fixture_
         "OrderConfirmed",
     ]
     event_row = asyncio.run(
-        d1_database.prepare("SELECT processing_state, processing_error FROM stripe_events WHERE stripe_event_id = ?")
+        d1_database.prepare(
+            "SELECT payload_json, payload_sha256, processing_state, processing_error "
+            "FROM stripe_events WHERE stripe_event_id = ?"
+        )
         .bind(kwargs["event_id"])
         .all()
     ).results[0]
-    assert event_row == {"processing_state": "confirmed", "processing_error": None}
+    assert event_row == {
+        "payload_json": '{"id":"evt_d1_settlement"}',
+        "payload_sha256": "sha256:d1-fixture",
+        "processing_state": "confirmed",
+        "processing_error": None,
+    }
+
+
+def test_d1_store_duplicate_insert_race_recovers_a_reserialized_received_event(d1_database, monkeypatch):
+    store = D1OrderStore(d1_database)
+    event_id = "evt_d1_duplicate_race"
+    session_id = "cs_d1_duplicate_race"
+    asyncio.run(
+        store.begin_settlement_event(
+            event_id=event_id,
+            session_id=session_id,
+            payload={"id": event_id},
+            payload_sha256="sha256:first-delivery",
+        )
+    )
+    original_first = store._first
+    calls = 0
+
+    async def hide_existing_event_once(sql, *params):
+        nonlocal calls
+        if "FROM stripe_events" in sql and calls == 0:
+            calls += 1
+            return None
+        return await original_first(sql, *params)
+
+    monkeypatch.setattr(store, "_first", hide_existing_event_once)
+
+    assert (
+        asyncio.run(
+            store.begin_settlement_event(
+                event_id=event_id,
+                session_id=session_id,
+                payload={"id": event_id, "reserialized": True},
+                payload_sha256="sha256:changed",
+            )
+        )
+        is False
+    )
+    row = asyncio.run(
+        d1_database.prepare(
+            "SELECT payload_json, payload_sha256, processing_state FROM stripe_events WHERE stripe_event_id = ?"
+        )
+        .bind(event_id)
+        .all()
+    ).results[0]
+    assert row == {
+        "payload_json": '{"id":"evt_d1_duplicate_race"}',
+        "payload_sha256": "sha256:first-delivery",
+        "processing_state": "received",
+    }
+
+
+def test_d1_store_confirmation_race_recovers_when_matching_event_is_confirmed(
+    fixture_catalogue, d1_database, monkeypatch
+):
+    store, order_id, kwargs = _pending_settlement(
+        fixture_catalogue,
+        d1_database,
+        request_id="d1-confirmation-race",
+        session_id="cs_d1_confirmation_race",
+        event_id="evt_d1_confirmation_race",
+    )
+    begin_kwargs = {key: kwargs[key] for key in ("event_id", "session_id", "payload", "payload_sha256")}
+    assert asyncio.run(store.begin_settlement_event(**begin_kwargs)) is False
+    original_first = store._first
+    original_batch = d1_database.batch
+    calls = 0
+
+    async def hide_existing_event_once(sql, *params):
+        nonlocal calls
+        if "FROM stripe_events" in sql and calls == 0:
+            calls += 1
+            return None
+        return await original_first(sql, *params)
+
+    async def confirm_winner_then_run_batch(statements):
+        await (
+            d1_database.prepare("UPDATE stripe_events SET processing_state = 'confirmed' WHERE stripe_event_id = ?")
+            .bind(kwargs["event_id"])
+            .run()
+        )
+        await (
+            d1_database.prepare(
+                "UPDATE checkout_sessions SET settlement_state = 'confirmed', settlement_session_id = ?, "
+                "settlement_event_id = ? WHERE order_id = ?"
+            )
+            .bind(kwargs["session_id"], kwargs["event_id"], order_id)
+            .run()
+        )
+        await (
+            d1_database.prepare(
+                "INSERT INTO outbox(order_id, event_type, payload_json, created_at) VALUES (?, ?, ?, ?)"
+            )
+            .bind(order_id, "OrderConfirmed", '{"order_id":"race"}', kwargs["now"])
+            .run()
+        )
+        return await original_batch(statements)
+
+    monkeypatch.setattr(store, "_first", hide_existing_event_once)
+    monkeypatch.setattr(d1_database, "batch", confirm_winner_then_run_batch)
+
+    changed = {
+        **kwargs,
+        "payload": {"id": kwargs["event_id"], "reserialized": True},
+        "payload_sha256": "sha256:changed",
+    }
+    assert asyncio.run(store.confirm_settlement(**changed)) is True
+
+
+def test_d1_store_confirmation_race_rejects_a_winner_with_a_different_session(
+    fixture_catalogue, d1_database, monkeypatch
+):
+    store, _order_id, kwargs = _pending_settlement(
+        fixture_catalogue,
+        d1_database,
+        request_id="d1-confirmation-race-conflict",
+        session_id="cs_d1_confirmation_original",
+        event_id="evt_d1_confirmation_conflict",
+    )
+    asyncio.run(
+        store.begin_settlement_event(
+            event_id=kwargs["event_id"],
+            session_id="cs_d1_confirmation_winner",
+            payload={"id": kwargs["event_id"]},
+            payload_sha256="sha256:winner",
+        )
+    )
+    original_first = store._first
+    calls = 0
+
+    async def hide_existing_event_once(sql, *params):
+        nonlocal calls
+        if "FROM stripe_events" in sql and calls == 0:
+            calls += 1
+            return None
+        return await original_first(sql, *params)
+
+    monkeypatch.setattr(store, "_first", hide_existing_event_once)
+
+    with pytest.raises(SettlementInconsistency, match="different Checkout Session"):
+        asyncio.run(store.confirm_settlement(**kwargs))
