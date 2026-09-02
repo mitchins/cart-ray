@@ -11,6 +11,7 @@ from cartray.canonical import CanonicalItem, projection_metadata
 from cartray.errors import CatalogueValidationError
 from cartray.models import CheckoutSpec
 from cartray.stripe import (
+    STRIPE_API_VERSION,
     CheckoutMetadataSealer,
     CheckoutMetadataVerifier,
     ProjectionSealError,
@@ -209,6 +210,7 @@ def test_stripe_checkout_keeps_session_metadata_canonical_when_no_payment_intent
         "/v1/checkout/sessions",
         "/v1/checkout/sessions/cs_test_free",
     ]
+    assert {request[2]["Stripe-Version"] for request in transport.requests} == {STRIPE_API_VERSION}
     session_metadata = parse_qs(transport.requests[1][3] or "")
     assert session_metadata["metadata[cr_order_id]"] == ["cr_order_free"]
     assert session_metadata["metadata[cr_signature]"][0]
@@ -224,6 +226,14 @@ def test_stripe_price_resolver_requires_one_active_one_off_price():
 
     assert price.stripe_price_id == "price_test_template"
     assert transport.requests[0][1] == "/v1/prices?active=true&lookup_keys%5B%5D=cr_test_template&limit=2"
+
+
+def test_stripe_api_version_pin_cannot_be_overridden_by_a_request_caller():
+    transport = RecordingTransport([(200, {})])
+    client = StripeApiClient("rk_test_fixture", transport)
+
+    assert asyncio.run(client._request("GET", "/v1/test", headers={"Stripe-Version": "2020-08-27"})) == {}
+    assert transport.requests[0][2]["Stripe-Version"] == STRIPE_API_VERSION
 
 
 @pytest.mark.parametrize(

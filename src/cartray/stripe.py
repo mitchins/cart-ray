@@ -23,6 +23,7 @@ class ProjectionSealError(RuntimeError):
 
 MAX_STRIPE_LINE_ITEMS = 100
 MAX_STRIPE_LINE_ITEM_PAGES = 10
+STRIPE_API_VERSION = "2023-08-16"
 _STRIPE_SESSION_ID_RE = re.compile(r"^cs_[A-Za-z0-9_]+$")
 
 
@@ -185,8 +186,11 @@ class StripeApiClient:
         if not self.secret_key.startswith(("rk_test_", "sk_test_")):
             raise StripeApiError("CartRay accepts only Stripe test-mode keys in this milestone")
         authorization = base64.b64encode(f"{self.secret_key}:".encode()).decode("ascii")
-        request_headers = {"Authorization": f"Basic {authorization}"}
+        request_headers = {
+            "Authorization": f"Basic {authorization}",
+        }
         request_headers.update(headers or {})
+        request_headers["Stripe-Version"] = STRIPE_API_VERSION
         status, payload = await self.transport.request(method, path, headers=request_headers, body=body)
         if not 200 <= status < 300:
             message = payload.get("error", "Stripe request failed")
