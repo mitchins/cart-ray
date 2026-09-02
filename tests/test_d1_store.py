@@ -11,7 +11,7 @@ from cartray.checkout import CheckoutService
 from cartray.errors import CheckoutInProgress, IdempotencyConflict, SettlementInconsistency
 from cartray.gateway import FakePaymentGateway
 from cartray.models import CheckoutRedirect, CheckoutRequest
-from cartray.store import D1OrderStore
+from cartray.store import D1OrderStore, SettlementRejection
 
 
 @pytest.fixture
@@ -61,6 +61,60 @@ def test_d1_store_persists_the_maximum_quantity_and_stripe_projection(fixture_ca
         .all()
     )
     assert items.results == [{"product_key": "TEST-SUPPORT-HOURS", "quantity": 5}]
+
+
+def test_d1_store_records_only_known_diagnostics_on_the_exact_received_event(d1_database):
+    store = D1OrderStore(d1_database)
+    event_id = "evt_diagnostic"
+    session_id = "cs_diagnostic"
+    payload_sha256 = "sha256:diagnostic"
+    asyncio.run(
+        store.begin_settlement_event(
+            event_id=event_id,
+            session_id=session_id,
+            payload={"id": event_id},
+            payload_sha256=payload_sha256,
+        )
+    )
+    asyncio.run(
+        store.record_settlement_rejection(
+            event_id=event_id,
+            session_id=session_id,
+            payload_sha256=payload_sha256,
+            rejection=SettlementRejection.PROJECTION,
+        )
+    )
+    asyncio.run(
+        store.record_settlement_rejection(
+            event_id=event_id,
+            session_id="cs_other",
+            payload_sha256=payload_sha256,
+            rejection=SettlementRejection.RECONCILIATION,
+        )
+    )
+    asyncio.run(
+        store.record_settlement_rejection(
+            event_id=event_id,
+            session_id=session_id,
+            payload_sha256="sha256:other",
+            rejection=SettlementRejection.RECONCILIATION,
+        )
+    )
+    row = asyncio.run(
+        d1_database.prepare("SELECT processing_state, processing_error FROM stripe_events WHERE stripe_event_id = ?")
+        .bind(event_id)
+        .all()
+    ).results[0]
+    assert row == {"processing_state": "received", "processing_error": SettlementRejection.PROJECTION}
+    with pytest.raises(ValueError, match="known operator diagnostic"):
+        asyncio.run(
+            store.record_settlement_rejection(
+                event_id=event_id,
+                session_id=session_id,
+                payload_sha256=payload_sha256,
+                rejection="arbitrary diagnostic",  # type: ignore[arg-type]
+            )
+        )
 
 
 def test_d1_store_enforces_leases_and_recovers_expired_leases(fixture_catalogue, d1_database):
@@ -186,8 +240,24 @@ def test_d1_store_confirms_once_and_rejects_a_conflicting_event_payload(fixture_
     begin_kwargs = {key: kwargs[key] for key in ("event_id", "session_id", "payload", "payload_sha256")}
     assert asyncio.run(store.begin_settlement_event(**begin_kwargs, now=122)) is False
     assert asyncio.run(store.begin_settlement_event(**begin_kwargs, now=123)) is False
+    asyncio.run(
+        store.record_settlement_rejection(
+            event_id=kwargs["event_id"],
+            session_id=kwargs["session_id"],
+            payload_sha256=kwargs["payload_sha256"],
+            rejection=SettlementRejection.PROJECTION,
+        )
+    )
     assert asyncio.run(store.confirm_settlement(**kwargs)) is False
     assert asyncio.run(store.confirm_settlement(**kwargs)) is True
+    asyncio.run(
+        store.record_settlement_rejection(
+            event_id=kwargs["event_id"],
+            session_id=kwargs["session_id"],
+            payload_sha256=kwargs["payload_sha256"],
+            rejection=SettlementRejection.RECONCILIATION,
+        )
+    )
     changed = {**kwargs, "payload_sha256": "sha256:changed"}
     with pytest.raises(SettlementInconsistency, match="payload hash"):
         asyncio.run(store.confirm_settlement(**changed))
@@ -199,3 +269,9 @@ def test_d1_store_confirms_once_and_rejects_a_conflicting_event_payload(fixture_
         "CheckoutRedirectIssued",
         "OrderConfirmed",
     ]
+    event_row = asyncio.run(
+        d1_database.prepare("SELECT processing_state, processing_error FROM stripe_events WHERE stripe_event_id = ?")
+        .bind(kwargs["event_id"])
+        .all()
+    ).results[0]
+    assert event_row == {"processing_state": "confirmed", "processing_error": None}

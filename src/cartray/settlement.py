@@ -4,8 +4,8 @@ from dataclasses import dataclass
 
 from .canonical import CanonicalItem, canonical_items
 from .errors import SettlementInconsistency, WebhookValidationError
-from .store import SettlementContext
-from .stripe import CheckoutMetadataVerifier, StripeCheckoutSessionRetriever
+from .store import SettlementContext, SettlementRejection
+from .stripe import CheckoutMetadataVerifier, ProjectionSealError, StripeCheckoutSessionRetriever
 from .webhook import StripeWebhookEvent
 
 
@@ -36,26 +36,56 @@ class StripeSettlementService:
             return True
         session = await self.retriever.retrieve(event.session_id)
         if session.livemode or session.mode != "payment" or session.session_id != event.session_id:
+            await self._record_rejection(event, SettlementRejection.SESSION)
             raise SettlementInconsistency("Stripe Checkout Session identity is inconsistent")
-        projection_items = await self.projection_verifier.verify(
-            session_id=session.session_id, metadata=session.metadata
-        )
+        try:
+            projection_items = await self.projection_verifier.verify(
+                session_id=session.session_id, metadata=session.metadata
+            )
+        except ProjectionSealError:
+            await self._record_rejection(event, SettlementRejection.PROJECTION)
+            raise
         order_id = session.metadata.get("cr_order_id")
         if not isinstance(order_id, str):
+            await self._record_rejection(event, SettlementRejection.PROJECTION)
             raise SettlementInconsistency("CartRay projection has no order ID")
-        context: SettlementContext = await self.store.settlement_context(order_id)
-        self._reconcile(context, session, projection_items)
+        try:
+            context: SettlementContext = await self.store.settlement_context(order_id)
+        except SettlementInconsistency:
+            await self._record_rejection(event, SettlementRejection.ORDER_CONTEXT)
+            raise
+        try:
+            self._reconcile(context, session, projection_items)
+        except SettlementInconsistency:
+            await self._record_rejection(event, SettlementRejection.RECONCILIATION)
+            raise
         if not _is_settled(session.amount_total_minor, session.status, session.payment_status):
+            await self._record_rejection(event, SettlementRejection.PREDICATE)
             raise SettlementInconsistency("Stripe Checkout Session is not settled")
-        return await self.store.confirm_settlement(
-            order_id=order_id,
-            session_id=session.session_id,
-            event_id=event.event_id,
-            payload=event.payload,
-            payload_sha256=event.payload_sha256,
-            payment_status=session.payment_status,
-            amount_total_minor=session.amount_total_minor,
-        )
+        try:
+            return await self.store.confirm_settlement(
+                order_id=order_id,
+                session_id=session.session_id,
+                event_id=event.event_id,
+                payload=event.payload,
+                payload_sha256=event.payload_sha256,
+                payment_status=session.payment_status,
+                amount_total_minor=session.amount_total_minor,
+            )
+        except SettlementInconsistency:
+            await self._record_rejection(event, SettlementRejection.CONFIRMATION)
+            raise
+
+    async def _record_rejection(self, event: StripeWebhookEvent, rejection: SettlementRejection) -> None:
+        try:
+            await self.store.record_settlement_rejection(
+                event_id=event.event_id,
+                session_id=event.session_id,
+                payload_sha256=event.payload_sha256,
+                rejection=rejection,
+            )
+        except Exception:
+            return
 
     @staticmethod
     def _reconcile(context, session, projection_items) -> None:
