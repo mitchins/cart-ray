@@ -30,6 +30,6 @@ The in-progress [Milestone 4a contract](docs/milestone-4-contract.md) adds the t
 Stripe webhook settlement kernel and its D1 `OrderConfirmed` outbox boundary. It deliberately does
 not deploy the Worker or configure a Stripe webhook endpoint; those operational steps are M4b.
 
-The in-progress [Milestone 4b contract](docs/milestone-4b-contract.md) defines the test-only
-Cloudflare/Stripe activation proof and its operational evidence. It is explicitly not a live-mode
-or production launch.
+The [Milestone 4b contract](docs/milestone-4b-contract.md) and its
+[recorded acceptance evidence](docs/milestone-4b-acceptance-evidence.md) define the test-only
+Cloudflare/Stripe activation proof. It is explicitly not a live-mode or production launch.
