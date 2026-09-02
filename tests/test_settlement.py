@@ -132,7 +132,30 @@ def test_paid_settlement_confirms_a_quantity_five_order_once(checkout_service):
     ]
 
 
-def test_settlement_rejects_an_unpaid_or_different_session(checkout_service):
+@pytest.mark.parametrize(
+    ("amount_total_minor", "status", "payment_status"),
+    (
+        (5_000, "complete", "unpaid"),
+        (0, "complete", "unpaid"),
+        (5_000, "complete", "no_payment_required"),
+        (0, "open", "paid"),
+    ),
+)
+def test_settlement_rejects_unsettled_checkout_sessions(checkout_service, amount_total_minor, status, payment_status):
+    checkout, gateway = checkout_service
+    _spec, session, event = _checkout_session(
+        checkout,
+        gateway,
+        CheckoutRequest("settlement-predicate", checkout.catalogue.version, (CanonicalItem("TEST-TEMPLATE", 1),)),
+        payment_status=payment_status,
+        amount_total_minor=amount_total_minor,
+    )
+    with pytest.raises(SettlementInconsistency, match="not settled"):
+        unsettled_session = StripeCheckoutSession(**{**session.__dict__, "status": status})
+        asyncio.run(_service(checkout.store, unsettled_session).settle(event))
+
+
+def test_settlement_rejects_a_different_session(checkout_service):
     checkout, gateway = checkout_service
     _spec, session, event = _checkout_session(
         checkout,
@@ -141,9 +164,6 @@ def test_settlement_rejects_an_unpaid_or_different_session(checkout_service):
         payment_status="paid",
         amount_total_minor=5_000,
     )
-    unpaid = StripeCheckoutSession(**{**session.__dict__, "payment_status": "unpaid"})
-    with pytest.raises(SettlementInconsistency, match="not settled"):
-        asyncio.run(_service(checkout.store, unpaid).settle(event))
 
     different_session = StripeCheckoutSession(**{**session.__dict__, "session_id": "cs_settlement_other"})
     different_event = StripeWebhookEvent(
@@ -238,7 +258,7 @@ def test_free_order_is_confirmed_from_checkout_completion_alone(checkout_service
         checkout,
         gateway,
         CheckoutRequest("settlement-free", checkout.catalogue.version, (CanonicalItem("TEST-FREE", 1),)),
-        payment_status="no_payment_required",
+        payment_status="paid",
         amount_total_minor=0,
     )
 

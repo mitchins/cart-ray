@@ -128,13 +128,14 @@ AND
 (
   amount_total > 0 AND payment_status == paid
   OR
-  amount_total == 0 AND payment_status == no_payment_required
+  amount_total == 0 AND payment_status IN (paid, no_payment_required)
 )
 ```
 
 This explicitly includes both native free carts and paid catalogue carts reduced to zero by a Stripe
-discount. A missing PaymentIntent is never used as a free-order signal. Delayed or unpaid payment
-states fail closed in M4a; their asynchronous event support is a later contract.
+discount. Stripe can report a completed zero-total Session as either `paid` or
+`no_payment_required`; a missing PaymentIntent is never used as a free-order signal. Delayed or
+unpaid payment states fail closed in M4a; their asynchronous event support is a later contract.
 
 ## Required test matrix
 

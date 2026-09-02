@@ -83,5 +83,5 @@ class StripeSettlementService:
 def _is_settled(amount_total_minor: int, status: str, payment_status: str) -> bool:
     return status == "complete" and (
         (amount_total_minor > 0 and payment_status == "paid")
-        or (amount_total_minor == 0 and payment_status == "no_payment_required")
+        or (amount_total_minor == 0 and payment_status in {"paid", "no_payment_required"})
     )
