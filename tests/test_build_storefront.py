@@ -9,6 +9,7 @@ _configuration = run_path(Path(__file__).parents[1] / "scripts" / "build_storefr
 _assert_selected_catalogue_is_valid = run_path(Path(__file__).parents[1] / "scripts" / "build_storefront.py")[
     "_assert_selected_catalogue_is_valid"
 ]
+_copy_profile_assets = run_path(Path(__file__).parents[1] / "scripts" / "build_storefront.py")["_copy_profile_assets"]
 _selected_profile = run_path(Path(__file__).parents[1] / "scripts" / "build_storefront.py")["_selected_profile"]
 
 
@@ -34,3 +35,12 @@ def test_preview_storefront_rejects_the_real_test_subset(monkeypatch):
 
     with pytest.raises(ValueError, match="preview requires the synthetic"):
         _selected_profile("preview")
+
+
+def test_storefront_copies_selected_profile_images_at_the_public_image_url_path(tmp_path):
+    profile = selected_catalogue_profile({"CARTRAY_CATALOGUE_PROFILE": "real-test-subset"})
+
+    _copy_profile_assets(profile, tmp_path)
+
+    assert (tmp_path / "assets" / "products" / "ep-sil-2026-cover-v1.webp").is_file()
+    assert (tmp_path / "assets" / "products" / "ep-lms-training-catalogue-cover-v1.webp").is_file()

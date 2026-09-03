@@ -34,7 +34,7 @@ def main() -> None:
         copy2(SOURCE / name, DIST / name)
     presentation_sources = run(CsvPresentationSourceAdapter(profile.presentation).load())
     validate_presentation_assets(presentation_sources, profile.product_assets)
-    copytree(SOURCE / "assets", DIST / "assets", dirs_exist_ok=True)
+    _copy_profile_assets(profile, DIST)
     (DIST / "storefront-config.js").write_text(f"window.CARTRAY_STOREFRONT = {json.dumps(config)};\n")
 
 
@@ -92,6 +92,10 @@ def _compile_profile(profile: CatalogueProfile, output: Path, *, check: bool = F
         ],
         check=True,
     )
+
+
+def _copy_profile_assets(profile: CatalogueProfile, destination: Path) -> None:
+    copytree(profile.product_assets, destination / "assets" / "products", dirs_exist_ok=True)
 
 
 if __name__ == "__main__":
