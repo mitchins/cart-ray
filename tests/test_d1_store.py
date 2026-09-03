@@ -314,6 +314,8 @@ def test_d1_store_confirms_once_and_preserves_the_first_delivery_for_a_reseriali
         .bind("cs_d1_settlement", order_id)
         .run()
     )
+    assert asyncio.run(store.checkout_status("cs_d1_settlement")) == "pending"
+    assert asyncio.run(store.checkout_status("cs_d1_unknown")) is None
 
     kwargs = {
         "order_id": order_id,
@@ -343,6 +345,7 @@ def test_d1_store_confirms_once_and_preserves_the_first_delivery_for_a_reseriali
     )
     assert asyncio.run(store.confirm_settlement(**changed)) is False
     assert asyncio.run(store.confirm_settlement(**changed)) is True
+    assert asyncio.run(store.checkout_status("cs_d1_settlement")) == "confirmed"
     asyncio.run(
         store.record_settlement_rejection(
             event_id=kwargs["event_id"],

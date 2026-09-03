@@ -48,6 +48,16 @@ class FixtureRateLimiter:
         return {"success": self.allowed}
 
 
+@dataclass
+class RecordingStatusStore:
+    states: dict[str, str]
+    calls: int = 0
+
+    async def checkout_status(self, session_id):
+        self.calls += 1
+        return self.states.get(session_id)
+
+
 STORE_ENV = {"CARTRAY_STOREFRONT_ORIGIN": STOREFRONT_ORIGIN, "CHECKOUT_RATE_LIMITER": FixtureRateLimiter(True)}
 
 
@@ -208,6 +218,79 @@ def test_catalogue_route_has_an_active_only_public_allowlist_and_cors(fixture_ca
     assert set(payload["products"][0]) == {"product_key", "title", "amount_minor", "currency", "max_quantity"}
     assert "stripe_price_id" not in json.dumps(payload)
     assert "fulfilment_resources" not in json.dumps(payload)
+
+
+def test_checkout_status_is_a_minimal_d1_only_browser_read():
+    store = RecordingStatusStore({"cs_test_pending": "pending", "cs_test_confirmed": "confirmed"})
+
+    async def status_factory(_env):
+        return store
+
+    client = TestClient(create_app(status_store_factory=status_factory), env=STORE_ENV)
+    status, headers, body = client.request(
+        "GET", "/checkout-status?session_id=cs_test_pending", headers={"origin": STOREFRONT_ORIGIN}
+    )
+    assert status == 200
+    assert json.loads(body) == {"state": "pending"}
+    assert headers["Access-Control-Allow-Origin"] == STOREFRONT_ORIGIN
+    assert headers["Cache-Control"] == "no-store"
+
+    status, _headers, body = client.request(
+        "GET", "/checkout-status?session_id=cs_test_confirmed", headers={"origin": STOREFRONT_ORIGIN}
+    )
+    assert status == 200
+    assert json.loads(body) == {"state": "confirmed"}
+    assert store.calls == 2
+
+    status, headers, body = client.request(
+        "GET", "/checkout-status?session_id=not-a-session", headers={"origin": STOREFRONT_ORIGIN}
+    )
+    assert status == 404
+    assert json.loads(body) == {"error": "checkout not found"}
+    assert headers["Cache-Control"] == "no-store"
+    assert store.calls == 2
+
+    status, _headers, body = client.request(
+        "GET", "/checkout-status?session_id=cs_test_unknown", headers={"origin": STOREFRONT_ORIGIN}
+    )
+    assert status == 404
+    assert json.loads(body) == {"error": "checkout not found"}
+    assert store.calls == 3
+
+
+def test_checkout_status_rejects_foreign_origins_and_has_route_specific_preflight():
+    async def forbidden_factory(_env):
+        raise AssertionError("a rejected origin must not access D1")
+
+    client = TestClient(create_app(status_store_factory=forbidden_factory), env=STORE_ENV)
+    status, headers, _body = client.request(
+        "GET", "/checkout-status?session_id=cs_test_pending", headers={"origin": "https://attacker.invalid"}
+    )
+    assert status == 403
+    assert "Access-Control-Allow-Origin" not in headers
+
+    status, headers, _body = client.request(
+        "OPTIONS",
+        "/checkout-status",
+        headers={
+            "origin": STOREFRONT_ORIGIN,
+            "access-control-request-method": "GET",
+        },
+    )
+    assert status == 204
+    assert headers["Access-Control-Allow-Methods"] == "GET"
+    assert "Access-Control-Allow-Headers" not in headers
+
+    status, _headers, _body = client.request(
+        "OPTIONS",
+        "/checkout-status",
+        headers={
+            "origin": STOREFRONT_ORIGIN,
+            "access-control-request-method": "GET",
+            "access-control-request-headers": "content-type",
+        },
+    )
+    assert status == 403
 
 
 def test_cors_rejects_other_origins_before_invoking_browser_factories():

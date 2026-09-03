@@ -154,6 +154,8 @@ def test_stripe_checkout_is_sealed_after_session_creation_and_before_redirect():
         "/v1/payment_intents/pi_123",
     ]
     created_form = parse_qs(transport.requests[0][3] or "")
+    assert created_form["success_url"] == ["https://store.invalid/success"]
+    assert created_form["cancel_url"] == ["https://store.invalid/cancel"]
     assert not any(key.startswith("metadata[") for key in created_form)
     assert created_form["line_items[0][price]"] == ["price_test_support_hours"]
     assert created_form["line_items[0][quantity]"] == ["5"]

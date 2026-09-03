@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from urllib.parse import parse_qsl, urlparse, urlunparse
 from uuid import uuid4
 
 from .canonical import (
@@ -26,6 +27,7 @@ class CheckoutService:
     cancel_url: str = "https://store.invalid/checkout-cancelled/"
 
     async def checkout(self, request: CheckoutRequest) -> CheckoutRedirect:
+        success_url = checkout_success_url(self.success_url)
         requested_items = canonical_items(request.items)
         fingerprint = request_fingerprint(request.manifest_version, requested_items)
         order = await self.store.find_order_by_request(request.checkout_request_id, fingerprint)
@@ -41,7 +43,7 @@ class CheckoutService:
             order_id=order.order_id,
             idempotency_key=f"cartray-checkout-v1:{order.order_id}",
             line_items=tuple((item.stripe_price_id, item.quantity) for item in order.items),
-            success_url=self.success_url,
+            success_url=success_url,
             cancel_url=self.cancel_url,
             metadata=projection_metadata(
                 order_id=order.order_id,
@@ -94,3 +96,13 @@ class CheckoutService:
             currency=currency or "",
             subtotal_minor=sum(item.unit_amount_minor * item.quantity for item in order_items),
         )
+
+
+def checkout_success_url(configured_url: str) -> str:
+    """Append Stripe's literal return-session template to CartRay's trusted success URL."""
+
+    parsed = urlparse(configured_url)
+    if any(key == "session_id" for key, _value in parse_qsl(parsed.query, keep_blank_values=True)):
+        raise RuntimeError("CartRay success URL must not define session_id")
+    separator = "&" if parsed.query else ""
+    return urlunparse(parsed._replace(query=f"{parsed.query}{separator}session_id={{CHECKOUT_SESSION_ID}}"))

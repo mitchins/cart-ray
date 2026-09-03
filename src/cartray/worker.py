@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass
-from urllib.parse import urlparse
+from urllib.parse import parse_qsl, urlparse
 
 from kinglet import Kinglet, Response
 
@@ -33,7 +34,8 @@ from cartray.workers_crypto import WorkersEd25519Signer, WorkersEd25519Verifier
 from cartray.workers_transport import WorkersFetchTransport
 
 MAX_CHECKOUT_BODY_BYTES = 16_384
-_BROWSER_ROUTES = {"/catalogue": "GET", "/checkout": "POST"}
+_BROWSER_ROUTES = {"/catalogue": "GET", "/checkout": "POST", "/checkout-status": "GET"}
+_CHECKOUT_SESSION_ID_RE = re.compile(r"^cs_[A-Za-z0-9_]+$")
 
 
 class CorsRejected(Exception):
@@ -45,22 +47,27 @@ class CorsPolicy:
     origin: str | None
     method: str
 
-    def response_headers(self) -> dict[str, str]:
+    def response_headers(self, *, allowed_headers: str | None = "Content-Type") -> dict[str, str]:
         if self.origin is None:
             return {}
-        return {
+        headers = {
             "Access-Control-Allow-Origin": self.origin,
             "Access-Control-Allow-Methods": self.method,
-            "Access-Control-Allow-Headers": "Content-Type",
             "Vary": "Origin",
         }
+        if allowed_headers is not None:
+            headers["Access-Control-Allow-Headers"] = allowed_headers
+        return headers
 
 
-def create_app(service_factory=None, catalogue_factory=None, settlement_service_factory=None):
+def create_app(
+    service_factory=None, catalogue_factory=None, settlement_service_factory=None, status_store_factory=None
+):
     app = Kinglet(auto_wrap_exceptions=False)
     service_factory = service_factory or checkout_service_from_environment
     catalogue_factory = catalogue_factory or catalogue_from_environment
     settlement_service_factory = settlement_service_factory or settlement_service_from_environment
+    status_store_factory = status_store_factory or status_store_from_environment
 
     @app.get("/health")
     async def health(request):
@@ -117,6 +124,25 @@ def create_app(service_factory=None, catalogue_factory=None, settlement_service_
             headers=cors.response_headers(),
         )
 
+    @app.get("/checkout-status")
+    async def checkout_status(request):
+        try:
+            cors = _cors_policy(request.env, request, method="GET")
+        except CorsRejected:
+            return Response({"error": "origin not allowed"}, status=403)
+        except RuntimeError:
+            return Response({"error": "checkout status unavailable"}, status=503)
+        session_id = _checkout_status_session_id(request)
+        if session_id is None:
+            return Response({"error": "checkout not found"}, status=404, headers=_status_headers(cors))
+        try:
+            state = await (await status_store_factory(request.env)).checkout_status(session_id)
+        except Exception:
+            return Response({"error": "checkout status unavailable"}, status=503, headers=_status_headers(cors))
+        if state not in {"pending", "confirmed"}:
+            return Response({"error": "checkout not found"}, status=404, headers=_status_headers(cors))
+        return Response({"state": state}, headers=_status_headers(cors))
+
     @app.post("/stripe/webhook")
     async def stripe_webhook(request):
         declared_size = request.header("content-length")
@@ -144,6 +170,7 @@ def create_app(service_factory=None, catalogue_factory=None, settlement_service_
 
     @app.route("/catalogue", methods=["OPTIONS"])
     @app.route("/checkout", methods=["OPTIONS"])
+    @app.route("/checkout-status", methods=["OPTIONS"])
     async def preflight(request):
         try:
             method = _BROWSER_ROUTES[request.path]
@@ -153,7 +180,8 @@ def create_app(service_factory=None, catalogue_factory=None, settlement_service_
             return Response({"error": "origin not allowed"}, status=403)
         except RuntimeError:
             return Response({"error": "checkout unavailable"}, status=503)
-        return Response(status=204, headers=cors.response_headers())
+        allowed_headers = None if request.path == "/checkout-status" else "Content-Type"
+        return Response(status=204, headers=cors.response_headers(allowed_headers=allowed_headers))
 
     return app
 
@@ -186,6 +214,11 @@ async def settlement_service_from_environment(env) -> StripeSettlementService:
         StripeCheckoutSessionRetriever(client),
         CheckoutMetadataVerifier(environment, _projection_verifiers(env)),
     )
+
+
+async def status_store_from_environment(env) -> D1OrderStore:
+    _test_environment(env)
+    return D1OrderStore(env.DB)
 
 
 async def _checkout_payload(request) -> CheckoutRequest:
@@ -256,6 +289,17 @@ async def _checkout_rate_limit(env) -> bool:
     return success is True
 
 
+def _checkout_status_session_id(request) -> str | None:
+    values = [value for key, value in parse_qsl(request.query_string, keep_blank_values=True) if key == "session_id"]
+    if len(values) != 1 or not _CHECKOUT_SESSION_ID_RE.fullmatch(values[0]):
+        return None
+    return values[0]
+
+
+def _status_headers(cors: CorsPolicy) -> dict[str, str]:
+    return {**cors.response_headers(allowed_headers=None), "Cache-Control": "no-store"}
+
+
 def _cors_policy(env, request, *, method: str) -> CorsPolicy:
     configured_origin = _origin(_required_env(env, "CARTRAY_STOREFRONT_ORIGIN"))
     origin = request.header("origin")
@@ -287,7 +331,8 @@ def _validate_preflight(request, method: str) -> None:
         raise CorsRejected
     requested_headers = request.header("access-control-request-headers", "")
     headers = {header.strip().lower() for header in requested_headers.split(",") if header.strip()}
-    if headers - {"content-type"}:
+    allowed_headers = set() if request.path == "/checkout-status" else {"content-type"}
+    if headers - allowed_headers:
         raise CorsRejected
 
 
