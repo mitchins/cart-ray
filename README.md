@@ -52,3 +52,7 @@ catalogue import.
 The in-progress [Milestone 7a contract](docs/milestone-7a-presentation-contract.md) defines a
 separate CSV sidecar for public descriptions and versioned static product images, leaving checkout
 facts in the commerce catalogue.
+
+The in-progress [Milestone 7b contract](docs/milestone-7b-contract.md) implements that sidecar
+against synthetic data and static fixture images, without importing a business catalogue or
+changing the deployed sandbox.

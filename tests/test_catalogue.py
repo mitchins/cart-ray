@@ -12,10 +12,13 @@ from cartray.catalogue import (
     build_catalogue_from_source,
 )
 from cartray.errors import CatalogueValidationError, CheckoutValidationError
+from cartray.presentation import CsvPresentationSourceAdapter
 from cartray.test_catalogue import (
     TEST_CATALOGUE_SOURCE_ADAPTER,
     TEST_CATALOGUE_SOURCES,
     TEST_FULFILMENT_EXPANSIONS,
+    TEST_PRESENTATION_SOURCE_ADAPTER,
+    TEST_PRESENTATION_SOURCES,
 )
 
 
@@ -23,6 +26,10 @@ def test_worker_and_preview_use_the_same_synthetic_catalogue_policy():
     root = Path(__file__).parents[1] / "fixtures"
     assert TEST_CATALOGUE_SOURCES == asyncio.run(CsvCatalogueSourceAdapter(root / "catalogue.csv").load())
     assert TEST_CATALOGUE_SOURCES == asyncio.run(TEST_CATALOGUE_SOURCE_ADAPTER.load())
+    assert TEST_PRESENTATION_SOURCES == asyncio.run(
+        CsvPresentationSourceAdapter(root / "catalogue-presentation.csv").load()
+    )
+    assert TEST_PRESENTATION_SOURCES == asyncio.run(TEST_PRESENTATION_SOURCE_ADAPTER.load())
     assert TEST_FULFILMENT_EXPANSIONS == {
         key: tuple(value) for key, value in json.loads((root / "fulfilment-expansions.json").read_text()).items()
     }

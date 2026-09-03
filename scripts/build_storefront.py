@@ -4,10 +4,11 @@ import json
 import os
 from asyncio import run
 from pathlib import Path
-from shutil import copy2
+from shutil import copy2, copytree
 from urllib.parse import urlparse
 
-from cartray.catalogue import CsvCatalogueSourceAdapter
+from cartray.catalogue import CsvCatalogueSourceAdapter, FixturePriceResolver, build_catalogue_from_source
+from cartray.presentation import CsvPresentationSourceAdapter, build_presented_catalogue, validate_presentation_assets
 
 ROOT = Path(__file__).parents[1]
 SOURCE = ROOT / "storefront"
@@ -23,6 +24,9 @@ def main() -> None:
     DIST.mkdir(exist_ok=True)
     for name in STATIC_FILES:
         copy2(SOURCE / name, DIST / name)
+    presentation_sources = run(CsvPresentationSourceAdapter(ROOT / "fixtures" / "catalogue-presentation.csv").load())
+    validate_presentation_assets(presentation_sources, SOURCE / "assets" / "products")
+    copytree(SOURCE / "assets", DIST / "assets", dirs_exist_ok=True)
     (DIST / "storefront-config.js").write_text(f"window.CARTRAY_STOREFRONT = {json.dumps(config)};\n")
 
 
@@ -47,22 +51,20 @@ def _configuration(mode: str) -> dict[str, object]:
 
 
 def _preview_catalogue() -> dict[str, object]:
-    products = run(CsvCatalogueSourceAdapter(ROOT / "fixtures" / "catalogue.csv").load())
-    prices = json.loads((ROOT / "fixtures" / "price-resolutions.json").read_text())
-    return {
-        "version": "sha256:preview-fixtures-v1",
-        "products": [
-            {
-                "product_key": product.product_key,
-                "title": product.title,
-                "amount_minor": prices[product.stripe_lookup_key]["amount_minor"],
-                "currency": prices[product.stripe_lookup_key]["currency"],
-                "max_quantity": product.max_quantity,
-            }
-            for product in products
-            if product.active
-        ],
-    }
+    catalogue = run(
+        build_catalogue_from_source(
+            CsvCatalogueSourceAdapter(ROOT / "fixtures" / "catalogue.csv"),
+            FixturePriceResolver.from_json(ROOT / "fixtures" / "price-resolutions.json"),
+            _fixture_expansions(),
+        )
+    )
+    presentation = run(CsvPresentationSourceAdapter(ROOT / "fixtures" / "catalogue-presentation.csv").load())
+    return build_presented_catalogue(catalogue, presentation).public_manifest()
+
+
+def _fixture_expansions() -> dict[str, tuple[str, ...]]:
+    raw = json.loads((ROOT / "fixtures" / "fulfilment-expansions.json").read_text())
+    return {key: tuple(value) for key, value in raw.items()}
 
 
 if __name__ == "__main__":

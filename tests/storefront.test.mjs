@@ -47,14 +47,18 @@ test("generated storefront configuration is safe for its declared build mode", a
   if (process.env.CARTRAY_STOREFRONT_EXPECTED_MODE === "preview") {
     assert.equal(configuration.checkoutEnabled, false);
     assert.equal(configuration.apiBaseUrl, null);
-    assert.equal(configuration.previewCatalogue.version, "sha256:preview-fixtures-v1");
+    assert.match(configuration.previewCatalogue.version, /^sha256:[0-9a-f]{64}$/);
+    assert.match(configuration.previewCatalogue.presentation_version, /^sha256:[0-9a-f]{64}$/);
     assert.deepEqual(Object.keys(configuration.previewCatalogue.products[0]).sort(), [
       "amount_minor",
       "currency",
+      "image_url",
       "max_quantity",
       "product_key",
+      "short_description",
       "title",
     ]);
+    await readFile(new URL("../storefront-dist/assets/products/test-template-cover-v1.webp", import.meta.url));
     return;
   }
   assert.equal(process.env.CARTRAY_STOREFRONT_EXPECTED_MODE, "production");

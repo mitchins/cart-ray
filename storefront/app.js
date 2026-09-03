@@ -283,8 +283,21 @@ async function boot() {
   for (const product of catalogue.products) {
     const card = document.createElement("article");
     card.className = "product";
+    let image;
+    if (typeof product.image_url === "string") {
+      image = document.createElement("img");
+      image.src = product.image_url;
+      image.alt = "";
+      image.loading = "lazy";
+    }
     const title = document.createElement("h3");
     title.textContent = product.title;
+    let description;
+    if (typeof product.short_description === "string") {
+      description = document.createElement("p");
+      description.className = "product-description";
+      description.textContent = product.short_description;
+    }
     const price = document.createElement("p");
     price.textContent = money(product.amount_minor, product.currency);
     const add = document.createElement("button");
@@ -292,7 +305,10 @@ async function boot() {
     add.textContent = "Add to cart";
     add.addEventListener("click", () => updateCart(product));
     addButtons.push(add);
-    card.append(title, price, add);
+    if (image) card.append(image);
+    card.append(title);
+    if (description) card.append(description);
+    card.append(price, add);
     productsElement.append(card);
   }
   status.textContent = configuration.checkoutEnabled ? "" : "Preview catalogue: cart interactions are enabled; checkout is disabled.";

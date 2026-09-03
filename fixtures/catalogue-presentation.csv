@@ -1,0 +1,5 @@
+product_key,short_description,image_key
+TEST-TEMPLATE,A synthetic downloadable template for storefront testing.,test-template-cover-v1
+TEST-BUNDLE,A synthetic bundle that represents multiple downloadable resources.,test-bundle-cover-v1
+TEST-FREE,A synthetic no-cost resource for native free Checkout testing.,test-free-cover-v1
+TEST-SUPPORT-HOURS,A synthetic service product with a quantity limit of five hours.,test-support-hours-cover-v1
