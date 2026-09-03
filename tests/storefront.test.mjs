@@ -6,6 +6,8 @@ import {
   addToCart,
   checkoutPayload,
   checkoutStatus,
+  cancelledCheckoutView,
+  confirmedCheckoutView,
   consumePendingCheckout,
   createCheckoutAndStorePending,
   loadCatalogue,
@@ -18,6 +20,7 @@ import {
   startCheckout,
   storePendingCheckout,
   successReturnPath,
+  unconfirmedCheckoutView,
 } from "../storefront/app.js";
 
 function memoryStorage() {
@@ -170,7 +173,7 @@ test("only the matching unchanged pending checkout may clear a cart", () => {
   assert.equal(loadPendingCheckout(storage), null);
 });
 
-test("return orchestration clears only the correlated unchanged cart and retains pending carts", async () => {
+test("return orchestration clears only the correlated unchanged cart and enables a fresh checkout", async () => {
   const storage = memoryStorage();
   const cart = new Map([["TEST-TEMPLATE", 1]]);
   persistCart(storage, catalogue.version, cart, 7);
@@ -189,7 +192,25 @@ test("return orchestration clears only the correlated unchanged cart and retains
   assert.deepEqual(confirmed, { state: "confirmed", cleared: true });
   assert.deepEqual([...cart], []);
   assert.deepEqual([...loadPersistedCart(storage, catalogue).cart], []);
-  assert.equal(successReturnPath("/", confirmed.state), "/?checkout=complete");
+  assert.equal(successReturnPath("/", confirmed.state), "/");
+  assert.deepEqual(confirmedCheckoutView(confirmed.cleared), {
+    checkoutLocked: false,
+    message: "Order confirmed. Your cart is ready for another purchase.",
+    actionLabel: "Continue shopping",
+  });
+  const freshCheckout = await createCheckoutAndStorePending({
+    configuration: { checkoutEnabled: true, apiBaseUrl: "https://api.test.invalid" },
+    catalogueVersion: catalogue.version,
+    cart: new Map([["TEST-TEMPLATE", 1]]),
+    revision: 1,
+    requestId: "checkout_fresh",
+    storage,
+    fetchImpl: async () => ({
+      ok: true,
+      json: async () => ({ checkout_url: "https://checkout.stripe.test/fresh", session_id: "cs_test_fresh" }),
+    }),
+  });
+  assert.equal(freshCheckout.sessionId, "cs_test_fresh");
 });
 
 test("a cart changed during checkout creation cannot be cleared by that checkout return", async () => {
@@ -216,6 +237,28 @@ test("a cart changed during checkout creation cannot be cleared by that checkout
   });
   assert.deepEqual(result, { state: "confirmed", cleared: false });
   assert.deepEqual([...loadPersistedCart(storage, catalogue).cart], [["TEST-SUPPORT-HOURS", 1], ["TEST-TEMPLATE", 1]]);
+  assert.deepEqual(confirmedCheckoutView(result.cleared), {
+    checkoutLocked: false,
+    message: "Order confirmed. Your cart was kept.",
+    actionLabel: "Continue shopping",
+  });
+});
+
+test("terminal checkout views enable safe repeat purchase and retain an uncertain cart lock", () => {
+  assert.deepEqual(cancelledCheckoutView(), {
+    checkoutLocked: false,
+    message: "Checkout cancelled. Your cart is ready when you are.",
+  });
+  assert.deepEqual(unconfirmedCheckoutView("pending"), {
+    checkoutLocked: true,
+    message: "Your order is still being confirmed. You can safely close this page.",
+    actionLabel: "Check order status again",
+  });
+  assert.deepEqual(unconfirmedCheckoutView(null), {
+    checkoutLocked: true,
+    message: "We could not confirm this checkout. Check order status again.",
+    actionLabel: "Check order status again",
+  });
 });
 
 test("return polling treats status as a tiny confirmation signal", async () => {
