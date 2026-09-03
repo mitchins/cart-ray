@@ -70,3 +70,7 @@ source inputs.
 
 The in-progress [Milestone 8c contract](docs/milestone-8c-contract.md) records the two approved
 real source inputs and the exact Stripe test-mode Price configuration they require.
+
+The in-progress [Milestone 8d contract](docs/milestone-8d-contract.md) defines the explicit,
+test-only deployment selection for that locked real subset while retaining synthetic inputs as the
+normal development default.
