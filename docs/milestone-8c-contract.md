@@ -8,7 +8,7 @@ Valet.
 
 | CartRay product key | Woo reference | Test Price lookup key | Amount |
 | --- | --- | --- | --- |
-| `EP-SIL-2026` | `sil-package-1` / Module 5a – Supported Independent Living Policy and Procedure Package | `cr_test_ep_sil_2026` | AUD 850.00 |
+| `EP-SIL-2026` | `sil-package-1` / Module 5a - Supported Independent Living Policy and Procedure Package | `cr_test_ep_sil_2026` | AUD 850.00 |
 | `EP-LMS-TRAINING-CATALOGUE` | `lms1` / LMS Training Catalogue | `cr_test_ep_lms_training_catalogue` | AUD 0.00 |
 
 Each is a singleton download in this test subset. Their private fulfilment expansion initially
@@ -32,7 +32,7 @@ Create the following two Stripe **test-mode only** Products and active, fixed, o
 
 | Product | Currency | Unit amount | Lookup key |
 | --- | --- | --- | --- |
-| Module 5a – Supported Independent Living Policy and Procedure Package | AUD | 850.00 | `cr_test_ep_sil_2026` |
+| Module 5a - Supported Independent Living Policy and Procedure Package | AUD | 850.00 | `cr_test_ep_sil_2026` |
 | LMS Training Catalogue | AUD | 0.00 | `cr_test_ep_lms_training_catalogue` |
 
 Do not create recurring, custom-amount, inactive, or live-mode Prices. Stripe product images and
