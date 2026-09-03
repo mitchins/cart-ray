@@ -139,7 +139,7 @@ def create_app(
             state = await (await status_store_factory(request.env)).checkout_status(session_id)
         except Exception:
             return Response({"error": "checkout status unavailable"}, status=503, headers=_status_headers(cors))
-        if state not in {"pending", "confirmed"}:
+        if state not in {"pending", "confirmed", "expired"}:
             return Response({"error": "checkout not found"}, status=404, headers=_status_headers(cors))
         return Response({"state": state}, headers=_status_headers(cors))
 

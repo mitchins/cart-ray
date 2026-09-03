@@ -49,9 +49,16 @@ or:
 {"state":"confirmed"}
 ```
 
+or:
+
+```json
+{"state":"expired"}
+```
+
 `confirmed` means only that the existing Stripe webhook settlement transition has been recorded.
-`pending` means the Session is known to CartRay but that transition has not yet happened. A missing
-or malformed Session identifier receives the same generic `404` response. The endpoint must not
+`pending` means the Session is known to CartRay but that transition has not yet happened. `expired`
+means the signed Stripe expiry webhook has been recorded. A missing or malformed Session identifier
+receives the same generic `404` response. The endpoint must not
 return order IDs, product keys, quantities, prices, currency, customer details, payment details,
 metadata, Stripe payloads, or error diagnostics.
 

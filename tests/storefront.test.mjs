@@ -10,6 +10,7 @@ import {
   confirmedCheckoutView,
   consumePendingCheckout,
   createCheckoutAndStorePending,
+  expiredCheckoutView,
   loadCatalogue,
   loadPendingCheckout,
   loadPersistedCart,
@@ -244,7 +245,7 @@ test("a cart changed during checkout creation cannot be cleared by that checkout
   });
 });
 
-test("terminal checkout views enable safe repeat purchase and retain an uncertain cart lock", () => {
+test("terminal checkout views unlock only authoritative terminal outcomes", () => {
   assert.deepEqual(cancelledCheckoutView(), {
     checkoutLocked: false,
     message: "Checkout cancelled. Your cart is ready when you are.",
@@ -259,6 +260,39 @@ test("terminal checkout views enable safe repeat purchase and retain an uncertai
     message: "We could not confirm this checkout. Check order status again.",
     actionLabel: "Check order status again",
   });
+  assert.deepEqual(expiredCheckoutView(), {
+    checkoutLocked: false,
+    message: "This Checkout expired. Your cart is ready for another purchase.",
+    actionLabel: "Continue shopping",
+  });
+  assert.equal(successReturnPath("/", "expired"), "/");
+});
+
+test("an authoritative expiry retains the cart for a fresh Checkout", async () => {
+  const storage = memoryStorage();
+  const cart = new Map([["TEST-TEMPLATE", 1]]);
+  persistCart(storage, catalogue.version, cart, 3);
+  storePendingCheckout(storage, { sessionId: "cs_test_expired" }, catalogue.version, cart, 3);
+
+  const result = await processCheckoutReturn({
+    configuration: {}, sessionId: "cs_test_expired", storage, catalogue, cart, revision: 3, poll: async () => "expired",
+  });
+
+  assert.deepEqual(result, { state: "expired", cleared: false });
+  assert.deepEqual([...loadPersistedCart(storage, catalogue).cart], [["TEST-TEMPLATE", 1]]);
+  const freshCheckout = await createCheckoutAndStorePending({
+    configuration: { checkoutEnabled: true, apiBaseUrl: "https://api.test.invalid" },
+    catalogueVersion: catalogue.version,
+    cart,
+    revision: 3,
+    requestId: "checkout_after_expiry",
+    storage,
+    fetchImpl: async () => ({
+      ok: true,
+      json: async () => ({ checkout_url: "https://checkout.stripe.test/after-expiry", session_id: "cs_test_fresh_expiry" }),
+    }),
+  });
+  assert.equal(freshCheckout.sessionId, "cs_test_fresh_expiry");
 });
 
 test("return polling treats status as a tiny confirmation signal", async () => {
@@ -277,6 +311,15 @@ test("return polling treats status as a tiny confirmation signal", async () => {
     "https://api.test.invalid/checkout-status?session_id=cs_test_return",
   ]);
   assert.equal(await checkoutStatus({ apiBaseUrl: "https://api.test.invalid" }, "not-a-session", fetchImpl), null);
+
+  assert.equal(
+    await checkoutStatus(
+      { apiBaseUrl: "https://api.test.invalid" },
+      "cs_test_expired",
+      async () => ({ ok: true, json: async () => ({ state: "expired" }) }),
+    ),
+    "expired",
+  );
 
   assert.equal(
     await pollCheckoutStatus(

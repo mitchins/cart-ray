@@ -247,7 +247,9 @@ def test_catalogue_route_can_serve_trusted_public_presentation(fixture_catalogue
 
 
 def test_checkout_status_is_a_minimal_d1_only_browser_read():
-    store = RecordingStatusStore({"cs_test_pending": "pending", "cs_test_confirmed": "confirmed"})
+    store = RecordingStatusStore(
+        {"cs_test_pending": "pending", "cs_test_confirmed": "confirmed", "cs_test_expired": "expired"}
+    )
 
     async def status_factory(_env):
         return store
@@ -268,20 +270,27 @@ def test_checkout_status_is_a_minimal_d1_only_browser_read():
     assert json.loads(body) == {"state": "confirmed"}
     assert store.calls == 2
 
+    status, _headers, body = client.request(
+        "GET", "/checkout-status?session_id=cs_test_expired", headers={"origin": STOREFRONT_ORIGIN}
+    )
+    assert status == 200
+    assert json.loads(body) == {"state": "expired"}
+    assert store.calls == 3
+
     status, headers, body = client.request(
         "GET", "/checkout-status?session_id=not-a-session", headers={"origin": STOREFRONT_ORIGIN}
     )
     assert status == 404
     assert json.loads(body) == {"error": "checkout not found"}
     assert headers["Cache-Control"] == "no-store"
-    assert store.calls == 2
+    assert store.calls == 3
 
     status, _headers, body = client.request(
         "GET", "/checkout-status?session_id=cs_test_unknown", headers={"origin": STOREFRONT_ORIGIN}
     )
     assert status == 404
     assert json.loads(body) == {"error": "checkout not found"}
-    assert store.calls == 3
+    assert store.calls == 4
 
 
 def test_checkout_status_rejects_foreign_origins_and_has_route_specific_preflight():
