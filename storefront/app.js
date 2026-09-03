@@ -175,7 +175,34 @@ export async function processCheckoutReturn({ configuration, sessionId, storage,
 }
 
 export function successReturnPath(pathname, state) {
-  return state === "confirmed" ? `${pathname}?checkout=complete` : null;
+  return state === "confirmed" ? pathname : null;
+}
+
+export function confirmedCheckoutView(cleared) {
+  return {
+    checkoutLocked: false,
+    message: cleared ? "Order confirmed. Your cart is ready for another purchase." : "Order confirmed. Your cart was kept.",
+    actionLabel: "Continue shopping",
+  };
+}
+
+export function unconfirmedCheckoutView(state) {
+  if (state === "pending") {
+    return {
+      checkoutLocked: true,
+      message: "Your order is still being confirmed. You can safely close this page.",
+      actionLabel: "Check order status again",
+    };
+  }
+  return {
+    checkoutLocked: true,
+    message: "We could not confirm this checkout. Check order status again.",
+    actionLabel: "Check order status again",
+  };
+}
+
+export function cancelledCheckoutView() {
+  return { checkoutLocked: false, message: "Checkout cancelled. Your cart is ready when you are." };
 }
 
 export async function loadCatalogue(configuration, fetchImpl = fetch) {
@@ -313,8 +340,31 @@ async function boot() {
   }
   status.textContent = configuration.checkoutEnabled ? "" : "Preview catalogue: cart interactions are enabled; checkout is disabled.";
   renderCart();
+
+  if (configuration.checkoutEnabled) {
+    checkoutButton.addEventListener("click", async () => {
+      checkoutLocked = true;
+      renderCart();
+      try {
+        const checkout = await createCheckoutAndStorePending({
+          configuration,
+          catalogueVersion: catalogue.version,
+          cart,
+          revision,
+          requestId: checkoutRequestId(),
+          storage,
+        });
+        window.location.assign(checkout.url);
+      } catch {
+        checkoutLocked = false;
+        status.textContent = "Checkout is currently unavailable.";
+        renderCart();
+      }
+    });
+  }
+
   if (returning.checkout === "cancelled") {
-    status.textContent = "Checkout cancelled.";
+    status.textContent = cancelledCheckoutView().message;
     window.history.replaceState(null, "", window.location.pathname);
   }
   if (returning.checkout === "complete") {
@@ -328,41 +378,26 @@ async function boot() {
       revision,
       poll: pollCheckoutStatus,
     });
-    const { state } = result;
-    if (state === "confirmed") {
+    if (result.state === "confirmed") {
       if (result.cleared) revision = 0;
-      window.history.replaceState(null, "", successReturnPath(window.location.pathname, state));
+      const view = confirmedCheckoutView(result.cleared);
+      checkoutLocked = view.checkoutLocked;
+      window.history.replaceState(null, "", successReturnPath(window.location.pathname, result.state));
       continueShopping.href = window.location.pathname;
+      continueShopping.textContent = view.actionLabel;
       continueShopping.hidden = false;
-      status.textContent = "Order confirmed.";
-    } else if (state === "pending") {
-      status.textContent = "Your order is still being confirmed. You can safely close this page.";
+      status.textContent = view.message;
     } else {
-      status.textContent = "We could not confirm this checkout.";
+      const view = unconfirmedCheckoutView(result.state);
+      checkoutLocked = view.checkoutLocked;
+      continueShopping.href = window.location.href;
+      continueShopping.textContent = view.actionLabel;
+      continueShopping.hidden = false;
+      status.textContent = view.message;
     }
     renderCart();
     return;
   }
-  if (!configuration.checkoutEnabled) return;
-  checkoutButton.addEventListener("click", async () => {
-    checkoutLocked = true;
-    renderCart();
-    try {
-      const checkout = await createCheckoutAndStorePending({
-        configuration,
-        catalogueVersion: catalogue.version,
-        cart,
-        revision,
-        requestId: checkoutRequestId(),
-        storage,
-      });
-      window.location.assign(checkout.url);
-    } catch {
-      checkoutLocked = false;
-      status.textContent = "Checkout is currently unavailable.";
-      renderCart();
-    }
-  });
 }
 
 if (typeof document !== "undefined") boot();

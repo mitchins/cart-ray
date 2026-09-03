@@ -77,3 +77,6 @@ normal development default.
 
 The [Milestone 8e sandbox acceptance evidence](docs/milestone-8e-acceptance-evidence.md) records
 the deployed real-subset free and paid Checkout proof.
+
+The in-progress [Milestone 9 contract](docs/milestone-9-contract.md) defines clean repeat-purchase
+and safe terminal-return behaviour for the static storefront.
