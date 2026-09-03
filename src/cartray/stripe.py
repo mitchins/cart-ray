@@ -221,6 +221,7 @@ class StripePriceResolver:
             or not isinstance(currency, str)
             or recurring is not None
             or amount < 0
+            or isinstance(amount, bool)
             or len(currency) != 3
         ):
             raise CatalogueValidationError(f"Stripe Price is invalid for lookup key: {lookup_key}")
