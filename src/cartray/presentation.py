@@ -96,9 +96,14 @@ def validate_presentation_sources(sources: tuple[PresentationSource, ...]) -> tu
         raise CatalogueValidationError("catalogue presentation must contain at least one product")
     keys: set[str] = set()
     for source in sources:
+        values = (
+            (source.product_key, source.short_description, source.image_key)
+            if isinstance(source, PresentationSource)
+            else ()
+        )
         if (
             not isinstance(source, PresentationSource)
-            or not all(isinstance(value, str) and value for value in source.__dict__.values())
+            or not all(isinstance(value, str) and value and value == value.strip() for value in values)
             or not PRODUCT_KEY_RE.fullmatch(source.product_key)
             or not IMAGE_KEY_RE.fullmatch(source.image_key)
         ):

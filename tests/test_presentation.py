@@ -58,6 +58,16 @@ def test_presentation_requires_an_exact_join_including_inactive_products(fixture
     assert "TEST-FREE" not in {product["product_key"] for product in manifest["products"]}
 
 
+def test_presentation_rejects_surrounding_whitespace_from_any_adapter(fixture_catalogue):
+    sources = fixture_presentation_sources()
+
+    with pytest.raises(CatalogueValidationError, match="invalid catalogue presentation record"):
+        build_presented_catalogue(
+            fixture_catalogue,
+            (replace(sources[0], short_description=" A description with surrounding whitespace. "), *sources[1:]),
+        )
+
+
 @pytest.mark.parametrize(
     "contents, message",
     [
