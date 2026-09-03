@@ -23,6 +23,13 @@ class CatalogSource:
 
 
 @dataclass(frozen=True)
+class PresentationSource:
+    product_key: str
+    short_description: str
+    image_key: str
+
+
+@dataclass(frozen=True)
 class ResolvedPrice:
     stripe_price_id: str
     amount_minor: int

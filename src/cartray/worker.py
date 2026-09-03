@@ -17,6 +17,7 @@ from cartray.errors import (
     WebhookValidationError,
 )
 from cartray.models import CheckoutRequest
+from cartray.presentation import build_presented_catalogue
 from cartray.settlement import StripeSettlementService
 from cartray.store import D1OrderStore
 from cartray.stripe import (
@@ -28,7 +29,11 @@ from cartray.stripe import (
     StripeCheckoutSessionRetriever,
     StripePriceResolver,
 )
-from cartray.test_catalogue import TEST_CATALOGUE_SOURCE_ADAPTER, TEST_FULFILMENT_EXPANSIONS
+from cartray.test_catalogue import (
+    TEST_CATALOGUE_SOURCE_ADAPTER,
+    TEST_FULFILMENT_EXPANSIONS,
+    TEST_PRESENTATION_SOURCE_ADAPTER,
+)
 from cartray.webhook import MAX_WEBHOOK_BODY_BYTES, StripeWebhookEvent, StripeWebhookSignatureVerifier
 from cartray.workers_crypto import WorkersEd25519Signer, WorkersEd25519Verifier
 from cartray.workers_transport import WorkersFetchTransport
@@ -65,7 +70,7 @@ def create_app(
 ):
     app = Kinglet(auto_wrap_exceptions=False)
     service_factory = service_factory or checkout_service_from_environment
-    catalogue_factory = catalogue_factory or catalogue_from_environment
+    catalogue_factory = catalogue_factory or public_catalogue_from_environment
     settlement_service_factory = settlement_service_factory or settlement_service_from_environment
     status_store_factory = status_store_factory or status_store_from_environment
 
@@ -208,6 +213,11 @@ async def catalogue_from_environment(env):
     return await build_catalogue_from_source(
         TEST_CATALOGUE_SOURCE_ADAPTER, StripePriceResolver(client), TEST_FULFILMENT_EXPANSIONS
     )
+
+
+async def public_catalogue_from_environment(env):
+    catalogue = await catalogue_from_environment(env)
+    return build_presented_catalogue(catalogue, await TEST_PRESENTATION_SOURCE_ADAPTER.load())
 
 
 async def settlement_service_from_environment(env) -> StripeSettlementService:

@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 from .catalogue import StaticCatalogueSourceAdapter
-from .models import CatalogSource
+from .models import CatalogSource, PresentationSource
+from .presentation import PresentationSourceAdapter
 
 TEST_CATALOGUE_SOURCES = (
     CatalogSource(
@@ -28,3 +29,30 @@ TEST_FULFILMENT_EXPANSIONS = {
 }
 
 TEST_CATALOGUE_SOURCE_ADAPTER = StaticCatalogueSourceAdapter(TEST_CATALOGUE_SOURCES)
+
+TEST_PRESENTATION_SOURCES = (
+    PresentationSource(
+        "TEST-TEMPLATE", "A synthetic downloadable template for storefront testing.", "test-template-cover-v1"
+    ),
+    PresentationSource(
+        "TEST-BUNDLE", "A synthetic bundle that represents multiple downloadable resources.", "test-bundle-cover-v1"
+    ),
+    PresentationSource(
+        "TEST-FREE", "A synthetic no-cost resource for native free Checkout testing.", "test-free-cover-v1"
+    ),
+    PresentationSource(
+        "TEST-SUPPORT-HOURS",
+        "A synthetic service product with a quantity limit of five hours.",
+        "test-support-hours-cover-v1",
+    ),
+)
+
+
+class StaticPresentationSourceAdapter:
+    """Adapts immutable test presentation records without a runtime dependency."""
+
+    async def load(self) -> tuple[PresentationSource, ...]:
+        return TEST_PRESENTATION_SOURCES
+
+
+TEST_PRESENTATION_SOURCE_ADAPTER: PresentationSourceAdapter = StaticPresentationSourceAdapter()

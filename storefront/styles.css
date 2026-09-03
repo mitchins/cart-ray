@@ -21,6 +21,18 @@ body {
   padding: 1rem;
 }
 
+.product img {
+  display: block;
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  object-fit: cover;
+  border-radius: 0.25rem;
+}
+
+.product-description {
+  color: #445349;
+}
+
 button {
   cursor: pointer;
   padding: 0.6rem 1rem;
