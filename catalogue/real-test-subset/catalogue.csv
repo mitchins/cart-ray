@@ -1,0 +1,3 @@
+product_key,title,stripe_lookup_key,fulfilment_type,fulfilment_version,max_quantity,active
+EP-SIL-2026,Module 5a - Supported Independent Living Policy and Procedure Package,cr_test_ep_sil_2026,download,ep-sil-2026-v1,1,true
+EP-LMS-TRAINING-CATALOGUE,LMS Training Catalogue,cr_test_ep_lms_training_catalogue,download,ep-lms-training-catalogue-v1,1,true

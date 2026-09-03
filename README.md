@@ -67,3 +67,6 @@ synthetic catalogue inputs into the private deployment artifact used by the Work
 The in-progress [Milestone 8b contract](docs/milestone-8b-contract.md) adds the private,
 test-only preflight lock required before the selected real subset can replace those synthetic
 source inputs.
+
+The in-progress [Milestone 8c contract](docs/milestone-8c-contract.md) records the two approved
+real source inputs and the exact Stripe test-mode Price configuration they require.
