@@ -48,3 +48,7 @@ for an explicit CSV and private fulfilment-expansions input.
 The [Milestone 6c sandbox acceptance evidence](docs/milestone-6c-acceptance-evidence.md) records
 the successful synthetic CSV preflight against Stripe test-mode objects. It is not a production
 catalogue import.
+
+The in-progress [Milestone 7a contract](docs/milestone-7a-presentation-contract.md) defines a
+separate CSV sidecar for public descriptions and versioned static product images, leaving checkout
+facts in the commerce catalogue.
