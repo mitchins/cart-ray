@@ -260,3 +260,10 @@ test("return polling treats status as a tiny confirmation signal", async () => {
   );
   assert.equal(calls, 1);
 });
+
+test("confirmed view has an explicit route back to the normal storefront", async () => {
+  const source = await readFile(new URL("../storefront/index.html", import.meta.url), "utf8");
+  assert.match(source, /id="continue-shopping" href="\/" hidden/);
+  const application = await readFile(new URL("../storefront/app.js", import.meta.url), "utf8");
+  assert.match(application, /continueShopping\.hidden = false/);
+});

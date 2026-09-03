@@ -63,6 +63,20 @@ def test_checkout_success_url_appends_only_the_server_authored_stripe_template()
     )
     with pytest.raises(RuntimeError, match="must not define session_id"):
         checkout_success_url("https://store.invalid/?session_id=browser-value")
+    with pytest.raises(RuntimeError, match="must not define session_id"):
+        checkout_success_url("https://store.invalid/?session%5Fid=browser-value")
+
+
+def test_invalid_success_url_writes_no_checkout_state(checkout_service):
+    service, _gateway = checkout_service
+    service.success_url = "https://store.invalid/?session%5Fid=browser-value"
+
+    with pytest.raises(RuntimeError, match="must not define session_id"):
+        checkout(service, valid_request(service.catalogue))
+
+    for table in ("orders", "checkout_sessions", "outbox"):
+        count = service.store.connection.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
+        assert count == 0
 
 
 def test_maximum_quantity_is_preserved_from_checkout_through_the_immutable_order(checkout_service):

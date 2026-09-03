@@ -155,7 +155,7 @@ export async function pollCheckoutStatus(
     const state = await checkoutStatusBeforeDeadline(configuration, sessionId, fetchImpl, remaining);
     if (state === "confirmed") return state;
     if (state === "pending") lastState = state;
-    else return now() >= deadline ? lastState : null;
+    else return lastState;
   }
   return lastState;
 }
@@ -242,6 +242,7 @@ async function boot() {
   const productsElement = document.querySelector("#products");
   const cartElement = document.querySelector("#cart");
   const checkoutButton = document.querySelector("#checkout");
+  const continueShopping = document.querySelector("#continue-shopping");
   if (!configuration) {
     status.textContent = "Storefront configuration is missing. Run the storefront build before serving this page.";
     return;
@@ -315,6 +316,8 @@ async function boot() {
     if (state === "confirmed") {
       if (result.cleared) revision = 0;
       window.history.replaceState(null, "", successReturnPath(window.location.pathname, state));
+      continueShopping.href = window.location.pathname;
+      continueShopping.hidden = false;
       status.textContent = "Order confirmed.";
     } else if (state === "pending") {
       status.textContent = "Your order is still being confirmed. You can safely close this page.";
