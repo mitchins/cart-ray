@@ -13,8 +13,10 @@ import pytest
 from cartray import preflight
 from cartray.errors import CatalogueValidationError
 from cartray.preflight import (
+    PreflightLock,
     StripeTestPreflightPriceResolver,
     preflight_catalogue,
+    preflight_lock_output,
     preflight_output,
 )
 from cartray.stripe import StripeApiClient
@@ -97,6 +99,44 @@ def test_preflight_builds_the_same_public_manifest_deterministically():
     assert {request[0] for request in first_transport.requests} == {"GET"}
     assert {request[2]["Stripe-Version"] for request in first_transport.requests} == {"2025-09-30.clover"}
     assert all(request[3] is None for request in first_transport.requests)
+
+
+def test_preflight_lock_preserves_private_test_price_resolutions(tmp_path):
+    catalogue_path, expansions_path = fixture_paths()
+    catalogue = asyncio.run(
+        preflight_catalogue(
+            catalogue_path=catalogue_path,
+            fulfilment_expansions_path=expansions_path,
+            environ={"STRIPE_API_KEY": "rk_test_preflight"},
+            transport=successful_transport(),
+        )
+    )
+    lock_path = tmp_path / "catalogue-preflight.lock.json"
+    lock_path.write_text(json.dumps(preflight_lock_output(catalogue)))
+
+    lock = PreflightLock.from_json(lock_path)
+
+    assert lock.catalogue_version == catalogue.version
+    assert asyncio.run(lock.resolve("cr_test_template")).stripe_price_id == "price_test_template"
+    assert preflight_lock_output(catalogue)["stripe_mode"] == "test"
+
+
+def test_preflight_lock_rejects_malformed_or_non_test_inputs(tmp_path):
+    lock_path = tmp_path / "catalogue-preflight.lock.json"
+    lock_path.write_text(
+        json.dumps(
+            {
+                "api_version": "2025-09-30.clover",
+                "catalogue_version": "sha256:" + "0" * 64,
+                "prices": [],
+                "schema": 1,
+                "stripe_mode": "live",
+            }
+        )
+    )
+
+    with pytest.raises(CatalogueValidationError, match="preflight lock is invalid"):
+        PreflightLock.from_json(lock_path)
 
 
 def test_preflight_resolves_inactive_csv_rows_but_hides_them_from_public_output(tmp_path):

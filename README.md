@@ -63,3 +63,7 @@ free and paid Stripe test Checkouts.
 
 The in-progress [Milestone 8a contract](docs/milestone-8a-contract.md) compiles those reviewed
 synthetic catalogue inputs into the private deployment artifact used by the Worker and Pages build.
+
+The in-progress [Milestone 8b contract](docs/milestone-8b-contract.md) adds the private,
+test-only preflight lock required before the selected real subset can replace those synthetic
+source inputs.

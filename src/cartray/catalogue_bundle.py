@@ -28,6 +28,7 @@ class CompiledCatalogueBundle:
 
     bundle_version: str
     expected_presentation_version: str
+    expected_catalogue_version: str | None
     catalogue_sources: tuple[CatalogSource, ...]
     fulfilment_expansions: Mapping[str, tuple[str, ...]]
     presentation_sources: tuple[PresentationSource, ...]
@@ -46,6 +47,8 @@ async def compile_catalogue_bundle(
     price_resolver: PriceResolver,
     fulfilment_expansions: Mapping[str, tuple[str, ...]],
     presentation_source: PresentationSourceAdapter,
+    *,
+    expected_catalogue_version: str | None = None,
 ) -> CompiledCatalogueBundle:
     """Builds a deployment bundle only after all source and presentation validations pass."""
 
@@ -55,9 +58,12 @@ async def compile_catalogue_bundle(
         StaticCatalogueSourceAdapter(catalogue_sources), price_resolver, fulfilment_expansions
     )
     presented = build_presented_catalogue(catalogue, presentation_sources)
+    if expected_catalogue_version is not None and catalogue.version != expected_catalogue_version:
+        raise CatalogueValidationError("catalogue does not match reviewed preflight")
     return CompiledCatalogueBundle(
         bundle_version=_bundle_version(catalogue_sources, fulfilment_expansions, presentation_sources),
         expected_presentation_version=presented.presentation_version,
+        expected_catalogue_version=expected_catalogue_version,
         catalogue_sources=catalogue_sources,
         fulfilment_expansions={key: tuple(value) for key, value in sorted(fulfilment_expansions.items())},
         presentation_sources=presentation_sources,
@@ -70,6 +76,8 @@ async def build_runtime_catalogue(bundle: CompiledCatalogueBundle, price_resolve
     catalogue = await build_catalogue_from_source(
         bundle.catalogue_source_adapter, price_resolver, bundle.fulfilment_expansions
     )
+    if bundle.expected_catalogue_version is not None and catalogue.version != bundle.expected_catalogue_version:
+        raise CatalogueValidationError("runtime catalogue does not match reviewed preflight")
     return catalogue
 
 
@@ -91,6 +99,7 @@ def render_compiled_catalogue_module(bundle: CompiledCatalogueBundle) -> str:
     payload = {
         "catalogue_sources": [source.__dict__ for source in bundle.catalogue_sources],
         "bundle_version": bundle.bundle_version,
+        "expected_catalogue_version": bundle.expected_catalogue_version,
         "expected_presentation_version": bundle.expected_presentation_version,
         "fulfilment_expansions": {key: list(value) for key, value in bundle.fulfilment_expansions.items()},
         "presentation_sources": [source.__dict__ for source in bundle.presentation_sources],
@@ -113,6 +122,7 @@ _PAYLOAD = json.loads(
 COMPILED_CATALOGUE = CompiledCatalogueBundle(
     bundle_version=_PAYLOAD["bundle_version"],
     expected_presentation_version=_PAYLOAD["expected_presentation_version"],
+    expected_catalogue_version=_PAYLOAD["expected_catalogue_version"],
     catalogue_sources=tuple(CatalogSource(**source) for source in _PAYLOAD["catalogue_sources"]),
     fulfilment_expansions={{key: tuple(value) for key, value in _PAYLOAD["fulfilment_expansions"].items()}},
     presentation_sources=tuple(PresentationSource(**source) for source in _PAYLOAD["presentation_sources"]),

@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 from collections.abc import Mapping
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 from urllib.error import HTTPError
@@ -146,6 +147,69 @@ class StripeTestPreflightPriceResolver:
         return ResolvedPrice(stripe_price_id=price_id, amount_minor=amount, currency=currency)
 
 
+@dataclass(frozen=True)
+class PreflightLock:
+    """Private, reviewed test-mode price resolution used to compile a real subset."""
+
+    catalogue_version: str
+    prices: Mapping[str, ResolvedPrice]
+
+    @classmethod
+    def from_json(cls, path: Path) -> PreflightLock:
+        try:
+            raw = json.loads(path.read_text(encoding="utf-8"), object_pairs_hook=_unique_json_object)
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError, ValueError) as error:
+            raise CatalogueValidationError("preflight lock is unavailable") from error
+        expected_keys = {"api_version", "catalogue_version", "prices", "schema", "stripe_mode"}
+        if not isinstance(raw, dict) or set(raw) != expected_keys:
+            raise CatalogueValidationError("preflight lock is invalid")
+        if raw["schema"] != 1 or raw["stripe_mode"] != "test" or raw["api_version"] != STRIPE_API_VERSION:
+            raise CatalogueValidationError("preflight lock is invalid")
+        catalogue_version = raw["catalogue_version"]
+        rows = raw["prices"]
+        if (
+            not isinstance(catalogue_version, str)
+            or len(catalogue_version) != 71
+            or not catalogue_version.startswith("sha256:")
+            or any(character not in "0123456789abcdef" for character in catalogue_version.removeprefix("sha256:"))
+            or not isinstance(rows, list)
+        ):
+            raise CatalogueValidationError("preflight lock is invalid")
+        prices: dict[str, ResolvedPrice] = {}
+        for row in rows:
+            expected_row_keys = {"amount_minor", "currency", "stripe_lookup_key", "stripe_price_id"}
+            if not isinstance(row, dict) or set(row) != expected_row_keys:
+                raise CatalogueValidationError("preflight lock is invalid")
+            lookup_key = row["stripe_lookup_key"]
+            price_id = row["stripe_price_id"]
+            amount = row["amount_minor"]
+            currency = row["currency"]
+            if (
+                not isinstance(lookup_key, str)
+                or not lookup_key
+                or lookup_key != lookup_key.strip()
+                or lookup_key in prices
+                or not isinstance(price_id, str)
+                or not price_id.startswith("price_")
+                or not isinstance(amount, int)
+                or isinstance(amount, bool)
+                or amount < 0
+                or not isinstance(currency, str)
+                or len(currency) != 3
+            ):
+                raise CatalogueValidationError("preflight lock is invalid")
+            prices[lookup_key] = ResolvedPrice(stripe_price_id=price_id, amount_minor=amount, currency=currency)
+        if not prices:
+            raise CatalogueValidationError("preflight lock is invalid")
+        return cls(catalogue_version=catalogue_version, prices=prices)
+
+    async def resolve(self, lookup_key: str) -> ResolvedPrice:
+        try:
+            return self.prices[lookup_key]
+        except KeyError as error:
+            raise CatalogueValidationError(f"preflight lock does not contain lookup key: {lookup_key}") from error
+
+
 def load_fulfilment_expansions(path: Path) -> dict[str, tuple[str, ...]]:
     """Loads the private local expansion input without exposing it in preflight output."""
 
@@ -207,5 +271,25 @@ def preflight_output(catalogue: Catalogue) -> dict[str, object]:
         "active_product_count": len(public_manifest["products"]),
         "product_count": len(catalogue.products),
         "status": "ok",
+        "stripe_mode": "test",
+    }
+
+
+def preflight_lock_output(catalogue: Catalogue) -> dict[str, object]:
+    """Produces the private checked-in input that binds compilation to a Stripe test preflight."""
+
+    return {
+        "api_version": STRIPE_API_VERSION,
+        "catalogue_version": catalogue.version,
+        "prices": [
+            {
+                "amount_minor": product.price.amount_minor,
+                "currency": product.price.currency,
+                "stripe_lookup_key": product.source.stripe_lookup_key,
+                "stripe_price_id": product.price.stripe_price_id,
+            }
+            for _, product in sorted(catalogue.products.items())
+        ],
+        "schema": 1,
         "stripe_mode": "test",
     }
