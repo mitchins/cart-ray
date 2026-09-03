@@ -5,6 +5,7 @@ import json
 from collections.abc import Mapping
 from dataclasses import dataclass
 from hashlib import sha256
+from io import StringIO
 from pathlib import Path
 from typing import Protocol
 
@@ -15,6 +16,36 @@ from .models import CatalogProduct, CatalogSource, ResolvedPrice
 
 class PriceResolver(Protocol):
     async def resolve(self, lookup_key: str) -> ResolvedPrice: ...
+
+
+class CatalogueSourceAdapter(Protocol):
+    """Loads normalized catalogue records from one deterministic source."""
+
+    async def load(self) -> tuple[CatalogSource, ...]: ...
+
+
+@dataclass(frozen=True)
+class CsvCatalogueSourceAdapter:
+    """Loads the versioned CartRay CSV interchange format from a local file."""
+
+    path: Path
+
+    async def load(self) -> tuple[CatalogSource, ...]:
+        try:
+            contents = self.path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError) as error:
+            raise CatalogueValidationError("catalogue CSV is unavailable") from error
+        return parse_catalogue_csv(contents)
+
+
+@dataclass(frozen=True)
+class StaticCatalogueSourceAdapter:
+    """Adapts immutable bundled records without adding a runtime data dependency."""
+
+    sources: tuple[CatalogSource, ...]
+
+    async def load(self) -> tuple[CatalogSource, ...]:
+        return self.sources
 
 
 @dataclass(frozen=True)
@@ -78,8 +109,8 @@ class Catalogue:
         }
 
 
-def load_catalogue_sources(path: Path) -> tuple[CatalogSource, ...]:
-    with path.open(newline="") as handle:
+def parse_catalogue_csv(contents: str) -> tuple[CatalogSource, ...]:
+    with StringIO(contents, newline="") as handle:
         reader = csv.DictReader(handle)
         headers = reader.fieldnames or []
         rows = list(reader)
@@ -120,10 +151,53 @@ def load_catalogue_sources(path: Path) -> tuple[CatalogSource, ...]:
             raise CatalogueValidationError(f"incomplete product: {source.product_key}")
         sources.append(source)
 
-    keys = [source.product_key for source in sources]
-    if len(keys) != len(set(keys)):
-        raise CatalogueValidationError("duplicate product keys")
-    return tuple(sources)
+    return validate_catalogue_sources(tuple(sources))
+
+
+def validate_catalogue_sources(sources: tuple[CatalogSource, ...]) -> tuple[CatalogSource, ...]:
+    """Enforces the normalized record contract for every source adapter."""
+
+    if not sources:
+        raise CatalogueValidationError("catalogue must contain at least one product")
+    keys: set[str] = set()
+    for source in sources:
+        if (
+            not isinstance(source, CatalogSource)
+            or not all(
+                isinstance(value, str)
+                for value in (
+                    source.product_key,
+                    source.title,
+                    source.stripe_lookup_key,
+                    source.fulfilment_type,
+                    source.fulfilment_version,
+                )
+            )
+            or not PRODUCT_KEY_RE.fullmatch(source.product_key)
+            or not source.title
+            or not source.stripe_lookup_key
+            or not source.fulfilment_type
+            or not source.fulfilment_version
+            or not isinstance(source.max_quantity, int)
+            or isinstance(source.max_quantity, bool)
+            or source.max_quantity < 1
+            or not isinstance(source.active, bool)
+        ):
+            raise CatalogueValidationError("invalid catalogue source record")
+        if source.product_key in keys:
+            raise CatalogueValidationError("duplicate product keys")
+        keys.add(source.product_key)
+    return sources
+
+
+async def build_catalogue_from_source(
+    source: CatalogueSourceAdapter,
+    price_resolver: PriceResolver,
+    fulfilment_expansions: Mapping[str, tuple[str, ...]],
+) -> Catalogue:
+    """Builds the immutable catalogue from an adapter-selected normalized source."""
+
+    return await build_catalogue(await source.load(), price_resolver, fulfilment_expansions)
 
 
 async def build_catalogue(
@@ -131,6 +205,7 @@ async def build_catalogue(
     price_resolver: PriceResolver,
     fulfilment_expansions: Mapping[str, tuple[str, ...]],
 ) -> Catalogue:
+    sources = validate_catalogue_sources(sources)
     products: dict[str, CatalogProduct] = {}
     for source in sources:
         price = await price_resolver.resolve(source.stripe_lookup_key)

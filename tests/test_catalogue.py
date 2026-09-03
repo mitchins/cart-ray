@@ -1,20 +1,63 @@
+import asyncio
 import json
 from dataclasses import replace
 from pathlib import Path
 
 import pytest
 
-from cartray.catalogue import load_catalogue_sources
+from cartray.catalogue import (
+    CsvCatalogueSourceAdapter,
+    FixturePriceResolver,
+    StaticCatalogueSourceAdapter,
+    build_catalogue_from_source,
+)
 from cartray.errors import CatalogueValidationError, CheckoutValidationError
-from cartray.test_catalogue import TEST_CATALOGUE_SOURCES, TEST_FULFILMENT_EXPANSIONS
+from cartray.test_catalogue import (
+    TEST_CATALOGUE_SOURCE_ADAPTER,
+    TEST_CATALOGUE_SOURCES,
+    TEST_FULFILMENT_EXPANSIONS,
+)
 
 
 def test_worker_and_preview_use_the_same_synthetic_catalogue_policy():
     root = Path(__file__).parents[1] / "fixtures"
-    assert TEST_CATALOGUE_SOURCES == load_catalogue_sources(root / "catalogue.csv")
+    assert TEST_CATALOGUE_SOURCES == asyncio.run(CsvCatalogueSourceAdapter(root / "catalogue.csv").load())
+    assert TEST_CATALOGUE_SOURCES == asyncio.run(TEST_CATALOGUE_SOURCE_ADAPTER.load())
     assert TEST_FULFILMENT_EXPANSIONS == {
         key: tuple(value) for key, value in json.loads((root / "fulfilment-expansions.json").read_text()).items()
     }
+
+
+def test_catalogue_build_uses_the_same_contract_for_csv_and_a_future_adapter():
+    root = Path(__file__).parents[1] / "fixtures"
+    resolver = FixturePriceResolver.from_json(root / "price-resolutions.json")
+    expansions = {
+        key: tuple(value) for key, value in json.loads((root / "fulfilment-expansions.json").read_text()).items()
+    }
+    csv_catalogue = asyncio.run(
+        build_catalogue_from_source(CsvCatalogueSourceAdapter(root / "catalogue.csv"), resolver, expansions)
+    )
+    static_catalogue = asyncio.run(
+        build_catalogue_from_source(StaticCatalogueSourceAdapter(TEST_CATALOGUE_SOURCES), resolver, expansions)
+    )
+
+    assert static_catalogue == csv_catalogue
+
+
+def test_future_adapter_cannot_bypass_normalized_record_validation():
+    root = Path(__file__).parents[1] / "fixtures"
+    resolver = FixturePriceResolver.from_json(root / "price-resolutions.json")
+    expansions = {
+        key: tuple(value) for key, value in json.loads((root / "fulfilment-expansions.json").read_text()).items()
+    }
+    duplicate_adapter = StaticCatalogueSourceAdapter((TEST_CATALOGUE_SOURCES[0], TEST_CATALOGUE_SOURCES[0]))
+
+    with pytest.raises(CatalogueValidationError, match="duplicate product keys"):
+        asyncio.run(build_catalogue_from_source(duplicate_adapter, resolver, expansions))
+
+    malformed_adapter = StaticCatalogueSourceAdapter((replace(TEST_CATALOGUE_SOURCES[0], product_key=1),))
+    with pytest.raises(CatalogueValidationError, match="invalid catalogue source record"):
+        asyncio.run(build_catalogue_from_source(malformed_adapter, resolver, expansions))
 
 
 def test_public_and_private_manifests_have_separate_concerns(fixture_catalogue):
@@ -62,7 +105,7 @@ def test_catalogue_rejects_duplicate_headers_before_dict_reader_collapses_them(t
     )
 
     with pytest.raises(CatalogueValidationError, match="headers"):
-        load_catalogue_sources(source)
+        asyncio.run(CsvCatalogueSourceAdapter(source).load())
 
 
 @pytest.mark.parametrize(
@@ -81,4 +124,4 @@ def test_catalogue_rejects_extra_or_missing_row_values_before_conversion(tmp_pat
     source.write_text(contents)
 
     with pytest.raises(CatalogueValidationError, match="invalid row"):
-        load_catalogue_sources(source)
+        asyncio.run(CsvCatalogueSourceAdapter(source).load())

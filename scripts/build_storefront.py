@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import json
 import os
-from csv import DictReader
+from asyncio import run
 from pathlib import Path
 from shutil import copy2
 from urllib.parse import urlparse
+
+from cartray.catalogue import CsvCatalogueSourceAdapter
 
 ROOT = Path(__file__).parents[1]
 SOURCE = ROOT / "storefront"
@@ -45,21 +47,20 @@ def _configuration(mode: str) -> dict[str, object]:
 
 
 def _preview_catalogue() -> dict[str, object]:
-    with (ROOT / "fixtures" / "catalogue.csv").open(newline="") as handle:
-        products = list(DictReader(handle))
+    products = run(CsvCatalogueSourceAdapter(ROOT / "fixtures" / "catalogue.csv").load())
     prices = json.loads((ROOT / "fixtures" / "price-resolutions.json").read_text())
     return {
         "version": "sha256:preview-fixtures-v1",
         "products": [
             {
-                "product_key": product["product_key"],
-                "title": product["title"],
-                "amount_minor": prices[product["stripe_lookup_key"]]["amount_minor"],
-                "currency": prices[product["stripe_lookup_key"]]["currency"],
-                "max_quantity": int(product["max_quantity"]),
+                "product_key": product.product_key,
+                "title": product.title,
+                "amount_minor": prices[product.stripe_lookup_key]["amount_minor"],
+                "currency": prices[product.stripe_lookup_key]["currency"],
+                "max_quantity": product.max_quantity,
             }
             for product in products
-            if product["active"] == "true"
+            if product.active
         ],
     }
 
