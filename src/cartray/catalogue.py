@@ -110,6 +110,8 @@ class Catalogue:
 
 
 def parse_catalogue_csv(contents: str) -> tuple[CatalogSource, ...]:
+    if contents.startswith("\ufeff"):
+        raise CatalogueValidationError("catalogue CSV must not contain a UTF-8 BOM")
     with StringIO(contents, newline="") as handle:
         reader = csv.DictReader(handle)
         headers = reader.fieldnames or []
@@ -132,6 +134,8 @@ def parse_catalogue_csv(contents: str) -> tuple[CatalogSource, ...]:
     for row in rows:
         if None in row or any(not isinstance(row.get(header), str) or not row[header].strip() for header in headers):
             raise CatalogueValidationError(f"invalid row: {row!r}")
+        if any(row[header] != row[header].strip() for header in headers):
+            raise CatalogueValidationError(f"catalogue CSV values must not have surrounding whitespace: {row!r}")
         try:
             active = {"true": True, "false": False}[row["active"].lower()]
             source = CatalogSource(

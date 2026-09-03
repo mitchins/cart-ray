@@ -34,6 +34,29 @@ class RecordingTransport:
         return self.responses.pop(0)
 
 
+def stripe_price(
+    *,
+    lookup_key: str = "cr_test_template",
+    active: bool = True,
+    livemode: bool = False,
+    product_active: bool = True,
+    product_livemode: bool = False,
+) -> dict[str, object]:
+    return {
+        "id": "price_test_template",
+        "unit_amount": 2500,
+        "currency": "aud",
+        "recurring": None,
+        "lookup_key": lookup_key,
+        "active": active,
+        "livemode": livemode,
+        "type": "one_time",
+        "billing_scheme": "per_unit",
+        "custom_unit_amount": None,
+        "product": {"active": product_active, "livemode": product_livemode},
+    }
+
+
 @dataclass(frozen=True)
 class FixtureSigner:
     async def sign(self, payload: bytes) -> bytes:
@@ -219,9 +242,7 @@ def test_stripe_checkout_keeps_session_metadata_canonical_when_no_payment_intent
 
 
 def test_stripe_price_resolver_requires_one_active_one_off_price():
-    transport = RecordingTransport(
-        [(200, {"data": [{"id": "price_test_template", "unit_amount": 2500, "currency": "aud", "recurring": None}]})]
-    )
+    transport = RecordingTransport([(200, {"data": [stripe_price()]})])
     resolver = StripePriceResolver(StripeApiClient("rk_test_fixture", transport))
 
     price = asyncio.run(resolver.resolve("cr_test_template"))
@@ -242,7 +263,7 @@ def test_stripe_api_version_pin_cannot_be_overridden_by_a_request_caller():
 
 @pytest.mark.parametrize(
     "prices",
-    [[], [{"id": "price_1", "unit_amount": 1, "currency": "aud", "recurring": None}] * 2],
+    [[], [stripe_price()] * 2],
 )
 def test_stripe_price_resolver_rejects_missing_or_ambiguous_lookup_keys(prices):
     resolver = StripePriceResolver(StripeApiClient("rk_test_fixture", RecordingTransport([(200, {"data": prices})])))

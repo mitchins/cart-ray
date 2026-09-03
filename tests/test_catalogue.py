@@ -109,6 +109,29 @@ def test_catalogue_rejects_duplicate_headers_before_dict_reader_collapses_them(t
 
 
 @pytest.mark.parametrize(
+    "contents, message",
+    [
+        (
+            "\ufeffproduct_key,title,stripe_lookup_key,fulfilment_type,fulfilment_version,max_quantity,active\n"
+            "TEST-ITEM,Title,lookup,download,test-v1,1,true\n",
+            "BOM",
+        ),
+        (
+            "product_key,title,stripe_lookup_key,fulfilment_type,fulfilment_version,max_quantity,active\n"
+            "TEST-ITEM,Title, lookup,download,test-v1,1,true\n",
+            "whitespace",
+        ),
+    ],
+)
+def test_catalogue_rejects_spreadsheet_encoding_or_whitespace_ambiguity(tmp_path, contents, message):
+    source = tmp_path / "ambiguous.csv"
+    source.write_text(contents)
+
+    with pytest.raises(CatalogueValidationError, match=message):
+        asyncio.run(CsvCatalogueSourceAdapter(source).load())
+
+
+@pytest.mark.parametrize(
     "contents",
     (
         "product_key,title,stripe_lookup_key,fulfilment_type,fulfilment_version,max_quantity,active\n"
