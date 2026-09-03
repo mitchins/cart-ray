@@ -39,6 +39,19 @@ purchase rather than merely appearing active.
 5. Return status is announced through the existing polite live region and the action label states
    whether the customer can continue shopping or should recheck confirmation.
 
+## Cancellation is not expiry
+
+`checkout=cancelled` records browser/customer intent only. It permits the retained local cart to
+be used again, but it does not change the original Stripe Checkout Session or CartRay's D1
+settlement state. If the customer later completes that older Stripe Session, its valid signed
+`checkout.session.completed` webhook is still processed normally.
+
+This deliberately leaves a small duplicate-purchase possibility when a customer cancels, starts a
+replacement Checkout, then completes the original Session. M9 does not imply that a cancel return
+is a Stripe terminal state. Authoritative Stripe expiry ingestion and replacement-Session
+semantics are separate follow-up work; until then, only `confirmed` is an authoritative terminal
+state visible to this status route.
+
 ## Acceptance criteria
 
 M9 tests prove that:
@@ -50,5 +63,7 @@ M9 tests prove that:
 3. cancellation is clearly announced while leaving the cart and Checkout path usable;
 4. pending and unavailable/unknown outcomes retain the cart, preserve the lock, and provide only
    a retry-confirmation action; and
-5. the browser contract, webhook-only settlement authority, and existing cross-tab protections
+5. a cancelled browser return unlocks the retained cart without changing CartRay's settlement
+   state, and a later valid completion webhook remains processable; and
+6. the browser contract, webhook-only settlement authority, and existing cross-tab protections
    remain unchanged.
