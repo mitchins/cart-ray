@@ -163,6 +163,16 @@ def validate_catalogue_sources(sources: tuple[CatalogSource, ...]) -> tuple[Cata
     for source in sources:
         if (
             not isinstance(source, CatalogSource)
+            or not all(
+                isinstance(value, str)
+                for value in (
+                    source.product_key,
+                    source.title,
+                    source.stripe_lookup_key,
+                    source.fulfilment_type,
+                    source.fulfilment_version,
+                )
+            )
             or not PRODUCT_KEY_RE.fullmatch(source.product_key)
             or not source.title
             or not source.stripe_lookup_key

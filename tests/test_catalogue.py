@@ -55,6 +55,10 @@ def test_future_adapter_cannot_bypass_normalized_record_validation():
     with pytest.raises(CatalogueValidationError, match="duplicate product keys"):
         asyncio.run(build_catalogue_from_source(duplicate_adapter, resolver, expansions))
 
+    malformed_adapter = StaticCatalogueSourceAdapter((replace(TEST_CATALOGUE_SOURCES[0], product_key=1),))
+    with pytest.raises(CatalogueValidationError, match="invalid catalogue source record"):
+        asyncio.run(build_catalogue_from_source(malformed_adapter, resolver, expansions))
+
 
 def test_public_and_private_manifests_have_separate_concerns(fixture_catalogue):
     public = fixture_catalogue.public_manifest()
