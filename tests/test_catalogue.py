@@ -11,26 +11,20 @@ from cartray.catalogue import (
     StaticCatalogueSourceAdapter,
     build_catalogue_from_source,
 )
+from cartray.compiled_catalogue import COMPILED_CATALOGUE
 from cartray.errors import CatalogueValidationError, CheckoutValidationError
 from cartray.presentation import CsvPresentationSourceAdapter
-from cartray.test_catalogue import (
-    TEST_CATALOGUE_SOURCE_ADAPTER,
-    TEST_CATALOGUE_SOURCES,
-    TEST_FULFILMENT_EXPANSIONS,
-    TEST_PRESENTATION_SOURCE_ADAPTER,
-    TEST_PRESENTATION_SOURCES,
-)
 
 
-def test_worker_and_preview_use_the_same_synthetic_catalogue_policy():
+def test_compiled_worker_and_preview_bundle_matches_the_synthetic_source_inputs():
     root = Path(__file__).parents[1] / "fixtures"
-    assert TEST_CATALOGUE_SOURCES == asyncio.run(CsvCatalogueSourceAdapter(root / "catalogue.csv").load())
-    assert TEST_CATALOGUE_SOURCES == asyncio.run(TEST_CATALOGUE_SOURCE_ADAPTER.load())
-    assert TEST_PRESENTATION_SOURCES == asyncio.run(
+    assert COMPILED_CATALOGUE.catalogue_sources == asyncio.run(CsvCatalogueSourceAdapter(root / "catalogue.csv").load())
+    assert COMPILED_CATALOGUE.catalogue_sources == asyncio.run(COMPILED_CATALOGUE.catalogue_source_adapter.load())
+    assert COMPILED_CATALOGUE.presentation_sources == asyncio.run(
         CsvPresentationSourceAdapter(root / "catalogue-presentation.csv").load()
     )
-    assert TEST_PRESENTATION_SOURCES == asyncio.run(TEST_PRESENTATION_SOURCE_ADAPTER.load())
-    assert TEST_FULFILMENT_EXPANSIONS == {
+    assert COMPILED_CATALOGUE.presentation_sources == asyncio.run(COMPILED_CATALOGUE.presentation_source_adapter.load())
+    assert COMPILED_CATALOGUE.fulfilment_expansions == {
         key: tuple(value) for key, value in json.loads((root / "fulfilment-expansions.json").read_text()).items()
     }
 
@@ -45,7 +39,7 @@ def test_catalogue_build_uses_the_same_contract_for_csv_and_a_future_adapter():
         build_catalogue_from_source(CsvCatalogueSourceAdapter(root / "catalogue.csv"), resolver, expansions)
     )
     static_catalogue = asyncio.run(
-        build_catalogue_from_source(StaticCatalogueSourceAdapter(TEST_CATALOGUE_SOURCES), resolver, expansions)
+        build_catalogue_from_source(COMPILED_CATALOGUE.catalogue_source_adapter, resolver, expansions)
     )
 
     assert static_catalogue == csv_catalogue
@@ -57,12 +51,14 @@ def test_future_adapter_cannot_bypass_normalized_record_validation():
     expansions = {
         key: tuple(value) for key, value in json.loads((root / "fulfilment-expansions.json").read_text()).items()
     }
-    duplicate_adapter = StaticCatalogueSourceAdapter((TEST_CATALOGUE_SOURCES[0], TEST_CATALOGUE_SOURCES[0]))
+    duplicate_adapter = StaticCatalogueSourceAdapter(
+        (COMPILED_CATALOGUE.catalogue_sources[0], COMPILED_CATALOGUE.catalogue_sources[0])
+    )
 
     with pytest.raises(CatalogueValidationError, match="duplicate product keys"):
         asyncio.run(build_catalogue_from_source(duplicate_adapter, resolver, expansions))
 
-    malformed_adapter = StaticCatalogueSourceAdapter((replace(TEST_CATALOGUE_SOURCES[0], product_key=1),))
+    malformed_adapter = StaticCatalogueSourceAdapter((replace(COMPILED_CATALOGUE.catalogue_sources[0], product_key=1),))
     with pytest.raises(CatalogueValidationError, match="invalid catalogue source record"):
         asyncio.run(build_catalogue_from_source(malformed_adapter, resolver, expansions))
 

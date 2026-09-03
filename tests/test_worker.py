@@ -6,11 +6,11 @@ from hashlib import sha256
 
 from kinglet import TestClient
 
+from cartray.compiled_catalogue import COMPILED_CATALOGUE
 from cartray.errors import CheckoutValidationError, SettlementInconsistency
 from cartray.models import CheckoutRedirect
 from cartray.presentation import build_presented_catalogue
 from cartray.stripe import ProjectionSealError
-from cartray.test_catalogue import TEST_PRESENTATION_SOURCES
 from cartray.worker import app, create_app
 
 STOREFRONT_ORIGIN = "https://cartray-store-test.pages.dev"
@@ -224,7 +224,7 @@ def test_catalogue_route_has_an_active_only_public_allowlist_and_cors(fixture_ca
 
 def test_catalogue_route_can_serve_trusted_public_presentation(fixture_catalogue):
     async def catalogue_factory(_env):
-        return build_presented_catalogue(fixture_catalogue, TEST_PRESENTATION_SOURCES)
+        return build_presented_catalogue(fixture_catalogue, COMPILED_CATALOGUE.presentation_sources)
 
     status, _headers, body = TestClient(create_app(catalogue_factory=catalogue_factory), env=STORE_ENV).request(
         "GET", "/catalogue", headers={"origin": STOREFRONT_ORIGIN}
