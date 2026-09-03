@@ -56,3 +56,7 @@ facts in the commerce catalogue.
 The in-progress [Milestone 7b contract](docs/milestone-7b-contract.md) implements that sidecar
 against synthetic data and static fixture images, without importing a business catalogue or
 changing the deployed sandbox.
+
+The [Milestone 7c sandbox acceptance evidence](docs/milestone-7c-acceptance-evidence.md) records
+the deployed synthetic presentation check across the public catalogue, static assets, and both
+free and paid Stripe test Checkouts.
