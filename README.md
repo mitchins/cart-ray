@@ -60,3 +60,6 @@ changing the deployed sandbox.
 The [Milestone 7c sandbox acceptance evidence](docs/milestone-7c-acceptance-evidence.md) records
 the deployed synthetic presentation check across the public catalogue, static assets, and both
 free and paid Stripe test Checkouts.
+
+The in-progress [Milestone 8a contract](docs/milestone-8a-contract.md) compiles those reviewed
+synthetic catalogue inputs into the private deployment artifact used by the Worker and Pages build.

@@ -7,8 +7,9 @@ from urllib.parse import parse_qsl, urlparse
 
 from kinglet import Kinglet, Response
 
-from cartray.catalogue import build_catalogue_from_source
+from cartray.catalogue_bundle import build_runtime_catalogue, build_runtime_presented_catalogue
 from cartray.checkout import CheckoutService
+from cartray.compiled_catalogue import COMPILED_CATALOGUE
 from cartray.errors import (
     CheckoutInProgress,
     CheckoutValidationError,
@@ -17,7 +18,6 @@ from cartray.errors import (
     WebhookValidationError,
 )
 from cartray.models import CheckoutRequest
-from cartray.presentation import build_presented_catalogue
 from cartray.settlement import StripeSettlementService
 from cartray.store import D1OrderStore
 from cartray.stripe import (
@@ -28,11 +28,6 @@ from cartray.stripe import (
     StripeCheckoutGateway,
     StripeCheckoutSessionRetriever,
     StripePriceResolver,
-)
-from cartray.test_catalogue import (
-    TEST_CATALOGUE_SOURCE_ADAPTER,
-    TEST_FULFILMENT_EXPANSIONS,
-    TEST_PRESENTATION_SOURCE_ADAPTER,
 )
 from cartray.webhook import MAX_WEBHOOK_BODY_BYTES, StripeWebhookEvent, StripeWebhookSignatureVerifier
 from cartray.workers_crypto import WorkersEd25519Signer, WorkersEd25519Verifier
@@ -196,9 +191,7 @@ async def checkout_service_from_environment(env) -> CheckoutService:
     success_url = _https_url(_required_env(env, "CARTRAY_SUCCESS_URL"), "CARTRAY_SUCCESS_URL")
     cancel_url = _https_url(_required_env(env, "CARTRAY_CANCEL_URL"), "CARTRAY_CANCEL_URL")
     client = StripeApiClient(_required_env(env, "STRIPE_API_KEY"), WorkersFetchTransport())
-    catalogue = await build_catalogue_from_source(
-        TEST_CATALOGUE_SOURCE_ADAPTER, StripePriceResolver(client), TEST_FULFILMENT_EXPANSIONS
-    )
+    catalogue = await build_runtime_catalogue(COMPILED_CATALOGUE, StripePriceResolver(client))
     signer = WorkersEd25519Signer(_required_env(env, "CARTRAY_SIGNING_PRIVATE_KEY_PKCS8_B64"))
     gateway = StripeCheckoutGateway(
         client,
@@ -210,14 +203,13 @@ async def checkout_service_from_environment(env) -> CheckoutService:
 async def catalogue_from_environment(env):
     _test_environment(env)
     client = StripeApiClient(_required_env(env, "STRIPE_API_KEY"), WorkersFetchTransport())
-    return await build_catalogue_from_source(
-        TEST_CATALOGUE_SOURCE_ADAPTER, StripePriceResolver(client), TEST_FULFILMENT_EXPANSIONS
-    )
+    return await build_runtime_catalogue(COMPILED_CATALOGUE, StripePriceResolver(client))
 
 
 async def public_catalogue_from_environment(env):
-    catalogue = await catalogue_from_environment(env)
-    return build_presented_catalogue(catalogue, await TEST_PRESENTATION_SOURCE_ADAPTER.load())
+    _test_environment(env)
+    client = StripeApiClient(_required_env(env, "STRIPE_API_KEY"), WorkersFetchTransport())
+    return await build_runtime_presented_catalogue(COMPILED_CATALOGUE, StripePriceResolver(client))
 
 
 async def settlement_service_from_environment(env) -> StripeSettlementService:

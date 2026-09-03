@@ -42,6 +42,16 @@ class CsvPresentationSourceAdapter:
 
 
 @dataclass(frozen=True)
+class StaticPresentationSourceAdapter:
+    """Adapts immutable bundled presentation records without a runtime data dependency."""
+
+    sources: tuple[PresentationSource, ...]
+
+    async def load(self) -> tuple[PresentationSource, ...]:
+        return self.sources
+
+
+@dataclass(frozen=True)
 class PresentedCatalogue:
     """Combines commerce facts with public presentation without changing checkout authority."""
 
