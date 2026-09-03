@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from cartray.catalogue import FixturePriceResolver, build_catalogue, load_catalogue_sources
+from cartray.catalogue import CsvCatalogueSourceAdapter, FixturePriceResolver, build_catalogue_from_source
 from cartray.checkout import CheckoutService
 from cartray.gateway import FakePaymentGateway
 from cartray.store import SqliteOrderStore
@@ -15,12 +15,13 @@ from cartray.store import SqliteOrderStore
 @pytest.fixture
 def fixture_catalogue():
     root = Path(__file__).parents[1] / "fixtures"
-    sources = load_catalogue_sources(root / "catalogue.csv")
     resolver = FixturePriceResolver.from_json(root / "price-resolutions.json")
     expansions = {
         key: tuple(value) for key, value in json.loads((root / "fulfilment-expansions.json").read_text()).items()
     }
-    return asyncio.run(build_catalogue(sources, resolver, expansions))
+    return asyncio.run(
+        build_catalogue_from_source(CsvCatalogueSourceAdapter(root / "catalogue.csv"), resolver, expansions)
+    )
 
 
 @pytest.fixture

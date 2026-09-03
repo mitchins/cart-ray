@@ -39,3 +39,6 @@ non-authoritative post-Checkout return view.
 
 The [Milestone 5b sandbox acceptance evidence](docs/milestone-5b-acceptance-evidence.md) records
 the paid and native-free browser-return proof. It is explicitly not a live-mode launch.
+
+The in-progress [Milestone 6a contract](docs/milestone-6-contract.md) introduces the deterministic
+CSV catalogue protocol and keeps future Sheets ingestion outside the commerce runtime.

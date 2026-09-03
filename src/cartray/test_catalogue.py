@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from .catalogue import StaticCatalogueSourceAdapter
 from .models import CatalogSource
 
 TEST_CATALOGUE_SOURCES = (
@@ -25,3 +26,5 @@ TEST_FULFILMENT_EXPANSIONS = {
     "test-free-v1": ("TEST-RESOURCE-FREE",),
     "test-support-hours-v1": ("TEST-RESOURCE-SUPPORT-HOURS",),
 }
+
+TEST_CATALOGUE_SOURCE_ADAPTER = StaticCatalogueSourceAdapter(TEST_CATALOGUE_SOURCES)
