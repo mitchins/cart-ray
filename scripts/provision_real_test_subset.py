@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import re
 import sys
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -16,6 +17,7 @@ from cartray.stripe import StripeApiClient, StripeApiError
 _STRIPE_API_BASE_URL = "https://api.stripe.com"
 _TIMEOUT_SECONDS = 10
 _MAX_RESPONSE_BYTES = 1_000_000
+_STRIPE_KEY_RE = re.compile(r"(?:rk|sk)_(?:test|live)_[A-Za-z0-9_]+")
 
 
 class _RejectRedirects(HTTPRedirectHandler):
@@ -102,6 +104,10 @@ def require_test_secret_key(environ: Mapping[str, str]) -> str:
     return key
 
 
+def safe_error_text(error: Exception) -> str:
+    return _STRIPE_KEY_RE.sub("[redacted]", str(error))
+
+
 def _valid_existing_price(price: Mapping[str, object], spec: ProductSpec) -> bool:
     return (
         isinstance(price.get("id"), str)
@@ -159,8 +165,8 @@ async def run() -> list[dict[str, str]]:
 def main() -> int:
     try:
         result = asyncio.run(run())
-    except (CatalogueValidationError, StripeApiError, OSError, ValueError):
-        print("Stripe test provisioning failed", file=sys.stderr)
+    except (CatalogueValidationError, StripeApiError, OSError, ValueError) as error:
+        print(f"Stripe test provisioning failed: {safe_error_text(error)}", file=sys.stderr)
         return 1
     print(json.dumps(result, sort_keys=True, separators=(",", ":")))
     return 0

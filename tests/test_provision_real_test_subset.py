@@ -93,3 +93,11 @@ def test_provision_rejects_incompatible_or_live_prices_and_non_test_credentials(
         asyncio.run(module["provision"](RecordingClient([incompatible]), spec))
     with pytest.raises(CatalogueValidationError, match="test_"):
         module["require_test_secret_key"]({"STRIPE_API_KEY": "sk_live_not_allowed"})
+
+
+def test_provisioning_error_text_redacts_key_shaped_values():
+    module = runpy.run_path(str(SCRIPT))
+
+    rendered = module["safe_error_text"](StripeApiError("Stripe rejected rk_test_this_must_not_be_printed"))
+
+    assert rendered == "Stripe rejected [redacted]"
