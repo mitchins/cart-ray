@@ -33,3 +33,6 @@ not deploy the Worker or configure a Stripe webhook endpoint; those operational 
 The [Milestone 4b contract](docs/milestone-4b-contract.md) and its
 [recorded acceptance evidence](docs/milestone-4b-acceptance-evidence.md) define the test-only
 Cloudflare/Stripe activation proof. It is explicitly not a live-mode or production launch.
+
+The in-progress [Milestone 5 contract](docs/milestone-5-contract.md) defines the minimal,
+non-authoritative post-Checkout return view.

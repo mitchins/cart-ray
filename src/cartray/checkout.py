@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from urllib.parse import urlparse, urlunparse
 from uuid import uuid4
 
 from .canonical import (
@@ -41,7 +42,7 @@ class CheckoutService:
             order_id=order.order_id,
             idempotency_key=f"cartray-checkout-v1:{order.order_id}",
             line_items=tuple((item.stripe_price_id, item.quantity) for item in order.items),
-            success_url=self.success_url,
+            success_url=checkout_success_url(self.success_url),
             cancel_url=self.cancel_url,
             metadata=projection_metadata(
                 order_id=order.order_id,
@@ -94,3 +95,13 @@ class CheckoutService:
             currency=currency or "",
             subtotal_minor=sum(item.unit_amount_minor * item.quantity for item in order_items),
         )
+
+
+def checkout_success_url(configured_url: str) -> str:
+    """Append Stripe's literal return-session template to CartRay's trusted success URL."""
+
+    parsed = urlparse(configured_url)
+    if any(part.split("=", 1)[0] == "session_id" for part in parsed.query.split("&") if part):
+        raise RuntimeError("CartRay success URL must not define session_id")
+    separator = "&" if parsed.query else ""
+    return urlunparse(parsed._replace(query=f"{parsed.query}{separator}session_id={{CHECKOUT_SESSION_ID}}"))

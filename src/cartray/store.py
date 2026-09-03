@@ -304,6 +304,12 @@ class SqliteOrderStore:
     def outbox_events(self, order_id: str) -> list[sqlite3.Row]:
         return self.connection.execute("SELECT * FROM outbox WHERE order_id = ? ORDER BY id", (order_id,)).fetchall()
 
+    async def checkout_status(self, session_id: str) -> str | None:
+        row = self.connection.execute(
+            "SELECT settlement_state FROM checkout_sessions WHERE external_session_id = ?", (session_id,)
+        ).fetchone()
+        return None if row is None else row["settlement_state"]
+
     async def settlement_context(self, order_id: str) -> SettlementContext:
         row = self.connection.execute(
             """SELECT projection_nonce, external_session_id, settlement_state, settlement_session_id
@@ -577,6 +583,12 @@ class D1OrderStore:
         if row["request_fingerprint"] != request_fingerprint:
             raise IdempotencyConflict("checkout request ID was reused with a different cart")
         return await self.load_order(row["order_id"])
+
+    async def checkout_status(self, session_id: str) -> str | None:
+        row = await self._first(
+            "SELECT settlement_state FROM checkout_sessions WHERE external_session_id = ?", session_id
+        )
+        return None if row is None else row["settlement_state"]
 
     async def settlement_context(self, order_id: str) -> SettlementContext:
         row = await self._first(

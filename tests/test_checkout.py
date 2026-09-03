@@ -5,6 +5,7 @@ import pytest
 
 from cartray.canonical import CanonicalItem, parse_projection_items
 from cartray.catalogue import Catalogue
+from cartray.checkout import checkout_success_url
 from cartray.errors import CheckoutValidationError, IdempotencyConflict
 from cartray.models import CheckoutRequest
 
@@ -37,6 +38,7 @@ def test_mixed_cart_creates_immutable_order_and_trusted_gateway_spec(checkout_se
         ("price_fixture_free", 1),
         ("price_fixture_template", 1),
     )
+    assert spec.success_url == "https://store.invalid/purchase-complete/?session_id={CHECKOUT_SESSION_ID}"
     assert parse_projection_items(spec.metadata) == (
         CanonicalItem("TEST-BUNDLE", 1),
         CanonicalItem("TEST-FREE", 1),
@@ -52,6 +54,15 @@ def test_mixed_cart_creates_immutable_order_and_trusted_gateway_spec(checkout_se
     ]
     with pytest.raises(sqlite3.IntegrityError, match="immutable"):
         service.store.connection.execute("UPDATE orders SET currency = 'usd' WHERE order_id = ?", (spec.order_id,))
+
+
+def test_checkout_success_url_appends_only_the_server_authored_stripe_template():
+    assert (
+        checkout_success_url("https://store.invalid/?checkout=complete")
+        == "https://store.invalid/?checkout=complete&session_id={CHECKOUT_SESSION_ID}"
+    )
+    with pytest.raises(RuntimeError, match="must not define session_id"):
+        checkout_success_url("https://store.invalid/?session_id=browser-value")
 
 
 def test_maximum_quantity_is_preserved_from_checkout_through_the_immutable_order(checkout_service):
