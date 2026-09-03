@@ -74,3 +74,6 @@ real source inputs and the exact Stripe test-mode Price configuration they requi
 The in-progress [Milestone 8d contract](docs/milestone-8d-contract.md) defines the explicit,
 test-only deployment selection for that locked real subset while retaining synthetic inputs as the
 normal development default.
+
+The [Milestone 8e sandbox acceptance evidence](docs/milestone-8e-acceptance-evidence.md) records
+the deployed real-subset free and paid Checkout proof.
