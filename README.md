@@ -36,3 +36,6 @@ Cloudflare/Stripe activation proof. It is explicitly not a live-mode or producti
 
 The in-progress [Milestone 5 contract](docs/milestone-5-contract.md) defines the minimal,
 non-authoritative post-Checkout return view.
+
+The [Milestone 5b sandbox acceptance evidence](docs/milestone-5b-acceptance-evidence.md) records
+the paid and native-free browser-return proof. It is explicitly not a live-mode launch.
