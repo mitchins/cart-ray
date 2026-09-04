@@ -141,6 +141,37 @@ def test_d1_store_records_only_known_diagnostics_for_a_logical_received_event(d1
         )
 
 
+def test_d1_store_expires_a_known_pending_session_idempotently_without_outbox(fixture_catalogue, d1_database):
+    store, order_id, settlement = _pending_settlement(
+        fixture_catalogue,
+        d1_database,
+        request_id="d1-expiry",
+        session_id="cs_d1_expiry",
+        event_id="evt_d1_completion",
+    )
+    expiry = {
+        "event_id": "evt_d1_expiry",
+        "session_id": settlement["session_id"],
+        "payload": {"id": "evt_d1_expiry", "type": "checkout.session.expired"},
+        "payload_sha256": "sha256:expiry",
+        "now": 123,
+    }
+
+    assert asyncio.run(store.expire_checkout(**expiry)) is False
+    assert asyncio.run(store.expire_checkout(**expiry)) is True
+    assert asyncio.run(store.checkout_status(expiry["session_id"])) == "expired"
+    row = asyncio.run(
+        d1_database.prepare(
+            "SELECT expiration_event_id, expired_at FROM checkout_sessions WHERE order_id = ?"
+        ).bind(order_id).all()
+    ).results[0]
+    assert row == {"expiration_event_id": expiry["event_id"], "expired_at": expiry["now"]}
+    events = asyncio.run(
+        d1_database.prepare("SELECT event_type FROM outbox WHERE order_id = ? ORDER BY id").bind(order_id).all()
+    ).results
+    assert [event["event_type"] for event in events] == ["OrderCreated", "CheckoutRedirectIssued"]
+
+
 def test_d1_store_rejects_an_event_id_bound_to_a_different_type(d1_database):
     store = D1OrderStore(d1_database)
     event_id = "evt_type_conflict"

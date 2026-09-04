@@ -99,7 +99,7 @@ def _signature_parts(header: str | None) -> tuple[int, tuple[str, ...]]:
 
 
 def _event_session_id(payload: Mapping[str, object]) -> str | None:
-    if payload.get("type") != "checkout.session.completed":
+    if payload.get("type") not in {"checkout.session.completed", "checkout.session.expired"}:
         return None
     try:
         session_id = payload["data"]["object"]["id"]

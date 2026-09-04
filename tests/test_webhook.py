@@ -50,3 +50,12 @@ def test_checkout_event_keeps_a_raw_body_hash_and_session_identity():
     assert event.event_id == "evt_fixture_1"
     assert event.session_id == "cs_fixture_1"
     assert event.payload_sha256 == "sha256:" + hashlib.sha256(raw).hexdigest()
+
+
+def test_expired_checkout_event_keeps_the_same_session_identity():
+    payload = {**checkout_event(), "type": "checkout.session.expired"}
+
+    event = StripeWebhookEvent.from_raw(json.dumps(payload, separators=(",", ":")).encode())
+
+    assert event.event_type == "checkout.session.expired"
+    assert event.session_id == "cs_fixture_1"

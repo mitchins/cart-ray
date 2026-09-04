@@ -80,3 +80,6 @@ the deployed real-subset free and paid Checkout proof.
 
 The in-progress [Milestone 9 contract](docs/milestone-9-contract.md) defines clean repeat-purchase
 and safe terminal-return behaviour for the static storefront.
+
+The in-progress [Milestone 9b contract](docs/milestone-9b-contract.md) adds signed Stripe expiry
+ingestion so the existing D1-only status route can safely unlock a retained expired cart.

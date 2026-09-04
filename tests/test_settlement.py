@@ -111,6 +111,17 @@ def _service(store, session):
     return StripeSettlementService(store, StaticRetriever(session), FixtureProjectionVerifier())
 
 
+def _expiry_event(session_id: str, *, event_id: str = "evt_expiry_1") -> StripeWebhookEvent:
+    return StripeWebhookEvent(
+        event_id=event_id,
+        event_type="checkout.session.expired",
+        livemode=False,
+        session_id=session_id,
+        payload={"id": event_id, "type": "checkout.session.expired"},
+        payload_sha256=f"sha256:{event_id}",
+    )
+
+
 def _processing_error(store, event: StripeWebhookEvent) -> str | None:
     return store.connection.execute(
         "SELECT processing_error FROM stripe_events WHERE stripe_event_id = ?", (event.event_id,)
@@ -153,6 +164,82 @@ def test_paid_settlement_confirms_a_quantity_five_order_once(checkout_service):
         "CheckoutRedirectIssued",
         "OrderConfirmed",
     ]
+
+
+def test_verified_checkout_expiry_transitions_pending_once_without_fulfilment(checkout_service):
+    checkout, gateway = checkout_service
+    spec, _session, _completion = _checkout_session(
+        checkout,
+        gateway,
+        CheckoutRequest("expiry-pending", checkout.catalogue.version, (CanonicalItem("TEST-TEMPLATE", 1),)),
+        payment_status="paid",
+        amount_total_minor=5_000,
+    )
+    event = _expiry_event(f"cs_settlement_{len(gateway.requests):06d}")
+    service = StripeSettlementService(checkout.store, None, None)
+
+    assert asyncio.run(service.settle(event)) is False
+    assert asyncio.run(service.settle(event)) is True
+    assert asyncio.run(service.settle(_expiry_event(event.session_id, event_id="evt_expiry_duplicate"))) is True
+
+    session_row = checkout.store.connection.execute(
+        "SELECT settlement_state, expiration_event_id, expired_at FROM checkout_sessions WHERE order_id = ?",
+        (spec.order_id,),
+    ).fetchone()
+    assert session_row["settlement_state"] == "expired"
+    assert session_row["expiration_event_id"] == event.event_id
+    assert session_row["expired_at"] is not None
+    assert [row["event_type"] for row in checkout.store.outbox_events(spec.order_id)] == [
+        "OrderCreated",
+        "CheckoutRedirectIssued",
+    ]
+    event_row = checkout.store.connection.execute(
+        "SELECT event_type, session_id, processing_state FROM stripe_events WHERE stripe_event_id = ?",
+        (event.event_id,),
+    ).fetchone()
+    assert dict(event_row) == {
+        "event_type": "checkout.session.expired",
+        "session_id": event.session_id,
+        "processing_state": "expired",
+    }
+
+
+def test_expiry_rejects_unknown_or_confirmed_sessions_and_completion_after_expiry(checkout_service):
+    checkout, gateway = checkout_service
+    spec, session, completion = _checkout_session(
+        checkout,
+        gateway,
+        CheckoutRequest("expiry-conflict", checkout.catalogue.version, (CanonicalItem("TEST-TEMPLATE", 1),)),
+        payment_status="paid",
+        amount_total_minor=5_000,
+    )
+    expiry_service = StripeSettlementService(checkout.store, None, None)
+
+    expiry = _expiry_event(session.session_id, event_id="evt_expiry_before_completion")
+    assert asyncio.run(expiry_service.settle(expiry)) is False
+    with pytest.raises(SettlementInconsistency, match="no CartRay"):
+        asyncio.run(expiry_service.settle(_expiry_event("cs_unknown", event_id="evt_expiry_unknown")))
+    with pytest.raises(SettlementInconsistency, match="expired"):
+        asyncio.run(_service(checkout.store, session).settle(completion))
+
+    assert asyncio.run(checkout.store.checkout_status(session.session_id)) == "expired"
+    assert [row["event_type"] for row in checkout.store.outbox_events(spec.order_id)] == [
+        "OrderCreated",
+        "CheckoutRedirectIssued",
+    ]
+
+    confirmed_spec, confirmed_session, confirmed_event = _checkout_session(
+        checkout,
+        gateway,
+        CheckoutRequest("expiry-after-confirmation", checkout.catalogue.version, (CanonicalItem("TEST-FREE", 1),)),
+        payment_status="paid",
+        amount_total_minor=0,
+    )
+    assert asyncio.run(_service(checkout.store, confirmed_session).settle(confirmed_event)) is False
+    with pytest.raises(SettlementInconsistency, match="confirmed"):
+        asyncio.run(expiry_service.settle(_expiry_event(confirmed_session.session_id, event_id="evt_expiry_after")))
+    assert asyncio.run(checkout.store.checkout_status(confirmed_session.session_id)) == "confirmed"
+    assert checkout.store.outbox_events(confirmed_spec.order_id)[-1]["event_type"] == "OrderConfirmed"
 
 
 @pytest.mark.parametrize(

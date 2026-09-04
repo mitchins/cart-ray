@@ -10,6 +10,12 @@ def test_sqlite_schema_contains_the_current_d1_settlement_tables():
     connection.executescript(SCHEMA)
 
     columns = {row[1] for row in connection.execute("PRAGMA table_info(checkout_sessions)")}
-    assert {"settlement_state", "settlement_session_id", "settlement_event_id"} <= columns
+    assert {
+        "settlement_state",
+        "settlement_session_id",
+        "settlement_event_id",
+        "expiration_event_id",
+        "expired_at",
+    } <= columns
     event_columns = {row[1] for row in connection.execute("PRAGMA table_info(stripe_events)")}
     assert {"payload_sha256", "processing_state"} <= event_columns

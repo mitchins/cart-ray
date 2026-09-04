@@ -135,7 +135,7 @@ export async function checkoutStatus(configuration, sessionId, fetchImpl = fetch
     );
     if (!response.ok) return null;
     const result = await response.json();
-    return result?.state === "pending" || result?.state === "confirmed" ? result.state : null;
+    return result?.state === "pending" || result?.state === "confirmed" || result?.state === "expired" ? result.state : null;
   } catch {
     return null;
   }
@@ -153,7 +153,7 @@ export async function pollCheckoutStatus(
     const remaining = deadline - now();
     if (remaining <= 0) return lastState;
     const state = await checkoutStatusBeforeDeadline(configuration, sessionId, fetchImpl, remaining);
-    if (state === "confirmed") return state;
+    if (state === "confirmed" || state === "expired") return state;
     if (state === "pending") lastState = state;
     else return lastState;
   }
@@ -175,13 +175,21 @@ export async function processCheckoutReturn({ configuration, sessionId, storage,
 }
 
 export function successReturnPath(pathname, state) {
-  return state === "confirmed" ? pathname : null;
+  return state === "confirmed" || state === "expired" ? pathname : null;
 }
 
 export function confirmedCheckoutView(cleared) {
   return {
     checkoutLocked: false,
     message: cleared ? "Order confirmed. Your cart is ready for another purchase." : "Order confirmed. Your cart was kept.",
+    actionLabel: "Continue shopping",
+  };
+}
+
+export function expiredCheckoutView() {
+  return {
+    checkoutLocked: false,
+    message: "This Checkout expired. Your cart is ready for another purchase.",
     actionLabel: "Continue shopping",
   };
 }
@@ -381,6 +389,14 @@ async function boot() {
     if (result.state === "confirmed") {
       if (result.cleared) revision = 0;
       const view = confirmedCheckoutView(result.cleared);
+      checkoutLocked = view.checkoutLocked;
+      window.history.replaceState(null, "", successReturnPath(window.location.pathname, result.state));
+      continueShopping.href = window.location.pathname;
+      continueShopping.textContent = view.actionLabel;
+      continueShopping.hidden = false;
+      status.textContent = view.message;
+    } else if (result.state === "expired") {
+      const view = expiredCheckoutView();
       checkoutLocked = view.checkoutLocked;
       window.history.replaceState(null, "", successReturnPath(window.location.pathname, result.state));
       continueShopping.href = window.location.pathname;

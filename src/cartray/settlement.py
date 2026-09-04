@@ -18,6 +18,15 @@ class StripeSettlementService:
     async def settle(self, event: StripeWebhookEvent) -> bool:
         if event.livemode:
             raise WebhookValidationError("Stripe webhook environment or Session is invalid")
+        if event.event_type == "checkout.session.expired":
+            if event.session_id is None:
+                raise WebhookValidationError("Stripe webhook environment or Session is invalid")
+            return await self.store.expire_checkout(
+                event_id=event.event_id,
+                session_id=event.session_id,
+                payload=event.payload,
+                payload_sha256=event.payload_sha256,
+            )
         if event.event_type != "checkout.session.completed":
             return await self.store.record_ignored_event(
                 event_id=event.event_id,
