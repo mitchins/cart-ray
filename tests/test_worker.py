@@ -1,3 +1,4 @@
+import asyncio
 import hmac
 import json
 import time
@@ -6,6 +7,7 @@ from hashlib import sha256
 
 from kinglet import TestClient
 
+import cartray.worker as worker_module
 from cartray.compiled_catalogue import COMPILED_CATALOGUE
 from cartray.errors import CheckoutValidationError, SettlementInconsistency
 from cartray.models import CheckoutRedirect
@@ -76,6 +78,22 @@ class RecordingSettlementService:
             raise self.error
         self.events.append(event)
         return False
+
+
+def test_scheduled_entrypoint_runs_only_the_server_side_reconciliation(monkeypatch):
+    observed = []
+
+    async def scheduled(env):
+        observed.append(env)
+
+    monkeypatch.setattr(worker_module, "scheduled_reconciliation_from_environment", scheduled)
+    env = {"CARTRAY_ENVIRONMENT": "test"}
+    entrypoint = worker_module.Default()
+    entrypoint.env = env
+
+    asyncio.run(entrypoint.scheduled(None, object(), None))
+
+    assert observed == [env]
 
 
 def _webhook_headers(body: bytes, secret: str, *, timestamp: int | None = None) -> dict[str, str]:
