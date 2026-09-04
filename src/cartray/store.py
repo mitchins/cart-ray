@@ -5,6 +5,7 @@ import sqlite3
 import time
 from dataclasses import dataclass
 from enum import StrEnum
+from uuid import uuid4
 
 from .errors import CheckoutInProgress, IdempotencyConflict, SettlementInconsistency
 from .models import CheckoutOrder, CheckoutRedirect, OrderItem
@@ -75,10 +76,35 @@ CREATE TABLE IF NOT EXISTS stripe_events (
     CHECK(processing_state IN ('received', 'ignored', 'confirmed', 'expired', 'failed'))
 );
 
+CREATE TABLE IF NOT EXISTS checkout_reconciliations (
+  order_id TEXT PRIMARY KEY REFERENCES orders(order_id),
+  session_id TEXT NOT NULL UNIQUE,
+  attempt_count INTEGER NOT NULL DEFAULT 0 CHECK(attempt_count >= 0),
+  next_attempt_at INTEGER NOT NULL,
+  lease_token TEXT,
+  lease_expires_at INTEGER,
+  last_attempt_at INTEGER,
+  last_outcome TEXT CHECK(last_outcome IN (
+    'open', 'unsettled', 'rejected', 'transient_error', 'confirmed', 'expired'
+  )),
+  last_error TEXT CHECK(last_error IN (
+    'stripe_retrieval_failed', 'projection_rejected', 'reconciliation_rejected',
+    'reconciliation_lookup_failed', 'checkout_not_settled', 'unrecognized_checkout_state'
+  )),
+  observed_status TEXT,
+  observed_payment_status TEXT,
+  observed_amount_total_minor INTEGER,
+  updated_at INTEGER NOT NULL
+);
+
 CREATE INDEX IF NOT EXISTS outbox_undelivered ON outbox(delivered_at, id);
 CREATE UNIQUE INDEX IF NOT EXISTS checkout_sessions_settlement_session_id
 ON checkout_sessions(settlement_session_id)
 WHERE settlement_session_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS checkout_sessions_reconciliation_candidates
+ON checkout_sessions(settlement_state, updated_at, external_session_id);
+CREATE INDEX IF NOT EXISTS checkout_reconciliations_due
+ON checkout_reconciliations(next_attempt_at, lease_expires_at, order_id);
 
 CREATE TRIGGER IF NOT EXISTS orders_are_immutable
 BEFORE UPDATE ON orders
@@ -139,6 +165,14 @@ class SettlementContext:
     checkout_session_id: str
     settlement_state: str
     settlement_session_id: str | None
+
+
+@dataclass(frozen=True)
+class ReconciliationCandidate:
+    order_id: str
+    session_id: str
+    lease_token: str
+    attempt_count: int
 
 
 class SettlementRejection(StrEnum):
@@ -311,6 +345,225 @@ class SqliteOrderStore:
             "SELECT settlement_state FROM checkout_sessions WHERE external_session_id = ?", (session_id,)
         ).fetchone()
         return None if row is None else row["settlement_state"]
+
+    async def claim_reconciliation_candidates(
+        self, *, now: int, stale_before: int, limit: int, lease_seconds: int
+    ) -> tuple[ReconciliationCandidate, ...]:
+        if limit < 1 or lease_seconds < 1:
+            raise ValueError("reconciliation claim bounds must be positive")
+        with self.connection:
+            rows = self.connection.execute(
+                """SELECT s.order_id, s.external_session_id
+                   FROM checkout_sessions AS s
+                   LEFT JOIN checkout_reconciliations AS r USING(order_id)
+                   WHERE s.settlement_state = 'pending'
+                     AND s.external_session_id IS NOT NULL
+                     AND s.updated_at <= ?
+                     AND (r.next_attempt_at IS NULL OR r.next_attempt_at <= ?)
+                     AND (r.lease_expires_at IS NULL OR r.lease_expires_at <= ?)
+                   ORDER BY COALESCE(r.next_attempt_at, s.updated_at), s.order_id
+                   LIMIT ?""",
+                (stale_before, now, now, limit),
+            ).fetchall()
+            claimed: list[ReconciliationCandidate] = []
+            for row in rows:
+                order_id, session_id = row["order_id"], row["external_session_id"]
+                token = uuid4().hex
+                self.connection.execute(
+                    """INSERT OR IGNORE INTO checkout_reconciliations
+                       (order_id, session_id, next_attempt_at, updated_at)
+                       VALUES (?, ?, ?, ?)""",
+                    (order_id, session_id, now, now),
+                )
+                updated = self.connection.execute(
+                    """UPDATE checkout_reconciliations
+                       SET attempt_count = attempt_count + 1, lease_token = ?, lease_expires_at = ?,
+                           last_attempt_at = ?, updated_at = ?
+                       WHERE order_id = ? AND session_id = ? AND next_attempt_at <= ?
+                         AND (lease_expires_at IS NULL OR lease_expires_at <= ?)
+                         AND EXISTS (
+                           SELECT 1 FROM checkout_sessions
+                           WHERE order_id = ? AND external_session_id = ? AND settlement_state = 'pending'
+                         )""",
+                    (token, now + lease_seconds, now, now, order_id, session_id, now, now, order_id, session_id),
+                )
+                if updated.rowcount == 1:
+                    attempt_count = self.connection.execute(
+                        "SELECT attempt_count FROM checkout_reconciliations WHERE order_id = ?", (order_id,)
+                    ).fetchone()["attempt_count"]
+                    claimed.append(ReconciliationCandidate(order_id, session_id, token, attempt_count))
+            return tuple(claimed)
+
+    async def finish_reconciliation_retry(
+        self,
+        *,
+        candidate: ReconciliationCandidate,
+        now: int,
+        next_attempt_at: int,
+        outcome: str,
+        error: str | None,
+        observed_status: str | None = None,
+        observed_payment_status: str | None = None,
+        observed_amount_total_minor: int | None = None,
+    ) -> bool:
+        _validate_reconciliation_outcome(outcome, terminal=False)
+        with self.connection:
+            updated = self.connection.execute(
+                """UPDATE checkout_reconciliations
+                   SET next_attempt_at = ?, lease_token = NULL, lease_expires_at = NULL, last_outcome = ?,
+                       last_error = ?, observed_status = ?, observed_payment_status = ?,
+                       observed_amount_total_minor = ?, updated_at = ?
+                   WHERE order_id = ? AND session_id = ? AND lease_token = ?
+                     AND EXISTS (
+                       SELECT 1 FROM checkout_sessions
+                       WHERE order_id = ? AND external_session_id = ? AND settlement_state = 'pending'
+                     )""",
+                (
+                    next_attempt_at,
+                    outcome,
+                    error,
+                    observed_status,
+                    observed_payment_status,
+                    observed_amount_total_minor,
+                    now,
+                    candidate.order_id,
+                    candidate.session_id,
+                    candidate.lease_token,
+                    candidate.order_id,
+                    candidate.session_id,
+                ),
+            )
+            return updated.rowcount == 1
+
+    async def confirm_reconciliation(
+        self,
+        *,
+        candidate: ReconciliationCandidate,
+        payment_status: str,
+        amount_total_minor: int,
+        now: int,
+        items_digest: str,
+    ) -> bool:
+        with self.connection:
+            checkout = self.connection.execute(
+                "SELECT settlement_state FROM checkout_sessions WHERE order_id = ? AND external_session_id = ?",
+                (candidate.order_id, candidate.session_id),
+            ).fetchone()
+            if checkout is None:
+                raise SettlementInconsistency("CartRay reconciliation has no Checkout Session")
+            if checkout["settlement_state"] == "expired":
+                raise SettlementInconsistency("an expired CartRay Checkout Session cannot be confirmed")
+            if checkout["settlement_state"] == "confirmed":
+                return True
+            updated = self.connection.execute(
+                """UPDATE checkout_sessions
+                   SET settlement_state = 'confirmed', settlement_session_id = ?, settled_at = ?,
+                       stripe_payment_status = ?, stripe_amount_total_minor = ?, updated_at = ?
+                   WHERE order_id = ? AND external_session_id = ? AND settlement_state = 'pending'
+                     AND EXISTS (
+                       SELECT 1 FROM checkout_reconciliations
+                       WHERE order_id = ? AND session_id = ? AND lease_token = ? AND lease_expires_at > ?
+                     )""",
+                (
+                    candidate.session_id,
+                    now,
+                    payment_status,
+                    amount_total_minor,
+                    now,
+                    candidate.order_id,
+                    candidate.session_id,
+                    candidate.order_id,
+                    candidate.session_id,
+                    candidate.lease_token,
+                    now,
+                ),
+            )
+            if updated.rowcount != 1:
+                raise SettlementInconsistency("CartRay reconciliation confirmation transition is invalid")
+            audit = self.connection.execute(
+                """UPDATE checkout_reconciliations
+                   SET lease_token = NULL, lease_expires_at = NULL, last_outcome = 'confirmed', last_error = NULL,
+                       observed_status = 'complete', observed_payment_status = ?,
+                       observed_amount_total_minor = ?, updated_at = ?
+                   WHERE order_id = ? AND session_id = ? AND lease_token = ? AND lease_expires_at > ?""",
+                (
+                    payment_status,
+                    amount_total_minor,
+                    now,
+                    candidate.order_id,
+                    candidate.session_id,
+                    candidate.lease_token,
+                    now,
+                ),
+            )
+            if audit.rowcount != 1:
+                raise SettlementInconsistency("CartRay reconciliation claim is invalid")
+            self._insert_outbox(
+                candidate.order_id,
+                "OrderConfirmed",
+                {
+                    "order_id": candidate.order_id,
+                    "session_id": candidate.session_id,
+                    "items_digest": items_digest,
+                },
+                now,
+            )
+            return False
+
+    async def expire_reconciliation(
+        self, *, candidate: ReconciliationCandidate, now: int, payment_status: str, amount_total_minor: int
+    ) -> bool:
+        with self.connection:
+            checkout = self.connection.execute(
+                "SELECT settlement_state FROM checkout_sessions WHERE order_id = ? AND external_session_id = ?",
+                (candidate.order_id, candidate.session_id),
+            ).fetchone()
+            if checkout is None:
+                raise SettlementInconsistency("CartRay reconciliation has no Checkout Session")
+            if checkout["settlement_state"] == "confirmed":
+                raise SettlementInconsistency("a confirmed CartRay Checkout Session cannot expire")
+            if checkout["settlement_state"] == "expired":
+                return True
+            updated = self.connection.execute(
+                """UPDATE checkout_sessions
+                   SET settlement_state = 'expired', expired_at = ?, updated_at = ?
+                   WHERE order_id = ? AND external_session_id = ? AND settlement_state = 'pending'
+                     AND EXISTS (
+                       SELECT 1 FROM checkout_reconciliations
+                       WHERE order_id = ? AND session_id = ? AND lease_token = ? AND lease_expires_at > ?
+                     )""",
+                (
+                    now,
+                    now,
+                    candidate.order_id,
+                    candidate.session_id,
+                    candidate.order_id,
+                    candidate.session_id,
+                    candidate.lease_token,
+                    now,
+                ),
+            )
+            if updated.rowcount != 1:
+                raise SettlementInconsistency("CartRay reconciliation expiry transition is invalid")
+            audit = self.connection.execute(
+                """UPDATE checkout_reconciliations
+                   SET lease_token = NULL, lease_expires_at = NULL, last_outcome = 'expired', last_error = NULL,
+                       observed_status = 'expired', observed_payment_status = ?,
+                       observed_amount_total_minor = ?, updated_at = ?
+                   WHERE order_id = ? AND session_id = ? AND lease_token = ? AND lease_expires_at > ?""",
+                (
+                    payment_status,
+                    amount_total_minor,
+                    now,
+                    candidate.order_id,
+                    candidate.session_id,
+                    candidate.lease_token,
+                    now,
+                ),
+            )
+            if audit.rowcount != 1:
+                raise SettlementInconsistency("CartRay reconciliation claim is invalid")
+            return False
 
     async def expire_checkout(
         self,
@@ -644,6 +897,280 @@ class D1OrderStore:
             "SELECT settlement_state FROM checkout_sessions WHERE external_session_id = ?", session_id
         )
         return None if row is None else row["settlement_state"]
+
+    async def claim_reconciliation_candidates(
+        self, *, now: int, stale_before: int, limit: int, lease_seconds: int
+    ) -> tuple[ReconciliationCandidate, ...]:
+        if limit < 1 or lease_seconds < 1:
+            raise ValueError("reconciliation claim bounds must be positive")
+        result = (
+            await self.database.prepare(
+                """SELECT s.order_id, s.external_session_id
+                   FROM checkout_sessions AS s
+                   LEFT JOIN checkout_reconciliations AS r USING(order_id)
+                   WHERE s.settlement_state = 'pending'
+                     AND s.external_session_id IS NOT NULL
+                     AND s.updated_at <= ?
+                     AND (r.next_attempt_at IS NULL OR r.next_attempt_at <= ?)
+                     AND (r.lease_expires_at IS NULL OR r.lease_expires_at <= ?)
+                   ORDER BY COALESCE(r.next_attempt_at, s.updated_at), s.order_id
+                   LIMIT ?"""
+            )
+            .bind(stale_before, now, now, limit)
+            .all()
+        )
+        claimed: list[ReconciliationCandidate] = []
+        for row in _results(result):
+            order_id, session_id = row["order_id"], row["external_session_id"]
+            token = uuid4().hex
+            await (
+                self.database.prepare(
+                    """INSERT OR IGNORE INTO checkout_reconciliations
+                       (order_id, session_id, next_attempt_at, updated_at)
+                       VALUES (?, ?, ?, ?)"""
+                )
+                .bind(order_id, session_id, now, now)
+                .run()
+            )
+            claimed_result = await (
+                self.database.prepare(
+                    """UPDATE checkout_reconciliations
+                       SET attempt_count = attempt_count + 1, lease_token = ?, lease_expires_at = ?,
+                           last_attempt_at = ?, updated_at = ?
+                       WHERE order_id = ? AND session_id = ? AND next_attempt_at <= ?
+                         AND (lease_expires_at IS NULL OR lease_expires_at <= ?)
+                         AND EXISTS (
+                           SELECT 1 FROM checkout_sessions
+                           WHERE order_id = ? AND external_session_id = ? AND settlement_state = 'pending'
+                         )"""
+                )
+                .bind(token, now + lease_seconds, now, now, order_id, session_id, now, now, order_id, session_id)
+                .run()
+            )
+            if _changes(claimed_result) != 1:
+                continue
+            claimed_row = await self._first(
+                "SELECT attempt_count FROM checkout_reconciliations WHERE order_id = ?", order_id
+            )
+            if claimed_row is None:
+                raise SettlementInconsistency("CartRay reconciliation claim disappeared")
+            claimed.append(ReconciliationCandidate(order_id, session_id, token, claimed_row["attempt_count"]))
+        return tuple(claimed)
+
+    async def finish_reconciliation_retry(
+        self,
+        *,
+        candidate: ReconciliationCandidate,
+        now: int,
+        next_attempt_at: int,
+        outcome: str,
+        error: str | None,
+        observed_status: str | None = None,
+        observed_payment_status: str | None = None,
+        observed_amount_total_minor: int | None = None,
+    ) -> bool:
+        _validate_reconciliation_outcome(outcome, terminal=False)
+        result = await (
+            self.database.prepare(
+                """UPDATE checkout_reconciliations
+                   SET next_attempt_at = ?, lease_token = NULL, lease_expires_at = NULL, last_outcome = ?,
+                       last_error = ?, observed_status = ?, observed_payment_status = ?,
+                       observed_amount_total_minor = ?, updated_at = ?
+                   WHERE order_id = ? AND session_id = ? AND lease_token = ?
+                     AND EXISTS (
+                       SELECT 1 FROM checkout_sessions
+                       WHERE order_id = ? AND external_session_id = ? AND settlement_state = 'pending'
+                     )"""
+            )
+            .bind(
+                next_attempt_at,
+                outcome,
+                error,
+                observed_status,
+                observed_payment_status,
+                observed_amount_total_minor,
+                now,
+                candidate.order_id,
+                candidate.session_id,
+                candidate.lease_token,
+                candidate.order_id,
+                candidate.session_id,
+            )
+            .run()
+        )
+        return _changes(result) == 1
+
+    async def confirm_reconciliation(
+        self,
+        *,
+        candidate: ReconciliationCandidate,
+        payment_status: str,
+        amount_total_minor: int,
+        now: int,
+        items_digest: str,
+    ) -> bool:
+        checkout = await self._first(
+            "SELECT settlement_state FROM checkout_sessions WHERE order_id = ? AND external_session_id = ?",
+            candidate.order_id,
+            candidate.session_id,
+        )
+        if checkout is None:
+            raise SettlementInconsistency("CartRay reconciliation has no Checkout Session")
+        if checkout["settlement_state"] == "expired":
+            raise SettlementInconsistency("an expired CartRay Checkout Session cannot be confirmed")
+        if checkout["settlement_state"] == "confirmed":
+            return True
+        results = await self.database.batch(
+            [
+                self.database.prepare(
+                    """UPDATE checkout_sessions
+                       SET settlement_state = 'confirmed', settlement_session_id = ?, settled_at = ?,
+                           stripe_payment_status = ?, stripe_amount_total_minor = ?, updated_at = ?
+                       WHERE order_id = ? AND external_session_id = ? AND settlement_state = 'pending'
+                         AND EXISTS (
+                           SELECT 1 FROM checkout_reconciliations
+                           WHERE order_id = ? AND session_id = ? AND lease_token = ? AND lease_expires_at > ?
+                         )"""
+                ).bind(
+                    candidate.session_id,
+                    now,
+                    payment_status,
+                    amount_total_minor,
+                    now,
+                    candidate.order_id,
+                    candidate.session_id,
+                    candidate.order_id,
+                    candidate.session_id,
+                    candidate.lease_token,
+                    now,
+                ),
+                self.database.prepare(
+                    """INSERT OR IGNORE INTO outbox(order_id, event_type, payload_json, created_at)
+                       SELECT ?, 'OrderConfirmed', ?, ?
+                       WHERE EXISTS (
+                         SELECT 1 FROM checkout_sessions
+                         WHERE order_id = ? AND external_session_id = ? AND settlement_state = 'confirmed'
+                           AND settlement_event_id IS NULL
+                       )
+                         AND EXISTS (
+                           SELECT 1 FROM checkout_reconciliations
+                           WHERE order_id = ? AND session_id = ? AND lease_token = ? AND lease_expires_at > ?
+                         )"""
+                ).bind(
+                    candidate.order_id,
+                    json.dumps(
+                        {
+                            "order_id": candidate.order_id,
+                            "session_id": candidate.session_id,
+                            "items_digest": items_digest,
+                        },
+                        separators=(",", ":"),
+                    ),
+                    now,
+                    candidate.order_id,
+                    candidate.session_id,
+                    candidate.order_id,
+                    candidate.session_id,
+                    candidate.lease_token,
+                    now,
+                ),
+                self.database.prepare(
+                    """UPDATE checkout_reconciliations
+                       SET lease_token = NULL, lease_expires_at = NULL, last_outcome = 'confirmed', last_error = NULL,
+                           observed_status = 'complete', observed_payment_status = ?,
+                           observed_amount_total_minor = ?, updated_at = ?
+                       WHERE order_id = ? AND session_id = ? AND lease_token = ? AND lease_expires_at > ?
+                         AND EXISTS (
+                           SELECT 1 FROM checkout_sessions
+                           WHERE order_id = ? AND external_session_id = ? AND settlement_state = 'confirmed'
+                         )"""
+                ).bind(
+                    payment_status,
+                    amount_total_minor,
+                    now,
+                    candidate.order_id,
+                    candidate.session_id,
+                    candidate.lease_token,
+                    now,
+                    candidate.order_id,
+                    candidate.session_id,
+                ),
+            ]
+        )
+        if _changes(results[0]) == 1 and _changes(results[2]) == 1:
+            return False
+        state = await self.checkout_status(candidate.session_id)
+        if state == "confirmed":
+            return True
+        if state == "expired":
+            raise SettlementInconsistency("an expired CartRay Checkout Session cannot be confirmed")
+        raise SettlementInconsistency("CartRay reconciliation confirmation transition is invalid")
+
+    async def expire_reconciliation(
+        self, *, candidate: ReconciliationCandidate, now: int, payment_status: str, amount_total_minor: int
+    ) -> bool:
+        checkout = await self._first(
+            "SELECT settlement_state FROM checkout_sessions WHERE order_id = ? AND external_session_id = ?",
+            candidate.order_id,
+            candidate.session_id,
+        )
+        if checkout is None:
+            raise SettlementInconsistency("CartRay reconciliation has no Checkout Session")
+        if checkout["settlement_state"] == "confirmed":
+            raise SettlementInconsistency("a confirmed CartRay Checkout Session cannot expire")
+        if checkout["settlement_state"] == "expired":
+            return True
+        results = await self.database.batch(
+            [
+                self.database.prepare(
+                    """UPDATE checkout_sessions
+                       SET settlement_state = 'expired', expired_at = ?, updated_at = ?
+                       WHERE order_id = ? AND external_session_id = ? AND settlement_state = 'pending'
+                         AND EXISTS (
+                           SELECT 1 FROM checkout_reconciliations
+                           WHERE order_id = ? AND session_id = ? AND lease_token = ? AND lease_expires_at > ?
+                         )"""
+                ).bind(
+                    now,
+                    now,
+                    candidate.order_id,
+                    candidate.session_id,
+                    candidate.order_id,
+                    candidate.session_id,
+                    candidate.lease_token,
+                    now,
+                ),
+                self.database.prepare(
+                    """UPDATE checkout_reconciliations
+                       SET lease_token = NULL, lease_expires_at = NULL, last_outcome = 'expired', last_error = NULL,
+                           observed_status = 'expired', observed_payment_status = ?,
+                           observed_amount_total_minor = ?, updated_at = ?
+                       WHERE order_id = ? AND session_id = ? AND lease_token = ? AND lease_expires_at > ?
+                         AND EXISTS (
+                           SELECT 1 FROM checkout_sessions
+                           WHERE order_id = ? AND external_session_id = ? AND settlement_state = 'expired'
+                         )"""
+                ).bind(
+                    payment_status,
+                    amount_total_minor,
+                    now,
+                    candidate.order_id,
+                    candidate.session_id,
+                    candidate.lease_token,
+                    now,
+                    candidate.order_id,
+                    candidate.session_id,
+                ),
+            ]
+        )
+        if _changes(results[0]) == 1 and _changes(results[1]) == 1:
+            return False
+        state = await self.checkout_status(candidate.session_id)
+        if state == "expired":
+            return True
+        if state == "confirmed":
+            raise SettlementInconsistency("a confirmed CartRay Checkout Session cannot expire")
+        raise SettlementInconsistency("CartRay reconciliation expiry transition is invalid")
 
     async def expire_checkout(
         self,
@@ -1032,3 +1559,9 @@ def _changes(result) -> int:
     if hasattr(meta, "to_py"):
         meta = meta.to_py()
     return int(meta.get("changes", 0) if isinstance(meta, dict) else getattr(meta, "changes", 0))
+
+
+def _validate_reconciliation_outcome(outcome: str, *, terminal: bool) -> None:
+    allowed = {"confirmed", "expired"} if terminal else {"open", "unsettled", "rejected", "transient_error"}
+    if outcome not in allowed:
+        raise ValueError("invalid reconciliation outcome")

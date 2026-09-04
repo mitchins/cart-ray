@@ -85,3 +85,7 @@ The [Milestone 9b contract](docs/milestone-9b-contract.md) adds signed Stripe ex
 the existing D1-only status route can safely unlock a retained expired cart. Its
 [sandbox acceptance evidence](docs/milestone-9b-acceptance-evidence.md) records an authoritative
 expiry followed by a clean replacement Checkout.
+
+The in-progress [Milestone 10a contract](docs/milestone-10a-contract.md) adds a bounded,
+test-mode scheduled reconciliation safety net for stale pending Checkout Sessions. It remains
+strictly server-side and is never part of browser status polling.

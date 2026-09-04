@@ -18,6 +18,7 @@ from cartray.errors import (
     WebhookValidationError,
 )
 from cartray.models import CheckoutRequest
+from cartray.reconciliation import StripeReconciliationService
 from cartray.settlement import StripeSettlementService
 from cartray.store import D1OrderStore
 from cartray.stripe import (
@@ -222,6 +223,22 @@ async def settlement_service_from_environment(env) -> StripeSettlementService:
     )
 
 
+async def reconciliation_service_from_environment(env) -> StripeReconciliationService:
+    environment = _test_environment(env)
+    client = StripeApiClient(_required_env(env, "STRIPE_API_KEY"), WorkersFetchTransport())
+    return StripeReconciliationService(
+        D1OrderStore(env.DB),
+        StripeCheckoutSessionRetriever(client),
+        CheckoutMetadataVerifier(environment, _projection_verifiers(env)),
+    )
+
+
+async def scheduled_reconciliation_from_environment(env) -> None:
+    result = await (await reconciliation_service_from_environment(env)).reconcile()
+    if result.failures:
+        raise RuntimeError("CartRay scheduled reconciliation has failed candidates")
+
+
 async def status_store_from_environment(env) -> D1OrderStore:
     _test_environment(env)
     return D1OrderStore(env.DB)
@@ -356,3 +373,6 @@ except ImportError:
 class Default(WorkerEntrypoint):
     async def fetch(self, request):
         return await app(request, self.env)
+
+    async def scheduled(self, controller, env, ctx):
+        await scheduled_reconciliation_from_environment(self.env)

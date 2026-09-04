@@ -5,6 +5,9 @@ compatibility_date = "2026-08-31"
 compatibility_flags = ["python_workers"]
 workers_dev = true
 
+[triggers]
+crons = ["0 * * * *"]
+
 [build]
 command = "uv run python scripts/sync_worker_source.py"
 

@@ -69,6 +69,192 @@ def test_d1_store_persists_an_idempotent_checkout_and_outbox(fixture_catalogue, 
     assert [event["event_type"] for event in events.results] == ["OrderCreated", "CheckoutRedirectIssued"]
 
 
+def test_d1_reconciliation_control_claims_and_defers_a_stale_pending_checkout(fixture_catalogue, d1_database):
+    store = D1OrderStore(d1_database)
+    gateway = FakePaymentGateway()
+    checkout = CheckoutService(fixture_catalogue, store, gateway)
+    asyncio.run(
+        checkout.checkout(
+            CheckoutRequest("d1-reconciliation", fixture_catalogue.version, (CanonicalItem("TEST-TEMPLATE", 1),))
+        )
+    )
+    spec = gateway.requests[0]
+    asyncio.run(
+        d1_database.prepare(
+            "UPDATE checkout_sessions SET external_session_id = ?, updated_at = 0 WHERE order_id = ?"
+        )
+        .bind("cs_d1_reconciliation", spec.order_id)
+        .run()
+    )
+
+    candidates = asyncio.run(
+        store.claim_reconciliation_candidates(now=10_000, stale_before=6_400, limit=5, lease_seconds=300)
+    )
+
+    assert len(candidates) == 1
+    assert candidates[0].order_id == spec.order_id
+    assert asyncio.run(
+        store.finish_reconciliation_retry(
+            candidate=candidates[0],
+            now=10_000,
+            next_attempt_at=13_600,
+            outcome="open",
+            error=None,
+            observed_status="open",
+            observed_payment_status="unpaid",
+            observed_amount_total_minor=2_500,
+        )
+    )
+    row = asyncio.run(
+        d1_database.prepare(
+            "SELECT attempt_count, next_attempt_at, lease_token, last_outcome FROM checkout_reconciliations "
+            "WHERE order_id = ?"
+        )
+        .bind(spec.order_id)
+        .all()
+    ).results[0]
+    assert row == {"attempt_count": 1, "next_attempt_at": 13_600, "lease_token": None, "last_outcome": "open"}
+
+
+def test_d1_reconciliation_confirmation_is_atomic_and_has_no_synthetic_stripe_event(fixture_catalogue, d1_database):
+    store = D1OrderStore(d1_database)
+    gateway = FakePaymentGateway()
+    checkout = CheckoutService(fixture_catalogue, store, gateway)
+    asyncio.run(
+        checkout.checkout(
+            CheckoutRequest("d1-reconciliation-confirm", fixture_catalogue.version, (CanonicalItem("TEST-FREE", 1),))
+        )
+    )
+    spec = gateway.requests[0]
+    asyncio.run(
+        d1_database.prepare(
+            "UPDATE checkout_sessions SET external_session_id = ?, updated_at = 0 WHERE order_id = ?"
+        )
+        .bind("cs_d1_reconciliation_confirm", spec.order_id)
+        .run()
+    )
+    candidate = asyncio.run(
+        store.claim_reconciliation_candidates(now=10_000, stale_before=6_400, limit=5, lease_seconds=300)
+    )[0]
+    order = asyncio.run(store.load_order(spec.order_id))
+
+    assert asyncio.run(
+        store.confirm_reconciliation(
+            candidate=candidate,
+            payment_status="no_payment_required",
+            amount_total_minor=0,
+            now=10_000,
+            items_digest=order.items_digest,
+        )
+    ) is False
+    session = asyncio.run(
+        d1_database.prepare(
+            "SELECT settlement_state, settlement_event_id, stripe_payment_status FROM checkout_sessions "
+            "WHERE order_id = ?"
+        )
+        .bind(spec.order_id)
+        .all()
+    ).results[0]
+    assert session == {
+        "settlement_state": "confirmed",
+        "settlement_event_id": None,
+        "stripe_payment_status": "no_payment_required",
+    }
+    outbox = asyncio.run(
+        d1_database.prepare("SELECT event_type FROM outbox WHERE order_id = ? ORDER BY id").bind(spec.order_id).all()
+    ).results
+    assert [row["event_type"] for row in outbox] == ["OrderCreated", "CheckoutRedirectIssued", "OrderConfirmed"]
+    events = asyncio.run(d1_database.prepare("SELECT count(*) AS count FROM stripe_events").all()).results
+    assert events == [{"count": 0}]
+
+
+@pytest.mark.parametrize("terminal", ["confirmed", "expired"])
+def test_d1_reconciliation_rejects_a_stale_lease_after_another_worker_reclaims_it(
+    fixture_catalogue, d1_database, terminal
+):
+    store = D1OrderStore(d1_database)
+    gateway = FakePaymentGateway()
+    checkout = CheckoutService(fixture_catalogue, store, gateway)
+    asyncio.run(
+        checkout.checkout(
+            CheckoutRequest(
+                f"d1-reconciliation-stale-{terminal}",
+                fixture_catalogue.version,
+                (CanonicalItem("TEST-FREE", 1),),
+            )
+        )
+    )
+    spec = gateway.requests[0]
+    asyncio.run(
+        d1_database.prepare(
+            "UPDATE checkout_sessions SET external_session_id = ?, updated_at = 0 WHERE order_id = ?"
+        )
+        .bind(f"cs_d1_reconciliation_stale_{terminal}", spec.order_id)
+        .run()
+    )
+    first = asyncio.run(
+        store.claim_reconciliation_candidates(now=10_000, stale_before=6_400, limit=5, lease_seconds=1)
+    )[0]
+    second = asyncio.run(
+        store.claim_reconciliation_candidates(now=10_002, stale_before=6_402, limit=5, lease_seconds=300)
+    )[0]
+    order = asyncio.run(store.load_order(spec.order_id))
+
+    with pytest.raises(SettlementInconsistency):
+        if terminal == "confirmed":
+            asyncio.run(
+                store.confirm_reconciliation(
+                    candidate=first,
+                    payment_status="no_payment_required",
+                    amount_total_minor=0,
+                    now=10_002,
+                    items_digest=order.items_digest,
+                )
+            )
+        else:
+            asyncio.run(
+                store.expire_reconciliation(
+                    candidate=first,
+                    payment_status="unpaid",
+                    amount_total_minor=0,
+                    now=10_002,
+                )
+            )
+
+    state = asyncio.run(
+        d1_database.prepare("SELECT settlement_state FROM checkout_sessions WHERE order_id = ?")
+        .bind(spec.order_id)
+        .all()
+    ).results[0]
+    assert state == {"settlement_state": "pending"}
+    audit = asyncio.run(
+        d1_database.prepare("SELECT lease_token FROM checkout_reconciliations WHERE order_id = ?")
+        .bind(spec.order_id)
+        .all()
+    ).results[0]
+    assert audit == {"lease_token": second.lease_token}
+
+    if terminal == "confirmed":
+        assert asyncio.run(
+            store.confirm_reconciliation(
+                candidate=second,
+                payment_status="no_payment_required",
+                amount_total_minor=0,
+                now=10_002,
+                items_digest=order.items_digest,
+            )
+        ) is False
+    else:
+        assert asyncio.run(
+            store.expire_reconciliation(
+                candidate=second,
+                payment_status="unpaid",
+                amount_total_minor=0,
+                now=10_002,
+            )
+        ) is False
+
+
 def test_d1_store_persists_the_maximum_quantity_and_stripe_projection(fixture_catalogue, d1_database):
     gateway = FakePaymentGateway()
     service = CheckoutService(fixture_catalogue, D1OrderStore(d1_database), gateway)
