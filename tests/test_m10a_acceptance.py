@@ -128,7 +128,7 @@ def test_d1_commands_are_targeted_to_only_the_prepared_sessions():
              );"""
     )
     connection.executemany(
-        "INSERT INTO checkout_sessions VALUES (?, ?, 'pending', 99_999_999_999)",
+        "INSERT INTO checkout_sessions VALUES (?, ?, 'pending', 99999999999)",
         (("order_confirm", "cs_test_confirm"), ("order_expire", "cs_test_expire")),
     )
     connection.executescript(shlex.split(due)[-1])
