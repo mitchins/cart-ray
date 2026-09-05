@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import runpy
 import shlex
 import sqlite3
@@ -144,6 +145,25 @@ def test_state_rejects_wrong_schema_and_secret_errors_are_redacted(tmp_path):
     state_file.write_text('{"schema": 2}\n', encoding="utf-8")
 
     with pytest.raises(module["AcceptanceError"], match="unsupported schema"):
+        module["_read_state"](state_file)
+
+    state_file.write_text(
+        json.dumps(
+            {
+                "schema": 1,
+                "destination_id": "we_test_destination",
+                "sessions": {
+                    "confirm": {"session_id": "cs_test_safe", "checkout_url": "https://checkout.stripe.com/safe"},
+                    "expire": {
+                        "session_id": "cs_test_bad'); DELETE FROM checkout_sessions; --",
+                        "checkout_url": "https://checkout.stripe.com/bad",
+                    },
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    with pytest.raises(module["AcceptanceError"], match="invalid Session ID"):
         module["_read_state"](state_file)
 
     assert module["_safe_error"](RuntimeError("rk_test_secret_must_not_escape")) == "[redacted]"

@@ -191,8 +191,9 @@ def _read_state(path: Path) -> dict[str, object]:
         raise AcceptanceError("acceptance state file has no Sessions")
     for case in ("confirm", "expire"):
         session = sessions.get(case)
-        if not isinstance(session, dict) or not isinstance(session.get("session_id"), str):
+        if not isinstance(session, dict):
             raise AcceptanceError("acceptance state file has an invalid Session")
+        _session_id(session.get("session_id"))
     return raw
 
 
@@ -234,10 +235,7 @@ def prepare(
 
 
 def expire(*, key: str, state: Mapping[str, object], request_json: RequestJson = _request_json) -> Mapping[str, object]:
-    session = state["sessions"]["expire"]
-    assert isinstance(session, dict)
-    session_id = session["session_id"]
-    assert isinstance(session_id, str)
+    _, session_id = _session_ids(state)
     payload = request_json(
         "POST", f"https://api.stripe.com/v1/checkout/sessions/{session_id}/expire", _stripe_headers(key), b""
     )
@@ -251,9 +249,13 @@ def _session_ids(state: Mapping[str, object]) -> tuple[str, str]:
     assert isinstance(sessions, dict)
     confirm, expire = sessions["confirm"], sessions["expire"]
     assert isinstance(confirm, dict) and isinstance(expire, dict)
-    confirm_id, expire_id = confirm["session_id"], expire["session_id"]
-    assert isinstance(confirm_id, str) and isinstance(expire_id, str)
-    return confirm_id, expire_id
+    return _session_id(confirm["session_id"]), _session_id(expire["session_id"])
+
+
+def _session_id(value: object) -> str:
+    if not isinstance(value, str) or not _SESSION_ID_RE.fullmatch(value):
+        raise AcceptanceError("acceptance state file has an invalid Session ID")
+    return value
 
 
 def d1_command(state: Mapping[str, object]) -> str:
