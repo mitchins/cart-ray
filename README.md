@@ -88,4 +88,6 @@ expiry followed by a clean replacement Checkout.
 
 The in-progress [Milestone 10a contract](docs/milestone-10a-contract.md) adds a bounded,
 test-mode scheduled reconciliation safety net for stale pending Checkout Sessions. It remains
-strictly server-side and is never part of browser status polling.
+strictly server-side and is never part of browser status polling. Its
+[test acceptance harness](docs/milestone-10a-acceptance-harness.md) automates the non-human
+parts of the remote sandbox proof without storing credentials.
