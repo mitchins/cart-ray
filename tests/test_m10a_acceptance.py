@@ -12,6 +12,7 @@ from urllib.error import HTTPError
 import pytest
 
 SCRIPT = Path(__file__).parents[1] / "scripts" / "m10a_acceptance.py"
+_BASIC_FIXTURE = "Basic cmtfdGVzdF9maXh0dXJlOg=="
 
 
 def test_prepare_disables_before_creating_two_free_cart_ray_sessions(tmp_path):
@@ -53,7 +54,7 @@ def test_prepare_disables_before_creating_two_free_cart_ray_sessions(tmp_path):
         "POST",
         "https://api.stripe.com/v1/webhook_endpoints/we_test_destination",
         {
-            "Authorization": "Bearer rk_test_fixture",
+            "Authorization": _BASIC_FIXTURE,
             "Stripe-Version": "2025-09-30.clover",
             "Content-Type": "application/x-www-form-urlencoded",
         },
@@ -102,7 +103,7 @@ def test_expire_targets_only_the_prepared_test_session():
         (
             "POST",
             "https://api.stripe.com/v1/checkout/sessions/cs_test_expire/expire",
-            {"Authorization": "Bearer rk_test_fixture", "Stripe-Version": "2025-09-30.clover"},
+            {"Authorization": _BASIC_FIXTURE, "Stripe-Version": "2025-09-30.clover"},
             b"",
         )
     ]
