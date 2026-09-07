@@ -146,7 +146,13 @@ def test_non_json_http_error_includes_status_and_content_type(monkeypatch):
 
     monkeypatch.setitem(module["_request_json"].__globals__, "_OPENER", Opener())
 
-    with pytest.raises(module["AcceptanceError"], match=r"HTTP 404; content type text/html"):
+    with pytest.raises(
+        module["AcceptanceError"],
+        match=(
+            r"\AGET https://api\.stripe\.com/example failed: "
+            r"response was not a JSON object \(HTTP 404; content type text/html\)\Z"
+        ),
+    ):
         module["_request_json"]("GET", "https://api.stripe.com/example", {}, None)
 
 
@@ -165,8 +171,23 @@ def test_non_json_http_error_without_content_type_is_unknown(monkeypatch):
 
     monkeypatch.setitem(module["_request_json"].__globals__, "_OPENER", Opener())
 
-    with pytest.raises(module["AcceptanceError"], match=r"HTTP 404; content type unknown"):
+    with pytest.raises(
+        module["AcceptanceError"],
+        match=(
+            r"\AGET https://api\.stripe\.com/example failed: "
+            r"response was not a JSON object \(HTTP 404; content type unknown\)\Z"
+        ),
+    ):
         module["_request_json"]("GET", "https://api.stripe.com/example", {}, None)
+
+
+def test_request_target_omits_query_and_user_information():
+    module = runpy.run_path(str(SCRIPT))
+
+    assert (
+        module["_safe_request_target"]("https://u:p@example.test:8443/path?debug=1")
+        == "https://example.test/path"
+    )
 
 
 def test_d1_commands_are_targeted_to_only_the_prepared_sessions():
