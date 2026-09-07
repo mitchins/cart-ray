@@ -4,6 +4,7 @@ import json
 import runpy
 import shlex
 import sqlite3
+from email.message import Message
 from io import BytesIO
 from pathlib import Path
 from urllib.error import HTTPError
@@ -145,6 +146,25 @@ def test_non_json_http_error_includes_status_and_content_type(monkeypatch):
     monkeypatch.setitem(module["_request_json"].__globals__, "_OPENER", Opener())
 
     with pytest.raises(module["AcceptanceError"], match=r"HTTP 404; content type text/html"):
+        module["_request_json"]("GET", "https://api.stripe.com/example", {}, None)
+
+
+def test_non_json_http_error_without_content_type_is_unknown(monkeypatch):
+    module = runpy.run_path(str(SCRIPT))
+
+    class Opener:
+        def open(self, *_args, **_kwargs):
+            raise HTTPError(
+                "https://api.stripe.com/example",
+                404,
+                "not found",
+                Message(),
+                BytesIO(b"<html>not found</html>"),
+            )
+
+    monkeypatch.setitem(module["_request_json"].__globals__, "_OPENER", Opener())
+
+    with pytest.raises(module["AcceptanceError"], match=r"HTTP 404; content type unknown"):
         module["_request_json"]("GET", "https://api.stripe.com/example", {}, None)
 
 

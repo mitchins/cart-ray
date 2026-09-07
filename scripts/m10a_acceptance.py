@@ -115,14 +115,11 @@ def _decode_response(raw: bytes, *, status: int, content_type: str | None) -> Ma
 
 
 def _content_type(headers: object) -> str | None:
-    get_content_type = getattr(headers, "get_content_type", None)
-    if callable(get_content_type):
-        value = get_content_type()
-        return value if isinstance(value, str) else None
-    if isinstance(headers, Mapping):
-        value = headers.get("Content-Type")
-        return value.split(";", 1)[0].strip() if isinstance(value, str) else None
-    return None
+    get_header = getattr(headers, "get", None)
+    if not callable(get_header):
+        return None
+    value = get_header("Content-Type")
+    return value.split(";", 1)[0].strip() if isinstance(value, str) else None
 
 
 def _stripe_headers(key: str) -> dict[str, str]:
