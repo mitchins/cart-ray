@@ -81,22 +81,39 @@ def _test_key(environ: Mapping[str, str]) -> str:
 
 def _request_json(method: str, url: str, headers: Mapping[str, str], body: bytes | None) -> Mapping[str, object]:
     request = Request(url, data=body, headers=dict(headers), method=method)
+    target = _safe_request_target(url)
     try:
         with _OPENER.open(request, timeout=_TIMEOUT_SECONDS) as response:
-            return _decode_response(
-                response.read(_MAX_RESPONSE_BYTES + 1),
-                status=response.status,
-                content_type=_content_type(response.headers),
-            )
+            try:
+                return _decode_response(
+                    response.read(_MAX_RESPONSE_BYTES + 1),
+                    status=response.status,
+                    content_type=_content_type(response.headers),
+                )
+            except AcceptanceError as error:
+                raise AcceptanceError(f"{method} {target} failed: {error}") from error
     except HTTPError as error:
-        payload = _decode_response(
-            error.read(_MAX_RESPONSE_BYTES + 1),
-            status=error.code,
-            content_type=_content_type(error.headers),
-        )
-        raise AcceptanceError(f"HTTP {error.code}: {payload.get('error', 'request failed')!r}") from error
+        try:
+            payload = _decode_response(
+                error.read(_MAX_RESPONSE_BYTES + 1),
+                status=error.code,
+                content_type=_content_type(error.headers),
+            )
+        except AcceptanceError as decode_error:
+            raise AcceptanceError(f"{method} {target} failed: {decode_error}") from error
+        raise AcceptanceError(
+            f"{method} {target} failed: HTTP {error.code}: {payload.get('error', 'request failed')!r}"
+        ) from error
     except URLError as error:
-        raise AcceptanceError("network request failed") from error
+        raise AcceptanceError(f"{method} {target} failed: network request failed") from error
+
+
+def _safe_request_target(url: str) -> str:
+    """Return only the request scheme, host, and path for operator diagnostics."""
+    parsed = urlparse(url)
+    host = parsed.hostname or "unknown-host"
+    path = parsed.path or "/"
+    return f"{parsed.scheme or 'https'}://{host}{path}"
 
 
 def _decode_response(raw: bytes, *, status: int, content_type: str | None) -> Mapping[str, object]:
