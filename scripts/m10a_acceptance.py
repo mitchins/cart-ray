@@ -82,7 +82,8 @@ def _test_key(environ: Mapping[str, str]) -> str:
 
 def _request_json(method: str, url: str, headers: Mapping[str, str], body: bytes | None) -> Mapping[str, object]:
     request_headers = dict(headers)
-    request_headers.setdefault("User-Agent", _HARNESS_USER_AGENT)
+    if not any(name.lower() == "user-agent" for name in request_headers):
+        request_headers["User-Agent"] = _HARNESS_USER_AGENT
     request = Request(url, data=body, headers=request_headers, method=method)
     target = _safe_request_target(url)
     try:

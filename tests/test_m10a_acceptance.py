@@ -206,11 +206,16 @@ def test_request_json_identifies_the_acceptance_harness_without_overriding_a_cal
     monkeypatch.setitem(module["_request_json"].__globals__, "_OPENER", Opener())
 
     assert module["_request_json"]("GET", "https://example.test/default", {}, None) == {"ok": True}
-    assert module["_request_json"](
-        "GET", "https://example.test/override", {"User-Agent": "operator-test-agent"}, None
-    ) == {"ok": True}
+    for case, header_name in enumerate(("User-Agent", "user-agent", "USER-AGENT"), start=1):
+        assert module["_request_json"](
+            "GET", f"https://example.test/override-{case}", {header_name: "operator-test-agent"}, None
+        ) == {"ok": True}
     assert requests[0].get_header("User-agent") == module["_HARNESS_USER_AGENT"]
-    assert requests[1].get_header("User-agent") == "operator-test-agent"
+    assert [request.get_header("User-agent") for request in requests[1:]] == [
+        "operator-test-agent",
+        "operator-test-agent",
+        "operator-test-agent",
+    ]
 
 
 def test_request_target_omits_query_and_user_information():
