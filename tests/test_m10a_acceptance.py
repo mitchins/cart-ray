@@ -181,6 +181,38 @@ def test_non_json_http_error_without_content_type_is_unknown(monkeypatch):
         module["_request_json"]("GET", "https://api.stripe.com/example", {}, None)
 
 
+def test_request_json_identifies_the_acceptance_harness_without_overriding_a_caller_header(monkeypatch):
+    module = runpy.run_path(str(SCRIPT))
+    requests = []
+
+    class Response:
+        status = 200
+        headers = {"Content-Type": "application/json"}
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def read(self, _limit):
+            return b'{"ok":true}'
+
+    class Opener:
+        def open(self, request, **_kwargs):
+            requests.append(request)
+            return Response()
+
+    monkeypatch.setitem(module["_request_json"].__globals__, "_OPENER", Opener())
+
+    assert module["_request_json"]("GET", "https://example.test/default", {}, None) == {"ok": True}
+    assert module["_request_json"](
+        "GET", "https://example.test/override", {"User-Agent": "operator-test-agent"}, None
+    ) == {"ok": True}
+    assert requests[0].get_header("User-agent") == module["_HARNESS_USER_AGENT"]
+    assert requests[1].get_header("User-agent") == "operator-test-agent"
+
+
 def test_request_target_omits_query_and_user_information():
     module = runpy.run_path(str(SCRIPT))
 
