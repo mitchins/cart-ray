@@ -149,8 +149,8 @@ def test_non_json_http_error_includes_status_and_content_type(monkeypatch):
     with pytest.raises(
         module["AcceptanceError"],
         match=(
-            r"GET https://api\.stripe\.com/example failed: "
-            r"response was not a JSON object \(HTTP 404; content type text/html\)"
+            r"\AGET https://api\.stripe\.com/example failed: "
+            r"response was not a JSON object \(HTTP 404; content type text/html\)\Z"
         ),
     ):
         module["_request_json"]("GET", "https://api.stripe.com/example", {}, None)
@@ -174,8 +174,8 @@ def test_non_json_http_error_without_content_type_is_unknown(monkeypatch):
     with pytest.raises(
         module["AcceptanceError"],
         match=(
-            r"GET https://api\.stripe\.com/example failed: "
-            r"response was not a JSON object \(HTTP 404; content type unknown\)"
+            r"\AGET https://api\.stripe\.com/example failed: "
+            r"response was not a JSON object \(HTTP 404; content type unknown\)\Z"
         ),
     ):
         module["_request_json"]("GET", "https://api.stripe.com/example", {}, None)
