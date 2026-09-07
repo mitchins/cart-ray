@@ -8,7 +8,8 @@ and never stores a credential or raw Stripe payload.
 The harness requires a Stripe restricted key that can manage the test destination as well as
 retrieve/expire Checkout Sessions. A Dashboard-created `we_...` webhook endpoint is managed
 through Stripe's v1 Webhook Endpoints API; an `ed_test_...` destination uses the v2 Event
-Destinations API. It does not require a Cloudflare token except for the printed
+Destinations API. The v1 calls use HTTP Basic authentication, matching CartRay's Stripe client;
+the v2 calls use Bearer authentication. It does not require a Cloudflare token except for the printed
 D1 commands, which intentionally run in the separate scoped-token console.
 
 ## Start a run

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import base64
 import json
 import os
 import re
@@ -122,7 +123,14 @@ def _content_type(headers: object) -> str | None:
     return value.split(";", 1)[0].strip() if isinstance(value, str) else None
 
 
-def _stripe_headers(key: str) -> dict[str, str]:
+def _stripe_v1_headers(key: str) -> dict[str, str]:
+    return {
+        "Authorization": f"Basic {base64.b64encode(f'{key}:'.encode()).decode()}",
+        "Stripe-Version": STRIPE_API_VERSION,
+    }
+
+
+def _stripe_v2_headers(key: str) -> dict[str, str]:
     return {
         "Authorization": f"Bearer {key}",
         "Stripe-Version": STRIPE_API_VERSION,
@@ -140,14 +148,14 @@ def _event_destination(
         payload = request_json(
             "POST",
             f"https://api.stripe.com/v1/webhook_endpoints/{destination_id}",
-            {**_stripe_headers(key), "Content-Type": "application/x-www-form-urlencoded"},
+            {**_stripe_v1_headers(key), "Content-Type": "application/x-www-form-urlencoded"},
             urlencode({"disabled": str(action == "disable").lower()}).encode("ascii"),
         )
     elif _EVENT_DESTINATION_ID_RE.fullmatch(destination_id):
         payload = request_json(
             "POST",
             f"https://api.stripe.com/v2/core/event_destinations/{destination_id}/{action}",
-            _stripe_headers(key),
+            _stripe_v2_headers(key),
             None,
         )
     else:
@@ -269,7 +277,7 @@ def prepare(
 def expire(*, key: str, state: Mapping[str, object], request_json: RequestJson = _request_json) -> Mapping[str, object]:
     _, session_id = _session_ids(state)
     payload = request_json(
-        "POST", f"https://api.stripe.com/v1/checkout/sessions/{session_id}/expire", _stripe_headers(key), b""
+        "POST", f"https://api.stripe.com/v1/checkout/sessions/{session_id}/expire", _stripe_v1_headers(key), b""
     )
     if payload.get("id") != session_id or payload.get("livemode") is not False or payload.get("status") != "expired":
         raise AcceptanceError("Stripe did not expire the intended test Checkout Session")
