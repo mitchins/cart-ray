@@ -4,7 +4,10 @@ import json
 import runpy
 import shlex
 import sqlite3
+from email.message import Message
+from io import BytesIO
 from pathlib import Path
+from urllib.error import HTTPError
 
 import pytest
 
@@ -17,7 +20,7 @@ def test_prepare_disables_before_creating_two_free_cart_ray_sessions(tmp_path):
 
     def request(method, url, headers, body):
         calls.append((method, url, headers, body))
-        if url.endswith("/disable"):
+        if url.endswith("/we_test_destination"):
             return {"id": "we_test_destination", "livemode": False, "status": "disabled"}
         if url.endswith("/catalogue"):
             return {
@@ -40,7 +43,22 @@ def test_prepare_disables_before_creating_two_free_cart_ray_sessions(tmp_path):
         request_json=request,
     )
 
-    assert [url.rsplit("/", 1)[-1] for _, url, _, _ in calls] == ["disable", "catalogue", "checkout", "checkout"]
+    assert [url.rsplit("/", 1)[-1] for _, url, _, _ in calls] == [
+        "we_test_destination",
+        "catalogue",
+        "checkout",
+        "checkout",
+    ]
+    assert calls[0] == (
+        "POST",
+        "https://api.stripe.com/v1/webhook_endpoints/we_test_destination",
+        {
+            "Authorization": "Bearer rk_test_fixture",
+            "Stripe-Version": "2025-09-30.clover",
+            "Content-Type": "application/x-www-form-urlencoded",
+        },
+        b"disabled=true",
+    )
     assert state["sessions"]["confirm"]["session_id"] == "cs_test_3"
     assert state["sessions"]["expire"]["session_id"] == "cs_test_4"
     assert state_file.stat().st_mode & 0o777 == 0o600
@@ -88,6 +106,66 @@ def test_expire_targets_only_the_prepared_test_session():
             b"",
         )
     ]
+
+
+def test_event_destination_uses_v2_actions_only_for_v2_ids():
+    module = runpy.run_path(str(SCRIPT))
+    calls = []
+
+    def request(method, url, headers, body):
+        calls.append((method, url, headers, body))
+        return {"id": "ed_test_destination", "livemode": False, "status": "disabled"}
+
+    module["_event_destination"](
+        key="rk_test_fixture", destination_id="ed_test_destination", action="disable", request_json=request
+    )
+
+    assert calls == [
+        (
+            "POST",
+            "https://api.stripe.com/v2/core/event_destinations/ed_test_destination/disable",
+            {"Authorization": "Bearer rk_test_fixture", "Stripe-Version": "2025-09-30.clover"},
+            None,
+        )
+    ]
+
+
+def test_non_json_http_error_includes_status_and_content_type(monkeypatch):
+    module = runpy.run_path(str(SCRIPT))
+
+    class Opener:
+        def open(self, *_args, **_kwargs):
+            raise HTTPError(
+                "https://api.stripe.com/example",
+                404,
+                "not found",
+                {"Content-Type": "text/html"},
+                BytesIO(b"<html>not found</html>"),
+            )
+
+    monkeypatch.setitem(module["_request_json"].__globals__, "_OPENER", Opener())
+
+    with pytest.raises(module["AcceptanceError"], match=r"HTTP 404; content type text/html"):
+        module["_request_json"]("GET", "https://api.stripe.com/example", {}, None)
+
+
+def test_non_json_http_error_without_content_type_is_unknown(monkeypatch):
+    module = runpy.run_path(str(SCRIPT))
+
+    class Opener:
+        def open(self, *_args, **_kwargs):
+            raise HTTPError(
+                "https://api.stripe.com/example",
+                404,
+                "not found",
+                Message(),
+                BytesIO(b"<html>not found</html>"),
+            )
+
+    monkeypatch.setitem(module["_request_json"].__globals__, "_OPENER", Opener())
+
+    with pytest.raises(module["AcceptanceError"], match=r"HTTP 404; content type unknown"):
+        module["_request_json"]("GET", "https://api.stripe.com/example", {}, None)
 
 
 def test_d1_commands_are_targeted_to_only_the_prepared_sessions():

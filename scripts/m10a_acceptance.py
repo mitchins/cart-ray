@@ -12,7 +12,7 @@ from pathlib import Path
 from tempfile import NamedTemporaryFile
 from typing import Any
 from urllib.error import HTTPError, URLError
-from urllib.parse import urlparse
+from urllib.parse import urlencode, urlparse
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 from cartray.stripe import STRIPE_API_VERSION
@@ -24,6 +24,8 @@ _MAX_RESPONSE_BYTES = 1_000_000
 _TIMEOUT_SECONDS = 15
 _STRIPE_KEY_RE = re.compile(r"(?:rk|sk)_(?:test|live)_[A-Za-z0-9_]+")
 _SESSION_ID_RE = re.compile(r"^cs_[A-Za-z0-9_]+$")
+_WEBHOOK_ENDPOINT_ID_RE = re.compile(r"^we_[A-Za-z0-9_]+$")
+_EVENT_DESTINATION_ID_RE = re.compile(r"^ed_test_[A-Za-z0-9_]+$")
 _DESTINATION_ID_RE = re.compile(r"^(?:we|ed_test)_[A-Za-z0-9_]+$")
 
 
@@ -80,24 +82,44 @@ def _request_json(method: str, url: str, headers: Mapping[str, str], body: bytes
     request = Request(url, data=body, headers=dict(headers), method=method)
     try:
         with _OPENER.open(request, timeout=_TIMEOUT_SECONDS) as response:
-            return _decode_response(response.read(_MAX_RESPONSE_BYTES + 1))
+            return _decode_response(
+                response.read(_MAX_RESPONSE_BYTES + 1),
+                status=response.status,
+                content_type=_content_type(response.headers),
+            )
     except HTTPError as error:
-        payload = _decode_response(error.read(_MAX_RESPONSE_BYTES + 1))
+        payload = _decode_response(
+            error.read(_MAX_RESPONSE_BYTES + 1),
+            status=error.code,
+            content_type=_content_type(error.headers),
+        )
         raise AcceptanceError(f"HTTP {error.code}: {payload.get('error', 'request failed')!r}") from error
     except URLError as error:
         raise AcceptanceError("network request failed") from error
 
 
-def _decode_response(raw: bytes) -> Mapping[str, object]:
+def _decode_response(raw: bytes, *, status: int, content_type: str | None) -> Mapping[str, object]:
     if len(raw) > _MAX_RESPONSE_BYTES:
         raise AcceptanceError("response exceeded the configured size limit")
     try:
         decoded: Any = json.loads(raw.decode("utf-8"))
     except (UnicodeDecodeError, json.JSONDecodeError) as error:
-        raise AcceptanceError("response was not a JSON object") from error
+        raise AcceptanceError(
+            f"response was not a JSON object (HTTP {status}; content type {content_type or 'unknown'})"
+        ) from error
     if not isinstance(decoded, dict):
-        raise AcceptanceError("response was not a JSON object")
+        raise AcceptanceError(
+            f"response was not a JSON object (HTTP {status}; content type {content_type or 'unknown'})"
+        )
     return decoded
+
+
+def _content_type(headers: object) -> str | None:
+    get_header = getattr(headers, "get", None)
+    if not callable(get_header):
+        return None
+    value = get_header("Content-Type")
+    return value.split(";", 1)[0].strip() if isinstance(value, str) else None
 
 
 def _stripe_headers(key: str) -> dict[str, str]:
@@ -114,12 +136,22 @@ def _event_destination(
         raise AcceptanceError("Stripe Event Destination ID is invalid")
     if action not in {"disable", "enable"}:
         raise ValueError("event destination action is invalid")
-    payload = request_json(
-        "POST",
-        f"https://api.stripe.com/v2/core/event_destinations/{destination_id}/{action}",
-        _stripe_headers(key),
-        None,
-    )
+    if _WEBHOOK_ENDPOINT_ID_RE.fullmatch(destination_id):
+        payload = request_json(
+            "POST",
+            f"https://api.stripe.com/v1/webhook_endpoints/{destination_id}",
+            {**_stripe_headers(key), "Content-Type": "application/x-www-form-urlencoded"},
+            urlencode({"disabled": str(action == "disable").lower()}).encode("ascii"),
+        )
+    elif _EVENT_DESTINATION_ID_RE.fullmatch(destination_id):
+        payload = request_json(
+            "POST",
+            f"https://api.stripe.com/v2/core/event_destinations/{destination_id}/{action}",
+            _stripe_headers(key),
+            None,
+        )
+    else:
+        raise AcceptanceError("Stripe Event Destination ID is invalid")
     if (
         payload.get("id") != destination_id
         or payload.get("livemode") is not False

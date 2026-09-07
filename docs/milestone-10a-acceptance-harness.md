@@ -5,8 +5,10 @@ hosted Stripe Checkout click, one real Cron run, and a D1-token-console command.
 test mode: it accepts only `rk_test_` or `sk_test_` credentials, requires a test Event Destination,
 and never stores a credential or raw Stripe payload.
 
-The harness requires a Stripe restricted key that can manage the test Event Destination as well as
-retrieve/expire Checkout Sessions. It does not require a Cloudflare token except for the printed
+The harness requires a Stripe restricted key that can manage the test destination as well as
+retrieve/expire Checkout Sessions. A Dashboard-created `we_...` webhook endpoint is managed
+through Stripe's v1 Webhook Endpoints API; an `ed_test_...` destination uses the v2 Event
+Destinations API. It does not require a Cloudflare token except for the printed
 D1 commands, which intentionally run in the separate scoped-token console.
 
 ## Start a run
