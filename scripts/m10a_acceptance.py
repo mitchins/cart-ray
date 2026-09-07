@@ -23,6 +23,7 @@ _DEFAULT_STATE_FILE = Path("/tmp/cartray-m10a-acceptance.json")
 _FREE_PRODUCT_KEY = "TEST-FREE"
 _MAX_RESPONSE_BYTES = 1_000_000
 _TIMEOUT_SECONDS = 15
+_HARNESS_USER_AGENT = "CartRay-M10a-Acceptance/1.0 (+https://github.com/mitchins/cart-ray)"
 _STRIPE_KEY_RE = re.compile(r"(?:rk|sk)_(?:test|live)_[A-Za-z0-9_]+")
 _SESSION_ID_RE = re.compile(r"^cs_[A-Za-z0-9_]+$")
 _WEBHOOK_ENDPOINT_ID_RE = re.compile(r"^we_[A-Za-z0-9_]+$")
@@ -80,7 +81,10 @@ def _test_key(environ: Mapping[str, str]) -> str:
 
 
 def _request_json(method: str, url: str, headers: Mapping[str, str], body: bytes | None) -> Mapping[str, object]:
-    request = Request(url, data=body, headers=dict(headers), method=method)
+    request_headers = dict(headers)
+    if not any(name.lower() == "user-agent" for name in request_headers):
+        request_headers["User-Agent"] = _HARNESS_USER_AGENT
+    request = Request(url, data=body, headers=request_headers, method=method)
     target = _safe_request_target(url)
     try:
         with _OPENER.open(request, timeout=_TIMEOUT_SECONDS) as response:
