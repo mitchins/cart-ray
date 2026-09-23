@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import base64
+import binascii
+import hashlib
 import json
 import re
 from dataclasses import dataclass
@@ -37,6 +40,8 @@ from cartray.workers_transport import WorkersFetchTransport
 MAX_CHECKOUT_BODY_BYTES = 16_384
 _BROWSER_ROUTES = {"/catalogue": "GET", "/checkout": "POST", "/checkout-status": "GET"}
 _CHECKOUT_SESSION_ID_RE = re.compile(r"^cs_[A-Za-z0-9_]+$")
+_RECOVERY_KID = "cartray-test-2026-09-01"
+_ED25519_SPKI_PREFIX = bytes.fromhex("302a300506032b6570032100")
 
 
 class CorsRejected(Exception):
@@ -76,6 +81,15 @@ def create_app(
         if not _d1_success(result):
             return Response({"error": "database unavailable"}, status=503)
         return {"service": "cartray", "mode": "test-only", "status": "ok"}
+
+    @app.get("/_m11b/test-public-key-recovery")
+    async def temporary_public_key_recovery(request):
+        try:
+            record = _public_key_recovery_record(request.env)
+            _emit_public_key_recovery_record(record)
+        except (RuntimeError, ValueError):
+            return Response(status=503, headers={"Cache-Control": "no-store"})
+        return Response(status=204, headers={"Cache-Control": "no-store"})
 
     @app.get("/catalogue")
     async def catalogue(request):
@@ -289,6 +303,44 @@ def _projection_verifiers(env) -> dict[str, WorkersEd25519Verifier]:
     ):
         raise RuntimeError("CARTRAY_PROJECTION_PUBLIC_KEYS_JSON must map key IDs to public keys")
     return {key_id: WorkersEd25519Verifier(key) for key_id, key in keyring.items()}
+
+
+def _public_key_recovery_record(env) -> dict[str, str]:
+    _test_environment(env)
+    if _required_env(env, "CARTRAY_SIGNING_KEY_ID") != _RECOVERY_KID:
+        raise RuntimeError("active projection key does not match the recovery target")
+    try:
+        pairs = json.loads(_required_env(env, "CARTRAY_PROJECTION_PUBLIC_KEYS_JSON"), object_pairs_hook=list)
+        if not isinstance(pairs, list) or not pairs or any(not isinstance(pair, tuple) for pair in pairs):
+            raise ValueError
+        keyring = {}
+        for key_id, value in pairs:
+            if key_id in keyring:
+                raise ValueError
+            keyring[key_id] = value
+        spki_b64 = keyring[_RECOVERY_KID]
+        if not isinstance(spki_b64, str):
+            raise ValueError
+        spki = base64.b64decode(spki_b64, validate=True)
+        if (
+            len(spki) != 44
+            or not spki.startswith(_ED25519_SPKI_PREFIX)
+            or base64.b64encode(spki).decode("ascii") != spki_b64
+        ):
+            raise ValueError
+    except (binascii.Error, KeyError, TypeError, ValueError) as error:
+        raise RuntimeError("active public key is unavailable or malformed") from error
+    return {
+        "kid": _RECOVERY_KID,
+        "spki_b64": spki_b64,
+        "spki_sha256": f"sha256:{hashlib.sha256(spki).hexdigest()}",
+    }
+
+
+def _emit_public_key_recovery_record(record: dict[str, str]) -> None:
+    from js import console
+
+    console.log("m11b-public-key-recovery " + json.dumps(record, sort_keys=True, separators=(",", ":")))
 
 
 def _https_url(value: str, name: str) -> str:
