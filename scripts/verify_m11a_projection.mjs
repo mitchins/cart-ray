@@ -21,12 +21,17 @@ function decodeCanonicalBase64url(value, length) {
   return bytes;
 }
 
+function asciiSafeJson(value) {
+  return JSON.stringify(value).replace(/[\u007f-\uffff]/g,
+    (char) => `\\u${char.charCodeAt(0).toString(16).padStart(4, '0')}`);
+}
+
 export function canonicalPayload(sessionId, environment, metadata) {
   const values = {};
   for (const [name, source] of Object.entries(SIGNED_FIELDS)) {
     values[name] = source === null ? (name === 'environment' ? environment : sessionId) : metadata[source];
   }
-  return Buffer.from(JSON.stringify(values), 'utf8');
+  return Buffer.from(asciiSafeJson(values), 'utf8');
 }
 
 export function verifyProjection({ session_id: sessionId, configured_environment: environment, metadata, trusted_public_keys: keyring }) {

@@ -12,6 +12,13 @@ test('frozen M11a fixture verifies with independent Node Ed25519', () => {
   assert.deepEqual(verifyProjection(trustedFixture), fixture.expected_items);
 });
 
+test('canonical payload escapes Unicode and DEL exactly like Python ensure_ascii', () => {
+  const metadata = { ...fixture.metadata, cr_nonce: 'caf\u00e9\ud83d\ude00\u007f' };
+  const payload = canonicalPayload(fixture.session_id, fixture.configured_environment, metadata).toString();
+  assert.ok(payload.includes('"nonce":"caf\\u00e9\\ud83d\\ude00\\u007f"'));
+  assert.equal(Buffer.byteLength(payload), payload.length);
+});
+
 test('every signed field, chunk, session and environment mutation fails', () => {
   for (const field of ['cr_schema', 'cr_source', 'cr_order_id', 'cr_catalogue_version', 'cr_item_count',
     'cr_items_digest', 'cr_nonce', 'cr_kid', 'cr_chunk_count', 'cr_items_01', 'cr_signature']) {
