@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import base64
-import binascii
 import hashlib
 import hmac
 import json
@@ -315,7 +314,7 @@ def _canonical_recovery_token(value: object) -> bool:
         return False
     try:
         decoded = base64.urlsafe_b64decode(value + "=")
-    except (binascii.Error, ValueError):
+    except ValueError:
         return False
     return len(decoded) == 32 and base64.urlsafe_b64encode(decoded).decode("ascii").rstrip("=") == value
 
@@ -354,7 +353,7 @@ async def _public_key_recovery_record(env) -> dict[str, str]:
             or base64.b64encode(spki).decode("ascii") != spki_b64
         ):
             raise ValueError
-    except (binascii.Error, KeyError, TypeError, ValueError) as error:
+    except (KeyError, TypeError, ValueError) as error:
         raise RuntimeError("active public key is unavailable or malformed") from error
     signer = WorkersEd25519Signer(_required_env(env, "CARTRAY_SIGNING_PRIVATE_KEY_PKCS8_B64"))
     signature = await signer.sign(_RECOVERY_CHALLENGE)
