@@ -27,6 +27,7 @@ jobs:
       - run: uv sync --all-groups
       - run: uv run ruff check .
       - run: uv run pytest
+      - run: npm run test:m11a-projection
       - run: npm run build:storefront
       - run: CARTRAY_STOREFRONT_EXPECTED_MODE=preview npm run test:storefront
       - run: CARTRAY_STOREFRONT_MODE=production CARTRAY_STOREFRONT_API_BASE_URL=https://api.test.invalid npm run build:storefront
@@ -57,3 +58,32 @@ jobs:
           done
           exit 1
       - run: uv build
+
+  sonarqube:
+    name: SonarQube Cloud
+    if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version-file: .nvmrc
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.12"
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6.8.0
+      - name: Generate coverage reports
+        run: |
+          mkdir -p coverage
+          uv sync --all-groups --locked
+          uv run --locked pytest --cov=. --cov-report=xml:coverage/python.xml
+          node --test --experimental-test-coverage --test-reporter=spec --test-reporter-destination=stdout --test-reporter=lcov --test-reporter-destination=coverage/m11a.lcov tests/m11a_projection.test.mjs
+      - name: Scan and await quality gate
+        uses: SonarSource/sonarqube-scan-action@7006c4492b2e0ee0f816d36501671557c97f5995 # v8.1.0
+        with:
+          args: -Dsonar.host.url=https://sonarcloud.io
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}

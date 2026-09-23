@@ -8,6 +8,7 @@ from cartray.catalogue import Catalogue
 from cartray.checkout import checkout_success_url
 from cartray.errors import CheckoutValidationError, IdempotencyConflict
 from cartray.models import CheckoutRequest
+from cartray.stripe import CheckoutMetadataSealer, StripeApiClient, StripeApiError, StripeCheckoutGateway
 
 
 def valid_request(catalogue, request_id: str = "request-1"):
@@ -77,6 +78,41 @@ def test_invalid_success_url_writes_no_checkout_state(checkout_service):
     for table in ("orders", "checkout_sessions", "outbox"):
         count = service.store.connection.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
         assert count == 0
+
+
+def test_failed_session_metadata_update_does_not_attach_redirect(checkout_service):
+    service, _gateway = checkout_service
+
+    class FailingMetadataTransport:
+        async def request(self, method, path, *, headers, body=None):
+            if path == "/v1/checkout/sessions":
+                return 200, {"id": "cs_test_unsealed", "url": "https://checkout.stripe.test/unsealed"}
+            if path == "/v1/checkout/sessions/cs_test_unsealed":
+                return 503, {"error": "temporary test failure"}
+            raise AssertionError((method, path))
+
+    class Signature:
+        async def sign(self, _payload):
+            return bytes(64)
+
+    service.gateway = StripeCheckoutGateway(
+        StripeApiClient("rk_test_fixture", FailingMetadataTransport()),
+        CheckoutMetadataSealer("test", "test-key-1", Signature()),
+    )
+
+    with pytest.raises(StripeApiError, match="failed"):
+        checkout(
+            service,
+            CheckoutRequest("unsealed-checkout", service.catalogue.version, (CanonicalItem("TEST-FREE", 1),)),
+        )
+
+    session = service.store.connection.execute(
+        "SELECT state, external_session_id, redirect_url FROM checkout_sessions"
+    ).fetchone()
+    assert tuple(session) == ("creating", None, None)
+    assert service.store.connection.execute(
+        "SELECT COUNT(*) FROM outbox WHERE event_type = 'CheckoutRedirectIssued'"
+    ).fetchone()[0] == 0
 
 
 def test_maximum_quantity_is_preserved_from_checkout_through_the_immutable_order(checkout_service):

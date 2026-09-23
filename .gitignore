@@ -6,6 +6,8 @@ node_modules/
 python_modules/
 pylock.toml
 dist/
+coverage/
+.coverage
 .wrangler/
 storefront-dist/
 .env

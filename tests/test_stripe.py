@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import hashlib
 from dataclasses import dataclass, field
 from urllib.parse import parse_qs
 
@@ -60,7 +61,7 @@ def stripe_price(
 @dataclass(frozen=True)
 class FixtureSigner:
     async def sign(self, payload: bytes) -> bytes:
-        return b"fixture-signature:" + payload[-8:]
+        return hashlib.sha512(payload).digest()
 
 
 @dataclass(frozen=True)
@@ -74,7 +75,7 @@ class ExpectedVerifier:
     expected_payload: bytes
 
     async def verify(self, payload: bytes, signature: bytes) -> bool:
-        return payload == self.expected_payload and signature == b"fixture-verifier-signature"
+        return payload == self.expected_payload and signature == bytes(64)
 
 
 def test_metadata_sealing_rejects_an_upstream_failure_without_a_checkout_redirect():
@@ -86,7 +87,7 @@ def test_metadata_sealing_rejects_an_upstream_failure_without_a_checkout_redirec
     )
     sealer = CheckoutMetadataSealer(environment="test", key_id="test-key-1", signer=EmptySigner())
 
-    with pytest.raises(ProjectionSealError, match="empty"):
+    with pytest.raises(ProjectionSealError, match="64-byte"):
         asyncio.run(sealer.seal(session_id="cs_test_123", metadata=metadata))
 
 
@@ -99,7 +100,7 @@ def test_metadata_verification_rejects_unknown_cart_ray_fields():
     )
     metadata["cr_kid"] = "fixture-key"
     payload = signature_payload(session_id="cs_test_123", environment="test", metadata=metadata)
-    metadata["cr_signature"] = base64.urlsafe_b64encode(b"fixture-verifier-signature").rstrip(b"=").decode()
+    metadata["cr_signature"] = base64.urlsafe_b64encode(bytes(64)).rstrip(b"=").decode()
     verifier = CheckoutMetadataVerifier("test", {"fixture-key": ExpectedVerifier(payload)})
 
     assert asyncio.run(verifier.verify(session_id="cs_test_123", metadata=metadata)) == (
@@ -119,7 +120,7 @@ def test_metadata_verification_rejects_a_signed_noncanonical_rechunking():
     )
     metadata["cr_kid"] = "fixture-key"
     payload = signature_payload(session_id="cs_test_123", environment="test", metadata=metadata)
-    metadata["cr_signature"] = base64.urlsafe_b64encode(b"fixture-verifier-signature").rstrip(b"=").decode()
+    metadata["cr_signature"] = base64.urlsafe_b64encode(bytes(64)).rstrip(b"=").decode()
     rechunked = {
         **metadata,
         "cr_chunk_count": "2",
@@ -182,6 +183,7 @@ def test_stripe_checkout_is_sealed_after_session_creation_and_before_redirect():
     assert not any(key.startswith("metadata[") for key in created_form)
     assert created_form["line_items[0][price]"] == ["price_test_support_hours"]
     assert created_form["line_items[0][quantity]"] == ["5"]
+    assert created_form["allow_promotion_codes"] == ["true"]
     assert transport.requests[0][2]["Idempotency-Key"] == "cartray-checkout-v1:cr_order_123"
 
     session_metadata = parse_qs(transport.requests[1][3] or "")
@@ -239,6 +241,39 @@ def test_stripe_checkout_keeps_session_metadata_canonical_when_no_payment_intent
     session_metadata = parse_qs(transport.requests[1][3] or "")
     assert session_metadata["metadata[cr_order_id]"] == ["cr_order_free"]
     assert session_metadata["metadata[cr_signature]"][0]
+
+
+def test_failed_session_metadata_update_never_exposes_a_checkout_redirect():
+    transport = RecordingTransport(
+        [
+            (200, {"id": "cs_test_unsealed", "url": "https://checkout.stripe.test/c/pay/cs_test_unsealed"}),
+            (503, {"error": "temporary test failure"}),
+        ]
+    )
+    gateway = StripeCheckoutGateway(
+        StripeApiClient("rk_test_fixture", transport),
+        CheckoutMetadataSealer("test", "test-key-1", FixtureSigner()),
+    )
+    spec = CheckoutSpec(
+        order_id="cr_order_unsealed",
+        idempotency_key="cartray-checkout-v1:cr_order_unsealed",
+        line_items=(("price_test_free", 1),),
+        success_url="https://store.invalid/success",
+        cancel_url="https://store.invalid/cancel",
+        metadata=projection_metadata(
+            order_id="cr_order_unsealed",
+            catalogue_version="sha256:catalogue",
+            items=(CanonicalItem("TEST-FREE", 1),),
+            nonce="nonce-unsealed",
+        ),
+    )
+
+    with pytest.raises(StripeApiError, match="failed"):
+        asyncio.run(gateway.create_checkout(spec))
+    assert [request[1] for request in transport.requests] == [
+        "/v1/checkout/sessions",
+        "/v1/checkout/sessions/cs_test_unsealed",
+    ]
 
 
 def test_stripe_price_resolver_requires_one_active_one_off_price():
