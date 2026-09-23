@@ -81,7 +81,8 @@ export function verifyProjection({ session_id: sessionId, configured_environment
 
 if (process.argv[1]?.endsWith('/verify_m11a_projection.mjs')) {
   try {
-    const input = process.argv[2] ? JSON.parse(readFileSync(process.argv[2], 'utf8')) : JSON.parse(readFileSync(0, 'utf8'));
+    if (process.argv.length !== 2) throw new Error('verifier accepts JSON on stdin only');
+    const input = JSON.parse(readFileSync(0, 'utf8'));
     const items = verifyProjection(input);
     if (items === null) process.exitCode = 1;
     else process.stdout.write(`${JSON.stringify({ items })}\n`);

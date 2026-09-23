@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import { canonicalPayload, verifyProjection } from '../scripts/verify_m11a_projection.mjs';
@@ -39,4 +40,21 @@ test('unknown or retired key fails with non-empty replacement keyring', () => {
   assert.deepEqual(verifyProjection(trustedFixture), fixture.expected_items);
   assert.equal(verifyProjection({ ...trustedFixture, trusted_public_keys: replacement }), null);
   assert.equal(verifyProjection({ ...trustedFixture, metadata: { ...fixture.metadata, cr_kid: 'kid-unknown' } }), null);
+});
+
+test('verifier CLI accepts only stdin JSON, never a pathname argument', () => {
+  const script = new URL('../scripts/verify_m11a_projection.mjs', import.meta.url);
+  const validInput = JSON.stringify(trustedFixture);
+  const valid = spawnSync(process.execPath, [script.pathname], { input: validInput, encoding: 'utf8' });
+  assert.equal(valid.status, 0);
+  assert.deepEqual(JSON.parse(valid.stdout), { items: fixture.expected_items });
+
+  const invalid = spawnSync(process.execPath, [script.pathname], { input: '{', encoding: 'utf8' });
+  assert.equal(invalid.status, 1);
+  assert.equal(invalid.stdout, '');
+
+  const pathname = spawnSync(process.execPath, [script.pathname, new URL('./fixtures/m11a_schema1_projection.json', import.meta.url).pathname],
+    { input: validInput, encoding: 'utf8' });
+  assert.equal(pathname.status, 1);
+  assert.equal(pathname.stdout, '');
 });
