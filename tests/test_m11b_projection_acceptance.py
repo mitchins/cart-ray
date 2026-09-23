@@ -11,7 +11,7 @@ import pytest
 
 SCRIPT = Path(__file__).parents[1] / "scripts/m11b_projection_acceptance.py"
 CATALOGUE_VERSION = "sha256:8d3674ae409653d9194f71fcdeb5f7b24f4d8442aac3fd966d0c2612aeba71ee"
-PUBLIC_KEY = "QwRr_kCSs-lJlOraFdzCDYqqB7ZY_TlU644O-4vcpd4"
+PUBLIC_KEY = "OI6FlBG2BvI_lA5VgK_50CWrB6-iHob3QGSYEh74qpE"
 
 
 def test_pinned_test_keyring_matches_recovered_spki_fingerprint():
@@ -72,6 +72,8 @@ def test_acceptance_proof_uses_deployed_profile_and_stripe_session_not_d1(monkey
                 "id": "cs_test_real_fixture",
                 "livemode": False,
                 "mode": "payment",
+                "status": "open",
+                "payment_status": "unpaid",
                 "allow_promotion_codes": True,
                 "metadata": {
                     "cr_catalogue_version": CATALOGUE_VERSION,
@@ -101,6 +103,8 @@ def test_acceptance_proof_uses_deployed_profile_and_stripe_session_not_d1(monkey
 
     assert result["ed25519_verified"] is True
     assert result["checkout_completed"] is False
+    assert result["session_status"] == "open"
+    assert result["payment_status"] == "unpaid"
     assert len(requests) == 4
     assert verifications[0][1]["session_id"] == "cs_test_real_fixture"
     assert verifications[0][1]["trusted_public_keys"] == {"cartray-test-2026-09-01": PUBLIC_KEY}
@@ -119,6 +123,8 @@ def test_acceptance_rejects_validly_signed_items_that_differ_from_stripe_line(mo
                 "id": "cs_test_real_fixture",
                 "livemode": False,
                 "mode": "payment",
+                "status": "open",
+                "payment_status": "unpaid",
                 "allow_promotion_codes": True,
                 "metadata": {
                     "cr_catalogue_version": CATALOGUE_VERSION,
@@ -158,3 +164,63 @@ def test_acceptance_proof_refuses_missing_public_key_before_network():
     module = runpy.run_path(str(SCRIPT))
     with pytest.raises(module["AcceptanceError"], match="public key is required"):
         module["prove"](stripe_key="rk_test_fixture", public_key_raw_b64url="")
+
+
+def test_acceptance_rejects_different_supplied_key_before_network(monkeypatch):
+    module = runpy.run_path(str(SCRIPT))
+    monkeypatch.setitem(module["prove"].__globals__, "request_json", lambda *_args, **_kwargs: pytest.fail("network"))
+    different_key = base64.urlsafe_b64encode(bytes(range(32))).decode().rstrip("=")
+    with pytest.raises(module["AcceptanceError"], match="differs from the pinned artifact"):
+        module["prove"](stripe_key="rk_test_fixture", public_key_raw_b64url=different_key)
+
+
+@pytest.mark.parametrize(
+    "artifact_contents",
+    [
+        None,
+        "not-json",
+        "[]",
+        json.dumps({"environment": "live", "trusted_public_keys": {"cartray-test-2026-09-01": PUBLIC_KEY}}),
+        json.dumps({"environment": "test", "trusted_public_keys": {"other-kid": PUBLIC_KEY}}),
+        json.dumps({"environment": "test", "trusted_public_keys": {"cartray-test-2026-09-01": "bad"}}),
+        json.dumps({"environment": "test", "trusted_public_keys": {"cartray-test-2026-09-01": PUBLIC_KEY}, "extra": 1}),
+        '{"environment":"test","environment":"test","trusted_public_keys":{}}',
+        '{"environment":"test","trusted_public_keys":{"cartray-test-2026-09-01":"first","cartray-test-2026-09-01":"second"}}',
+    ],
+)
+def test_acceptance_rejects_untrusted_artifact_before_network(monkeypatch, tmp_path, artifact_contents):
+    module = runpy.run_path(str(SCRIPT))
+    artifact = tmp_path / "projection-public-keys.test.json"
+    if artifact_contents is not None:
+        artifact.write_text(artifact_contents)
+    monkeypatch.setitem(module["prove"].__globals__, "PINNED_TEST_KEYRING", artifact)
+    monkeypatch.setitem(module["prove"].__globals__, "request_json", lambda *_args, **_kwargs: pytest.fail("network"))
+    with pytest.raises(module["AcceptanceError"], match="pinned CartRay test keyring|pinned CartRay test public key"):
+        module["prove"](stripe_key="rk_test_fixture", public_key_raw_b64url=PUBLIC_KEY)
+
+
+@pytest.mark.parametrize(
+    "status,payment_status",
+    [("complete", "paid"), ("expired", "unpaid"), ("open", "paid"), ("open", "no_payment_required"), (None, None)],
+)
+def test_acceptance_rejects_non_open_or_paid_session_before_line_items(monkeypatch, status, payment_status):
+    module = runpy.run_path(str(SCRIPT))
+
+    def request(_method, url, **_kwargs):
+        if url.endswith("/catalogue"):
+            return {"version": CATALOGUE_VERSION, "products": [{"product_key": "EP-SIL-2026", "amount_minor": 85000}]}
+        if url.endswith("/checkout"):
+            return {"session_id": "cs_test_real_fixture"}
+        if url.endswith("/cs_test_real_fixture"):
+            return {
+                "id": "cs_test_real_fixture",
+                "livemode": False,
+                "mode": "payment",
+                "status": status,
+                "payment_status": payment_status,
+            }
+        pytest.fail("line items requested for non-open/unpaid Session")
+
+    monkeypatch.setitem(module["prove"].__globals__, "request_json", request)
+    with pytest.raises(module["AcceptanceError"], match="not open and unpaid"):
+        module["prove"](stripe_key="rk_test_fixture", public_key_raw_b64url=PUBLIC_KEY)

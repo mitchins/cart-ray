@@ -51,3 +51,11 @@ verification key from `config/projection-public-keys.test.json`. It again passed
 with order `cr_fbc28cf114ed4268a4c7ad7aac1fb7b3` and Stripe test Session
 `cs_test_b10137Xq8AvcdJ60VO0kzSmnY2y4EEQzMZGyIACrX4X5t3gcxQIS5W39Gg`.
 That Checkout Session was not completed and no payment was taken.
+
+After final review tightened the harness, it additionally required the supplied
+key to equal the exact checked-in test keyring and required Stripe's Session
+state to be `open` with `payment_status=unpaid` before reporting success. A fresh
+run against the same route-free Worker passed with order
+`cr_4f1473632e8b42fe943d3d7d3bbfac12` and Stripe test Session
+`cs_test_b1WUwgWBAMO9QUud5EVYpxzkijVyiTWW5dy9K7dg3okrlYlSW0RpijI82I`;
+the observed Session state was `open`/`unpaid`.

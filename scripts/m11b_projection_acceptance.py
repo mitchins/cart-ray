@@ -7,7 +7,6 @@ No checkout is completed and no customer or credential data is recorded.
 from __future__ import annotations
 
 import base64
-import binascii
 import json
 import os
 import re
@@ -24,6 +23,7 @@ from cartray.stripe import STRIPE_API_VERSION
 WORKER_URL = "https://cartray-test.mitch-336.workers.dev"
 CATALOGUE_LOCK = Path(__file__).parents[1] / "catalogue/real-test-subset/stripe-test-preflight.lock.json"
 NODE_VERIFIER = Path(__file__).with_name("verify_m11a_projection.mjs")
+PINNED_TEST_KEYRING = Path(__file__).parents[1] / "config/projection-public-keys.test.json"
 SESSION_ID_RE = re.compile(r"^cs_test_[A-Za-z0-9_]+$")
 EXPECTED_TEST_KID = "cartray-test-2026-09-01"
 HARNESS_USER_AGENT = "CartRay-M11b-Acceptance/1.0 (+https://github.com/mitchins/cart-ray)"
@@ -31,6 +31,41 @@ HARNESS_USER_AGENT = "CartRay-M11b-Acceptance/1.0 (+https://github.com/mitchins/
 
 class AcceptanceError(RuntimeError):
     """The test checkout did not meet the frozen projection contract."""
+
+
+def _canonical_raw_public_key(value: object) -> bool:
+    if not isinstance(value, str) or re.fullmatch(r"[A-Za-z0-9_-]{43}", value) is None:
+        return False
+    try:
+        raw = base64.urlsafe_b64decode(value + "=")
+    except ValueError:
+        return False
+    return len(raw) == 32 and base64.urlsafe_b64encode(raw).decode().rstrip("=") == value
+
+
+def _unique_json_object(pairs: list[tuple[str, object]]) -> dict[str, object]:
+    result: dict[str, object] = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError("duplicate JSON key")
+        result[key] = value
+    return result
+
+
+def _pinned_test_public_key() -> str:
+    try:
+        artifact = json.loads(PINNED_TEST_KEYRING.read_text(encoding="utf-8"), object_pairs_hook=_unique_json_object)
+    except (OSError, ValueError) as error:
+        raise AcceptanceError("the pinned CartRay test keyring is unavailable or malformed") from error
+    if not isinstance(artifact, dict) or set(artifact) != {"environment", "trusted_public_keys"}:
+        raise AcceptanceError("the pinned CartRay test keyring has an unexpected schema")
+    keys = artifact["trusted_public_keys"]
+    if artifact["environment"] != "test" or not isinstance(keys, dict) or set(keys) != {EXPECTED_TEST_KID}:
+        raise AcceptanceError("the pinned CartRay test keyring has an unexpected environment or key ID")
+    pinned = keys[EXPECTED_TEST_KID]
+    if not _canonical_raw_public_key(pinned):
+        raise AcceptanceError("the pinned CartRay test public key is not canonical base64url")
+    return pinned
 
 
 def request_json(method: str, url: str, *, headers: dict[str, str] | None = None, body: bytes | None = None) -> dict:
@@ -54,14 +89,10 @@ def request_json(method: str, url: str, *, headers: dict[str, str] | None = None
 def prove(*, stripe_key: str, public_key_raw_b64url: str) -> dict[str, object]:
     if not stripe_key.startswith(("rk_test_", "sk_test_")):
         raise AcceptanceError("only a Stripe test key is accepted")
-    if not isinstance(public_key_raw_b64url, str) or not re.fullmatch(r"[A-Za-z0-9_-]{43}", public_key_raw_b64url):
+    if not _canonical_raw_public_key(public_key_raw_b64url):
         raise AcceptanceError("the trusted 32-byte CartRay test public key is required")
-    try:
-        decoded_key = base64.urlsafe_b64decode(public_key_raw_b64url + "=")
-    except (binascii.Error, ValueError) as error:
-        raise AcceptanceError("the trusted CartRay test public key is not canonical base64url") from error
-    if len(decoded_key) != 32 or base64.urlsafe_b64encode(decoded_key).rstrip(b"=").decode() != public_key_raw_b64url:
-        raise AcceptanceError("the trusted CartRay test public key is not canonical base64url")
+    if public_key_raw_b64url != _pinned_test_public_key():
+        raise AcceptanceError("the supplied CartRay test public key differs from the pinned artifact")
     lock = json.loads(CATALOGUE_LOCK.read_text())
     catalogue = request_json("GET", f"{WORKER_URL}/catalogue")
     if catalogue.get("version") != lock["catalogue_version"]:
@@ -93,15 +124,17 @@ def prove(*, stripe_key: str, public_key_raw_b64url: str) -> dict[str, object]:
         "Stripe-Version": STRIPE_API_VERSION,
     }
     session = request_json("GET", f"https://api.stripe.com/v1/checkout/sessions/{session_id}", headers=stripe_headers)
+    if session.get("id") != session_id or session.get("livemode") is not False or session.get("mode") != "payment":
+        raise AcceptanceError("Stripe returned a mismatched or non-test Session")
+    if session.get("status") != "open" or session.get("payment_status") != "unpaid":
+        raise AcceptanceError("Stripe test Checkout Session is not open and unpaid")
+    if session.get("allow_promotion_codes") is not True:
+        raise AcceptanceError("paid Checkout did not allow promotion codes")
     line_items = request_json(
         "GET",
         f"https://api.stripe.com/v1/checkout/sessions/{session_id}/line_items?" + urlencode({"limit": "100"}),
         headers=stripe_headers,
     )
-    if session.get("id") != session_id or session.get("livemode") is not False or session.get("mode") != "payment":
-        raise AcceptanceError("Stripe returned a mismatched or non-test Session")
-    if session.get("allow_promotion_codes") is not True:
-        raise AcceptanceError("paid Checkout did not allow promotion codes")
     expected_price = next(item for item in lock["prices"] if item["amount_minor"] == 85000)
     lines = line_items.get("data")
     if line_items.get("has_more") is not False or not isinstance(lines, list) or len(lines) != 1:
@@ -153,6 +186,8 @@ def prove(*, stripe_key: str, public_key_raw_b64url: str) -> dict[str, object]:
         "stripe_price_id": expected_price["stripe_price_id"],
         "promotion_codes_allowed": True,
         "ed25519_verified": True,
+        "session_status": session["status"],
+        "payment_status": session["payment_status"],
         "checkout_completed": False,
     }
 
