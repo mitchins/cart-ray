@@ -26,6 +26,7 @@ CATALOGUE_LOCK = Path(__file__).parents[1] / "catalogue/real-test-subset/stripe-
 NODE_VERIFIER = Path(__file__).with_name("verify_m11a_projection.mjs")
 SESSION_ID_RE = re.compile(r"^cs_test_[A-Za-z0-9_]+$")
 EXPECTED_TEST_KID = "cartray-test-2026-09-01"
+HARNESS_USER_AGENT = "CartRay-M11b-Acceptance/1.0 (+https://github.com/mitchins/cart-ray)"
 
 
 class AcceptanceError(RuntimeError):
@@ -33,7 +34,10 @@ class AcceptanceError(RuntimeError):
 
 
 def request_json(method: str, url: str, *, headers: dict[str, str] | None = None, body: bytes | None = None) -> dict:
-    request = Request(url, method=method, data=body, headers=headers or {})
+    request_headers = dict(headers or {})
+    if not any(name.lower() == "user-agent" for name in request_headers):
+        request_headers["User-Agent"] = HARNESS_USER_AGENT
+    request = Request(url, method=method, data=body, headers=request_headers)
     try:
         with urlopen(request, timeout=20) as response:
             raw = response.read(1_000_001)
@@ -65,14 +69,22 @@ def prove(*, stripe_key: str, public_key_raw_b64url: str) -> dict[str, object]:
     product = next((item for item in catalogue.get("products", []) if item.get("product_key") == "EP-SIL-2026"), None)
     if product is None or product.get("amount_minor") != 85000:
         raise AcceptanceError("deployed SIL product is not the frozen paid test item")
-    checkout_body = json.dumps({
-        "checkout_request_id": f"m11b-projection-{uuid4().hex}",
-        "manifest_version": lock["catalogue_version"],
-        "items": [{"product_key": "EP-SIL-2026", "quantity": 1}],
-    }).encode()
-    checkout = request_json("POST", f"{WORKER_URL}/checkout", headers={
-        "Content-Type": "application/json", "Origin": "https://cartray-store-test.pages.dev",
-    }, body=checkout_body)
+    checkout_body = json.dumps(
+        {
+            "checkout_request_id": f"m11b-projection-{uuid4().hex}",
+            "manifest_version": lock["catalogue_version"],
+            "items": [{"product_key": "EP-SIL-2026", "quantity": 1}],
+        }
+    ).encode()
+    checkout = request_json(
+        "POST",
+        f"{WORKER_URL}/checkout",
+        headers={
+            "Content-Type": "application/json",
+            "Origin": "https://cartray-store-test.pages.dev",
+        },
+        body=checkout_body,
+    )
     session_id = checkout.get("session_id")
     if not isinstance(session_id, str) or not SESSION_ID_RE.fullmatch(session_id):
         raise AcceptanceError("CartRay did not return a test Checkout Session ID")
@@ -81,8 +93,11 @@ def prove(*, stripe_key: str, public_key_raw_b64url: str) -> dict[str, object]:
         "Stripe-Version": STRIPE_API_VERSION,
     }
     session = request_json("GET", f"https://api.stripe.com/v1/checkout/sessions/{session_id}", headers=stripe_headers)
-    line_items = request_json("GET", f"https://api.stripe.com/v1/checkout/sessions/{session_id}/line_items?" +
-                              urlencode({"limit": "100"}), headers=stripe_headers)
+    line_items = request_json(
+        "GET",
+        f"https://api.stripe.com/v1/checkout/sessions/{session_id}/line_items?" + urlencode({"limit": "100"}),
+        headers=stripe_headers,
+    )
     if session.get("id") != session_id or session.get("livemode") is not False or session.get("mode") != "payment":
         raise AcceptanceError("Stripe returned a mismatched or non-test Session")
     if session.get("allow_promotion_codes") is not True:
@@ -94,9 +109,12 @@ def prove(*, stripe_key: str, public_key_raw_b64url: str) -> dict[str, object]:
     line = lines[0]
     price = line.get("price") if isinstance(line, dict) else None
     if (
-        not isinstance(line, dict) or line.get("quantity") != 1 or not isinstance(price, dict)
+        not isinstance(line, dict)
+        or line.get("quantity") != 1
+        or not isinstance(price, dict)
         or price.get("id") != expected_price["stripe_price_id"]
-        or price.get("unit_amount") != 85000 or price.get("currency") != "aud"
+        or price.get("unit_amount") != 85000
+        or price.get("currency") != "aud"
     ):
         raise AcceptanceError("Stripe line item differs from the frozen paid catalogue")
     metadata = session.get("metadata")
@@ -106,13 +124,18 @@ def prove(*, stripe_key: str, public_key_raw_b64url: str) -> dict[str, object]:
         raise AcceptanceError("Stripe Session uses an unexpected CartRay test signing key")
     verified = subprocess.run(
         ["node", str(NODE_VERIFIER)],
-        input=json.dumps({
-            "session_id": session_id,
-            "configured_environment": "test",
-            "metadata": metadata,
-            "trusted_public_keys": {EXPECTED_TEST_KID: public_key_raw_b64url},
-        }),
-        capture_output=True, text=True, check=False, timeout=10,
+        input=json.dumps(
+            {
+                "session_id": session_id,
+                "configured_environment": "test",
+                "metadata": metadata,
+                "trusted_public_keys": {EXPECTED_TEST_KID: public_key_raw_b64url},
+            }
+        ),
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=10,
     )
     if verified.returncode != 0:
         raise AcceptanceError("independent Ed25519 projection verification failed")
