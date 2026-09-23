@@ -5,7 +5,8 @@
   "scripts": {
     "build:storefront": "uv run python scripts/build_storefront.py",
     "preview:storefront": "npm run build:storefront && uv run python -m http.server 8788 --directory storefront-dist",
-    "test:storefront": "node --test tests/storefront.test.mjs"
+    "test:storefront": "node --test tests/storefront.test.mjs",
+    "test:m11a-projection": "node --test tests/m11a_projection.test.mjs"
   },
   "devDependencies": {
     "wrangler": "4.127.1"

@@ -1,0 +1,19 @@
+{
+  "session_id": "cs_test_fixture",
+  "configured_environment": "test",
+  "metadata": {
+    "cr_schema": "1",
+    "cr_source": "cartray",
+    "cr_order_id": "cr_order_fixture",
+    "cr_catalogue_version": "sha256:8d3674ae409653d9194f71fcdeb5f7b24f4d8442aac3fd966d0c2612aeba71ee",
+    "cr_item_count": "2",
+    "cr_chunk_count": "1",
+    "cr_items_digest": "sha256:bc015bfe893b50b78899b3dd40de8734c7b43ee9c8e67fcc419507b792a24e75",
+    "cr_nonce": "nonce-fixture",
+    "cr_kid": "kid-fixture-1",
+    "cr_items_01": "EP-LMS-TRAINING-CATALOGUE:1,EP-SIL-2026:1",
+    "cr_signature": "pi25ZMZwXGuMEoJVxgckfkckEYv3Cnu3l7NlWW8oSfnudoBUQKIRo8gfLL9F8TJPChVtUt5ZYUXVJKKjBuOUCg"
+  },
+  "ed25519_public_key_base64url": "QwRr_kCSs-lJlOraFdzCDYqqB7ZY_TlU644O-4vcpd4",
+  "expected_items": [["EP-LMS-TRAINING-CATALOGUE", 1], ["EP-SIL-2026", 1]]
+}

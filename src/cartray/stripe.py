@@ -25,6 +25,12 @@ MAX_STRIPE_LINE_ITEMS = 100
 MAX_STRIPE_LINE_ITEM_PAGES = 10
 STRIPE_API_VERSION = "2025-09-30.clover"
 _STRIPE_SESSION_ID_RE = re.compile(r"^cs_[A-Za-z0-9_]+$")
+_BASE64URL_SIGNATURE_RE = re.compile(r"^[A-Za-z0-9_-]{86}$")
+
+
+def _require_commerce_environment(environment: str) -> None:
+    if environment not in ("test", "live"):
+        raise ProjectionSealError("CartRay projection environment must be exactly test or live")
 
 
 class AsyncStripeTransport(Protocol):
@@ -86,6 +92,7 @@ class CheckoutMetadataSealer:
     signer: ProjectionSigner
 
     async def seal(self, *, session_id: str, metadata: Mapping[str, str]) -> dict[str, str]:
+        _require_commerce_environment(self.environment)
         if not _STRIPE_SESSION_ID_RE.fullmatch(session_id):
             raise ProjectionSealError("Stripe returned an invalid Checkout Session ID")
         unsigned = dict(metadata)
@@ -94,8 +101,8 @@ class CheckoutMetadataSealer:
         unsigned["cr_kid"] = self.key_id
         payload = signature_payload(session_id=session_id, environment=self.environment, metadata=unsigned)
         signature = await self.signer.sign(payload)
-        if not signature:
-            raise ProjectionSealError("the CartRay signing key returned an empty signature")
+        if not isinstance(signature, bytes) or len(signature) != 64:
+            raise ProjectionSealError("the CartRay signing key must return a 64-byte Ed25519 signature")
         unsigned["cr_signature"] = base64.urlsafe_b64encode(signature).rstrip(b"=").decode("ascii")
         return unsigned
 
@@ -106,6 +113,7 @@ class CheckoutMetadataVerifier:
     verifiers: Mapping[str, ProjectionVerifier]
 
     async def verify(self, *, session_id: str, metadata: Mapping[str, str]) -> tuple[CanonicalItem, ...]:
+        _require_commerce_environment(self.environment)
         required = {
             "cr_schema",
             "cr_source",
@@ -149,9 +157,12 @@ class CheckoutMetadataVerifier:
 
 
 def _base64url_decode(value: str) -> bytes:
-    if not isinstance(value, str) or not value:
+    if not isinstance(value, str) or not _BASE64URL_SIGNATURE_RE.fullmatch(value):
         raise ValueError
-    return base64.urlsafe_b64decode(value + "=" * (-len(value) % 4))
+    decoded = base64.urlsafe_b64decode(value + "==")
+    if len(decoded) != 64 or base64.urlsafe_b64encode(decoded).rstrip(b"=").decode("ascii") != value:
+        raise ValueError
+    return decoded
 
 
 @dataclass(frozen=True)

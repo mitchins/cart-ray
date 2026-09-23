@@ -27,6 +27,7 @@ jobs:
       - run: uv sync --all-groups
       - run: uv run ruff check .
       - run: uv run pytest
+      - run: npm run test:m11a-projection
       - run: npm run build:storefront
       - run: CARTRAY_STOREFRONT_EXPECTED_MODE=preview npm run test:storefront
       - run: CARTRAY_STOREFRONT_MODE=production CARTRAY_STOREFRONT_API_BASE_URL=https://api.test.invalid npm run build:storefront
