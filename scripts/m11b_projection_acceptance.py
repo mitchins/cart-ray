@@ -7,6 +7,7 @@ No checkout is completed and no customer or credential data is recorded.
 from __future__ import annotations
 
 import base64
+import binascii
 import json
 import os
 import re
@@ -49,6 +50,14 @@ def request_json(method: str, url: str, *, headers: dict[str, str] | None = None
 def prove(*, stripe_key: str, public_key_raw_b64url: str) -> dict[str, object]:
     if not stripe_key.startswith(("rk_test_", "sk_test_")):
         raise AcceptanceError("only a Stripe test key is accepted")
+    if not isinstance(public_key_raw_b64url, str) or not re.fullmatch(r"[A-Za-z0-9_-]{43}", public_key_raw_b64url):
+        raise AcceptanceError("the trusted 32-byte CartRay test public key is required")
+    try:
+        decoded_key = base64.urlsafe_b64decode(public_key_raw_b64url + "=")
+    except (binascii.Error, ValueError) as error:
+        raise AcceptanceError("the trusted CartRay test public key is not canonical base64url") from error
+    if len(decoded_key) != 32 or base64.urlsafe_b64encode(decoded_key).rstrip(b"=").decode() != public_key_raw_b64url:
+        raise AcceptanceError("the trusted CartRay test public key is not canonical base64url")
     lock = json.loads(CATALOGUE_LOCK.read_text())
     catalogue = request_json("GET", f"{WORKER_URL}/catalogue")
     if catalogue.get("version") != lock["catalogue_version"]:

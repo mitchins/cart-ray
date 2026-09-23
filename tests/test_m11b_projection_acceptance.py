@@ -9,6 +9,7 @@ import pytest
 
 SCRIPT = Path(__file__).parents[1] / "scripts/m11b_projection_acceptance.py"
 CATALOGUE_VERSION = "sha256:8d3674ae409653d9194f71fcdeb5f7b24f4d8442aac3fd966d0c2612aeba71ee"
+PUBLIC_KEY = "QwRr_kCSs-lJlOraFdzCDYqqB7ZY_TlU644O-4vcpd4"
 
 
 def test_acceptance_proof_uses_deployed_profile_and_stripe_session_not_d1(monkeypatch):
@@ -39,13 +40,13 @@ def test_acceptance_proof_uses_deployed_profile_and_stripe_session_not_d1(monkey
 
     module["prove"].__globals__["request_json"] = request
     monkeypatch.setattr(module["prove"].__globals__["subprocess"], "run", node_verify)
-    result = module["prove"](stripe_key="rk_test_fixture", public_key_raw_b64url="public-fixture")
+    result = module["prove"](stripe_key="rk_test_fixture", public_key_raw_b64url=PUBLIC_KEY)
 
     assert result["ed25519_verified"] is True
     assert result["checkout_completed"] is False
     assert len(requests) == 4
     assert verifications[0][1]["session_id"] == "cs_test_real_fixture"
-    assert verifications[0][1]["trusted_public_keys"] == {"cartray-test-2026-09-01": "public-fixture"}
+    assert verifications[0][1]["trusted_public_keys"] == {"cartray-test-2026-09-01": PUBLIC_KEY}
 
 
 def test_acceptance_rejects_validly_signed_items_that_differ_from_stripe_line(monkeypatch):
@@ -69,10 +70,16 @@ def test_acceptance_rejects_validly_signed_items_that_differ_from_stripe_line(mo
     monkeypatch.setattr(module["prove"].__globals__["subprocess"], "run", lambda *_args, **_kwargs:
                         SimpleNamespace(returncode=0, stdout='{"items":[["EP-LMS-TRAINING-CATALOGUE",1]]}'))
     with pytest.raises(module["AcceptanceError"], match="differ from the Stripe line"):
-        module["prove"](stripe_key="rk_test_fixture", public_key_raw_b64url="public-fixture")
+        module["prove"](stripe_key="rk_test_fixture", public_key_raw_b64url=PUBLIC_KEY)
 
 
 def test_acceptance_proof_refuses_non_test_stripe_key_before_network():
     module = runpy.run_path(str(SCRIPT))
     with pytest.raises(module["AcceptanceError"], match="test key"):
-        module["prove"](stripe_key="sk_live_invalid", public_key_raw_b64url="public-fixture")
+        module["prove"](stripe_key="sk_live_invalid", public_key_raw_b64url=PUBLIC_KEY)
+
+
+def test_acceptance_proof_refuses_missing_public_key_before_network():
+    module = runpy.run_path(str(SCRIPT))
+    with pytest.raises(module["AcceptanceError"], match="public key is required"):
+        module["prove"](stripe_key="rk_test_fixture", public_key_raw_b64url="")
