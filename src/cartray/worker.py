@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import binascii
 import hashlib
+import hmac
 import json
 import re
 from dataclasses import dataclass
@@ -41,7 +42,9 @@ MAX_CHECKOUT_BODY_BYTES = 16_384
 _BROWSER_ROUTES = {"/catalogue": "GET", "/checkout": "POST", "/checkout-status": "GET"}
 _CHECKOUT_SESSION_ID_RE = re.compile(r"^cs_[A-Za-z0-9_]+$")
 _RECOVERY_KID = "cartray-test-2026-09-01"
+_RECOVERY_CHALLENGE = b"cartray-m11b-public-key-recovery-v1\ntest\ncartray-test-2026-09-01\n"
 _ED25519_SPKI_PREFIX = bytes.fromhex("302a300506032b6570032100")
+_RECOVERY_TOKEN_RE = re.compile(r"^[A-Za-z0-9_-]{43}$")
 
 
 class CorsRejected(Exception):
@@ -84,10 +87,12 @@ def create_app(
 
     @app.get("/_m11b/test-public-key-recovery")
     async def temporary_public_key_recovery(request):
+        if not _authorized_public_key_recovery(request):
+            return Response(status=404, headers={"Cache-Control": "no-store"})
         try:
-            record = _public_key_recovery_record(request.env)
+            record = await _public_key_recovery_record(request.env)
             _emit_public_key_recovery_record(record)
-        except (RuntimeError, ValueError):
+        except Exception:
             return Response(status=503, headers={"Cache-Control": "no-store"})
         return Response(status=204, headers={"Cache-Control": "no-store"})
 
@@ -305,7 +310,28 @@ def _projection_verifiers(env) -> dict[str, WorkersEd25519Verifier]:
     return {key_id: WorkersEd25519Verifier(key) for key_id, key in keyring.items()}
 
 
-def _public_key_recovery_record(env) -> dict[str, str]:
+def _canonical_recovery_token(value: object) -> bool:
+    if not isinstance(value, str) or _RECOVERY_TOKEN_RE.fullmatch(value) is None:
+        return False
+    try:
+        decoded = base64.urlsafe_b64decode(value + "=")
+    except (binascii.Error, ValueError):
+        return False
+    return len(decoded) == 32 and base64.urlsafe_b64encode(decoded).decode("ascii").rstrip("=") == value
+
+
+def _authorized_public_key_recovery(request) -> bool:
+    configured = getattr(request.env, "CARTRAY_RECOVERY_TOKEN", None)
+    if not _canonical_recovery_token(configured):
+        return False
+    authorization = request.header("authorization")
+    if not isinstance(authorization, str) or not authorization.startswith("Bearer "):
+        return False
+    supplied = authorization[len("Bearer ") :]
+    return _canonical_recovery_token(supplied) and hmac.compare_digest(supplied, configured)
+
+
+async def _public_key_recovery_record(env) -> dict[str, str]:
     _test_environment(env)
     if _required_env(env, "CARTRAY_SIGNING_KEY_ID") != _RECOVERY_KID:
         raise RuntimeError("active projection key does not match the recovery target")
@@ -330,6 +356,12 @@ def _public_key_recovery_record(env) -> dict[str, str]:
             raise ValueError
     except (binascii.Error, KeyError, TypeError, ValueError) as error:
         raise RuntimeError("active public key is unavailable or malformed") from error
+    signer = WorkersEd25519Signer(_required_env(env, "CARTRAY_SIGNING_PRIVATE_KEY_PKCS8_B64"))
+    signature = await signer.sign(_RECOVERY_CHALLENGE)
+    if not isinstance(signature, bytes) or len(signature) != 64:
+        raise RuntimeError("active signer did not produce an Ed25519 signature")
+    if not await WorkersEd25519Verifier(spki_b64).verify(_RECOVERY_CHALLENGE, signature):
+        raise RuntimeError("active public key does not verify the configured signer")
     return {
         "kid": _RECOVERY_KID,
         "spki_b64": spki_b64,
