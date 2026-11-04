@@ -1,0 +1,16 @@
+name = "cartray-reviews-local-test"
+main = "src/worker.py"
+compatibility_date = "2026-08-31"
+compatibility_flags = ["python_workers", "disable_python_external_sdk"]
+workers_dev = false
+
+[vars]
+REVIEWS_MODE = "disabled"
+REVIEWS_STORE_KEY = "example-store"
+REVIEWS_ENVIRONMENT = "test"
+
+[[d1_databases]]
+binding = "REVIEWS_DB"
+database_name = "cartray-reviews-local-test"
+database_id = "00000000-0000-0000-0000-000000000003"
+migrations_dir = "migrations"

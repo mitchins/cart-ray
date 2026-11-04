@@ -12,7 +12,8 @@ def test_fresh_install_is_explicit_disabled_and_has_no_import_prerequisite():
     descriptor = json.loads((MODULE / "module.json").read_text())
     assert descriptor["installation"] == "explicit"
     assert descriptor["default_mode"] == "disabled"
-    assert descriptor["routes"] == descriptor["subscriptions"] == descriptor["scheduled_tasks"] == []
+    assert len(descriptor["routes"]) == 2
+    assert descriptor["subscriptions"] == descriptor["scheduled_tasks"] == []
     connection = sqlite3.connect(":memory:")
     migration = (MODULE / descriptor["migrations"][0]).read_text()
     connection.executescript(migration)

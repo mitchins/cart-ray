@@ -33,6 +33,8 @@ jobs:
         run: |
           uv build modules/reviews --wheel --out-dir /tmp/cartray-reviews-wheel
           uv run python modules/reviews/tests/verify_wheel.py /tmp/cartray-reviews-wheel
+      - name: Exercise Reviews installer, ingestion and Workerd D1 API
+        run: uv run python modules/reviews/tests/workerd_integration.py
       - run: npm run test:m11a-projection
       - run: npm run build:storefront
       - run: CARTRAY_STOREFRONT_EXPECTED_MODE=preview npm run test:storefront
