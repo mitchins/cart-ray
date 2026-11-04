@@ -8,12 +8,12 @@ CartRay feature worktree starts at `2af810283ad8acf44503035686007b3cd44669bb` on
 
 Input SHA-256: v1.1 `3c5f26167dc1e7585f97c40a9c8cef44141e54916270b0a0367aa86aab48f0ac`; handoff `cee36d9b61e3fc8871161c668ce56717d27f4867e800794bc72dc4a74d2c7c34`.
 
-On 2026-11-05, read-only SSH to `scs-nonprod` returned host `scs-nonprod-01`; WP-CLI at `/var/www/effectivepolicy-epcore/current` returned both home and siteurl as `https://effectivepolicy.com.au`. This identifies the observed installation, not a licence to infer production from the hostname. Fresh aggregate queries, using the discovered database prefix, found:
+On 2026-11-05, read-only inspection confirmed the target WordPress installation's home and site URLs were `https://effectivepolicy.com.au`. Installation identity was verified directly rather than inferred from the host name. Fresh aggregate queries, using the discovered database prefix, found:
 
 - 17 approved review-type comments: 10 attached to a page, seven to products; 15 have rating metadata and two do not. Five review-type comments are pending and 96 are spam.
 - Six approved comment-type children of approved review-type records. Parent/child identity and all other relationships still require full reconciliation.
 - Approved review metadata includes `verified` (17), `rating` (15), vote-related keys (six records each), `flag_count` (three), `title` (three), `cr_rev_title` (one), and `ivole_media_count` (two). Key presence is not proof of a nonzero value or of a currently working feature.
-- Active versions include WooCommerce 11.2.1, CusRev 5.127.0, Product Reviews Pro 1.20.4, Trustpilot Reviews 3.16.0, and AutomateWoo 6.3.1. Installed functionality must not be confused with used functionality.
+- WooCommerce, CusRev, Product Reviews Pro, Trustpilot Reviews and AutomateWoo were active. Version details belong in restricted source evidence. Installed functionality must not be confused with used functionality.
 - The seven product-attached records span six product slugs; two share `ndis-participant-handbook`. A fresh configuration read confirms one nested form with `rev_perm=anybody`, while the older standalone option reports `nobody`. Neither proves the complete live submission route.
 
 The prior handoff's targeted source inspection records guest form setting `ivole_review_forms[0].rev_perm=anybody`, auto reminders off, manual reminders enabled, six approved records with vote metadata, 24 spam-linked video attachment rows, and 15 transactional fulfilment/booking workflows. These are preliminary observations, not a consistent export or proof of current writer behaviour. Revalidate effective settings and front-end submission, voting, reporting, Q&A, moderation, manual requests and provider callbacks without creating submissions or sending messages. Determine which are actually used, enabled but unused, or unknown, with an explicit disposition for each. Verify Trustpilot provider-held jobs separately.
