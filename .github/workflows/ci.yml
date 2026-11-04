@@ -29,6 +29,10 @@ jobs:
       - run: uv run pytest
       - name: Test optional Reviews snapshot rehearsal
         run: PYTHONPATH=modules/reviews/src uv run pytest modules/reviews/tests
+      - name: Build and inspect optional Reviews package
+        run: |
+          uv build modules/reviews --wheel --out-dir /tmp/cartray-reviews-wheel
+          uv run python modules/reviews/tests/verify_wheel.py /tmp/cartray-reviews-wheel
       - run: npm run test:m11a-projection
       - run: npm run build:storefront
       - run: CARTRAY_STOREFRONT_EXPECTED_MODE=preview npm run test:storefront
