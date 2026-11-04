@@ -27,6 +27,8 @@ jobs:
       - run: uv sync --all-groups
       - run: uv run ruff check .
       - run: uv run pytest
+      - name: Test optional Reviews snapshot rehearsal
+        run: PYTHONPATH=modules/reviews/src uv run pytest modules/reviews/tests
       - run: npm run test:m11a-projection
       - run: npm run build:storefront
       - run: CARTRAY_STOREFRONT_EXPECTED_MODE=preview npm run test:storefront
