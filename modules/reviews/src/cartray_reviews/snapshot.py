@@ -12,20 +12,24 @@ class SnapshotError(ValueError):
 
 
 def _fail(message):
+    """Reject a snapshot with a bounded diagnostic."""
     raise SnapshotError(message)
 
 
 def _object(value, keys):
+    """Require exactly the explicitly allowed object fields."""
     if not isinstance(value, dict) or set(value) != set(keys):
         _fail("unexpected object fields")
 
 
 def _string(value):
+    """Require a nonempty, bounded string."""
     if not isinstance(value, str) or not value.strip() or len(value) > 10000:
         _fail("invalid string")
 
 
 def _unique_pairs(pairs):
+    """Reject duplicate object keys while decoding JSON."""
     result = {}
     for key, value in pairs:
         if key in result:
@@ -35,10 +39,12 @@ def _unique_pairs(pairs):
 
 
 def _reject_constant(value):
+    """Reject JSON extensions such as NaN and Infinity."""
     _fail("non-finite number")
 
 
 def _utc_time(value):
+    """Validate a UTC timestamp without silently changing its precision."""
     if not isinstance(value, str) or not re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?Z", value):
         _fail("expected UTC timestamp")
     try:

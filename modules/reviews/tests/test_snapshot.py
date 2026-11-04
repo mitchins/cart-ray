@@ -73,6 +73,7 @@ def test_unrated_and_replies_do_not_change_summary():
 
 @pytest.mark.parametrize("change", ["private", "boolean", "summary", "anchor", "parent", "revision", "kind"])
 def test_invalid_snapshots_are_rejected(change):
+    """Reject malformed fields, relationships and unsupported contribution kinds."""
     data = snapshot()
     c = data["contributions"]
     if change == "private":

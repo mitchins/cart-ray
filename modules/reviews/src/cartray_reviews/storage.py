@@ -11,9 +11,11 @@ from cartray_reviews.snapshot import SnapshotError, load_snapshot
 
 class SnapshotStore:
     def __init__(self, connection: sqlite3.Connection):
+        """Use an explicitly supplied local SQLite connection."""
         self.connection = connection
 
     def initialize(self):
+        """Create the local rehearsal tables if they do not exist."""
         self.connection.executescript(
             """
             CREATE TABLE IF NOT EXISTS snapshots (
@@ -82,6 +84,7 @@ class SnapshotStore:
         return "unchanged" if previous else "imported"
 
     def published_bytes(self, *, store: str, environment: str):
+        """Read the current artifact and verify its stored digest."""
         row = self.connection.execute(
             "SELECT s.contents, s.digest FROM publications p JOIN snapshots s "
             "ON s.store=p.store AND s.environment=p.environment AND s.snapshot_id=p.snapshot_id "

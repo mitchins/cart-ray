@@ -49,6 +49,7 @@ def test_failed_promotion_rolls_back_snapshot_and_pointer():
 
 
 def test_concurrent_revisions_never_regress(tmp_path):
+    """Concurrent promotions leave the newest accepted revision published."""
     from concurrent.futures import ThreadPoolExecutor
     from threading import Barrier
 
@@ -61,6 +62,7 @@ def test_concurrent_revisions_never_regress(tmp_path):
     barrier = Barrier(2)
 
     def promote(revision):
+        """Try to promote one revision from a separate connection."""
         connection = sqlite3.connect(db_path, timeout=10)
         local_store = SnapshotStore(connection)
         item = snapshot()
