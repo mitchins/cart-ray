@@ -1,0 +1,11 @@
+{
+  "name": "cartray-reviews",
+  "version": "0.0.1",
+  "installation": "explicit",
+  "default_mode": "disabled",
+  "supported_modes": ["disabled", "read_only"],
+  "migrations": ["migrations/0001_native_subjects.sql"],
+  "routes": [],
+  "subscriptions": [],
+  "scheduled_tasks": []
+}

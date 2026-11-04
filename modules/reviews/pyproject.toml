@@ -10,3 +10,7 @@ description = "Optional CartRay Reviews public snapshot contract"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/cartray_reviews"]
+
+[tool.hatch.build.targets.wheel.force-include]
+"module.json" = "cartray_reviews/module.json"
+"migrations" = "cartray_reviews/migrations"
