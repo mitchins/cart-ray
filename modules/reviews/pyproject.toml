@@ -1,0 +1,12 @@
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+[project]
+name = "cartray-reviews"
+version = "0.0.1"
+requires-python = ">=3.12"
+description = "Optional CartRay Reviews public snapshot contract"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/cartray_reviews"]
