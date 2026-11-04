@@ -8,6 +8,7 @@ MODULE = Path(__file__).resolve().parents[1]
 
 
 def test_fresh_install_is_explicit_disabled_and_has_no_import_prerequisite():
+    """A fresh native database installs without legacy data or implicit activation."""
     descriptor = json.loads((MODULE / "module.json").read_text())
     assert descriptor["installation"] == "explicit"
     assert descriptor["default_mode"] == "disabled"
@@ -33,6 +34,7 @@ def test_fresh_install_is_explicit_disabled_and_has_no_import_prerequisite():
 
 
 def test_scope_constraints_and_invalid_configuration():
+    """Enforce environment and kind constraints while keeping scopes separate."""
     connection = sqlite3.connect(":memory:")
     connection.executescript((MODULE / "migrations/0001_native_subjects.sql").read_text())
     for store, environment in (("shop-a", "test"), ("shop-a", "live"), ("shop-b", "test")):
