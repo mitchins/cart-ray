@@ -121,6 +121,8 @@ def load_snapshot(data: bytes, *, expected_sha256: str, store: str, environment:
         _fail("snapshot identity mismatch")
     for key in ("snapshot_id", "store", "environment"):
         _string(payload[key])
+    if not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", payload["snapshot_id"]):
+        _fail("invalid snapshot identity")
     _object(payload["source"], ("identity", "extracted_at", "sha256", "complete"))
     source = payload["source"]
     _string(source["identity"])
@@ -129,7 +131,7 @@ def load_snapshot(data: bytes, *, expected_sha256: str, store: str, environment:
     if source["complete"] is not True:
         _fail("source is not complete")
     _utc_time(source["extracted_at"])
-    if type(payload["publication_revision"]) is not int or payload["publication_revision"] < 1:
+    if type(payload["publication_revision"]) is not int or not 1 <= payload["publication_revision"] <= 2**63 - 1:
         _fail("invalid publication revision")
     if environment not in ("test", "live"):
         _fail("invalid environment")
@@ -141,6 +143,8 @@ def load_snapshot(data: bytes, *, expected_sha256: str, store: str, environment:
         _object(item, ("id", "kind", "path"))
         for value in item.values():
             _string(value)
+        if not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", item["id"]):
+            _fail("invalid routable subject identity")
         if item["kind"] not in ("product", "service", "store") or item["id"] in subjects:
             _fail("invalid subject")
         path = item["path"]
@@ -169,6 +173,8 @@ def load_snapshot(data: bytes, *, expected_sha256: str, store: str, environment:
         )
         for key in ("id", "revision_id", "subject_id", "kind", "author", "body", "verification"):
             _string(item[key])
+        if not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", item["id"]):
+            _fail("invalid contribution identity")
         if item["id"] in contributions or item["subject_id"] not in subjects:
             _fail("duplicate contribution or unknown subject")
         if item["kind"] not in ("review", "reply") or item["verification"] not in (

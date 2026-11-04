@@ -1,0 +1,136 @@
+{
+  "schema": "cartray.reviews.snapshot.v1",
+  "snapshot_id": "one",
+  "source": {
+    "identity": "synthetic-native",
+    "extracted_at": "2026-11-05T00:00:00Z",
+    "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "complete": true
+  },
+  "publication_revision": 1,
+  "store": "example-store",
+  "environment": "test",
+  "subjects": [
+    {
+      "id": "example-policy",
+      "kind": "product",
+      "path": "/product/"
+    }
+  ],
+  "contributions": [
+    {
+      "id": "r",
+      "revision_id": "r1",
+      "subject_id": "example-policy",
+      "parent_id": null,
+      "kind": "review",
+      "author": "A",
+      "body": "Good",
+      "rating": 5,
+      "date": {
+        "original": "2024-01-02",
+        "precision": "date",
+        "timezone_provenance": "unknown",
+        "utc": null
+      },
+      "verification": "email_only",
+      "anchors": [
+        "review-r"
+      ],
+      "votes": {
+        "up": 2,
+        "down": 1,
+        "net": 1
+      }
+    },
+    {
+      "id": "u",
+      "revision_id": "u1",
+      "subject_id": "example-policy",
+      "parent_id": null,
+      "kind": "review",
+      "author": "B",
+      "body": "Thanks",
+      "rating": null,
+      "date": {
+        "original": "2024-01-03",
+        "precision": "date",
+        "timezone_provenance": "unknown",
+        "utc": null
+      },
+      "verification": "unverified",
+      "anchors": [
+        "review-u"
+      ],
+      "votes": {
+        "up": null,
+        "down": null,
+        "net": null
+      }
+    },
+    {
+      "id": "a",
+      "revision_id": "a1",
+      "subject_id": "example-policy",
+      "parent_id": "r",
+      "kind": "reply",
+      "author": "Staff",
+      "body": "Thanks",
+      "rating": null,
+      "date": {
+        "original": "2024-01-04",
+        "precision": "date",
+        "timezone_provenance": "unknown",
+        "utc": null
+      },
+      "verification": "unverified",
+      "anchors": [
+        "reply-a"
+      ],
+      "votes": {
+        "up": null,
+        "down": null,
+        "net": null
+      }
+    },
+    {
+      "id": "r2",
+      "revision_id": "r2v1",
+      "subject_id": "example-policy",
+      "parent_id": null,
+      "kind": "review",
+      "author": "C",
+      "body": "Useful",
+      "rating": 4,
+      "date": {
+        "original": "2024-01-02",
+        "precision": "date",
+        "timezone_provenance": "unknown",
+        "utc": null
+      },
+      "verification": "email_only",
+      "anchors": [
+        "review-r2"
+      ],
+      "votes": {
+        "up": 2,
+        "down": 1,
+        "net": 1
+      }
+    }
+  ],
+  "summaries": [
+    {
+      "subject_id": "example-policy",
+      "count": 2,
+      "sum": 9,
+      "histogram": [
+        0,
+        0,
+        0,
+        1,
+        1
+      ]
+    }
+  ]
+}

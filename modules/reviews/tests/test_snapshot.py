@@ -158,3 +158,14 @@ def test_original_instant_must_match_utc_and_date_only_has_no_instant():
     data["contributions"][0]["date"]["utc"] = "2024-01-02T00:00:00Z"
     with pytest.raises(SnapshotError):
         read(data)
+
+
+def test_unroutable_subject_and_oversized_revision_are_rejected():
+    data = snapshot()
+    data["subjects"][0]["id"] = "not routable"
+    with pytest.raises(SnapshotError):
+        read(data)
+    data = snapshot()
+    data["publication_revision"] = 2**63
+    with pytest.raises(SnapshotError):
+        read(data)
