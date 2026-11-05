@@ -72,6 +72,62 @@ def test_purchase_submission_accepts_rating_without_a_name_and_rejects_title_onl
     assert tuple(review) == ("Anonymous", 2)
 
 
+def test_customer_landing_uses_approved_names_and_scoped_nonconsuming_capability(lifecycle):
+    reviews, _ = stores()
+    commerce = CommerceDatabase()
+    commerce.add_purchase(second=True)
+    reviews.db.execute("INSERT INTO review_subjects VALUES ('store','test','second','product','/second/')")
+    reviews.db.commit()
+    invitation = issue(reviews, commerce, subject_maps={"v1": {"product_1": "policy", "product_2": "second"}})
+    env = SimpleNamespace(
+        REVIEWS_DB=reviews,
+        CARTRAY_DB=commerce,
+        REVIEWS_STORE_KEY="store",
+        REVIEWS_ENVIRONMENT="test",
+        REVIEWS_MODE="verified_acquisition_only",
+        REVIEWS_TEST_ADMIN_TOKEN="a" * 40,
+        REVIEWS_SETTLEMENT_TOKEN="b" * 40,
+        REVIEWS_INVITATION_KEY="c" * 40,
+        REVIEWS_REVIEWER_KEY="d" * 40,
+        REVIEWS_PUBLIC_STORE_NAME="Example Store",
+    )
+    landing = "/reviews/v1/invitation"
+    data = {"invitation_token": invitation["token"]}
+    with patch.object(lifecycle.time, "time", return_value=101):
+        assert invoke(lifecycle, env, landing, data).status == 404
+        name_path = "/reviews-admin/v1/subject-display-names"
+        for subject, name in (("policy", "Policy"), ("second", "Second product")):
+            assert invoke(lifecycle, env, name_path, {"subject_id": subject, "public_name": name}).status == 401
+            assert (
+                invoke(lifecycle, env, name_path, {"subject_id": subject, "public_name": name}, admin=True).status
+                == 200
+            )
+        result = invoke(lifecycle, env, landing, data)
+        assert result.status == 200
+        assert result.body == {
+            "store_name": "Example Store",
+            "subjects": [
+                {"subject_id": "policy", "public_name": "Policy", "progress": "available"},
+                {"subject_id": "second", "public_name": "Second product", "progress": "available"},
+            ],
+        }
+        assert invoke(lifecycle, env, landing, {"invitation_token": "0" * 64}).body == {
+            "error": "invitation unavailable"
+        }
+        assert reviews.db.execute("SELECT COUNT(*) FROM native_reviews").fetchone()[0] == 0
+        assert (
+            invoke(
+                lifecycle, env, "/reviews/v1/contributions", data | {"subject_id": "policy", "rating": 5}, key="r1"
+            ).status
+            == 202
+        )
+        result = invoke(lifecycle, env, landing, data)
+        assert [item["progress"] for item in result.body["subjects"]] == ["submitted", "available"]
+        reviews.db.execute("UPDATE acquisition_invitations SET revoked_at=101")
+        reviews.db.commit()
+        assert invoke(lifecycle, env, landing, data).status == 404
+
+
 def test_conflict_revocation_and_missing_subject_fail_closed():
     reviews, commerce = stores()
     issue(reviews, commerce)

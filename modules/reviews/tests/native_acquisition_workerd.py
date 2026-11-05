@@ -120,6 +120,7 @@ def main():
                 "REVIEWS_SETTLEMENT_TOKEN": ISSUER,
                 "REVIEWS_INVITATION_KEY": "i" * 40,
                 "REVIEWS_REVIEWER_KEY": "r" * 40,
+                "REVIEWS_PUBLIC_STORE_NAME": "Example Store",
                 "REVIEWS_SUBJECT_MAPS": json.dumps(
                     {manifest: {"TEST-TEMPLATE": "example-policy"}}, separators=(",", ":")
                 ),
@@ -128,12 +129,31 @@ def main():
         try:
             subject = {"subject_id": "example-policy", "kind": "product", "path": "/example-policy/"}
             assert call("/reviews-admin/v1/subjects", subject, admin=True)[0] == 201
+            assert (
+                call(
+                    "/reviews-admin/v1/subject-display-names",
+                    {"subject_id": "example-policy", "public_name": "Example policy"},
+                    admin=True,
+                )[0]
+                == 200
+            )
             event = {"event_id": event_ids[0], "recipient_context_hash": "a" * 64}
             endpoint = "/reviews-internal/v1/settlements"
             assert internal(endpoint, event, ADMIN)[0] == 401
             status, invitation = internal(endpoint, event, ISSUER)
             assert status == 201, (status, invitation)
             assert internal(endpoint, event, ISSUER) == (status, invitation)
+            landing = "/reviews/v1/invitation"
+            capability = {"invitation_token": invitation["token"]}
+            assert call(landing, capability) == (
+                200,
+                {
+                    "store_name": "Example Store",
+                    "subjects": [
+                        {"subject_id": "example-policy", "public_name": "Example policy", "progress": "available"}
+                    ],
+                },
+            )
             assert call("/reviews-admin/v1/test-capabilities", {}, admin=True)[0] == 404
             assert call(endpoint)[0] == 404
             try:
@@ -158,6 +178,7 @@ def main():
             assert sorted(result[0] for _, result in outcomes) == [202, 409], outcomes
             winning_key, (status, pending) = next(item for item in outcomes if item[1][0] == 202)
             assert call("/reviews/v1/contributions", body, key=winning_key) == (status, pending)
+            assert call(landing, capability)[1]["subjects"][0]["progress"] == "submitted"
             assert call("/reviews/v1/contributions", body, key="other-request")[0] == 409
             listing = "/reviews/v1/subjects/example-policy/contributions"
             assert call(listing)[1]["contributions"] == []

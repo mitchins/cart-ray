@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="referrer" content="no-referrer">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'unsafe-inline'; connect-src 'self'; base-uri 'none'; form-action 'self'">
+  <title>Share your experience</title>
+  <style>
+    body { font: 1rem/1.5 system-ui, sans-serif; max-width: 42rem; padding: 1rem; margin: auto; color: #242424; }
+    label { display: block; margin-top: 1rem; } input, textarea, select, button { font: inherit; max-width: 100%; }
+    textarea { width: 100%; min-height: 8rem; } button { margin-top: 1rem; padding: .6rem 1rem; cursor: pointer; }
+    .message { padding: 1rem; background: #f2f5f6; } fieldset { margin-top: 1.5rem; }
+  </style>
+  <script src="./reviews.js" defer></script>
+</head>
+<body>
+  <main>
+    <h1>Share your experience</h1>
+    <p>Tell us what you thought. Your feedback can help other customers.</p>
+    <p id="message" class="message" role="status" aria-live="polite">Loading your invitation…</p>
+    <section id="content" aria-label="Your products"></section>
+  </main>
+</body>
+</html>

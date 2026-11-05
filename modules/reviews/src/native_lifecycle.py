@@ -297,6 +297,65 @@ async def handle_write(request, env, path):
         data = await read_json(request)
     except (ValueError, TypeError, json.JSONDecodeError):
         return fail(400, "invalid request")
+    if path == "/reviews/v1/invitation":
+        if not acquisition_mode or set(data) != {"invitation_token"}:
+            return fail(404, "invitation unavailable")
+        token = data["invitation_token"]
+        store_name = str(getattr(env, "REVIEWS_PUBLIC_STORE_NAME", "")).strip()
+        if not isinstance(token, str) or not re.fullmatch(r"[0-9a-f]{64}", token) or not 1 <= len(store_name) <= 200:
+            return fail(404, "invitation unavailable")
+        token_hash = hashlib.sha256(token.encode()).hexdigest()
+        subjects = rows(
+            await db.prepare(
+                "SELECT s.subject_id, n.public_name, CASE WHEN s.consumed_at IS NULL THEN 'available' "
+                "ELSE 'submitted' END progress FROM acquisition_invitations i "
+                "JOIN acquisition_invitation_subjects s USING(store_key,environment,acquisition_id) "
+                "JOIN review_subject_display_names n ON n.store_key=s.store_key AND n.environment=s.environment "
+                "AND n.subject_id=s.subject_id WHERE i.store_key=? AND i.environment=? AND i.token_hash=? "
+                "AND i.revoked_at IS NULL AND i.expires_at>? AND i.expires_at>unixepoch() "
+                "ORDER BY n.public_name,s.subject_id LIMIT 101"
+            )
+            .bind(store, environment, token_hash, now)
+            .all()
+        )
+        # Refuse partial display: an approved name is required for each subject.
+        expected = rows(
+            await db.prepare(
+                "SELECT COUNT(*) count FROM acquisition_invitations i "
+                "JOIN acquisition_invitation_subjects s USING(store_key,environment,acquisition_id) "
+                "WHERE i.store_key=? AND i.environment=? AND i.token_hash=? "
+                "AND i.revoked_at IS NULL AND i.expires_at>? AND i.expires_at>unixepoch()"
+            )
+            .bind(store, environment, token_hash, now)
+            .all()
+        )[0]["count"]
+        if not subjects or len(subjects) != expected or len(subjects) > 100:
+            return fail(404, "invitation unavailable")
+        return Response.json(
+            {"store_name": store_name, "subjects": subjects},
+            headers={"Cache-Control": "no-store", "Referrer-Policy": "no-referrer"},
+        )
+    if path == "/reviews-admin/v1/subject-display-names":
+        if (
+            set(data) != {"subject_id", "public_name"}
+            or not isinstance(data["subject_id"], str)
+            or not ID.fullmatch(data["subject_id"])
+            or not isinstance(data["public_name"], str)
+            or not 1 <= len(data["public_name"].strip()) <= 200
+        ):
+            return fail(400, "invalid subject name")
+        try:
+            await db.batch(
+                [
+                    db.prepare(
+                        "INSERT INTO review_subject_display_names VALUES (?,?,?,?) "
+                        "ON CONFLICT(store_key,environment,subject_id) DO UPDATE SET public_name=excluded.public_name"
+                    ).bind(store, environment, data["subject_id"], data["public_name"].strip())
+                ]
+            )
+        except Exception:
+            return fail(409, "subject unavailable")
+        return Response.json({"status": "saved"}, headers={"Cache-Control": "no-store"})
     if path == "/reviews-admin/v1/subjects":
         if (
             set(data) != {"subject_id", "kind", "path"}
