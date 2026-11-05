@@ -4,6 +4,7 @@ import json
 import re
 from urllib.parse import parse_qs, urlparse
 
+from native_lifecycle import handle_write, native_read, pending_read
 from workers import Response, WorkerEntrypoint
 
 
@@ -29,11 +30,20 @@ def public_contribution(row):
 
 class Default(WorkerEntrypoint):
     async def fetch(self, request):
-        if str(getattr(self.env, "REVIEWS_MODE", "disabled")) != "read_only":
+        mode = str(getattr(self.env, "REVIEWS_MODE", "disabled"))
+        if mode not in ("read_only", "collect"):
             return Response.json({"error": "not found"}, status=404)
-        if str(request.method) != "GET":
-            return Response.json({"error": "method not allowed"}, status=405)
         url = urlparse(str(request.url))
+        if str(request.method) == "GET" and url.path == "/reviews-admin/v1/pending":
+            if mode != "collect":
+                return Response.json({"error": "not found"}, status=404)
+            return await pending_read(request, self.env, url.query)
+        if str(request.method) != "GET":
+            if mode != "collect" or url.query:
+                return Response.json({"error": "method not allowed"}, status=405)
+            return await handle_write(request, self.env, url.path)
+        if mode == "collect" and str(self.env.REVIEWS_ENVIRONMENT) != "test":
+            return Response.json({"error": "collection unavailable"}, status=503)
         if len(url.query) > 512:
             return Response.json({"error": "invalid query"}, status=400)
         match = re.fullmatch(r"/reviews/v1/subjects/([A-Za-z0-9_-]{1,128})/(summary|contributions)", url.path)
@@ -55,15 +65,25 @@ class Default(WorkerEntrypoint):
         db = self.env.REVIEWS_DB
         subject = rows(
             await db.prepare(
-                "SELECT s.subject_id, s.snapshot_id FROM review_snapshot_subjects s JOIN review_publications p "
+                "SELECT s.subject_id, s.snapshot_id, 0 native_version, 'imported' source_kind "
+                "FROM review_snapshot_subjects s "
+                "JOIN review_publications p "
                 "ON p.store_key=s.store_key AND p.environment=s.environment AND p.snapshot_id=s.snapshot_id "
-                "WHERE s.store_key=? AND s.environment=? AND s.subject_id=?"
+                "WHERE s.store_key=? AND s.environment=? AND s.subject_id=? UNION ALL "
+                "SELECT s.subject_id,'' snapshot_id,v.version native_version,'native' source_kind "
+                "FROM review_subjects s "
+                "JOIN native_publication_versions v ON v.store_key=s.store_key AND v.environment=s.environment "
+                "AND v.subject_id=s.subject_id WHERE s.store_key=? AND s.environment=? AND s.subject_id=? LIMIT 2"
             )
-            .bind(store, environment, subject_id)
+            .bind(store, environment, subject_id, store, environment, subject_id)
             .all()
         )
         if not subject:
             return Response.json({"error": "not found"}, status=404)
+        if len(subject) != 1:
+            return Response.json({"error": "subject conflict"}, status=503)
+        if subject[0]["source_kind"] == "native":
+            return await native_read(db, store, environment, subject_id, endpoint, params, subject[0]["native_version"])
         snapshot_id = subject[0]["snapshot_id"]
         after = params.get("after", [None])[0]
         cursor_snapshot = params.get("snapshot", [None])[0]

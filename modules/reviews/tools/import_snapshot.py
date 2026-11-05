@@ -55,6 +55,11 @@ def import_snapshot(data, *, digest, store, environment):
         f"INSERT OR IGNORE INTO review_snapshots VALUES ({scoped},{rev},{fingerprint});",
     ]
     for subject in snapshot["subjects"]:
+        lines.append(
+            "INSERT INTO review_import_guard SELECT CASE WHEN NOT EXISTS(SELECT 1 FROM review_subjects "
+            f"WHERE store_key={st} AND environment={env} AND subject_id={literal(subject['id'])}) "
+            "THEN 1 ELSE 0 END;"
+        )
         values = (store, environment, sid, subject["id"], subject["kind"], subject["path"])
         lines.append("INSERT OR IGNORE INTO review_snapshot_subjects VALUES (" + ",".join(map(literal, values)) + ");")
     for item in snapshot["contributions"]:

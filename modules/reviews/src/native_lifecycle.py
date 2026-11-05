@@ -1,0 +1,507 @@
+"""Test-only native Reviews lifecycle; no external identity or anti-abuse provider."""
+
+import hashlib
+import hmac
+import json
+import re
+import time
+from urllib.parse import parse_qs
+
+from js import Uint8Array, crypto
+from workers import Response
+
+ID = re.compile(r"[A-Za-z0-9_-]{1,128}\Z")
+
+
+def random_token():
+    """Use Workerd's cryptographic random generator."""
+    data = Uint8Array.new(32)
+    crypto.getRandomValues(data)
+    return bytes(data.to_py()).hex()
+
+
+def rows(result):
+    """Convert D1 rows without exposing database metadata."""
+    return [row.to_py() if hasattr(row, "to_py") else dict(row) for row in result.results]
+
+
+def fail(status, message):
+    """Return a bounded error without leaking private state."""
+    return Response.json({"error": message}, status=status)
+
+
+def unique_pairs(pairs):
+    """Reject ambiguous duplicate JSON keys."""
+    result = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError("duplicate JSON key")
+        result[key] = value
+    return result
+
+
+def invalid_constant(_value):
+    """Reject non-finite JSON numbers."""
+    raise ValueError("non-finite number")
+
+
+def admin_ok(request, env):
+    """Only a configured test identity can exercise privileged local routes."""
+    token = str(getattr(env, "REVIEWS_TEST_ADMIN_TOKEN", ""))
+    supplied = str(request.headers.get("Authorization") or "")
+    return len(token) >= 32 and hmac.compare_digest(supplied.encode(), ("Bearer " + token).encode())
+
+
+async def pending_read(request, env, query):
+    """Allow the test administrator to inspect bounded pending work."""
+    if str(env.REVIEWS_ENVIRONMENT) != "test":
+        return fail(503, "moderation unavailable")
+    if not admin_ok(request, env):
+        return fail(401, "unauthorized")
+    if len(query) > 512:
+        return fail(400, "invalid query")
+    params = parse_qs(query, keep_blank_values=True)
+    if set(params) - {"after"} or any(len(values) != 1 for values in params.values()):
+        return fail(400, "invalid query")
+    after = params.get("after", [""])[0]
+    if after and not re.fullmatch(r"[0-9a-f]{64}", after):
+        return fail(400, "invalid cursor")
+    result = rows(
+        await env.REVIEWS_DB.prepare(
+            "SELECT r.review_id,r.subject_id,r.revision_id,r.created_at,v.author,v.title,v.body,v.rating "
+            "FROM native_reviews r JOIN native_revisions v ON v.store_key=r.store_key "
+            "AND v.environment=r.environment AND v.revision_id=r.revision_id "
+            "WHERE r.store_key=? AND r.environment=? AND r.state='pending' AND r.review_id>? "
+            "ORDER BY r.review_id LIMIT 51"
+        )
+        .bind(str(env.REVIEWS_STORE_KEY), str(env.REVIEWS_ENVIRONMENT), after)
+        .all()
+    )
+    page = result[:50]
+    output = {"pending": page, "next_after": page[-1]["review_id"] if len(result) > 50 else None}
+    while len(json.dumps(output, ensure_ascii=True).encode("ascii")) > 128_000:
+        page.pop()
+        if not page:
+            return fail(503, "response exceeds limit")
+        output["next_after"] = page[-1]["review_id"]
+    return Response.json(output, headers={"Cache-Control": "no-store"})
+
+
+async def read_json(request):
+    """Read a small JSON object; caller handles invalid data uniformly."""
+    length = request.headers.get("Content-Length")
+    content_type = str(request.headers.get("Content-Type") or "").split(";", 1)[0].strip().lower()
+    if not length or not str(length).isdigit() or not 1 <= int(length) <= 16384 or content_type != "application/json":
+        raise ValueError("invalid request size")
+    reader = request.body.getReader()
+    data = bytearray()
+    while True:
+        chunk = await reader.read()
+        if chunk.done:
+            break
+        if len(data) + int(chunk.value.length) > 16384:
+            await reader.cancel()
+            raise ValueError("invalid request size")
+        data.extend(chunk.value.to_py())
+    if len(data) != int(length):
+        raise ValueError("invalid request size")
+    value = json.loads(bytes(data), object_pairs_hook=unique_pairs, parse_constant=invalid_constant)
+    if not isinstance(value, dict):
+        raise ValueError("expected object")
+    return value
+
+
+def rate(db, store, environment, action, now):
+    """Atomically bound operations per store and minute across Worker instances."""
+    return db.prepare(
+        "INSERT INTO native_rate_limits VALUES (?,?,?,?,1) "
+        "ON CONFLICT(store_key,environment,action,window) DO UPDATE SET count=count+1"
+    ).bind(store, environment, action, now // 60)
+
+
+async def handle_write(request, env, path):
+    """Handle test-only writes; no production credentials or identity are implied."""
+    store, environment = str(env.REVIEWS_STORE_KEY), str(env.REVIEWS_ENVIRONMENT)
+    if environment != "test" or len(str(getattr(env, "REVIEWS_TEST_ADMIN_TOKEN", ""))) < 32:
+        return fail(503, "collection unavailable")
+    if str(request.method) != "POST":
+        return fail(405, "method not allowed")
+    admin = path.startswith("/reviews-admin/")
+    if admin and not admin_ok(request, env):
+        return fail(401, "unauthorized")
+    db, now = env.REVIEWS_DB, int(time.time())
+    rate_action = {"/reviews-admin/v1/test-capabilities": "issue", "/reviews/v1/contributions": "submit"}.get(path)
+    if rate_action:
+        try:
+            await db.batch(
+                [
+                    rate(db, store, environment, rate_action, now),
+                    db.prepare(
+                        "DELETE FROM native_rate_limits WHERE store_key=? AND environment=? AND action=? AND window<?"
+                    ).bind(store, environment, rate_action, now // 60 - 1440),
+                ]
+            )
+        except Exception:
+            return fail(429, "rate limit exceeded")
+    try:
+        data = await read_json(request)
+    except (ValueError, TypeError, json.JSONDecodeError):
+        return fail(400, "invalid request")
+    if path == "/reviews-admin/v1/subjects":
+        if (
+            set(data) != {"subject_id", "kind", "path"}
+            or not isinstance(data["subject_id"], str)
+            or not ID.fullmatch(data["subject_id"])
+        ):
+            return fail(400, "invalid subject")
+        if (
+            data["kind"] not in ("product", "service", "store")
+            or not isinstance(data["path"], str)
+            or not re.fullmatch(r"/(?:[A-Za-z0-9_-]+/)*", data["path"])
+        ):
+            return fail(400, "invalid subject")
+        sid = data["subject_id"]
+        try:
+            await db.batch(
+                [
+                    db.prepare(
+                        "INSERT INTO native_guard SELECT CASE WHEN NOT EXISTS(SELECT 1 FROM "
+                        "review_snapshot_subjects WHERE store_key=? AND environment=? AND subject_id=?) "
+                        "THEN 1 ELSE 0 END"
+                    ).bind(store, environment, sid),
+                    db.prepare("INSERT INTO review_subjects VALUES (?,?,?,?,?)").bind(
+                        store, environment, sid, data["kind"], data["path"]
+                    ),
+                    db.prepare(
+                        "INSERT INTO native_publication_versions(store_key,environment,subject_id) VALUES (?,?,?)"
+                    ).bind(store, environment, sid),
+                    db.prepare("DELETE FROM native_guard"),
+                ]
+            )
+        except Exception:
+            return fail(409, "subject conflict")
+        return Response.json({"subject_id": sid}, status=201)
+    if path == "/reviews-admin/v1/test-capabilities":
+        if (
+            set(data) != {"subject_id", "test_reviewer"}
+            or not isinstance(data["subject_id"], str)
+            or not ID.fullmatch(data["subject_id"])
+            or not isinstance(data["test_reviewer"], str)
+            or not ID.fullmatch(data["test_reviewer"])
+        ):
+            return fail(400, "invalid subject")
+        token = random_token()
+        reviewer = hmac.new(
+            str(env.REVIEWS_TEST_ADMIN_TOKEN).encode(),
+            json.dumps([store, environment, data["test_reviewer"]]).encode(),
+            hashlib.sha256,
+        ).hexdigest()
+        token_hash = hashlib.sha256(token.encode()).hexdigest()
+        try:
+            await db.batch(
+                [
+                    db.prepare(
+                        "INSERT INTO native_guard SELECT CASE WHEN EXISTS(SELECT 1 FROM review_subjects "
+                        "WHERE store_key=? AND environment=? AND subject_id=?) THEN 1 ELSE 0 END"
+                    ).bind(store, environment, data["subject_id"]),
+                    db.prepare("INSERT INTO native_capabilities VALUES (?,?,?,?,?,?,NULL)").bind(
+                        store, environment, token_hash, reviewer, data["subject_id"], now + 300
+                    ),
+                    db.prepare("DELETE FROM native_guard"),
+                ]
+            )
+        except Exception:
+            return fail(429, "capability unavailable")
+        return Response.json(
+            {"test_capability": token, "expires_at": now + 300},
+            status=201,
+            headers={"Cache-Control": "no-store"},
+        )
+    if path == "/reviews/v1/contributions":
+        if not {"subject_id", "author", "test_capability"} <= set(data) or set(data) - {
+            "subject_id",
+            "author",
+            "title",
+            "body",
+            "rating",
+            "test_capability",
+        }:
+            return fail(400, "invalid submission")
+        sid, author, proof = (data[k] for k in ("subject_id", "author", "test_capability"))
+        title, body, rating = (data.get(k) for k in ("title", "body", "rating"))
+        key = str(request.headers.get("Idempotency-Key") or "")
+        if (
+            not isinstance(sid, str)
+            or not ID.fullmatch(sid)
+            or not ID.fullmatch(key)
+            or not isinstance(proof, str)
+            or not re.fullmatch(r"[0-9a-f]{64}", proof)
+        ):
+            return fail(400, "invalid submission")
+        if (
+            not isinstance(author, str)
+            or not 1 <= len(author.strip()) <= 120
+            or (body is not None and (not isinstance(body, str) or len(body) > 5000))
+            or (title is not None and (not isinstance(title, str) or len(title) > 200))
+            or (rating is not None and (type(rating) is not int or not 1 <= rating <= 5))
+        ):
+            return fail(400, "invalid submission")
+        body = body or ""
+        if rating is None and not body.strip() and not (title and title.strip()):
+            return fail(400, "empty submission")
+        digest = hashlib.sha256(
+            json.dumps([sid, author, title, body, rating], ensure_ascii=True, separators=(",", ":")).encode()
+        ).hexdigest()
+        token_hash = hashlib.sha256(proof.encode()).hexdigest()
+        existing = rows(
+            await db.prepare(
+                "SELECT payload_hash,token_hash,review_id,revision_id FROM native_requests WHERE store_key=? AND "
+                "environment=? AND request_key=?"
+            )
+            .bind(store, environment, key)
+            .all()
+        )
+        if existing:
+            item = existing[0]
+            if item["payload_hash"] != digest or item["token_hash"] != token_hash:
+                return fail(409, "request conflict")
+            return Response.json(
+                {"review_id": item["review_id"], "revision_id": item["revision_id"], "status": "pending"}, status=202
+            )
+        review_id, revision_id, event_id = random_token(), random_token(), random_token()
+        try:
+            await db.batch(
+                [
+                    db.prepare(
+                        "INSERT INTO native_guard SELECT CASE WHEN EXISTS(SELECT 1 FROM "
+                        "native_capabilities WHERE store_key=? AND environment=? AND token_hash=? AND "
+                        "subject_id=? AND used_at IS NULL AND expires_at>?) THEN 1 ELSE 0 END"
+                    ).bind(store, environment, token_hash, sid, now),
+                    db.prepare(
+                        "INSERT INTO native_reviews SELECT "
+                        "store_key,environment,?,subject_id,reviewer_key,'pending',?,? FROM "
+                        "native_capabilities WHERE store_key=? AND environment=? AND token_hash=?"
+                    ).bind(review_id, revision_id, now, store, environment, token_hash),
+                    db.prepare(
+                        "INSERT INTO native_revisions VALUES (?,?,?,?,?,NULLIF(?,''),?,CAST(NULLIF(?,'') AS INTEGER))"
+                    ).bind(
+                        store,
+                        environment,
+                        revision_id,
+                        review_id,
+                        author,
+                        title or "",
+                        body,
+                        str(rating) if rating is not None else "",
+                    ),
+                    db.prepare("INSERT INTO native_requests VALUES (?,?,?,?,?,?,?)").bind(
+                        store, environment, key, digest, token_hash, review_id, revision_id
+                    ),
+                    db.prepare(
+                        "UPDATE native_capabilities SET used_at=? WHERE store_key=? AND environment=? AND token_hash=?"
+                    ).bind(now, store, environment, token_hash),
+                    db.prepare("INSERT INTO native_audit VALUES (?,?,?,?,?,?,?,?)").bind(
+                        event_id, store, environment, review_id, revision_id, "submitted", "test_guest", now
+                    ),
+                    db.prepare("DELETE FROM native_guard"),
+                ]
+            )
+        except Exception:
+            existing = rows(
+                await db.prepare(
+                    "SELECT payload_hash,token_hash,review_id,revision_id FROM native_requests WHERE store_key=? AND "
+                    "environment=? AND request_key=?"
+                )
+                .bind(store, environment, key)
+                .all()
+            )
+            if existing and existing[0]["payload_hash"] == digest and existing[0]["token_hash"] == token_hash:
+                return Response.json(
+                    {
+                        "review_id": existing[0]["review_id"],
+                        "revision_id": existing[0]["revision_id"],
+                        "status": "pending",
+                    },
+                    status=202,
+                )
+            return fail(409, "submission unavailable")
+        return Response.json({"review_id": review_id, "revision_id": revision_id, "status": "pending"}, status=202)
+    match = re.fullmatch(r"/reviews-admin/v1/contributions/([0-9a-f]{64})/(approve|reject|withdraw)", path)
+    if match:
+        if (
+            set(data) != {"revision_id"}
+            or not isinstance(data["revision_id"], str)
+            or not re.fullmatch(r"[0-9a-f]{64}", data["revision_id"])
+        ):
+            return fail(400, "invalid revision")
+        rid, action = match.groups()
+        desired = {"approve": "published", "reject": "rejected", "withdraw": "withdrawn"}[action]
+        source = "published" if action == "withdraw" else "pending"
+        revision = data["revision_id"]
+        current = rows(
+            await db.prepare(
+                "SELECT state,revision_id,subject_id FROM native_reviews WHERE store_key=? AND "
+                "environment=? AND review_id=?"
+            )
+            .bind(store, environment, rid)
+            .all()
+        )
+        if not current or current[0]["revision_id"] != revision:
+            return fail(409, "revision conflict")
+        if current[0]["state"] == desired:
+            return Response.json({"review_id": rid, "status": desired})
+        subject = current[0]["subject_id"]
+        event_id = random_token()
+        delta = 1 if action == "approve" else -1 if action == "withdraw" else 0
+        try:
+            await db.batch(
+                [
+                    db.prepare(
+                        "INSERT INTO native_guard SELECT CASE WHEN EXISTS(SELECT 1 FROM native_reviews r "
+                        "JOIN native_publication_versions p ON p.store_key=r.store_key AND p.environment=r.environment "
+                        "AND p.subject_id=r.subject_id JOIN native_revisions v ON v.store_key=r.store_key "
+                        "AND v.environment=r.environment AND v.revision_id=r.revision_id AND v.review_id=r.review_id "
+                        "WHERE r.store_key=? AND r.environment=? AND r.review_id=? AND r.revision_id=? AND "
+                        "r.state=?) THEN 1 ELSE 0 END"
+                    ).bind(store, environment, rid, revision, source),
+                    db.prepare(
+                        "UPDATE native_reviews SET state=? WHERE store_key=? AND environment=? AND "
+                        "review_id=? AND revision_id=? AND state=?"
+                    ).bind(desired, store, environment, rid, revision, source),
+                    db.prepare(
+                        "UPDATE native_publication_versions SET version=version+1, "
+                        "contribution_count=contribution_count+?, "
+                        "rated_count=rated_count+?*(SELECT CASE WHEN rating IS NULL THEN 0 ELSE 1 END "
+                        "FROM native_revisions WHERE store_key=? AND environment=? AND revision_id=?), "
+                        "rating_sum=rating_sum+?*(SELECT COALESCE(rating,0) FROM native_revisions "
+                        "WHERE store_key=? AND environment=? AND revision_id=?) "
+                        "WHERE store_key=? AND environment=? AND subject_id=?"
+                    ).bind(
+                        delta,
+                        delta,
+                        store,
+                        environment,
+                        revision,
+                        delta,
+                        store,
+                        environment,
+                        revision,
+                        store,
+                        environment,
+                        subject,
+                    ),
+                    db.prepare("INSERT INTO native_audit VALUES (?,?,?,?,?,?,?,?)").bind(
+                        event_id, store, environment, rid, revision, action, "test_admin", now
+                    ),
+                    db.prepare("INSERT INTO native_effect_outbox VALUES (?,?,?,?,?,?)").bind(
+                        event_id, store, environment, subject, "invalidate", now
+                    ),
+                    db.prepare("DELETE FROM native_guard"),
+                ]
+            )
+        except Exception:
+            return fail(409, "moderation conflict")
+        return Response.json({"review_id": rid, "status": desired})
+    return fail(404, "not found")
+
+
+async def native_read(db, store, environment, subject_id, endpoint, params, native_version):
+    """Read only approved native revisions for a scoped native subject."""
+    version = "native-" + str(native_version)
+    if endpoint == "summary":
+        aggregate_rows = rows(
+            await db.prepare(
+                "SELECT version,contribution_count,rated_count,rating_sum FROM native_publication_versions "
+                "WHERE store_key=? AND environment=? AND subject_id=?"
+            )
+            .bind(store, environment, subject_id)
+            .all()
+        )
+        if not aggregate_rows:
+            return fail(503, "publication unavailable")
+        aggregate = aggregate_rows[0]
+        count, total = aggregate["rated_count"], aggregate["rating_sum"]
+        version = "native-" + str(aggregate["version"])
+        return Response.json(
+            {
+                "subject_id": subject_id,
+                "snapshot_id": version,
+                "rating": {"average": total / count if count else None, "rated_count": count},
+                "contribution_count": aggregate["contribution_count"],
+            },
+            headers={"Cache-Control": "no-store"},
+        )
+    try:
+        limit = int(params.get("limit", ["20"])[0])
+    except ValueError:
+        return fail(400, "invalid limit")
+    if not 1 <= limit <= 50:
+        return fail(400, "invalid limit")
+    after = params.get("after", [None])[0]
+    if after and (params.get("snapshot", [None])[0] != version or not re.fullmatch(r"[0-9a-f]{64}", after)):
+        return fail(400, "invalid or stale cursor")
+    if not after and "snapshot" in params:
+        return fail(400, "invalid cursor")
+    cursor_time, cursor_id = None, None
+    if after:
+        cursor = rows(
+            await db.prepare(
+                "SELECT created_at FROM native_reviews WHERE store_key=? AND environment=? AND subject_id=? "
+                "AND review_id=? AND state='published'"
+            )
+            .bind(store, environment, subject_id, after)
+            .all()
+        )
+        if not cursor:
+            return fail(400, "invalid cursor")
+        cursor_time, cursor_id = cursor[0]["created_at"], after
+    query = (
+        "SELECT r.review_id,r.created_at,v.author,v.title,v.body,v.rating FROM native_reviews r "
+        "JOIN native_revisions v ON v.store_key=r.store_key AND v.environment=r.environment AND "
+        "v.revision_id=r.revision_id "
+        "WHERE r.store_key=? AND r.environment=? AND r.subject_id=? AND r.state='published' "
+    )
+    bindings = [store, environment, subject_id]
+    if after:
+        query += "AND (r.created_at < ? OR (r.created_at=? AND r.review_id>?)) "
+        bindings.extend([cursor_time, cursor_time, cursor_id])
+    query += "ORDER BY r.created_at DESC,r.review_id LIMIT ?"
+    found = rows(await db.prepare(query).bind(*bindings, limit + 1).all())
+    current_version = rows(
+        await db.prepare(
+            "SELECT version FROM native_publication_versions WHERE store_key=? AND environment=? AND subject_id=?"
+        )
+        .bind(store, environment, subject_id)
+        .all()
+    )
+    if not current_version or "native-" + str(current_version[0]["version"]) != version:
+        return fail(409, "publication changed; restart pagination")
+    items = [
+        {
+            "id": x["review_id"],
+            "kind": "review",
+            "author": x["author"],
+            "title": x["title"],
+            "body": x["body"],
+            "rating": x["rating"],
+            "created_at": x["created_at"],
+            "verification": "unverified",
+            "replies": [],
+        }
+        for x in found[:limit]
+    ]
+    has_more = len(found) > limit
+    output = {
+        "subject_id": subject_id,
+        "snapshot_id": version,
+        "contributions": items,
+        "next_after": items[-1]["id"] if has_more and items else None,
+        "has_more": has_more,
+    }
+    while len(json.dumps(output, ensure_ascii=True).encode("ascii")) > 128_000:
+        items.pop()
+        if not items:
+            return fail(503, "response exceeds limit")
+        output["has_more"] = True
+        output["next_after"] = items[-1]["id"]
+    return Response.json(output, headers={"Cache-Control": "no-store"})
