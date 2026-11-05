@@ -266,11 +266,16 @@ def main():
             with ThreadPoolExecutor(max_workers=2) as pool:
                 decisions = list(
                     pool.map(
-                        lambda action: call(race_base + action, {"revision_id": winning["revision_id"]}, admin=True)[0],
+                        lambda action: call(race_base + action, {"revision_id": winning["revision_id"]}, admin=True),
                         ("approve", "reject"),
                     )
                 )
-            assert sorted(decisions) == [200, 409]
+            if sorted(status for status, _ in decisions) != [200, 409]:
+                state = query("SELECT state FROM native_reviews WHERE subject_id='race-policy'")
+                version = query("SELECT * FROM native_publication_versions WHERE subject_id='race-policy'")
+                audit = query("SELECT action FROM native_audit WHERE review_id='" + winning["review_id"] + "'")
+                outbox = query("SELECT COUNT(*) n FROM native_effect_outbox WHERE subject_id='race-policy'")
+                raise AssertionError((decisions, state, version, audit, outbox))
             assert (
                 query("SELECT version FROM native_publication_versions WHERE subject_id='race-policy'")[0]["version"]
                 == 1

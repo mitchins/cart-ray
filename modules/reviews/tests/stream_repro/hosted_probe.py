@@ -97,7 +97,7 @@ for auth in (False, True):
                             expected = b"400" if auth else b"401"
                             assert data.startswith((b"HTTP/1.1 " + expected, b"HTTP/1.0 " + expected)), repr(data)
                         outcome = repr(data)
-                    except (OSError, ssl.SSLError) as e:
+                    except (ConnectionResetError, BrokenPipeError, ssl.SSLEOFError) as e:
                         outcome = type(e).__name__
                     break
                 status = health()
