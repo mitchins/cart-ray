@@ -280,7 +280,7 @@ async def handle_write(request, env, path):
         return fail(401, "unauthorized")
     db, now = env.REVIEWS_DB, int(time.time())
     rate_action = {"/reviews-admin/v1/test-capabilities": "issue", "/reviews/v1/contributions": "submit"}.get(path)
-    if rate_action:
+    if rate_action and not (acquisition_mode and rate_action == "submit"):
         try:
             await db.batch(
                 [
@@ -469,6 +469,28 @@ async def handle_write(request, env, path):
             return fail(400, "empty submission")
         if acquisition_mode:
             author = author.strip() or "Anonymous"
+            token_hash = hashlib.sha256(proof.encode()).hexdigest()
+            try:
+                await db.batch(
+                    [
+                        db.prepare(
+                            "INSERT INTO native_guard SELECT CASE WHEN EXISTS(SELECT 1 FROM "
+                            "acquisition_invitations i JOIN acquisition_invitation_subjects s "
+                            "USING(store_key,environment,acquisition_id) WHERE i.store_key=? AND "
+                            "i.environment=? AND i.token_hash=? AND i.revoked_at IS NULL AND "
+                            "i.expires_at>? AND i.expires_at>unixepoch() AND s.subject_id=?) "
+                            "THEN 1 ELSE 0 END"
+                        ).bind(store, environment, token_hash, now, sid),
+                        rate(db, store, environment, "purchase-submit:" + token_hash, now),
+                        db.prepare(
+                            "INSERT INTO acquisition_rate_backstop VALUES (?,?,?,1) "
+                            "ON CONFLICT(store_key,environment,window) DO UPDATE SET count=count+1"
+                        ).bind(store, environment, now // 60),
+                        db.prepare("DELETE FROM native_guard"),
+                    ]
+                )
+            except Exception:
+                return fail(429, "submission unavailable; please try again later")
             try:
                 result = await redeem_purchase(
                     db,

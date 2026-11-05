@@ -91,6 +91,31 @@ def test_purchase_submission_accepts_rating_without_a_name_and_rejects_title_onl
     assert tuple(review) == ("Anonymous", 2)
 
 
+def test_invalid_capability_flood_does_not_exhaust_store_allowance(lifecycle):
+    reviews, commerce = stores()
+    invitation = issue(reviews, commerce)
+    env = SimpleNamespace(
+        REVIEWS_DB=reviews,
+        CARTRAY_DB=commerce,
+        REVIEWS_STORE_KEY="store",
+        REVIEWS_ENVIRONMENT="test",
+        REVIEWS_MODE="verified_acquisition_only",
+        REVIEWS_TEST_ADMIN_TOKEN="a" * 40,
+        REVIEWS_SETTLEMENT_TOKEN="b" * 40,
+        REVIEWS_INVITATION_KEY="c" * 40,
+        REVIEWS_REVIEWER_KEY="d" * 40,
+    )
+    path = "/reviews/v1/contributions"
+    base = {"subject_id": "policy", "rating": 4}
+    with patch.object(lifecycle.time, "time", return_value=101):
+        for index in range(40):
+            invalid = format(index + 1, "064x")
+            assert invoke(lifecycle, env, path, base | {"invitation_token": invalid}, key=f"bad-{index}").status == 429
+        assert reviews.db.execute("SELECT COUNT(*) FROM acquisition_rate_backstop").fetchone()[0] == 0
+        assert invoke(lifecycle, env, path, base | {"invitation_token": invitation["token"]}, key="valid").status == 202
+    assert reviews.db.execute("SELECT count FROM acquisition_rate_backstop").fetchone()[0] == 1
+
+
 def test_customer_landing_uses_approved_names_and_scoped_nonconsuming_capability(lifecycle):
     reviews, _ = stores()
     commerce = CommerceDatabase()
