@@ -1257,6 +1257,11 @@ def test_queued_recovery_is_durable_before_d1_and_selects_canonical_request(life
         )
         assert reviews.db.execute("SELECT COUNT(*) FROM review_recovery_requests").fetchone()[0] == 0
         assert len(messages) == 2
+        for invalid in ({}, 123, "not-a-token"):
+            assert (
+                invoke(lifecycle, env, "/reviews/v1/invitation-recovery", {"invitation_token": invalid}).status == 202
+            )
+        assert len(messages) == 2
         assert original["token"] not in json.dumps(messages)
 
         def command(message):

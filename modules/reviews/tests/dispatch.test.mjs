@@ -33,8 +33,9 @@ test("duplicate delivery commands cannot resend an accepted invitation", async (
 });
 
 test("lost provider acknowledgement never resends a claimed generation", async () => {
-  const f=await fixture(); f.failOutcome();
-  await assert.rejects(processCommand(f.command,f.env,()=>101));
+  const f=await fixture(); f.failOutcome(); const delays=[];
+  await assert.rejects(processCommand(f.command,f.env,()=>101,async ms=>{delays.push(ms);}));
+  assert.deepEqual(delays,[1000,1000]);
   assert.equal(f.outcomeAttempts(),3);
   await assert.rejects(processCommand(f.command,f.env,()=>102));
   assert.equal(f.sends(),1);

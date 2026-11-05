@@ -591,9 +591,11 @@ async def handle_write(request, env, path):
         if str(getattr(env, "REVIEWS_RECOVERY_AUTOMATIC", "")) == "1" and queue is None:
             return fail(503, "recovery temporarily unavailable")
         if queue is not None:
+            if not isinstance(token, str) or not re.fullmatch(r"[0-9a-f]{64}", token):
+                return Response.json({"status": "requested"}, status=202, headers={"Cache-Control": "no-store"})
             # The queued command is the durable authority: it is persisted
             # before any consumer writes the recovery request to D1.
-            token_hash = hashlib.sha256(str(token).encode()).hexdigest()
+            token_hash = hashlib.sha256(token.encode()).hexdigest()
             try:
                 await queue.send(
                     to_js(

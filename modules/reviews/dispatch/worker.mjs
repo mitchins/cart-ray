@@ -16,7 +16,7 @@ async function digest(text) {
 }
 
 /** A delivery claim is single-use. Once a send might have happened, never resend. */
-export async function processCommand(command, env, now = () => Math.floor(Date.now() / 1000)) {
+export async function processCommand(command, env, now = () => Math.floor(Date.now() / 1000), pause = ms => new Promise(resolve => setTimeout(resolve, ms))) {
   if (env.REVIEWS_ENVIRONMENT !== "test" || !env.REVIEWS_ISSUER || !env.REVIEWS_DELIVERY_TOKEN || !env.REVIEWS_API || !env.MAIL) {
     throw new Error("test delivery not configured");
   }
@@ -64,7 +64,11 @@ export async function processCommand(command, env, now = () => Math.floor(Date.n
     try {
       await post(api, prefix + "delivery-outcome", outcome, env.REVIEWS_DELIVERY_TOKEN);
       return "done";
-    } catch (_) { /* identical acknowledgement retry does not resend */ }
+    } catch (_) {
+      // The acknowledgement is idempotent; give transient failures and clock
+      // skew time to resolve without repeating the email send.
+      if (attempt < 2) await pause(1000);
+    }
   }
   throw new Error("delivery reconciliation required");
 }
