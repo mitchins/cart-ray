@@ -65,7 +65,19 @@ def test_bound_delivery_rejects_redirected_or_unknown_recipient(tmp_path):
     assert len(box) == 1
 
 
-@pytest.mark.parametrize("recipient", ["@example.test", "a@", "a@@example.test", "a @example.test", "a@" + "x" * 10000])
+@pytest.mark.parametrize(
+    "recipient",
+    [
+        "@example.test",
+        "a@",
+        "a@@example.test",
+        "a @example.test",
+        "alice@example.test,bob",
+        "alice@example.test;bob",
+        "a\x00@example.test",
+        "a@" + "x" * 10000,
+    ],
+)
 def test_test_mailbox_rejects_invalid_or_oversized_recipients(tmp_path, recipient):
     with pytest.raises(ValueError, match="invalid synthetic recipient"):
         sink.deliver_invitation(

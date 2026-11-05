@@ -76,6 +76,21 @@ def test_local_recovery_delivers_only_to_the_bound_recipient(lifecycle, tmp_path
             "status": "recipient temporarily unavailable"
         }
         assert reviews.db.execute("SELECT state FROM review_recovery_requests").fetchone()[0] == "pending"
+        assert (
+            post("/reviews-internal/v1/invitations/recovery-next", {}, env.REVIEWS_SETTLEMENT_TOKEN)["pending"] is None
+        )
+        reviews.db.execute("DELETE FROM review_recovery_deferrals")
+        reviews.db.commit()
+
+        def unavailable(_acquisition):
+            raise ConnectionError("recipient adapter temporarily unavailable")
+
+        assert processor.process_one(post, resolve_recipient=unavailable, **args) == {
+            "status": "recipient temporarily unavailable"
+        }
+        assert reviews.db.execute("SELECT state FROM review_recovery_requests").fetchone()[0] == "pending"
+        reviews.db.execute("DELETE FROM review_recovery_deferrals")
+        reviews.db.commit()
         assert processor.process_one(post, resolve_recipient=lambda _: "redirect@example.test", **args) == {
             "status": "recipient unavailable"
         }

@@ -18,10 +18,15 @@ def process_one(
     item = post("/reviews-internal/v1/invitations/recovery-next", {}, issuer)["pending"]
     if item is None:
         return {"status": "empty"}
-    recipient = resolve_recipient(item["acquisition_id"])
+    try:
+        recipient = resolve_recipient(item["acquisition_id"])
+    except Exception:
+        # Provider outages must not permanently discard a customer's request.
+        recipient = None
     # A missing lookup result can mean a temporarily unavailable recipient
     # adapter. Leave the durable request pending for a safe retry.
     if recipient is None:
+        post("/reviews-internal/v1/invitations/recovery-defer", {"request_id": item["request_id"]}, issuer)
         return {"status": "recipient temporarily unavailable"}
     if not isinstance(recipient, str) or not hmac.compare_digest(
         hashlib.sha256(recipient.encode()).hexdigest(), item["recipient_context_hash"]

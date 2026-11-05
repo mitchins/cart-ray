@@ -1197,6 +1197,14 @@ def test_recovery_queue_skips_revoked_consent_and_claimed_deliveries(lifecycle):
         "INSERT INTO review_recovery_requests VALUES ('store','test','order_3',?,3,'pending')", ("3" * 64,)
     )
     reviews.db.commit()
+    req.data = {"request_id": "2" * 64}
+    deferred = asyncio.run(lifecycle.handle_write(req, env, "/reviews-internal/v1/invitations/recovery-defer"))
+    assert deferred.status == 200
+    req.data = {}
+    next_request = asyncio.run(lifecycle.handle_write(req, env, "/reviews-internal/v1/invitations/recovery-next"))
+    assert next_request.body["pending"]["acquisition_id"] == "order_3"
+    reviews.db.execute("DELETE FROM review_recovery_deferrals")
+    reviews.db.commit()
     asyncio.run(
         prepare_replacement(
             reviews,

@@ -21,7 +21,8 @@
     "migrations/0009_invitation_generations.sql",
     "migrations/0010_invitation_delivery_claim.sql",
     "migrations/0011_review_management.sql",
-    "migrations/0012_review_recovery_requests.sql"
+    "migrations/0012_review_recovery_requests.sql",
+    "migrations/0013_recovery_retry_deferrals.sql"
   ],
   "routes": [
     "GET /reviews/v1/subjects/{subject_id}/summary",
@@ -36,6 +37,7 @@
     "POST /reviews-internal/v1/invitations/recovery-next (verified_acquisition_only, test only)",
     "POST /reviews-internal/v1/invitations/recovery-prepare (verified_acquisition_only, test only)",
     "POST /reviews-internal/v1/invitations/recovery-cancel (verified_acquisition_only, test only)",
+    "POST /reviews-internal/v1/invitations/recovery-defer (verified_acquisition_only, test only)",
     "POST /reviews-internal/v1/invitations/delivery-claim (verified_acquisition_only, test only)",
     "POST /reviews-internal/v1/invitations/delivery-outcome (verified_acquisition_only, test only)",
     "POST /reviews/v1/invitation (verified_acquisition_only, test only)",

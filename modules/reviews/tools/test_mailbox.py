@@ -31,7 +31,7 @@ def deliver_invitation(directory, *, recipient, store_name, landing_url, token, 
     if not isinstance(recipient, str) or (
         len(recipient) > 254
         or recipient.count("@") != 1
-        or any(c.isspace() or c in "<>" for c in recipient)
+        or any(ord(c) < 33 or ord(c) > 126 or c in '<>,;:"\\()[]' for c in recipient)
         or "." not in recipient.rsplit("@", 1)[-1]
         or any(not part for part in recipient.rsplit("@", 1))
     ):

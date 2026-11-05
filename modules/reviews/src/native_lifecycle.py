@@ -354,6 +354,7 @@ async def handle_write(request, env, path):
         "/reviews-internal/v1/invitations/recovery-next",
         "/reviews-internal/v1/invitations/recovery-prepare",
         "/reviews-internal/v1/invitations/recovery-cancel",
+        "/reviews-internal/v1/invitations/recovery-defer",
     ):
         issuer = str(getattr(env, "REVIEWS_SETTLEMENT_TOKEN", ""))
         supplied = str(request.headers.get("Authorization") or "")
@@ -378,6 +379,10 @@ async def handle_write(request, env, path):
                         "USING(store_key,environment,acquisition_id) JOIN review_invitation_consents c "
                         "USING(store_key,environment,acquisition_id) WHERE r.store_key=? AND r.environment=? "
                         "AND r.state='pending' AND c.revoked_at IS NULL AND c.purpose='review_invitation' "
+                        "AND NOT EXISTS(SELECT 1 FROM review_recovery_deferrals d WHERE d.store_key=r.store_key "
+                        "AND d.environment=r.environment AND d.acquisition_id=r.acquisition_id "
+                        "AND d.request_id=r.request_id "
+                        "AND d.retry_after>?) "
                         "AND c.recipient_context_hash=i.recipient_context_hash "
                         "AND NOT EXISTS(SELECT 1 FROM invitation_generations g WHERE g.store_key=r.store_key "
                         "AND g.environment=r.environment AND g.acquisition_id=r.acquisition_id "
@@ -385,12 +390,34 @@ async def handle_write(request, env, path):
                         "AND (g.request_key<>'recovery-'||r.request_id OR g.state<>'prepared')) "
                         "ORDER BY r.requested_at,r.acquisition_id LIMIT 1"
                     )
-                    .bind(store, environment)
+                    .bind(store, environment, int(time.time()))
                     .all()
                 )
                 return Response.json(
                     {"pending": pending[0] if pending else None}, headers={"Cache-Control": "no-store"}
                 )
+            if path == "/reviews-internal/v1/invitations/recovery-defer":
+                request_id = data.get("request_id")
+                if (
+                    set(data) != {"request_id"}
+                    or not isinstance(request_id, str)
+                    or not re.fullmatch(r"[0-9a-f]{64}", request_id)
+                ):
+                    return fail(400, "invalid recovery request")
+                now = int(time.time())
+                await env.REVIEWS_DB.batch(
+                    [
+                        env.REVIEWS_DB.prepare(
+                            "INSERT INTO review_recovery_deferrals "
+                            "(store_key,environment,acquisition_id,request_id,retry_after) "
+                            "SELECT store_key,environment,acquisition_id,request_id,? FROM review_recovery_requests "
+                            "WHERE store_key=? AND environment=? AND request_id=? AND state='pending' "
+                            "ON CONFLICT(store_key,environment,acquisition_id) DO UPDATE SET "
+                            "request_id=excluded.request_id,retry_after=excluded.retry_after"
+                        ).bind(now + 60, store, environment, request_id)
+                    ]
+                )
+                return Response.json({"status": "deferred"}, headers={"Cache-Control": "no-store"})
             if path == "/reviews-internal/v1/invitations/recovery-cancel":
                 if (
                     set(data) != {"request_id"}
