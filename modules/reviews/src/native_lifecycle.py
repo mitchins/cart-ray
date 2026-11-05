@@ -183,7 +183,10 @@ async def read_json(request):
             pass
     if len(data) != int(length):
         raise ValueError("invalid request size")
-    value = json.loads(bytes(data), object_pairs_hook=unique_pairs, parse_constant=invalid_constant)
+    try:
+        value = json.loads(bytes(data), object_pairs_hook=unique_pairs, parse_constant=invalid_constant)
+    except RecursionError as exc:
+        raise ValueError("JSON nesting too deep") from exc
     if not isinstance(value, dict):
         raise ValueError("expected object")
     return value

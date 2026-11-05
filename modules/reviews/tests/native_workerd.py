@@ -72,6 +72,17 @@ def main():
         try:
             subject = {"subject_id": "example-policy", "kind": "product", "path": "/example-policy/"}
             assert call("/reviews-admin/v1/subjects", subject)[0] == 401
+            deeply_nested = urllib.request.Request(
+                BASE + "/reviews-admin/v1/subjects",
+                data=b"[" * 2000 + b"]" * 2000,
+                headers={"Content-Type": "application/json", "Authorization": "Bearer " + ADMIN},
+                method="POST",
+            )
+            try:
+                urllib.request.urlopen(deeply_nested, timeout=10)
+                raise AssertionError("deeply nested JSON accepted")
+            except urllib.error.HTTPError as exc:
+                assert exc.code == 400
 
             def incomplete_request(*, authorized):
                 """Reject an intentionally stalled client without accepting arbitrary errors."""

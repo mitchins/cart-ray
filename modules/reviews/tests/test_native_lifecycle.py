@@ -282,7 +282,12 @@ def test_body_validation_and_single_reader_cleanup(lifecycle):
         return await value
 
     lifecycle.await_promise = await_promise
-    for raw, expected in ((b'{"a":1}', {"a": 1}), (b'{"a":1,"a":2}', None), (b"[1]", None)):
+    for raw, expected in (
+        (b'{"a":1}', {"a": 1}),
+        (b'{"a":1,"a":2}', None),
+        (b"[1]", None),
+        (b"[" * 2000 + b"]" * 2000, None),
+    ):
         reader = Reader([raw])
         body = Body(reader)
         request = types.SimpleNamespace(
@@ -399,8 +404,10 @@ def test_public_pagination_and_rollback(lifecycle):
         reviews.append(result.body)
         action = "/reviews-admin/v1/contributions/" + result.body["review_id"] + "/approve"
         assert invoke(lifecycle, env, action, {"revision_id": result.body["revision_id"]}, admin=True).status == 200
+
     def read(params):
         return asyncio.run(lifecycle.native_read(db, "store", "test", "policy", "contributions", params, 2))
+
     page = read({"limit": ["1"]})
     assert page.body["has_more"] and len(page.body["contributions"]) == 1
     cursor = page.body["next_after"]

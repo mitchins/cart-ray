@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Run from any directory; requires Docker and network access for pinned npm packages.
 set -euo pipefail
-root=$(git rev-parse --show-toplevel)
+root=$(git -C "$(dirname "${BASH_SOURCE[0]}")" rev-parse --show-toplevel)
 docker run --rm -v "$root:/src:ro" node:24.20.0-bookworm bash -c '
 set -eu
 mkdir /tmp/repro
