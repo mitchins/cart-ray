@@ -587,10 +587,11 @@ async def handle_write(request, env, path):
         if not acquisition_mode or set(data) != {"invitation_token"}:
             return fail(400, "invalid request")
         token = data["invitation_token"]
+        recovery_mode = str(getattr(env, "REVIEWS_RECOVERY_MODE", "automatic"))
         queue = getattr(env, "REVIEWS_RECOVERY_QUEUE", None)
-        if str(getattr(env, "REVIEWS_RECOVERY_AUTOMATIC", "")) == "1" and queue is None:
+        if recovery_mode not in ("automatic", "manual_test") or (recovery_mode == "automatic" and queue is None):
             return fail(503, "recovery temporarily unavailable")
-        if queue is not None:
+        if recovery_mode == "automatic":
             if not isinstance(token, str) or not re.fullmatch(r"[0-9a-f]{64}", token):
                 return Response.json({"status": "requested"}, status=202, headers={"Cache-Control": "no-store"})
             # The queued command is the durable authority: it is persisted

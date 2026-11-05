@@ -1,6 +1,6 @@
 # Test-only recovery consumer
 
-This optional Worker consumes recovery commands from a private Cloudflare queue. Configure `REVIEWS_RECOVERY_AUTOMATIC=1` and a `REVIEWS_RECOVERY_QUEUE` producer binding on the Reviews Worker; automatic mode fails closed if that binding is missing. Configure this consumer with a service binding named `REVIEWS_API` to the Reviews Worker, the independently provisioned issuer and delivery secrets, and a `MAIL` email binding restricted to the approved synthetic test mailbox. Its `REVIEWS_ENVIRONMENT` must be `test`.
+This optional Worker consumes recovery commands from a private Cloudflare queue. Recovery defaults to automatic mode and requires a `REVIEWS_RECOVERY_QUEUE` producer binding on the Reviews Worker; a missing binding fails closed. `REVIEWS_RECOVERY_MODE=manual_test` is an explicit test-only fallback for controlled local processor tests. Configure this consumer with a service binding named `REVIEWS_API` to the Reviews Worker, the independently provisioned issuer and delivery secrets, and a `MAIL` email binding restricted to the approved synthetic test mailbox. Its `REVIEWS_ENVIRONMENT` must be `test`.
 
 The test deployment must set `SYNTHETIC_RECIPIENT`, `SYNTHETIC_SENDER`, `REVIEWS_PUBLIC_STORE_NAME`, and `REVIEWS_LANDING_URL`. The recipient is accepted only when its hash matches the independently consent-bound acquisition. The sender and destination must be restricted in the test email binding. No arbitrary address from an invitation or queue command is accepted.
 

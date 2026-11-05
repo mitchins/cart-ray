@@ -159,6 +159,7 @@ def main():
                 "REVIEWS_CONSENT_SECRET": CONSENT_SECRET,
                 "REVIEWS_DELIVERY_TOKEN": DELIVERY_TOKEN,
                 "REVIEWS_PUBLIC_STORE_NAME": "Example Store",
+                "REVIEWS_RECOVERY_MODE": "manual_test",
                 "REVIEWS_SUBJECT_MAPS": json.dumps(
                     {manifest: {"TEST-TEMPLATE": "example-policy", "TEST-BUNDLE": "example-bundle"}},
                     separators=(",", ":"),

@@ -1079,6 +1079,7 @@ def test_recovery_request_is_generic_bounded_and_does_not_accept_an_address(life
         REVIEWS_REVIEWER_KEY="d" * 40,
         REVIEWS_DELIVERY_TOKEN="f" * 40,
         REVIEWS_SUBJECT_MAPS=json.dumps({"v1": {"product_1": "policy"}}),
+        REVIEWS_RECOVERY_MODE="manual_test",
     )
     path = "/reviews/v1/invitation-recovery"
     with patch.object(lifecycle.time, "time", return_value=101):
@@ -1243,7 +1244,7 @@ def test_queued_recovery_is_durable_before_d1_and_selects_canonical_request(life
         REVIEWS_SETTLEMENT_TOKEN="b" * 40,
         REVIEWS_INVITATION_KEY="c" * 40,
         REVIEWS_REVIEWER_KEY="d" * 40,
-        REVIEWS_RECOVERY_AUTOMATIC="1",
+        REVIEWS_RECOVERY_MODE="automatic",
         REVIEWS_RECOVERY_QUEUE=SimpleNamespace(send=enqueue),
     )
     with patch.object(lifecycle.time, "time", return_value=101):
@@ -1286,9 +1287,16 @@ def test_queued_recovery_is_durable_before_d1_and_selects_canonical_request(life
         assert command(messages[1]).status == 409
         assert reviews.db.execute("SELECT state FROM review_recovery_requests").fetchone()[0] == "fulfilled"
     env.REVIEWS_RECOVERY_QUEUE = None
+    del env.REVIEWS_RECOVERY_MODE
+    before = reviews.db.execute("SELECT state,request_id FROM review_recovery_requests").fetchall()
     assert (
         invoke(lifecycle, env, "/reviews/v1/invitation-recovery", {"invitation_token": original["token"]}).status == 503
     )
+    env.REVIEWS_RECOVERY_MODE = "unknown"
+    assert (
+        invoke(lifecycle, env, "/reviews/v1/invitation-recovery", {"invitation_token": original["token"]}).status == 503
+    )
+    assert reviews.db.execute("SELECT state,request_id FROM review_recovery_requests").fetchall() == before
 
 
 def test_stale_recovery_command_never_rearms_during_fulfilment():

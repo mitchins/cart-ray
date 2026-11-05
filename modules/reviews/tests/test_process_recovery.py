@@ -43,6 +43,7 @@ def test_local_recovery_delivers_only_to_the_bound_recipient(lifecycle, tmp_path
         REVIEWS_REVIEWER_KEY="d" * 40,
         REVIEWS_DELIVERY_TOKEN="f" * 40,
         REVIEWS_SUBJECT_MAPS=json.dumps({"v1": {"product_1": "policy"}}),
+        REVIEWS_RECOVERY_MODE="manual_test",
     )
 
     def post(path, data, token):
