@@ -211,7 +211,8 @@ def test_one_capability_at_limit_does_not_block_another(lifecycle):
     second_hash = hashlib.sha256(second_token.encode()).hexdigest()
     reviews.db.execute(
         "INSERT INTO acquisition_invitations SELECT store_key,environment,'order_2',source_event_id,"
-        "recipient_context_hash,subject_set_hash,key_version,?,expires_at,NULL FROM acquisition_invitations",
+        "recipient_context_hash,subject_set_hash,key_version,?,expires_at,NULL,revocation_epoch,active_key_version "
+        "FROM acquisition_invitations",
         (second_hash,),
     )
     reviews.db.execute("INSERT INTO acquisition_invitation_subjects VALUES ('store','test','order_2','policy',NULL)")
@@ -521,3 +522,218 @@ def test_missing_one_eligible_subject_rolls_back_entire_issuance():
         issue(reviews, commerce, subject_maps=mapping)
     assert reviews.db.execute("SELECT COUNT(*) FROM acquisition_invitations").fetchone()[0] == 0
     assert reviews.db.execute("SELECT COUNT(*) FROM acquisition_invitation_subjects").fetchone()[0] == 0
+
+
+def test_replacement_is_pending_until_delivery_and_preserves_consumed_subjects():
+    import secrets
+
+    from cartray_reviews.invitations import prepare_replacement, record_delivery_outcome, redeem_purchase
+
+    commerce = CommerceDatabase()
+    commerce.add_purchase(second=True, amount=200)
+    reviews = ReviewsDatabase()
+    reviews.db.create_function("unixepoch", 0, lambda: 100)
+    for subject in ("policy", "other-policy"):
+        reviews.db.execute("INSERT INTO review_subjects VALUES ('store','test',?,'product','/')", (subject,))
+    reviews.db.execute(
+        "INSERT INTO review_invitation_consents VALUES (?,?,?,?,?,?,?,NULL)",
+        ("store", "test", "order_1", "a" * 64, "review_invitation", "consent", 90),
+    )
+    reviews.db.commit()
+    mapping = {"v1": {"product_1": "policy", "product_2": "other-policy"}}
+    initial = issue(reviews, commerce, subject_maps=mapping)
+    common = dict(
+        store="store",
+        environment="test",
+        subject="policy",
+        token=initial["token"],
+        request_key="first",
+        author="Guest",
+        title=None,
+        body="Good",
+        rating=5,
+        reviewer_key_secret=b"r" * 32,
+        now=101,
+        random_token=lambda: secrets.token_hex(32),
+    )
+    first_review = asyncio.run(redeem_purchase(reviews, **common))
+    assert first_review["status"] == "pending"
+    params = dict(
+        store="store",
+        environment="test",
+        acquisition="order_1",
+        request_key="replacement-1",
+        key_version="v2",
+        secret=b"z" * 32,
+        now=102,
+        random_token=lambda: secrets.token_hex(32),
+    )
+    replacement = asyncio.run(prepare_replacement(reviews, **params))
+    assert asyncio.run(prepare_replacement(reviews, **params)) == replacement
+    assert replacement["token"] != initial["token"]
+    with pytest.raises(ValueError):
+        asyncio.run(
+            redeem_purchase(
+                reviews,
+                **(common | {"token": replacement["token"], "subject": "other-policy", "request_key": "pre-send"}),
+            )
+        )
+    outcome = dict(
+        store="store",
+        environment="test",
+        acquisition="order_1",
+        generation=replacement["generation_id"],
+        delivery=replacement["delivery_identity"],
+        now=200,
+    )
+    assert asyncio.run(record_delivery_outcome(reviews, **outcome, outcome="accepted", accepted_at=103)) == {
+        "state": "accepted"
+    }
+    assert asyncio.run(record_delivery_outcome(reviews, **outcome, outcome="accepted", accepted_at=103)) == {
+        "state": "accepted"
+    }
+    row = reviews.db.execute("SELECT expires_at FROM acquisition_invitations").fetchone()
+    assert row[0] == 103 + 60 * 86400
+    with pytest.raises(ValueError):
+        asyncio.run(redeem_purchase(reviews, **(common | {"request_key": "old-link"})))
+    assert asyncio.run(redeem_purchase(reviews, **(common | {"token": replacement["token"]}))) == first_review
+    with pytest.raises(ValueError):
+        asyncio.run(redeem_purchase(reviews, **(common | {"token": replacement["token"], "request_key": "duplicate"})))
+    second = asyncio.run(
+        redeem_purchase(
+            reviews, **(common | {"token": replacement["token"], "subject": "other-policy", "request_key": "second"})
+        )
+    )
+    assert second["status"] == "pending"
+    assert reviews.db.execute("SELECT COUNT(*) FROM native_review_acquisitions").fetchone()[0] == 2
+
+
+def test_uncertain_delivery_cannot_be_replaced_or_activated_without_resolution():
+    import secrets
+
+    from cartray_reviews.invitations import prepare_replacement, record_delivery_outcome
+
+    reviews, commerce = stores()
+    issue(reviews, commerce)
+    params = dict(
+        store="store",
+        environment="test",
+        acquisition="order_1",
+        request_key="send-1",
+        key_version="v2",
+        secret=b"z" * 32,
+        now=102,
+        random_token=lambda: secrets.token_hex(32),
+    )
+    draft = asyncio.run(prepare_replacement(reviews, **params))
+    outcome = dict(
+        store="store",
+        environment="test",
+        acquisition="order_1",
+        generation=draft["generation_id"],
+        delivery=draft["delivery_identity"],
+        now=103,
+    )
+    assert asyncio.run(record_delivery_outcome(reviews, **outcome, outcome="uncertain")) == {"state": "uncertain"}
+    assert "token" not in asyncio.run(prepare_replacement(reviews, **params))
+    with pytest.raises(ValueError):
+        asyncio.run(prepare_replacement(reviews, **(params | {"request_key": "send-2"})))
+    assert asyncio.run(record_delivery_outcome(reviews, **outcome, outcome="failed")) == {"state": "failed"}
+    assert asyncio.run(prepare_replacement(reviews, **(params | {"request_key": "send-2"})))["state"] == "prepared"
+
+
+def test_replacement_endpoints_separate_issuer_and_delivery_credentials(lifecycle):
+    reviews, commerce = stores()
+    issue(reviews, commerce)
+    env = SimpleNamespace(
+        REVIEWS_DB=reviews,
+        CARTRAY_DB=commerce,
+        REVIEWS_STORE_KEY="store",
+        REVIEWS_ENVIRONMENT="test",
+        REVIEWS_MODE="verified_acquisition_only",
+        REVIEWS_TEST_ADMIN_TOKEN="a" * 40,
+        REVIEWS_SETTLEMENT_TOKEN="b" * 40,
+        REVIEWS_INVITATION_KEY="c" * 40,
+        REVIEWS_REVIEWER_KEY="d" * 40,
+        REVIEWS_CONSENT_SECRET="e" * 40,
+        REVIEWS_DELIVERY_TOKEN="f" * 40,
+        REVIEWS_INVITATION_KEY_VERSION="v2",
+        REVIEWS_SUBJECT_MAPS=json.dumps({"v1": {"product_1": "policy"}}),
+    )
+
+    def post(path, data, credential):
+        request = SimpleNamespace(
+            method="POST", headers={"Authorization": "Bearer " + credential}, data=data, body=None
+        )
+        return asyncio.run(lifecycle.handle_write(request, env, path))
+
+    replacement_path = "/reviews-internal/v1/invitations/replacement"
+    outcome_path = "/reviews-internal/v1/invitations/delivery-outcome"
+    with patch.object(lifecycle.time, "time", return_value=101):
+        assert (
+            post(replacement_path, {"event_id": "event_1", "request_key": "one"}, env.REVIEWS_TEST_ADMIN_TOKEN).status
+            == 401
+        )
+        prepared = post(replacement_path, {"event_id": "event_1", "request_key": "one"}, env.REVIEWS_SETTLEMENT_TOKEN)
+        assert prepared.status == 201
+        payload = {
+            "acquisition_id": "order_1",
+            "generation_id": prepared.body["generation_id"],
+            "delivery_identity": prepared.body["delivery_identity"],
+            "outcome": "accepted",
+            "accepted_at": 101,
+        }
+        assert post(outcome_path, payload, env.REVIEWS_SETTLEMENT_TOKEN).status == 401
+        assert post(outcome_path, payload, env.REVIEWS_DELIVERY_TOKEN).body == {"state": "accepted"}
+
+
+def test_revocation_after_preparation_cannot_be_undone_by_delivery_acknowledgement():
+    import secrets
+
+    from cartray_reviews.invitations import prepare_replacement, record_delivery_outcome, revoke_purchase
+
+    reviews, commerce = stores()
+    initial = issue(reviews, commerce)
+    params = dict(
+        store="store",
+        environment="test",
+        acquisition="order_1",
+        request_key="pending",
+        key_version="v2",
+        secret=b"z" * 32,
+        now=102,
+        random_token=lambda: secrets.token_hex(32),
+    )
+    draft = asyncio.run(prepare_replacement(reviews, **params))
+    asyncio.run(revoke_purchase(reviews, store="store", environment="test", token=initial["token"], now=103))
+    assert asyncio.run(
+        record_delivery_outcome(
+            reviews,
+            store="store",
+            environment="test",
+            acquisition="order_1",
+            generation=draft["generation_id"],
+            delivery=draft["delivery_identity"],
+            outcome="accepted",
+            now=104,
+            accepted_at=104,
+        )
+    ) == {"state": "revoked"}
+    row = reviews.db.execute("SELECT token_hash,revoked_at FROM acquisition_invitations").fetchone()
+    assert row[1] == 103
+    assert row[0] == hashlib.sha256(initial["token"].encode()).hexdigest()
+    second = asyncio.run(prepare_replacement(reviews, **(params | {"request_key": "retry", "now": 106})))
+    asyncio.run(revoke_purchase(reviews, store="store", environment="test", token=initial["token"], now=107))
+    assert asyncio.run(
+        record_delivery_outcome(
+            reviews,
+            store="store",
+            environment="test",
+            acquisition="order_1",
+            generation=second["generation_id"],
+            delivery=second["delivery_identity"],
+            outcome="accepted",
+            now=108,
+            accepted_at=108,
+        )
+    ) == {"state": "revoked"}

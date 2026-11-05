@@ -7,7 +7,15 @@ import re
 import time
 from urllib.parse import parse_qs
 
-from cartray_reviews.invitations import issue_from_settlement, record_signed_consent, redeem_purchase, revoke_purchase
+from cartray_reviews.acquisition import confirmed_purchase
+from cartray_reviews.invitations import (
+    issue_from_settlement,
+    prepare_replacement,
+    record_delivery_outcome,
+    record_signed_consent,
+    redeem_purchase,
+    revoke_purchase,
+)
 from js import Promise, Uint8Array, clearTimeout, crypto, setTimeout
 from pyodide.ffi import create_proxy, to_js
 from workers import Response
@@ -246,7 +254,46 @@ async def handle_write(request, env, path):
             return Response.json({"status": "recorded"}, status=201, headers={"Cache-Control": "no-store"})
         except (ValueError, TypeError, AttributeError, KeyError):
             return fail(409, "consent unavailable")
-    if path in ("/reviews-internal/v1/settlements", "/reviews-internal/v1/invitations/revoke"):
+    if path == "/reviews-internal/v1/invitations/delivery-outcome":
+        delivery_token = str(getattr(env, "REVIEWS_DELIVERY_TOKEN", ""))
+        supplied = str(request.headers.get("Authorization") or "")
+        if (
+            not acquisition_mode
+            or len(delivery_token) < 32
+            or delivery_token in secrets
+            or delivery_token == str(getattr(env, "REVIEWS_CONSENT_SECRET", ""))
+            or not hmac.compare_digest(supplied.encode(), ("Bearer " + delivery_token).encode())
+        ):
+            await discard_body(request)
+            return fail(401, "unauthorized")
+        try:
+            data = await read_json(request)
+            expected = {"acquisition_id", "generation_id", "delivery_identity", "outcome"}
+            if data.get("outcome") == "accepted":
+                expected.add("accepted_at")
+            if set(data) != expected:
+                return fail(400, "invalid delivery outcome")
+            lifetime = int(str(getattr(env, "REVIEWS_INVITATION_LIFETIME", "5184000")))
+            result = await record_delivery_outcome(
+                env.REVIEWS_DB,
+                store=store,
+                environment=environment,
+                acquisition=data["acquisition_id"],
+                generation=data["generation_id"],
+                delivery=data["delivery_identity"],
+                outcome=data["outcome"],
+                now=int(time.time()),
+                accepted_at=data.get("accepted_at"),
+                lifetime=lifetime,
+            )
+            return Response.json(result, headers={"Cache-Control": "no-store"})
+        except (ValueError, TypeError, AttributeError, KeyError):
+            return fail(409, "delivery unavailable")
+    if path in (
+        "/reviews-internal/v1/settlements",
+        "/reviews-internal/v1/invitations/revoke",
+        "/reviews-internal/v1/invitations/replacement",
+    ):
         issuer = str(getattr(env, "REVIEWS_SETTLEMENT_TOKEN", ""))
         supplied = str(request.headers.get("Authorization") or "")
         if (
@@ -259,6 +306,28 @@ async def handle_write(request, env, path):
             return fail(401, "unauthorized")
         try:
             data = await read_json(request)
+            if path == "/reviews-internal/v1/invitations/replacement":
+                if set(data) != {"event_id", "request_key"}:
+                    return fail(400, "invalid replacement")
+                acquisition = await confirmed_purchase(
+                    env.CARTRAY_DB,
+                    store=store,
+                    environment=environment,
+                    event_id=data["event_id"],
+                    subject_maps=json.loads(str(getattr(env, "REVIEWS_SUBJECT_MAPS", ""))),
+                )
+                result = await prepare_replacement(
+                    env.REVIEWS_DB,
+                    store=store,
+                    environment=environment,
+                    acquisition=acquisition.acquisition_id,
+                    request_key=data["request_key"],
+                    key_version=str(getattr(env, "REVIEWS_INVITATION_KEY_VERSION", "v1")),
+                    secret=str(env.REVIEWS_INVITATION_KEY).encode(),
+                    now=int(time.time()),
+                    random_token=random_token,
+                )
+                return Response.json(result, status=201, headers={"Cache-Control": "no-store"})
             if path == "/reviews-internal/v1/invitations/revoke":
                 if set(data) != {"invitation_token"}:
                     return fail(400, "invalid invitation")
