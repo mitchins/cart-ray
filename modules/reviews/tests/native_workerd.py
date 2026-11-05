@@ -3,6 +3,7 @@
 import hashlib
 import json
 import os
+import socket
 import subprocess
 import sys
 import tempfile
@@ -70,6 +71,13 @@ def main():
         try:
             subject = {"subject_id": "example-policy", "kind": "product", "path": "/example-policy/"}
             assert call("/reviews-admin/v1/subjects", subject)[0] == 401
+            with socket.create_connection(("127.0.0.1", PORT), timeout=5) as stalled:
+                stalled.settimeout(5)
+                stalled.sendall(
+                    b"POST /reviews-admin/v1/subjects HTTP/1.1\r\nHost: localhost\r\n"
+                    b"Content-Type: application/json\r\nContent-Length: 10\r\n\r\n{"
+                )
+                assert b"401" in stalled.recv(1024)
             created = call("/reviews-admin/v1/subjects", subject, admin=True)
             assert created[0] == 201, created
             summary_path = "/reviews/v1/subjects/example-policy/summary"

@@ -1,5 +1,6 @@
 """Test-only native Reviews lifecycle; no external identity or anti-abuse provider."""
 
+import asyncio
 import hashlib
 import hmac
 import json
@@ -43,6 +44,51 @@ def unique_pairs(pairs):
 def invalid_constant(_value):
     """Reject non-finite JSON numbers."""
     raise ValueError("non-finite number")
+
+
+async def await_promise(promise, timeout):
+    """Bound an awaitable JavaScript stream operation."""
+
+    async def wait():
+        return await promise
+
+    return await asyncio.wait_for(wait(), timeout=timeout)
+
+
+async def discard_body(request):
+    """Best-effort bounded drain of a rejected body, with a total deadline."""
+    reader = None
+    try:
+        length = request.headers.get("Content-Length")
+        if length == "0" or request.body is None or request.bodyUsed:
+            return
+        reader = request.body.getReader()
+        if not length or not str(length).isdigit() or int(length) > 16384:
+            await await_promise(reader.cancel(), 0.25)
+            return
+        received, deadline = 0, time.monotonic() + 1.0
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise TimeoutError("body deadline")
+            chunk = await await_promise(reader.read(), remaining)
+            if chunk.done:
+                return
+            received += int(chunk.value.length)
+            if received > 16384:
+                raise ValueError("body limit")
+    except Exception:
+        if reader is not None:
+            try:
+                await await_promise(reader.cancel(), 0.25)
+            except Exception:
+                pass
+    finally:
+        if reader is not None:
+            try:
+                reader.releaseLock()
+            except Exception:
+                pass
 
 
 def admin_ok(request, env):
@@ -95,14 +141,29 @@ async def read_json(request):
         raise ValueError("invalid request size")
     reader = request.body.getReader()
     data = bytearray()
-    while True:
-        chunk = await reader.read()
-        if chunk.done:
-            break
-        if len(data) + int(chunk.value.length) > 16384:
-            await reader.cancel()
-            raise ValueError("invalid request size")
-        data.extend(chunk.value.to_py())
+    deadline = time.monotonic() + 2.0
+    try:
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise TimeoutError("body deadline")
+            chunk = await await_promise(reader.read(), remaining)
+            if chunk.done:
+                break
+            if len(data) + int(chunk.value.length) > 16384:
+                raise ValueError("invalid request size")
+            data.extend(chunk.value.to_py())
+    except Exception as exc:
+        try:
+            await await_promise(reader.cancel(), 0.25)
+        except Exception:
+            pass
+        raise ValueError("invalid request body") from exc
+    finally:
+        try:
+            reader.releaseLock()
+        except Exception:
+            pass
     if len(data) != int(length):
         raise ValueError("invalid request size")
     value = json.loads(bytes(data), object_pairs_hook=unique_pairs, parse_constant=invalid_constant)
@@ -123,11 +184,14 @@ async def handle_write(request, env, path):
     """Handle test-only writes; no production credentials or identity are implied."""
     store, environment = str(env.REVIEWS_STORE_KEY), str(env.REVIEWS_ENVIRONMENT)
     if environment != "test" or len(str(getattr(env, "REVIEWS_TEST_ADMIN_TOKEN", ""))) < 32:
+        await discard_body(request)
         return fail(503, "collection unavailable")
     if str(request.method) != "POST":
+        await discard_body(request)
         return fail(405, "method not allowed")
     admin = path.startswith("/reviews-admin/")
     if admin and not admin_ok(request, env):
+        await discard_body(request)
         return fail(401, "unauthorized")
     db, now = env.REVIEWS_DB, int(time.time())
     rate_action = {"/reviews-admin/v1/test-capabilities": "issue", "/reviews/v1/contributions": "submit"}.get(path)
@@ -142,10 +206,12 @@ async def handle_write(request, env, path):
                 ]
             )
         except Exception:
+            await discard_body(request)
             return fail(429, "rate limit exceeded")
     try:
         data = await read_json(request)
     except (ValueError, TypeError, json.JSONDecodeError):
+        await discard_body(request)
         return fail(400, "invalid request")
     if path == "/reviews-admin/v1/subjects":
         if (
