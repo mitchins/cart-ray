@@ -75,6 +75,7 @@ def lifecycle():
     with patch.dict(sys.modules, {"js": js, "workers": workers, "pyodide": pyodide, "pyodide.ffi": ffi}):
         spec.loader.exec_module(module)
     module.random_token = lambda: secrets.token_hex(32)
+    module.actual_read_json = module.read_json
 
     async def decode(request):
         return request.data
@@ -240,3 +241,109 @@ def test_worker_enforces_modes_and_scope(lifecycle):
     response = fetch(path)
     assert response.status == 200
     assert response.body["rating"] == {"average": None, "rated_count": 0}
+
+
+def test_body_validation_and_single_reader_cleanup(lifecycle):
+    class Bytes:
+        def __init__(self, value):
+            self.value = value
+            self.length = len(value)
+
+        def to_py(self):
+            return self.value
+
+    class Reader:
+        def __init__(self, chunks):
+            self.chunks = iter(chunks)
+            self.cancelled = 0
+            self.released = 0
+
+        async def read(self):
+            value = next(self.chunks, None)
+            if value == b"timeout":
+                raise TimeoutError("deadline")
+            return types.SimpleNamespace(done=value is None, value=Bytes(value) if value is not None else None)
+
+        async def cancel(self):
+            self.cancelled += 1
+
+        def releaseLock(self):
+            self.released += 1
+
+    class Body:
+        def __init__(self, reader):
+            self.reader, self.acquired = reader, 0
+
+        def getReader(self):
+            self.acquired += 1
+            return self.reader
+
+    async def await_promise(value, _timeout):
+        return await value
+
+    lifecycle.await_promise = await_promise
+    for raw, expected in ((b'{"a":1}', {"a": 1}), (b'{"a":1,"a":2}', None), (b"[1]", None)):
+        reader = Reader([raw])
+        body = Body(reader)
+        request = types.SimpleNamespace(
+            headers={"Content-Length": str(len(raw)), "Content-Type": "application/json"}, body=body
+        )
+        if expected is None:
+            with pytest.raises(ValueError):
+                asyncio.run(lifecycle.actual_read_json(request))
+        else:
+            assert asyncio.run(lifecycle.actual_read_json(request)) == expected
+        assert body.acquired == 1 and reader.released == 1
+    reader = Reader([b"timeout"])
+    body = Body(reader)
+    request = types.SimpleNamespace(headers={"Content-Length": "10", "Content-Type": "application/json"}, body=body)
+    with pytest.raises(ValueError):
+        asyncio.run(lifecycle.actual_read_json(request))
+    assert body.acquired == 1 and reader.cancelled == 1 and reader.released == 1
+
+
+def test_moderation_queue_is_scoped_and_private(lifecycle):
+    db = Database()
+    env = types.SimpleNamespace(
+        REVIEWS_DB=db, REVIEWS_STORE_KEY="store", REVIEWS_ENVIRONMENT="test", REVIEWS_TEST_ADMIN_TOKEN="s" * 40
+    )
+    assert (
+        invoke(
+            lifecycle,
+            env,
+            "/reviews-admin/v1/subjects",
+            {"subject_id": "policy", "kind": "product", "path": "/"},
+            admin=True,
+        ).status
+        == 201
+    )
+    proof = invoke(
+        lifecycle,
+        env,
+        "/reviews-admin/v1/test-capabilities",
+        {"subject_id": "policy", "test_reviewer": "guest"},
+        admin=True,
+    ).body["test_capability"]
+    assert (
+        invoke(
+            lifecycle,
+            env,
+            "/reviews/v1/contributions",
+            {"subject_id": "policy", "author": "Guest", "body": "Private", "test_capability": proof},
+            key="key",
+        ).status
+        == 202
+    )
+    request = types.SimpleNamespace(headers={})
+    assert asyncio.run(lifecycle.pending_read(request, env, "")).status == 401
+    request.headers["Authorization"] = "Bearer " + env.REVIEWS_TEST_ADMIN_TOKEN
+    assert asyncio.run(lifecycle.pending_read(request, env, "bad=value")).status == 400
+    assert asyncio.run(lifecycle.pending_read(request, env, "after=bad")).status == 400
+    response = asyncio.run(lifecycle.pending_read(request, env, ""))
+    assert response.status == 200 and response.headers["Cache-Control"] == "no-store"
+    assert response.body["pending"][0]["body"] == "Private"
+    assert proof not in str(response.body)
+    env.REVIEWS_STORE_KEY = "another-store"
+    assert asyncio.run(lifecycle.pending_read(request, env, "")).body["pending"] == []
+    env.REVIEWS_ENVIRONMENT = "live"
+    assert asyncio.run(lifecycle.pending_read(request, env, "")).status == 503
