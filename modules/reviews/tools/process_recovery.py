@@ -74,3 +74,29 @@ def process_one(
     except Exception:
         return {"status": "reconciliation required"}
     return {"status": result["state"]}
+
+
+def reconcile_delivery(post, *, delivery_token, claim, lookup):
+    """Apply an authoritative provider receipt without ever resending a message.
+
+    Unknown or unavailable provider status remains unresolved. The provider
+    must return the original acceptance time, not the time of reconciliation.
+    """
+    try:
+        receipt = lookup(claim["delivery_identity"])
+    except Exception:
+        return {"status": "reconciliation required"}
+    if not isinstance(receipt, dict) or receipt.get("delivery_identity") != claim["delivery_identity"]:
+        return {"status": "reconciliation required"}
+    state = receipt.get("status")
+    if state == "accepted" and type(receipt.get("accepted_at")) is int:
+        outcome = {"outcome": "accepted", "accepted_at": receipt["accepted_at"]}
+    elif state == "failed" and receipt.get("final") is True:
+        outcome = {"outcome": "failed"}
+    else:
+        return {"status": "reconciliation required"}
+    try:
+        result = post("/reviews-internal/v1/invitations/delivery-outcome", claim | outcome, delivery_token)
+    except Exception:
+        return {"status": "reconciliation required"}
+    return {"status": result["state"]}

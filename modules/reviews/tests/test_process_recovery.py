@@ -148,3 +148,83 @@ def test_unclaimed_delivery_is_never_sent(monkeypatch, tmp_path):
         landing_url="http://localhost/review/",
     )
     assert result == {"status": "reconciliation required"}
+
+
+def test_reconciliation_uses_provider_receipt_without_resending(lifecycle):
+    from cartray_reviews.invitations import claim_delivery, prepare_replacement
+
+    reviews, commerce = stores()
+    issue(reviews, commerce)
+    draft = asyncio.run(
+        prepare_replacement(
+            reviews,
+            store="store",
+            environment="test",
+            acquisition="order_1",
+            request_key="receipt-test",
+            key_version="v1",
+            secret=b"c" * 40,
+            now=101,
+            random_token=lambda: "9" * 64,
+        )
+    )
+    claim = {"acquisition_id": "order_1", **{key: draft[key] for key in ("generation_id", "delivery_identity")}}
+    asyncio.run(
+        claim_delivery(
+            reviews,
+            store="store",
+            environment="test",
+            acquisition=claim["acquisition_id"],
+            generation=claim["generation_id"],
+            delivery=claim["delivery_identity"],
+            now=102,
+        )
+    )
+    env = SimpleNamespace(
+        REVIEWS_DB=reviews,
+        CARTRAY_DB=commerce,
+        REVIEWS_STORE_KEY="store",
+        REVIEWS_ENVIRONMENT="test",
+        REVIEWS_MODE="verified_acquisition_only",
+        REVIEWS_TEST_ADMIN_TOKEN="a" * 40,
+        REVIEWS_SETTLEMENT_TOKEN="b" * 40,
+        REVIEWS_INVITATION_KEY="c" * 40,
+        REVIEWS_REVIEWER_KEY="d" * 40,
+        REVIEWS_DELIVERY_TOKEN="f" * 40,
+    )
+
+    def post(path, data, credential):
+        request = SimpleNamespace(
+            method="POST", headers={"Authorization": "Bearer " + credential}, data=data, body=None
+        )
+        response = asyncio.run(lifecycle.handle_write(request, env, path))
+        if response.status >= 400:
+            raise ValueError("request unavailable")
+        return response.body
+
+    args = dict(post=post, delivery_token=env.REVIEWS_DELIVERY_TOKEN, claim=claim)
+
+    def provider_unavailable(_delivery):
+        raise ConnectionError("provider unavailable")
+
+    with patch.object(lifecycle.time, "time", return_value=200):
+        assert processor.reconcile_delivery(**args, lookup=provider_unavailable) == {
+            "status": "reconciliation required"
+        }
+        assert processor.reconcile_delivery(**args, lookup=lambda _: None) == {"status": "reconciliation required"}
+        assert processor.reconcile_delivery(
+            **args, lookup=lambda _: {"status": "accepted", "delivery_identity": "0" * 64, "accepted_at": 103}
+        ) == {"status": "reconciliation required"}
+        assert processor.reconcile_delivery(
+            **args,
+            lookup=lambda _: {"status": "failed", "delivery_identity": claim["delivery_identity"], "final": False},
+        ) == {"status": "reconciliation required"}
+        assert reviews.db.execute("SELECT state FROM invitation_generations").fetchone()[0] == "dispatching"
+        receipt = {"status": "accepted", "delivery_identity": claim["delivery_identity"], "accepted_at": 103}
+        assert processor.reconcile_delivery(**args, lookup=lambda _: receipt) == {"status": "accepted"}
+        assert processor.reconcile_delivery(**args, lookup=lambda _: receipt) == {"status": "accepted"}
+        assert processor.reconcile_delivery(**args, lookup=lambda _: receipt | {"accepted_at": 104}) == {
+            "status": "reconciliation required"
+        }
+    expires = reviews.db.execute("SELECT expires_at FROM acquisition_invitations").fetchone()[0]
+    assert expires == 103 + 60 * 86400
