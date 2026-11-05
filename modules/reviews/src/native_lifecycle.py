@@ -7,6 +7,7 @@ import re
 import time
 from urllib.parse import parse_qs
 
+from cartray_reviews.invitations import issue_from_settlement, redeem_purchase, revoke_purchase
 from js import Promise, Uint8Array, clearTimeout, crypto, setTimeout
 from pyodide.ffi import create_proxy, to_js
 from workers import Response
@@ -209,6 +210,70 @@ async def handle_write(request, env, path):
     if str(request.method) != "POST":
         await discard_body(request)
         return fail(405, "method not allowed")
+    acquisition_mode = str(getattr(env, "REVIEWS_MODE", "")) == "verified_acquisition_only"
+    if acquisition_mode:
+        secrets = (
+            str(getattr(env, "REVIEWS_SETTLEMENT_TOKEN", "")),
+            str(getattr(env, "REVIEWS_INVITATION_KEY", "")),
+            str(getattr(env, "REVIEWS_REVIEWER_KEY", "")),
+            str(getattr(env, "REVIEWS_TEST_ADMIN_TOKEN", "")),
+        )
+        if (
+            any(len(secret) < 32 for secret in secrets)
+            or len(set(secrets)) != 4
+            or getattr(env, "CARTRAY_DB", None) is None
+        ):
+            await discard_body(request)
+            return fail(503, "collection unavailable")
+    if path in ("/reviews-internal/v1/settlements", "/reviews-internal/v1/invitations/revoke"):
+        issuer = str(getattr(env, "REVIEWS_SETTLEMENT_TOKEN", ""))
+        supplied = str(request.headers.get("Authorization") or "")
+        if (
+            not acquisition_mode
+            or len(issuer) < 32
+            or issuer == str(env.REVIEWS_TEST_ADMIN_TOKEN)
+            or not hmac.compare_digest(supplied.encode(), ("Bearer " + issuer).encode())
+        ):
+            await discard_body(request)
+            return fail(401, "unauthorized")
+        try:
+            data = await read_json(request)
+            if path == "/reviews-internal/v1/invitations/revoke":
+                if set(data) != {"invitation_token"}:
+                    return fail(400, "invalid invitation")
+                await revoke_purchase(
+                    env.REVIEWS_DB,
+                    store=store,
+                    environment=environment,
+                    token=data["invitation_token"],
+                    now=int(time.time()),
+                )
+                return Response.json({"status": "revoked"}, headers={"Cache-Control": "no-store"})
+            if set(data) != {"event_id", "recipient_context_hash"}:
+                return fail(400, "invalid settlement")
+            token_key = str(getattr(env, "REVIEWS_INVITATION_KEY", ""))
+            reviewer_secret = str(getattr(env, "REVIEWS_REVIEWER_KEY", ""))
+            if (
+                len(token_key) < 32
+                or len(reviewer_secret) < 32
+                or len({issuer, token_key, reviewer_secret, str(env.REVIEWS_TEST_ADMIN_TOKEN)}) != 4
+            ):
+                return fail(503, "collection unavailable")
+            mappings = json.loads(str(getattr(env, "REVIEWS_SUBJECT_MAPS", "")))
+            result = await issue_from_settlement(
+                env.REVIEWS_DB,
+                env.CARTRAY_DB,
+                store=store,
+                environment=environment,
+                event_id=data["event_id"],
+                subject_maps=mappings,
+                recipient_context_hash=data["recipient_context_hash"],
+                token_key=token_key.encode(),
+                now=int(time.time()),
+            )
+            return Response.json(result, status=201, headers={"Cache-Control": "no-store"})
+        except (ValueError, TypeError, AttributeError, KeyError):
+            return fail(409, "settlement unavailable")
     admin = path.startswith("/reviews-admin/")
     if admin and not admin_ok(request, env):
         await discard_body(request)
@@ -267,6 +332,8 @@ async def handle_write(request, env, path):
             return fail(409, "subject conflict")
         return Response.json({"subject_id": sid}, status=201)
     if path == "/reviews-admin/v1/test-capabilities":
+        if acquisition_mode:
+            return fail(404, "not found")
         if (
             set(data) != {"subject_id", "test_reviewer"}
             or not isinstance(data["subject_id"], str)
@@ -303,16 +370,17 @@ async def handle_write(request, env, path):
             headers={"Cache-Control": "no-store"},
         )
     if path == "/reviews/v1/contributions":
-        if not {"subject_id", "author", "test_capability"} <= set(data) or set(data) - {
+        proof_field = "invitation_token" if acquisition_mode else "test_capability"
+        if not {"subject_id", "author", proof_field} <= set(data) or set(data) - {
             "subject_id",
             "author",
             "title",
             "body",
             "rating",
-            "test_capability",
+            proof_field,
         }:
             return fail(400, "invalid submission")
-        sid, author, proof = (data[k] for k in ("subject_id", "author", "test_capability"))
+        sid, author, proof = (data[k] for k in ("subject_id", "author", proof_field))
         title, body, rating = (data.get(k) for k in ("title", "body", "rating"))
         key = str(request.headers.get("Idempotency-Key") or "")
         if (
@@ -334,6 +402,26 @@ async def handle_write(request, env, path):
         body = body or ""
         if rating is None and not body.strip() and not (title and title.strip()):
             return fail(400, "empty submission")
+        if acquisition_mode:
+            try:
+                result = await redeem_purchase(
+                    db,
+                    store=store,
+                    environment=environment,
+                    subject=sid,
+                    token=proof,
+                    request_key=key,
+                    author=author,
+                    title=title,
+                    body=body,
+                    rating=rating,
+                    reviewer_key_secret=str(getattr(env, "REVIEWS_REVIEWER_KEY", "")).encode(),
+                    now=now,
+                    random_token=random_token,
+                )
+            except ValueError:
+                return fail(409, "submission unavailable")
+            return Response.json(result, status=202, headers={"Cache-Control": "no-store"})
         digest = hashlib.sha256(
             json.dumps([sid, author, title, body, rating], ensure_ascii=True, separators=(",", ":")).encode()
         ).hexdigest()
@@ -541,7 +629,10 @@ async def native_read(db, store, environment, subject_id, endpoint, params, nati
             return fail(400, "invalid cursor")
         cursor_time, cursor_id = cursor[0]["created_at"], after
     query = (
-        "SELECT r.review_id,r.created_at,v.author,v.title,v.body,v.rating FROM native_reviews r "
+        "SELECT r.review_id,r.created_at,v.author,v.title,v.body,v.rating, "
+        "EXISTS(SELECT 1 FROM native_review_acquisitions a WHERE a.store_key=r.store_key "
+        "AND a.environment=r.environment AND a.review_id=r.review_id AND a.subject_id=r.subject_id) verified_purchase "
+        "FROM native_reviews r "
         "JOIN native_revisions v ON v.store_key=r.store_key AND v.environment=r.environment AND "
         "v.revision_id=r.revision_id "
         "WHERE r.store_key=? AND r.environment=? AND r.subject_id=? AND r.state='published' "
@@ -570,7 +661,7 @@ async def native_read(db, store, environment, subject_id, endpoint, params, nati
             "body": x["body"],
             "rating": x["rating"],
             "created_at": x["created_at"],
-            "verification": "unverified",
+            "verification": "cartray_verified_acquisition" if x["verified_purchase"] else "unverified",
             "replies": [],
         }
         for x in found[:limit]

@@ -1,24 +1,29 @@
 {
   "name": "cartray-reviews",
-  "version": "0.0.2",
+  "version": "0.0.3",
   "installation": "explicit",
   "default_mode": "disabled",
   "supported_modes": [
     "disabled",
     "read_only",
-    "collect"
+    "collect",
+    "verified_acquisition_only"
   ],
   "migrations": [
     "migrations/0001_native_subjects.sql",
     "migrations/0002_native_reviews.sql",
-    "migrations/0003_native_lifecycle.sql"
+    "migrations/0003_native_lifecycle.sql",
+    "migrations/0004_acquisition_invitations.sql"
   ],
   "routes": [
     "GET /reviews/v1/subjects/{subject_id}/summary",
     "GET /reviews/v1/subjects/{subject_id}/contributions",
     "POST /reviews/v1/contributions (collect, test only)",
     "GET /reviews-admin/v1/pending (collect, test only)",
-    "POST /reviews-admin/v1/* (collect, test only)"
+    "POST /reviews-admin/v1/* (collect, test only)",
+    "POST /reviews-internal/v1/settlements (verified_acquisition_only, test only)",
+    "POST /reviews-internal/v1/invitations/revoke (verified_acquisition_only, test only)",
+    "POST /reviews/v1/contributions (verified_acquisition_only, test only)"
   ],
   "subscriptions": [],
   "scheduled_tasks": []

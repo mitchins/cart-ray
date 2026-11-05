@@ -15,6 +15,8 @@ SOURCES = (
     "worker.py",
     "native_lifecycle.py",
     "cartray_reviews/__init__.py",
+    "cartray_reviews/acquisition.py",
+    "cartray_reviews/invitations.py",
     "cartray_reviews/snapshot.py",
     "cartray_reviews/storage.py",
 )
