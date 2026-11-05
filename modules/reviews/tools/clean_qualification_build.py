@@ -158,6 +158,7 @@ def main():
                 raise RuntimeError(f"vendored artifact hashes do not match uv.lock: {package['name']}")
         vendor = project / "python_modules"
         bundled_vendor = project / "bundle/python_modules"
+        expected_vendor_files = {Path(".synced"), Path("pyvenv.cfg")}
         for package_name, version in versions.items():
             normalized = package_name.replace("-", "_")
             metadata = list(vendor.glob(f"{normalized}-*.dist-info"))
@@ -173,18 +174,26 @@ def main():
                 raise RuntimeError(f"locked wheel hash mismatch: {package_name}")
             with zipfile.ZipFile(io.BytesIO(wheel_bytes)) as wheel:
                 for entry in wheel.infolist():
-                    if entry.is_dir() or entry.filename.endswith(".dist-info/RECORD"):
-                        continue  # installers rewrite RECORD to describe the installation
+                    if entry.is_dir():
+                        continue
                     parts = Path(entry.filename).parts
                     if not parts or ".." in parts or Path(entry.filename).is_absolute():
                         raise RuntimeError("unsafe wheel entry")
+                    expected_vendor_files.add(Path(entry.filename))
+                    if entry.filename.endswith(".dist-info/RECORD"):
+                        continue  # installers rewrite RECORD to describe the installation
                     installed = vendor / entry.filename
                     if not installed.is_file() or installed.read_bytes() != wheel.read(entry):
                         raise RuntimeError(f"vendored file differs from locked wheel: {entry.filename}")
+            expected_vendor_files.update(
+                {metadata[0].relative_to(vendor) / "INSTALLER", metadata[0].relative_to(vendor) / "REQUESTED"}
+            )
         if not (vendor / "workers/__init__.py").is_file():
             raise RuntimeError("Workers SDK Python module missing from vendor directory")
         vendor_files = {path.relative_to(vendor) for path in vendor.rglob("*") if path.is_file()}
         bundle_files = {path.relative_to(bundled_vendor) for path in bundled_vendor.rglob("*") if path.is_file()}
+        if vendor_files != expected_vendor_files:
+            raise RuntimeError("vendored file set differs from locked wheel and installer metadata")
         if vendor_files != bundle_files:
             raise RuntimeError("vendored file set differs from bundle")
         for relative in vendor_files:
