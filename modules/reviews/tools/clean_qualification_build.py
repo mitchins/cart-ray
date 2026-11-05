@@ -67,16 +67,22 @@ def main():
                 ]
             )
         (project / "pylock.toml").write_text("\n".join(seed) + "\n")
+        # pywrangler derives its vendoring requirements from the project
+        # manifest. The repository-root manifest belongs to commerce and would
+        # silently add kinglet back to the independent Reviews deployment.
+        sdk_version = locked["workers-runtime-sdk"]["version"]
+        (project / "pyproject.toml").write_text(
+            '[project]\nname = "cartray-reviews-qualification"\nversion = "0.0.0"\n'
+            'requires-python = ">=3.13.2"\n'
+            f'dependencies = ["workers-runtime-sdk=={sdk_version}"]\n'
+        )
         config = (project / "modules/reviews/wrangler.test.toml").read_text()
         config = config.replace('main = "src/worker.py"', 'main = "modules/reviews/src/worker.py"')
         config = config.replace('migrations_dir = "migrations"', 'migrations_dir = "modules/reviews/migrations"')
         (project / "qualification.toml").write_text(config)
         run(
             [
-                "uv",
-                "run",
-                "--locked",
-                "pywrangler",
+                str(project / ".venv/bin/pywrangler"),
                 "deploy",
                 "--config",
                 "qualification.toml",
