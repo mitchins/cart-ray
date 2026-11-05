@@ -210,9 +210,15 @@ def main():
         if not (project / "bundle/python_modules").is_dir():
             raise RuntimeError("vendored Python modules absent from bundle")
         bundle_hash = hashlib.sha256()
+        deployable_hash = hashlib.sha256()
         for path in sorted(path for path in (project / "bundle").rglob("*") if path.is_file()):
-            bundle_hash.update(str(path.relative_to(project / "bundle")).encode() + b"\0")
-            bundle_hash.update(hashlib.sha256(path.read_bytes()).digest())
+            relative = path.relative_to(project / "bundle")
+            entry = str(relative).encode() + b"\0" + hashlib.sha256(path.read_bytes()).digest()
+            bundle_hash.update(entry)
+            # Wrangler generates this local explanation with a timestamp on
+            # each dry run. It is not a Worker module or deployment asset.
+            if relative != Path("README.md"):
+                deployable_hash.update(entry)
         workerd = subprocess.check_output(
             [str(project / "node_modules/.bin/workerd"), "--version"], cwd=project, text=True
         ).strip()
@@ -228,6 +234,7 @@ def main():
                     "vendored_versions": versions,
                     "runtime_source_sha256": hashes,
                     "bundle_content_sha256": bundle_hash.hexdigest(),
+                    "deployable_content_sha256": deployable_hash.hexdigest(),
                 },
                 indent=2,
             )
