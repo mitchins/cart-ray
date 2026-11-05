@@ -35,6 +35,8 @@ jobs:
           uv run python modules/reviews/tests/verify_wheel.py /tmp/cartray-reviews-wheel
       - name: Exercise Reviews installer, ingestion and Workerd D1 API
         run: uv run python modules/reviews/tests/workerd_integration.py
+      - name: Qualify stalled uploads against direct Workerd
+        run: uv run python modules/reviews/tests/stream_repro/direct_gate.py
       - name: Exercise local native Reviews lifecycle on Workerd and D1
         run: REVIEWS_TEST_VERBOSE=1 uv run python modules/reviews/tests/native_workerd.py
       - run: npm run test:m11a-projection

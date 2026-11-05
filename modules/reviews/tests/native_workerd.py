@@ -102,21 +102,24 @@ def main():
                     )
                 assert time.monotonic() - started < 5
 
-            incomplete_request(authorized=False)
+            proxy_diagnostic = os.environ.get("REVIEWS_PROXY_STALL_DIAGNOSTIC") == "1"
+            if proxy_diagnostic:
+                incomplete_request(authorized=False)
             created = call("/reviews-admin/v1/subjects", subject, admin=True)
             assert created[0] == 201, created
             assert query("SELECT COUNT(*) n FROM native_audit")[0]["n"] == 0
             summary_path = "/reviews/v1/subjects/example-policy/summary"
             list_path = "/reviews/v1/subjects/example-policy/contributions"
-            for _ in range(10):
-                assert proc.poll() is None and call(summary_path)[0] == 200
-                time.sleep(1)
-            incomplete_request(authorized=True)
-            assert query("SELECT COUNT(*) n FROM review_subjects")[0]["n"] == 1
-            assert query("SELECT COUNT(*) n FROM native_audit")[0]["n"] == 0
-            for _ in range(10):
-                assert proc.poll() is None and call(summary_path)[0] == 200
-                time.sleep(1)
+            if proxy_diagnostic:
+                for _ in range(10):
+                    assert proc.poll() is None and call(summary_path)[0] == 200
+                    time.sleep(1)
+                incomplete_request(authorized=True)
+                assert query("SELECT COUNT(*) n FROM review_subjects")[0]["n"] == 1
+                assert query("SELECT COUNT(*) n FROM native_audit")[0]["n"] == 0
+                for _ in range(10):
+                    assert proc.poll() is None and call(summary_path)[0] == 200
+                    time.sleep(1)
             assert call(summary_path)[1]["rating"] == {"average": None, "rated_count": 0}
             status, issued = call(
                 "/reviews-admin/v1/test-capabilities",
