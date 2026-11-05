@@ -51,9 +51,12 @@ class Database:
     async def batch(self, statements):
         try:
             self.db.execute("BEGIN")
+            results = []
             for statement in statements:
-                self.db.execute(statement.sql, statement.values)
+                cursor = self.db.execute(statement.sql, statement.values)
+                results.append(types.SimpleNamespace(results=[dict(row) for row in cursor.fetchall()]))
             self.db.commit()
+            return results
         except Exception:
             self.db.rollback()
             raise

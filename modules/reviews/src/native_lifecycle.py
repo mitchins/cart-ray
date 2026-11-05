@@ -481,9 +481,9 @@ async def handle_write(request, env, path):
                 .all()
             )
             if not eligible:
-                return fail(429, "submission unavailable; please try again later")
+                return fail(409, "submission unavailable")
             try:
-                await db.batch(
+                rate_results = await db.batch(
                     [
                         db.prepare(
                             "INSERT INTO native_guard SELECT CASE WHEN EXISTS(SELECT 1 FROM "
@@ -498,6 +498,13 @@ async def handle_write(request, env, path):
                             "INSERT INTO acquisition_rate_backstop VALUES (?,?,?,1) "
                             "ON CONFLICT(store_key,environment,window) DO UPDATE SET count=count+1"
                         ).bind(store, environment, now // 60),
+                        db.prepare(
+                            "INSERT INTO acquisition_rate_maintenance VALUES (?,?,1) "
+                            "ON CONFLICT(store_key,environment) DO UPDATE SET operations=operations+1"
+                        ).bind(store, environment),
+                        db.prepare(
+                            "SELECT operations FROM acquisition_rate_maintenance WHERE store_key=? AND environment=?"
+                        ).bind(store, environment),
                         db.prepare("DELETE FROM native_guard"),
                     ]
                 )
@@ -505,7 +512,7 @@ async def handle_write(request, env, path):
                 return fail(429, "submission unavailable; please try again later")
             # Amortized, bounded retention; no cleanup runs for invalid tokens
             # and the normal request does not pay for a cleanup write.
-            if int(random_token()[:2], 16) == 0:
+            if rows(rate_results[-2])[0]["operations"] % 64 == 0:
                 try:
                     await db.batch(
                         [

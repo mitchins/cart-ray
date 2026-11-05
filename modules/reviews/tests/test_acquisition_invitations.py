@@ -111,17 +111,14 @@ def test_invalid_capability_flood_does_not_exhaust_store_allowance(lifecycle):
     reviews.db.execute("INSERT INTO native_rate_limits VALUES ('store','test','purchase-submit:old',-3000,1)")
     reviews.db.execute("INSERT INTO native_rate_limits VALUES ('store','test','issue',-3000,1)")
     reviews.db.execute("INSERT INTO acquisition_rate_backstop VALUES ('store','test',-3000,1)")
+    reviews.db.execute("INSERT INTO acquisition_rate_maintenance VALUES ('store','test',63)")
     reviews.db.commit()
     with patch.object(lifecycle.time, "time", return_value=101):
         for index in range(40):
             invalid = format(index + 1, "064x")
-            assert invoke(lifecycle, env, path, base | {"invitation_token": invalid}, key=f"bad-{index}").status == 429
+            assert invoke(lifecycle, env, path, base | {"invitation_token": invalid}, key=f"bad-{index}").status == 409
         assert reviews.db.execute("SELECT COUNT(*) FROM acquisition_rate_backstop").fetchone()[0] == 1
-        with patch.object(lifecycle, "random_token", return_value="00" * 32):
-            assert (
-                invoke(lifecycle, env, path, base | {"invitation_token": invitation["token"]}, key="valid").status
-                == 202
-            )
+        assert invoke(lifecycle, env, path, base | {"invitation_token": invitation["token"]}, key="valid").status == 202
     assert reviews.db.execute("SELECT count FROM acquisition_rate_backstop").fetchone()[0] == 1
     assert (
         reviews.db.execute("SELECT COUNT(*) FROM native_rate_limits WHERE action='purchase-submit:old'").fetchone()[0]
