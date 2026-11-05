@@ -4,15 +4,18 @@ import asyncio
 import hashlib
 import hmac
 import json
+import mailbox
 import os
 import subprocess
 import sys
 import tempfile
+import time
 import urllib.error
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from pathlib import Path
+from urllib.parse import parse_qs, urlsplit
 
 from native_workerd import ADMIN, BASE, call
 from workerd_integration import MODULE, ROOT, start, stop
@@ -27,6 +30,8 @@ from cartray.store import SqliteOrderStore
 from cartray.stripe import CheckoutMetadataSealer, CheckoutMetadataVerifier
 
 ISSUER = "synthetic-settlement-issuer-token-0123456789"
+CONSENT_SECRET = "e" * 40
+DELIVERY_TOKEN = "f" * 40
 
 
 def synthetic_settlement(sql_path):
@@ -52,14 +57,17 @@ def synthetic_settlement(sql_path):
     catalogue = asyncio.run(create())
     checkout = CheckoutService(catalogue, SqliteOrderStore.in_memory(), FakePaymentGateway())
     signature = SyntheticSignature()
-    events = []
+    events, orders = [], []
     for index in range(2):
+        items = (CanonicalItem("TEST-TEMPLATE", 1),)
+        if index == 0:
+            items += (CanonicalItem("TEST-BUNDLE", 1),)
         _spec, session, event = _checkout_session(
             checkout,
             checkout.gateway,
-            CheckoutRequest(f"reviews-synthetic-{index}", catalogue.version, (CanonicalItem("TEST-TEMPLATE", 1),)),
+            CheckoutRequest(f"reviews-synthetic-{index}", catalogue.version, items),
             payment_status="paid",
-            amount_total_minor=5000,
+            amount_total_minor=7500 if index == 0 else 5000,
         )
         metadata = asyncio.run(
             CheckoutMetadataSealer("test", "synthetic", signature).seal(
@@ -72,12 +80,13 @@ def synthetic_settlement(sql_path):
         )
         assert asyncio.run(service.settle(event)) is False
         events.append(event.event_id)
+        orders.append(_spec.order_id)
     dumps = list(checkout.store.connection.iterdump())
     tables = ("orders", "order_items", "stripe_events", "checkout_sessions")
     inserts = [line for table in tables for line in dumps if line.startswith(f'INSERT INTO "{table}"')]
-    assert len(inserts) == 8
+    assert len(inserts) == 9
     sql_path.write_text("\n".join(inserts) + "\n")
-    return catalogue.version, events
+    return catalogue.version, events, orders
 
 
 def internal(path, payload, token):
@@ -94,6 +103,30 @@ def internal(path, payload, token):
         return exc.code, json.loads(exc.read())
 
 
+def signed_consent(event_id, recipient_hash):
+    payload = {
+        "event_id": event_id,
+        "recipient_context_hash": recipient_hash,
+        "evidence_reference": "synthetic-consent",
+        "granted_at": 1,
+    }
+    signed = json.dumps(
+        ["reviews-consent-v1", "example-store", "test", payload],
+        ensure_ascii=True,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode()
+    signature = hmac.new(CONSENT_SECRET.encode(), signed, hashlib.sha256).hexdigest()
+    request = urllib.request.Request(
+        BASE + "/reviews-internal/v1/consents",
+        data=json.dumps(payload).encode(),
+        headers={"Content-Type": "application/json", "X-Reviews-Consent-Signature": signature},
+        method="POST",
+    )
+    with urllib.request.urlopen(request, timeout=10) as response:
+        return response.status
+
+
 def main():
     with tempfile.TemporaryDirectory(prefix="reviews-acquisition-d1-") as directory:
         env = os.environ | {"REVIEWS_LOCAL_PERSIST_DIR": directory}
@@ -105,12 +138,15 @@ def main():
             [wrangler, "d1", "migrations", "apply", "cartray-acquisition-local-test", *common], cwd=ROOT, check=True
         )
         sql = Path(directory) / "synthetic.sql"
-        manifest, event_ids = synthetic_settlement(sql)
+        manifest, event_ids, order_ids = synthetic_settlement(sql)
         subprocess.run(
             [wrangler, "d1", "execute", "cartray-acquisition-local-test", *common, "--file", str(sql)],
             cwd=ROOT,
             check=True,
         )
+        recipients = ("buyer@example.test", "second@example.test")
+        trusted_recipients = dict(zip(order_ids, recipients, strict=True))
+        recipient_hashes = [hashlib.sha256(recipient.encode()).hexdigest() for recipient in recipients]
         process = start(
             "wrangler.acquisition.test.toml",
             directory,
@@ -120,20 +156,135 @@ def main():
                 "REVIEWS_SETTLEMENT_TOKEN": ISSUER,
                 "REVIEWS_INVITATION_KEY": "i" * 40,
                 "REVIEWS_REVIEWER_KEY": "r" * 40,
+                "REVIEWS_CONSENT_SECRET": CONSENT_SECRET,
+                "REVIEWS_DELIVERY_TOKEN": DELIVERY_TOKEN,
+                "REVIEWS_PUBLIC_STORE_NAME": "Example Store",
+                "REVIEWS_RECOVERY_MODE": "manual_test",
                 "REVIEWS_SUBJECT_MAPS": json.dumps(
-                    {manifest: {"TEST-TEMPLATE": "example-policy"}}, separators=(",", ":")
+                    {manifest: {"TEST-TEMPLATE": "example-policy", "TEST-BUNDLE": "example-bundle"}},
+                    separators=(",", ":"),
                 ),
             },
         )
         try:
             subject = {"subject_id": "example-policy", "kind": "product", "path": "/example-policy/"}
             assert call("/reviews-admin/v1/subjects", subject, admin=True)[0] == 201
-            event = {"event_id": event_ids[0], "recipient_context_hash": "a" * 64}
+            assert (
+                call(
+                    "/reviews-admin/v1/subjects",
+                    {"subject_id": "example-bundle", "kind": "product", "path": "/example-bundle/"},
+                    admin=True,
+                )[0]
+                == 201
+            )
+            assert (
+                call(
+                    "/reviews-admin/v1/subject-display-names",
+                    {"subject_id": "example-bundle", "public_name": "Example bundle"},
+                    admin=True,
+                )[0]
+                == 200
+            )
+            assert (
+                call(
+                    "/reviews-admin/v1/subject-display-names",
+                    {"subject_id": "example-policy", "public_name": "Example policy"},
+                    admin=True,
+                )[0]
+                == 200
+            )
+            event = {
+                "event_id": event_ids[0],
+                "recipient_context_hash": recipient_hashes[0],
+                "request_key": "initial-1",
+            }
             endpoint = "/reviews-internal/v1/settlements"
             assert internal(endpoint, event, ADMIN)[0] == 401
+            assert internal(endpoint, event, ISSUER)[0] == 409
+            counts = subprocess.run(
+                [
+                    wrangler,
+                    "d1",
+                    "execute",
+                    "cartray-reviews-local-test",
+                    *common,
+                    "--json",
+                    "--command",
+                    "SELECT COUNT(*) AS count FROM acquisition_invitations",
+                ],
+                cwd=ROOT,
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            assert json.loads(counts.stdout)[0]["results"][0]["count"] == 0
+            assert signed_consent(event_ids[0], recipient_hashes[0]) == 201
+            assert signed_consent(event_ids[1], recipient_hashes[1]) == 201
             status, invitation = internal(endpoint, event, ISSUER)
             assert status == 201, (status, invitation)
             assert internal(endpoint, event, ISSUER) == (status, invitation)
+            landing = "/reviews/v1/invitation"
+            capability = {"invitation_token": invitation["token"]}
+            assert call(landing, capability)[0] == 404
+            sys.path.insert(0, str(MODULE / "tools"))
+            from test_mailbox import deliver_bound_invitation
+
+            mailbox_path = Path(directory) / "synthetic-mail"
+            first_claim = {
+                "acquisition_id": invitation["acquisition_id"],
+                "generation_id": invitation["generation_id"],
+                "delivery_identity": invitation["delivery_identity"],
+            }
+            assert internal("/reviews-internal/v1/invitations/delivery-claim", first_claim, DELIVERY_TOKEN)[0] == 200
+            message_id = deliver_bound_invitation(
+                mailbox_path,
+                acquisition_id=invitation["acquisition_id"],
+                expected_recipient_hash=recipient_hashes[0],
+                resolve_recipient=trusted_recipients.get,
+                store_name="Example Store",
+                landing_url="http://127.0.0.1:3000/review/",
+                token=invitation["token"],
+            )
+            email = mailbox.Maildir(mailbox_path, create=False)[message_id].get_payload(decode=True).decode()
+            url = next(line for line in email.splitlines() if line.startswith("http://"))
+            emailed_token = parse_qs(urlsplit(url).fragment)["invitation"][0]
+            assert emailed_token == invitation["token"]
+            delivery = {
+                "acquisition_id": invitation["acquisition_id"],
+                "generation_id": invitation["generation_id"],
+                "delivery_identity": invitation["delivery_identity"],
+                "outcome": "accepted",
+                "accepted_at": int(time.time()),
+            }
+            with ThreadPoolExecutor(max_workers=2) as pool:
+                outcomes = list(
+                    pool.map(
+                        lambda _: internal(
+                            "/reviews-internal/v1/invitations/delivery-outcome", delivery, DELIVERY_TOKEN
+                        ),
+                        range(2),
+                    )
+                )
+            assert outcomes == [(200, {"state": "accepted"}), (200, {"state": "accepted"})], outcomes
+            capability = {"invitation_token": emailed_token}
+            draft_scope = hmac.new(
+                ("r" * 40).encode(),
+                json.dumps(
+                    ["reviews-draft-v1", "example-store", "test", invitation["acquisition_id"]], separators=(",", ":")
+                ).encode(),
+                hashlib.sha256,
+            ).hexdigest()
+            assert call(landing, capability) == (
+                200,
+                {
+                    "store_name": "Example Store",
+                    "draft_scope": draft_scope,
+                    "subjects": [
+                        {"subject_id": "example-bundle", "public_name": "Example bundle", "progress": "available"},
+                        {"subject_id": "example-policy", "public_name": "Example policy", "progress": "available"},
+                    ],
+                },
+            )
             assert call("/reviews-admin/v1/test-capabilities", {}, admin=True)[0] == 404
             assert call(endpoint)[0] == 404
             try:
@@ -158,6 +309,7 @@ def main():
             assert sorted(result[0] for _, result in outcomes) == [202, 409], outcomes
             winning_key, (status, pending) = next(item for item in outcomes if item[1][0] == 202)
             assert call("/reviews/v1/contributions", body, key=winning_key) == (status, pending)
+            assert [s["progress"] for s in call(landing, capability)[1]["subjects"]] == ["available", "submitted"]
             assert call("/reviews/v1/contributions", body, key="other-request")[0] == 409
             listing = "/reviews/v1/subjects/example-policy/contributions"
             assert call(listing)[1]["contributions"] == []
@@ -167,13 +319,125 @@ def main():
             public = call(listing)[1]
             assert public["contributions"][0]["verification"] == "cartray_verified_acquisition"
             assert invitation["token"] not in json.dumps(public)
+            subprocess.run(
+                [
+                    wrangler,
+                    "d1",
+                    "execute",
+                    "cartray-reviews-local-test",
+                    *common,
+                    "--command",
+                    "UPDATE acquisition_invitations SET expires_at=unixepoch()-1 "
+                    f"WHERE source_event_id='{event_ids[0]}'",
+                ],
+                cwd=ROOT,
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            assert call(landing, capability)[0] == 404
+            assert call("/reviews/v1/invitation-recovery", capability) == (202, {"status": "requested"})
+            queued = internal("/reviews-internal/v1/invitations/recovery-next", {}, ISSUER)[1]["pending"]
+            assert queued["acquisition_id"] == invitation["acquisition_id"]
+            previous_messages = set(mailbox.Maildir(mailbox_path, create=False).keys())
+            from process_recovery import process_one
+
+            def delivery_post(path, payload, credential):
+                result_status, result = internal(path, payload, credential)
+                if result_status >= 400:
+                    raise ValueError("delivery unavailable")
+                return result
+
+            assert process_one(
+                delivery_post,
+                issuer=ISSUER,
+                delivery_token=DELIVERY_TOKEN,
+                resolve_recipient=trusted_recipients.get,
+                mailbox_path=mailbox_path,
+                store_name="Example Store",
+                landing_url="http://127.0.0.1:3000/review/",
+            ) == {"status": "accepted"}
+            inbox = mailbox.Maildir(mailbox_path, create=False)
+            new_messages = set(inbox.keys()) - previous_messages
+            assert len(new_messages) == 1
+            replacement_email = inbox[new_messages.pop()].get_payload(decode=True).decode()
+            replacement_url = next(line for line in replacement_email.splitlines() if line.startswith("http://"))
+            replacement_token = parse_qs(urlsplit(replacement_url).fragment)["invitation"][0]
+            assert internal("/reviews-internal/v1/invitations/recovery-next", {}, ISSUER)[1]["pending"] is None
+            assert (
+                internal(
+                    "/reviews-internal/v1/invitations/recovery-prepare",
+                    {"event_id": event_ids[0], "request_id": queued["request_id"]},
+                    ISSUER,
+                )[0]
+                == 409
+            )
+            assert call(landing, capability)[0] == 404
+            capability = {"invitation_token": replacement_token}
+            assert call(landing, capability)[1]["draft_scope"] == draft_scope
+            assert [s["progress"] for s in call(landing, capability)[1]["subjects"]] == ["available", "submitted"]
+            assert call("/reviews/v1/contributions", body | capability, key=winning_key) == (status, pending)
+            second_body = {"subject_id": "example-bundle", "rating": 2, **capability}
+            status, second = call("/reviews/v1/contributions", second_body, key="second-product")
+            assert status == 202
+            assert [s["progress"] for s in call(landing, capability)[1]["subjects"]] == ["submitted", "submitted"]
+            second_action = "/reviews-admin/v1/contributions/" + second["review_id"] + "/approve"
+            assert call(second_action, {"revision_id": second["revision_id"]}, admin=True)[0] == 200
+            assert call("/reviews/v1/subjects/example-bundle/summary")[1]["rating"] == {"average": 2, "rated_count": 1}
+            management = "/reviews/v1/manage/" + second["review_id"] + "/"
+            management_capability = second["management_token"]
+            assert call(management + "read", {"management_token": management_capability})[1]["rating"] == 2
+            edit = {
+                "management_token": management_capability,
+                "revision_id": second["revision_id"],
+                "update": {"body": "Updated synthetic feedback", "rating": None},
+            }
+            edit_status, edited = call(management + "edit", edit, key="edit-second")
+            assert edit_status == 200 and edited["status"] == "pending"
+            assert call(management + "edit", edit, key="edit-second") == (edit_status, edited)
+            assert call("/reviews/v1/subjects/example-bundle/summary")[1]["rating"]["rated_count"] == 0
+            assert call(second_action, {"revision_id": edited["revision_id"]}, admin=True)[0] == 200
+            assert call("/reviews/v1/subjects/example-bundle/summary")[1]["contribution_count"] == 1
+            withdrawal = {"management_token": management_capability, "revision_id": edited["revision_id"]}
+            assert call(management + "withdraw", withdrawal, key="withdraw-second")[1]["status"] == "withdrawn"
+            assert call(management + "read", {"management_token": management_capability})[0] == 409
+            assert call("/reviews/v1/subjects/example-bundle/summary")[1]["contribution_count"] == 0
             revoke = "/reviews-internal/v1/invitations/revoke"
-            assert internal(revoke, {"invitation_token": invitation["token"]}, ADMIN)[0] == 401
-            assert internal(revoke, {"invitation_token": invitation["token"]}, ISSUER)[0] == 200
-            assert call("/reviews/v1/contributions", body, key=winning_key)[0] == 409
+            assert internal(revoke, capability, ADMIN)[0] == 401
+            assert internal(revoke, capability, ISSUER)[0] == 200
+            assert call("/reviews/v1/contributions", body | capability, key=winning_key)[0] == 409
             assert len(call(listing)[1]["contributions"]) == 1
-            status, fresh = internal(endpoint, {"event_id": event_ids[1], "recipient_context_hash": "b" * 64}, ISSUER)
+            status, fresh = internal(
+                endpoint,
+                {"event_id": event_ids[1], "recipient_context_hash": recipient_hashes[1], "request_key": "initial-2"},
+                ISSUER,
+            )
             assert status == 201
+            second_claim = {
+                "acquisition_id": fresh["acquisition_id"],
+                "generation_id": fresh["generation_id"],
+                "delivery_identity": fresh["delivery_identity"],
+            }
+            assert internal("/reviews-internal/v1/invitations/delivery-claim", second_claim, DELIVERY_TOKEN)[0] == 200
+            deliver_bound_invitation(
+                mailbox_path,
+                acquisition_id=fresh["acquisition_id"],
+                expected_recipient_hash=recipient_hashes[1],
+                resolve_recipient=trusted_recipients.get,
+                store_name="Example Store",
+                landing_url="http://127.0.0.1:3000/review/",
+                token=fresh["token"],
+            )
+            second_delivery = {
+                "acquisition_id": fresh["acquisition_id"],
+                "generation_id": fresh["generation_id"],
+                "delivery_identity": fresh["delivery_identity"],
+                "outcome": "accepted",
+                "accepted_at": int(time.time()),
+            }
+            assert (
+                internal("/reviews-internal/v1/invitations/delivery-outcome", second_delivery, DELIVERY_TOKEN)[0] == 200
+            )
             fresh_body = body | {"invitation_token": fresh["token"], "body": "Racing review"}
             with ThreadPoolExecutor(max_workers=2) as pool:
                 revoke_future = pool.submit(internal, revoke, {"invitation_token": fresh["token"]}, ISSUER)

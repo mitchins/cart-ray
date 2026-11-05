@@ -51,9 +51,12 @@ class Database:
     async def batch(self, statements):
         try:
             self.db.execute("BEGIN")
+            results = []
             for statement in statements:
-                self.db.execute(statement.sql, statement.values)
+                cursor = self.db.execute(statement.sql, statement.values)
+                results.append(types.SimpleNamespace(results=[dict(row) for row in cursor.fetchall()]))
             self.db.commit()
+            return results
         except Exception:
             self.db.rollback()
             raise
@@ -64,8 +67,9 @@ def lifecycle():
     js = types.ModuleType("js")
     for name in ("Promise", "Uint8Array", "clearTimeout", "crypto", "setTimeout"):
         setattr(js, name, None)
+    js.Object = types.SimpleNamespace(fromEntries=None)
     ffi = types.ModuleType("pyodide.ffi")
-    ffi.create_proxy = ffi.to_js = lambda value: value
+    ffi.create_proxy = ffi.to_js = lambda value, **_kwargs: value
     pyodide = types.ModuleType("pyodide")
     pyodide.ffi = ffi
     workers = types.ModuleType("workers")
@@ -85,6 +89,12 @@ def lifecycle():
 
 
 def invoke(module, env, path, data, *, admin=False, key=None):
+    if not hasattr(env, "REVIEWS_INGRESS"):
+
+        async def allow(_options):
+            return types.SimpleNamespace(success=True)
+
+        env.REVIEWS_INGRESS = types.SimpleNamespace(limit=allow)
     headers = {}
     if admin:
         headers["Authorization"] = "Bearer " + env.REVIEWS_TEST_ADMIN_TOKEN

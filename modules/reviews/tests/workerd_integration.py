@@ -55,7 +55,7 @@ def start(config, persist, mode=None, admin_token=None, extra_vars=None):
         command.extend(["--var", f"{name}:{value}"])
     output = None if os.environ.get("REVIEWS_TEST_VERBOSE") else subprocess.DEVNULL
     proc = subprocess.Popen(command, cwd=ROOT, stdout=output, stderr=output, start_new_session=True)
-    for _ in range(60):
+    for _ in range(180):
         if proc.poll() is not None:
             raise RuntimeError("worker exited before readiness")
         try:

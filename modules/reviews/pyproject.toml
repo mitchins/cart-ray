@@ -14,3 +14,4 @@ packages = ["src/cartray_reviews"]
 [tool.hatch.build.targets.wheel.force-include]
 "module.json" = "cartray_reviews/module.json"
 "migrations" = "cartray_reviews/migrations"
+"dispatch" = "cartray_reviews/dispatch"
