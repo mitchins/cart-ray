@@ -18,7 +18,7 @@ from cartray_reviews.invitations import (
     revoke_purchase,
 )
 from cartray_reviews.management import manage_review, management_token
-from js import Promise, Uint8Array, clearTimeout, crypto, setTimeout
+from js import Object, Promise, Uint8Array, clearTimeout, crypto, setTimeout
 from pyodide.ffi import create_proxy, to_js
 from workers import Response
 
@@ -259,6 +259,25 @@ async def handle_write(request, env, path):
         ):
             await discard_body(request)
             return fail(503, "collection unavailable")
+        if path.startswith("/reviews/v1/"):
+            source = str(request.headers.get("CF-Connecting-IP") or "local-test")
+            if len(source) > 64:
+                await discard_body(request)
+                return fail(400, "invalid request")
+            source_key = hmac.new(
+                str(env.REVIEWS_REVIEWER_KEY).encode(),
+                json.dumps(["reviews-ingress-v1", store, environment, source], separators=(",", ":")).encode(),
+                hashlib.sha256,
+            ).hexdigest()
+            try:
+                limiter = getattr(env, "REVIEWS_INGRESS", None)
+                decision = await limiter.limit(to_js({"key": source_key}, dict_converter=Object.fromEntries))
+                if not decision.success:
+                    await discard_body(request)
+                    return fail(429, "too many requests; please try again later")
+            except Exception:
+                await discard_body(request)
+                return fail(503, "collection unavailable")
     if path == "/reviews-internal/v1/consents":
         consent_secret = str(getattr(env, "REVIEWS_CONSENT_SECRET", ""))
         if not acquisition_mode or len(consent_secret) < 32 or consent_secret in secrets:

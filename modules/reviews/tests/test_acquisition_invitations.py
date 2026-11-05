@@ -1009,3 +1009,47 @@ def test_scoped_management_edits_and_withdraws_without_public_leak(lifecycle):
         for _ in range(30 - used):
             assert invoke(lifecycle, env, manage + "read", {"management_token": token}).status == 409
         assert invoke(lifecycle, env, manage + "read", {"management_token": token}).status == 429
+
+
+def test_edge_admission_rejects_before_d1_and_fails_closed(lifecycle):
+    class NoD1:
+        def prepare(self, _sql):
+            raise AssertionError("D1 must not be reached")
+
+    async def deny(_options):
+        return SimpleNamespace(success=False)
+
+    env = SimpleNamespace(
+        REVIEWS_DB=NoD1(),
+        CARTRAY_DB=object(),
+        REVIEWS_STORE_KEY="store",
+        REVIEWS_ENVIRONMENT="test",
+        REVIEWS_MODE="verified_acquisition_only",
+        REVIEWS_TEST_ADMIN_TOKEN="a" * 40,
+        REVIEWS_SETTLEMENT_TOKEN="b" * 40,
+        REVIEWS_INVITATION_KEY="c" * 40,
+        REVIEWS_REVIEWER_KEY="d" * 40,
+        REVIEWS_INGRESS=SimpleNamespace(limit=deny),
+    )
+    request = {"subject_id": "policy", "rating": 2, "invitation_token": "0" * 64}
+    assert invoke(lifecycle, env, "/reviews/v1/contributions", request, key="attempt").status == 429
+    env.REVIEWS_INGRESS = None
+    assert invoke(lifecycle, env, "/reviews/v1/contributions", request, key="attempt").status == 503
+
+    async def broken(_options):
+        raise RuntimeError("provider unavailable")
+
+    env.REVIEWS_INGRESS = SimpleNamespace(limit=broken)
+    assert invoke(lifecycle, env, "/reviews/v1/contributions", request, key="attempt").status == 503
+    observed = []
+
+    async def capture(options):
+        observed.append(options["key"])
+        return SimpleNamespace(success=False)
+
+    env.REVIEWS_INGRESS = SimpleNamespace(limit=capture)
+    for ip in ("192.0.2.1", "192.0.2.2"):
+        obj = SimpleNamespace(method="POST", headers={"CF-Connecting-IP": ip}, data=request, body=None)
+        assert asyncio.run(lifecycle.handle_write(obj, env, "/reviews/v1/contributions")).status == 429
+    assert observed[0] != observed[1]
+    assert all("192.0.2." not in key for key in observed)

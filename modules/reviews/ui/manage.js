@@ -15,7 +15,14 @@
     }
     let response;
     try { response = await post("read", {}); } catch (_) { message.textContent = "We couldn't reach the store. Please try again."; return; }
-    if (!response.ok) { message.textContent = "This management link is unavailable. Your review may already be withdrawn."; return; }
+    if (!response.ok) {
+      message.textContent = response.status === 429
+        ? "Too many attempts. Please wait a little and try again."
+        : response.status === 503
+          ? "The review service is temporarily unavailable. Please try again shortly."
+          : "This management link is unavailable. Your review may already be withdrawn.";
+      return;
+    }
     const current = await response.json();
     message.textContent = "Changes are checked before they appear publicly. You can also withdraw this review.";
     const form = element("form");

@@ -90,7 +90,14 @@
     if (!token || !/^[a-f0-9]{64}$/.test(token)) { message.textContent = unavailable; return; }
     try {
       const response = await post("/reviews/v1/invitation", {invitation_token: token});
-      if (!response.ok) { message.textContent = unavailable; return; }
+      if (!response.ok) {
+        message.textContent = response.status === 429
+          ? "Too many attempts. Please wait a little and try again."
+          : response.status === 503
+            ? "The review service is temporarily unavailable. Please try again shortly."
+            : unavailable;
+        return;
+      }
       const data = await response.json();
       const hashBytes = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(token));
       const invitationHash = Array.from(new Uint8Array(hashBytes), byte => byte.toString(16).padStart(2, "0")).join("");
