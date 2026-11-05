@@ -1,0 +1,25 @@
+{
+  "source_commit": "ab9382345119c9f3df51b15c82917d474591cc48",
+  "wrangler_version": "4.127.1",
+  "local_workerd_version": "2026-08-28",
+  "build_python": "3.12.8",
+  "pyodide_build_python": "3.13.2",
+  "hosted_python_version": null,
+  "vendored_packages": {"kinglet": "1.8.3", "workers-runtime-sdk": "1.8.1"},
+  "bundle_content_sha256": "e9638c355359c1f9ac58907e991ccc8cee061565e1dc32c6ae2a18c2265568e0",
+  "source_sha256": {
+    "worker.py": "16ef9cc411aa100037cf426d699a5f28661d0ce0d275ccd7a8501601f2479ecc",
+    "native_lifecycle.py": "5c4112a8752b7e8a907ae527bb154441c8ef4f506d6c8e60b0bc2d0ddafdd1c1"
+  },
+  "reviews_flow": {"pending_rated_count": 0, "approved_average": 2.0, "approved_rated_count": 1, "withdrawn_average": null, "withdrawn_rated_count": 0},
+  "incomplete_requests": {
+    "authorized": "client timeout after four seconds",
+    "unauthorized": "client timeout after four seconds",
+    "healthy_during": 200,
+    "healthy_after_disconnect": "10/10 HTTP 200 for each request",
+    "protected_d1_tables_unchanged": 8,
+    "edge_side_deadline_proven": false
+  },
+  "resources_deleted": {"workers": 2, "d1_databases": 1},
+  "limitations": ["Hosted stream reproducer initially used a different vendor SDK version; only the Reviews deployment was repeated with locked vendor versions.", "This records a one-off synthetic qualification, not a repeatable hosted acceptance harness or a production activation approval."]
+}
