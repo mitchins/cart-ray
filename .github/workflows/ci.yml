@@ -36,7 +36,7 @@ jobs:
       - name: Exercise Reviews installer, ingestion and Workerd D1 API
         run: uv run python modules/reviews/tests/workerd_integration.py
       - name: Exercise local native Reviews lifecycle on Workerd and D1
-        run: uv run python modules/reviews/tests/native_workerd.py
+        run: REVIEWS_TEST_VERBOSE=1 uv run python modules/reviews/tests/native_workerd.py
       - run: npm run test:m11a-projection
       - run: npm run build:storefront
       - run: CARTRAY_STOREFRONT_EXPECTED_MODE=preview npm run test:storefront
