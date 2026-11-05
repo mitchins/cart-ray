@@ -347,3 +347,60 @@ def test_moderation_queue_is_scoped_and_private(lifecycle):
     assert asyncio.run(lifecycle.pending_read(request, env, "")).body["pending"] == []
     env.REVIEWS_ENVIRONMENT = "live"
     assert asyncio.run(lifecycle.pending_read(request, env, "")).status == 503
+
+
+def test_public_pagination_and_rollback(lifecycle):
+    db = Database()
+    env = types.SimpleNamespace(
+        REVIEWS_DB=db, REVIEWS_STORE_KEY="store", REVIEWS_ENVIRONMENT="test", REVIEWS_TEST_ADMIN_TOKEN="s" * 40
+    )
+    assert (
+        invoke(
+            lifecycle,
+            env,
+            "/reviews-admin/v1/subjects",
+            {"subject_id": "policy", "kind": "product", "path": "/"},
+            admin=True,
+        ).status
+        == 201
+    )
+    reviews = []
+    for guest in ("one", "two"):
+        proof = invoke(
+            lifecycle,
+            env,
+            "/reviews-admin/v1/test-capabilities",
+            {"subject_id": "policy", "test_reviewer": guest},
+            admin=True,
+        ).body["test_capability"]
+        result = invoke(
+            lifecycle,
+            env,
+            "/reviews/v1/contributions",
+            {"subject_id": "policy", "author": guest, "body": guest, "test_capability": proof},
+            key=guest,
+        )
+        assert result.status == 202
+        reviews.append(result.body)
+        action = "/reviews-admin/v1/contributions/" + result.body["review_id"] + "/approve"
+        assert invoke(lifecycle, env, action, {"revision_id": result.body["revision_id"]}, admin=True).status == 200
+    def read(params):
+        return asyncio.run(lifecycle.native_read(db, "store", "test", "policy", "contributions", params, 2))
+    page = read({"limit": ["1"]})
+    assert page.body["has_more"] and len(page.body["contributions"]) == 1
+    cursor = page.body["next_after"]
+    page2 = read({"limit": ["1"], "after": [cursor], "snapshot": ["native-2"]})
+    assert len(page2.body["contributions"]) == 1 and not page2.body["has_more"]
+    assert read({"after": ["f" * 64], "snapshot": ["native-2"]}).status == 400
+    assert read({"after": [cursor], "snapshot": ["native-1"]}).status == 400
+    assert read({"limit": ["bad"]}).status == 400
+    before = db.db.execute("SELECT COUNT(*) FROM native_audit").fetchone()[0]
+    db.db.execute("DELETE FROM native_publication_versions WHERE subject_id='policy'")
+    db.db.commit()
+    action = "/reviews-admin/v1/contributions/" + reviews[0]["review_id"] + "/withdraw"
+    assert invoke(lifecycle, env, action, {"revision_id": reviews[0]["revision_id"]}, admin=True).status == 409
+    assert db.db.execute("SELECT COUNT(*) FROM native_audit").fetchone()[0] == before
+    assert (
+        db.db.execute("SELECT state FROM native_reviews WHERE review_id=?", (reviews[0]["review_id"],)).fetchone()[0]
+        == "published"
+    )
