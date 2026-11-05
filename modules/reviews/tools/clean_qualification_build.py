@@ -7,6 +7,7 @@ import subprocess
 import tarfile
 import tempfile
 import tomllib
+from importlib.metadata import PathDistribution
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -36,7 +37,6 @@ def main():
             stream.seek(0)
             with tarfile.open(fileobj=stream) as tar:
                 tar.extractall(project, filter="data")
-        (project / "node_modules").symlink_to(ROOT / "node_modules", target_is_directory=True)
         # These paths are generated solely within this fresh temporary project.
         for name in ("python_modules", ".venv-workers", ".wrangler"):
             generated = project / name
@@ -45,6 +45,7 @@ def main():
             if generated.exists():
                 shutil.rmtree(generated)
         run(["uv", "sync", "--locked", "--all-groups"], project)
+        run(["npm", "ci", "--ignore-scripts"], project)
         uv_lock = tomllib.loads((project / "uv.lock").read_text())
         locked = {package["name"]: package for package in uv_lock["package"]}
         seed = ['lock-version = "1.0"', 'created-by = "uv"', 'requires-python = ">=3.13.2"']
@@ -87,6 +88,16 @@ def main():
             name not in locked or locked[name]["version"] != version for name, version in versions.items()
         ):
             raise RuntimeError("vendored dependency versions do not match uv.lock")
+        for package in vendor_lock["packages"]:
+            expected = {wheel["hash"].removeprefix("sha256:") for wheel in locked[package["name"]]["wheels"]}
+            actual = {wheel["hashes"]["sha256"] for wheel in package["wheels"]}
+            if not actual or not actual <= expected:
+                raise RuntimeError(f"vendored artifact hashes do not match uv.lock: {package['name']}")
+        for package_name, version in versions.items():
+            normalized = package_name.replace("-", "_")
+            metadata = list((project / "python_modules").glob(f"{normalized}-*.dist-info"))
+            if len(metadata) != 1 or PathDistribution(metadata[0]).version != version:
+                raise RuntimeError(f"vendored package metadata does not match: {package_name}")
         hashes = {}
         for relative in SOURCES:
             source = (project / "modules/reviews/src" / relative).read_bytes()
