@@ -391,6 +391,7 @@ def test_public_pagination_and_rollback(lifecycle):
     cursor = page.body["next_after"]
     page2 = read({"limit": ["1"], "after": [cursor], "snapshot": ["native-2"]})
     assert len(page2.body["contributions"]) == 1 and not page2.body["has_more"]
+    assert page.body["contributions"][0]["id"] != page2.body["contributions"][0]["id"]
     assert read({"after": ["f" * 64], "snapshot": ["native-2"]}).status == 400
     assert read({"after": [cursor], "snapshot": ["native-1"]}).status == 400
     assert read({"limit": ["bad"]}).status == 400
