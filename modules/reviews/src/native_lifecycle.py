@@ -371,7 +371,8 @@ async def handle_write(request, env, path):
         )
     if path == "/reviews/v1/contributions":
         proof_field = "invitation_token" if acquisition_mode else "test_capability"
-        if not {"subject_id", "author", proof_field} <= set(data) or set(data) - {
+        required = {"subject_id", proof_field} | (set() if acquisition_mode else {"author"})
+        if not required <= set(data) or set(data) - {
             "subject_id",
             "author",
             "title",
@@ -380,7 +381,8 @@ async def handle_write(request, env, path):
             proof_field,
         }:
             return fail(400, "invalid submission")
-        sid, author, proof = (data[k] for k in ("subject_id", "author", proof_field))
+        sid, proof = data["subject_id"], data[proof_field]
+        author = data.get("author", "")
         title, body, rating = (data.get(k) for k in ("title", "body", "rating"))
         key = str(request.headers.get("Idempotency-Key") or "")
         if (
@@ -393,16 +395,18 @@ async def handle_write(request, env, path):
             return fail(400, "invalid submission")
         if (
             not isinstance(author, str)
-            or not 1 <= len(author.strip()) <= 120
+            or len(author.strip()) > 120
+            or (not acquisition_mode and not author.strip())
             or (body is not None and (not isinstance(body, str) or len(body) > 5000))
             or (title is not None and (not isinstance(title, str) or len(title) > 200))
             or (rating is not None and (type(rating) is not int or not 1 <= rating <= 5))
         ):
             return fail(400, "invalid submission")
         body = body or ""
-        if rating is None and not body.strip() and not (title and title.strip()):
+        if rating is None and len(body.strip()) < 3:
             return fail(400, "empty submission")
         if acquisition_mode:
+            author = author.strip() or "Anonymous"
             try:
                 result = await redeem_purchase(
                     db,

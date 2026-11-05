@@ -1,11 +1,14 @@
 """Synthetic acquisition issuance against the real local commerce and Reviews schemas."""
 
 import asyncio
+from types import SimpleNamespace
+from unittest.mock import patch
 
 import pytest
 from cartray_reviews.invitations import issue_from_settlement
 from test_acquisition import Database as CommerceDatabase
 from test_native_lifecycle import Database as ReviewsDatabase
+from test_native_lifecycle import invoke
 from test_native_lifecycle import lifecycle as lifecycle
 
 
@@ -41,6 +44,32 @@ def test_issue_opaque_scoped_invitation_is_idempotent():
     assert stored != first["token"]
     assert reviews.db.execute("SELECT COUNT(*) FROM acquisition_invitations").fetchone()[0] == 1
     assert reviews.db.execute("SELECT COUNT(*) FROM acquisition_invitation_subjects").fetchone()[0] == 1
+
+
+def test_purchase_submission_accepts_rating_without_a_name_and_rejects_title_only(lifecycle):
+    reviews, commerce = stores()
+    invitation = issue(reviews, commerce)
+    env = SimpleNamespace(
+        REVIEWS_DB=reviews,
+        CARTRAY_DB=commerce,
+        REVIEWS_STORE_KEY="store",
+        REVIEWS_ENVIRONMENT="test",
+        REVIEWS_MODE="verified_acquisition_only",
+        REVIEWS_TEST_ADMIN_TOKEN="a" * 40,
+        REVIEWS_SETTLEMENT_TOKEN="b" * 40,
+        REVIEWS_INVITATION_KEY="c" * 40,
+        REVIEWS_REVIEWER_KEY="d" * 40,
+    )
+    path = "/reviews/v1/contributions"
+    base = {"subject_id": "policy", "invitation_token": invitation["token"]}
+    with patch.object(lifecycle.time, "time", return_value=101):
+        assert invoke(lifecycle, env, path, base | {"title": "Nice"}, key="title-only").status == 400
+        assert invoke(lifecycle, env, path, base | {"body": "ok"}, key="short-comment").status == 400
+        result = invoke(lifecycle, env, path, base | {"rating": 2}, key="rating-only")
+        assert result.status == 202
+        assert invoke(lifecycle, env, path, base | {"rating": 2}, key="rating-only").body == result.body
+    review = reviews.db.execute("SELECT author, rating FROM native_revisions").fetchone()
+    assert tuple(review) == ("Anonymous", 2)
 
 
 def test_conflict_revocation_and_missing_subject_fail_closed():
