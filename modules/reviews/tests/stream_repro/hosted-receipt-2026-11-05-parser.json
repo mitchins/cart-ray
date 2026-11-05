@@ -1,0 +1,51 @@
+{
+  "source_commit": "531ef76561bb64edfbd263a9202ac6628f21742c",
+  "wrangler_version": "4.127.1",
+  "local_workerd_version": "2026-08-28",
+  "build_python": "3.12.8",
+  "pyodide_build_python": "3.13.2",
+  "hosted_python_version": "3.13.2 (separately deployed probe, same compatibility date)",
+  "vendored_packages": {
+    "kinglet": "1.8.3",
+    "workers-runtime-sdk": "1.8.1"
+  },
+  "bundle_content_sha256": "ca0b37430668130ca2dfaf7ef9c9c69aa9d6260e28e28bcfa17d56abaec11bef",
+  "source_sha256": {
+    "worker.py": "16ef9cc411aa100037cf426d699a5f28661d0ce0d275ccd7a8501601f2479ecc",
+    "native_lifecycle.py": "cdc5ecc80adf2be8c59473efecae7399daa2dba9b9740295b2df9143d539c696"
+  },
+  "completed_requests": {
+    "authorized_malformed": 400,
+    "unauthorized": 401,
+    "subject_creation": 201,
+    "review_submission": 202,
+    "deeply_nested_json": 400
+  },
+  "reviews_flow": {
+    "pending_rated_count": 0,
+    "approved_average": 2.0,
+    "approved_rated_count": 1,
+    "approved_contribution_count": 2,
+    "withdrawn_average": null,
+    "withdrawn_rated_count": 0,
+    "withdrawn_contribution_count": 1
+  },
+  "incomplete_requests": {
+    "authorized": "connection reset after 15.1 seconds",
+    "unauthorized": "connection reset after 15.1 seconds",
+    "healthy_during": "HTTP 200 at 5 and 10 seconds",
+    "healthy_after_disconnect": "10/10 HTTP 200 for each request",
+    "protected_d1_tables_unchanged": 8,
+    "qualification": "Single observed run; connection reset is a transport outcome, not an application response."
+  },
+  "resources_deleted": {
+    "workers": 1,
+    "d1_databases": 1
+  },
+  "limitations": [
+    "Eight-table comparison began during the unauthorized stall and ended after both stalls; the earlier locked deployment compared both shorter stalls.",
+    "Hosted Python 3.13.2 was measured in a separate Worker with the same compatibility date.",
+    "Hosted resource provisioning, database comparisons and teardown remain manual."
+  ],
+  "moderation_race": "20 additional local Workerd/D1 races: one success and one conflict each; both outcomes won at least once; one earlier uninstrumented failure remains unexplained."
+}

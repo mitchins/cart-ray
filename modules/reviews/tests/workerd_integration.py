@@ -31,7 +31,7 @@ def request(path):
         return exc.code, exc.read().decode()
 
 
-def start(config, persist, mode=None):
+def start(config, persist, mode=None, admin_token=None, extra_vars=None):
     """Start the pinned local worker and wait for its HTTP listener."""
     command = [
         "uv",
@@ -49,15 +49,19 @@ def start(config, persist, mode=None):
     ]
     if mode:
         command.extend(["--var", f"REVIEWS_MODE:{mode}"])
-    proc = subprocess.Popen(
-        command, cwd=ROOT, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True
-    )
+    if admin_token:
+        command.extend(["--var", f"REVIEWS_TEST_ADMIN_TOKEN:{admin_token}"])
+    for name, value in (extra_vars or {}).items():
+        command.extend(["--var", f"{name}:{value}"])
+    output = None if os.environ.get("REVIEWS_TEST_VERBOSE") else subprocess.DEVNULL
+    proc = subprocess.Popen(command, cwd=ROOT, stdout=output, stderr=output, start_new_session=True)
     for _ in range(60):
         if proc.poll() is not None:
             raise RuntimeError("worker exited before readiness")
         try:
-            request("summary")
-            return proc
+            status, _ = request("summary")
+            if status in (200, 404, 503):
+                return proc
         except (OSError, TimeoutError):
             time.sleep(1)
     os.killpg(proc.pid, signal.SIGTERM)
@@ -72,6 +76,12 @@ def stop(proc):
     except subprocess.TimeoutExpired:
         os.killpg(proc.pid, signal.SIGKILL)
         proc.wait()
+    for _ in range(100):
+        with socket.socket() as probe:
+            if probe.connect_ex(("127.0.0.1", PORT)) != 0:
+                return
+        time.sleep(0.1)
+    raise RuntimeError("worker port did not close")
 
 
 def main():

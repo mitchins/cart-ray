@@ -12,7 +12,7 @@ def test_fresh_install_is_explicit_disabled_and_has_no_import_prerequisite():
     descriptor = json.loads((MODULE / "module.json").read_text())
     assert descriptor["installation"] == "explicit"
     assert descriptor["default_mode"] == "disabled"
-    assert len(descriptor["routes"]) == 2
+    assert len(descriptor["routes"]) == 5
     assert descriptor["subscriptions"] == descriptor["scheduled_tasks"] == []
     connection = sqlite3.connect(":memory:")
     migration = (MODULE / descriptor["migrations"][0]).read_text()
@@ -50,3 +50,23 @@ def test_scope_constraints_and_invalid_configuration():
     ):
         with pytest.raises(sqlite3.IntegrityError):
             connection.execute("INSERT INTO review_subjects VALUES (?, ?, ?, ?, ?)", values)
+
+
+def test_core_import_does_not_load_reviews_package():
+    """Core checkout imports successfully without Reviews on its module path."""
+    import os
+    import subprocess
+    import sys
+
+    repository = MODULE.parents[1]
+    env = os.environ | {"PYTHONPATH": str(repository / "src")}
+    subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "import cartray.worker, sys; assert not any(n.startswith('cartray_reviews') for n in sys.modules)",
+        ],
+        cwd=repository,
+        env=env,
+        check=True,
+    )

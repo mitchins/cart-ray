@@ -28,13 +28,17 @@ jobs:
       - run: uv run ruff check .
       - run: uv run pytest
       - name: Test optional Reviews snapshot rehearsal
-        run: PYTHONPATH=modules/reviews/src uv run pytest modules/reviews/tests
+        run: REVIEWS_QUALIFICATION_BUILD=1 PYTHONPATH=modules/reviews/src uv run pytest modules/reviews/tests
       - name: Build and inspect optional Reviews package
         run: |
           uv build modules/reviews --wheel --out-dir /tmp/cartray-reviews-wheel
           uv run python modules/reviews/tests/verify_wheel.py /tmp/cartray-reviews-wheel
       - name: Exercise Reviews installer, ingestion and Workerd D1 API
         run: uv run python modules/reviews/tests/workerd_integration.py
+      - name: Qualify stalled uploads against direct Workerd
+        run: uv run python modules/reviews/tests/stream_repro/direct_gate.py
+      - name: Exercise local native Reviews lifecycle on Workerd and D1
+        run: REVIEWS_TEST_VERBOSE=1 uv run python modules/reviews/tests/native_workerd.py
       - run: npm run test:m11a-projection
       - run: npm run build:storefront
       - run: CARTRAY_STOREFRONT_EXPECTED_MODE=preview npm run test:storefront
@@ -88,6 +92,8 @@ jobs:
           mkdir -p coverage
           uv sync --all-groups --locked
           uv run --locked pytest --cov=. --cov-report=xml:coverage/python.xml
+          REVIEWS_QUALIFICATION_BUILD=1 PYTHONPATH=modules/reviews/src uv run --locked pytest modules/reviews/tests --cov=. --cov-append --cov-report=xml:coverage/python.xml
+          uv run python -c "import xml.etree.ElementTree as E; r=E.parse('coverage/python.xml'); assert any(c.get('filename', '').startswith('modules/reviews/src/') and float(c.get('line-rate', '0')) > 0 for c in r.iter('class')), 'Reviews coverage missing from report'"
           node --test --experimental-test-coverage --test-reporter=spec --test-reporter-destination=stdout --test-reporter=lcov --test-reporter-destination=coverage/m11a.lcov tests/m11a_projection.test.mjs
       - name: Scan and await quality gate
         uses: SonarSource/sonarqube-scan-action@7006c4492b2e0ee0f816d36501671557c97f5995 # v8.1.0
