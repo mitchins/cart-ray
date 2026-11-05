@@ -154,6 +154,7 @@ async def read_json(request):
     length = request.headers.get("Content-Length")
     content_type = str(request.headers.get("Content-Type") or "").split(";", 1)[0].strip().lower()
     if not length or not str(length).isdigit() or not 1 <= int(length) <= 16384 or content_type != "application/json":
+        await discard_body(request)
         raise ValueError("invalid request size")
     reader = request.body.getReader()
     data = bytearray()
@@ -227,7 +228,6 @@ async def handle_write(request, env, path):
     try:
         data = await read_json(request)
     except (ValueError, TypeError, json.JSONDecodeError):
-        await discard_body(request)
         return fail(400, "invalid request")
     if path == "/reviews-admin/v1/subjects":
         if (
