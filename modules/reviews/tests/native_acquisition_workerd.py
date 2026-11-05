@@ -52,7 +52,7 @@ def synthetic_settlement(sql_path):
     catalogue = asyncio.run(create())
     checkout = CheckoutService(catalogue, SqliteOrderStore.in_memory(), FakePaymentGateway())
     signature = SyntheticSignature()
-    events = []
+    events, orders = [], []
     for index in range(2):
         _spec, session, event = _checkout_session(
             checkout,
@@ -72,12 +72,13 @@ def synthetic_settlement(sql_path):
         )
         assert asyncio.run(service.settle(event)) is False
         events.append(event.event_id)
+        orders.append(_spec.order_id)
     dumps = list(checkout.store.connection.iterdump())
     tables = ("orders", "order_items", "stripe_events", "checkout_sessions")
     inserts = [line for table in tables for line in dumps if line.startswith(f'INSERT INTO "{table}"')]
     assert len(inserts) == 8
     sql_path.write_text("\n".join(inserts) + "\n")
-    return catalogue.version, events
+    return catalogue.version, events, orders
 
 
 def internal(path, payload, token):
@@ -105,9 +106,25 @@ def main():
             [wrangler, "d1", "migrations", "apply", "cartray-acquisition-local-test", *common], cwd=ROOT, check=True
         )
         sql = Path(directory) / "synthetic.sql"
-        manifest, event_ids = synthetic_settlement(sql)
+        manifest, event_ids, order_ids = synthetic_settlement(sql)
         subprocess.run(
             [wrangler, "d1", "execute", "cartray-acquisition-local-test", *common, "--file", str(sql)],
+            cwd=ROOT,
+            check=True,
+        )
+        # Synthetic purpose-bound consent is provisioned independently from
+        # CartRay settlement, as a trusted consent adapter would do.
+        consent_sql = Path(directory) / "consent.sql"
+        consent_sql.write_text(
+            "\n".join(
+                "INSERT INTO review_invitation_consents VALUES "
+                f"('example-store','test','{order_id}','{recipient * 64}','review_invitation',"
+                "'synthetic-consent',1,NULL);"
+                for order_id, recipient in zip(order_ids, ("a", "b"), strict=True)
+            )
+        )
+        subprocess.run(
+            [wrangler, "d1", "execute", "cartray-reviews-local-test", *common, "--file", str(consent_sql)],
             cwd=ROOT,
             check=True,
         )

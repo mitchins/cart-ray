@@ -31,8 +31,27 @@ def stores():
     reviews = ReviewsDatabase()
     reviews.db.create_function("unixepoch", 0, lambda: 100)
     reviews.db.execute("INSERT INTO review_subjects VALUES ('store','test','policy','product','/policy/')")
+    reviews.db.execute(
+        "INSERT INTO review_invitation_consents VALUES (?,?,?,?,?,?,?,NULL)",
+        ("store", "test", "order_1", "a" * 64, "review_invitation", "synthetic-consent-1", 90),
+    )
     reviews.db.commit()
     return reviews, commerce
+
+
+def test_missing_mismatched_or_revoked_consent_suppresses_invitation():
+    for condition in ("missing", "mismatched", "revoked"):
+        reviews, commerce = stores()
+        if condition == "missing":
+            reviews.db.execute("DELETE FROM review_invitation_consents")
+        elif condition == "mismatched":
+            reviews.db.execute("UPDATE review_invitation_consents SET recipient_context_hash=?", ("b" * 64,))
+        else:
+            reviews.db.execute("UPDATE review_invitation_consents SET revoked_at=99")
+        reviews.db.commit()
+        with pytest.raises(ValueError, match="invitation unavailable"):
+            issue(reviews, commerce)
+        assert reviews.db.execute("SELECT COUNT(*) FROM acquisition_invitations").fetchone()[0] == 0
 
 
 def test_issue_opaque_scoped_invitation_is_idempotent():
@@ -310,6 +329,10 @@ def test_one_invitation_covers_two_paid_subjects_without_resetting_consumption()
     reviews.db.create_function("unixepoch", 0, lambda: 100)
     for subject in ("policy", "other-policy"):
         reviews.db.execute("INSERT INTO review_subjects VALUES ('store','test',?,'product','/')", (subject,))
+    reviews.db.execute(
+        "INSERT INTO review_invitation_consents VALUES (?,?,?,?,?,?,?,NULL)",
+        ("store", "test", "order_1", "a" * 64, "review_invitation", "synthetic-consent-1", 90),
+    )
     reviews.db.commit()
     mapping = {"v1": {"product_1": "policy", "product_2": "other-policy"}}
     invitation = issue(reviews, commerce, subject_maps=mapping)
@@ -341,6 +364,10 @@ def test_missing_one_eligible_subject_rolls_back_entire_issuance():
     commerce.add_purchase(second=True, amount=200)
     reviews = ReviewsDatabase()
     reviews.db.execute("INSERT INTO review_subjects VALUES ('store','test','policy','product','/')")
+    reviews.db.execute(
+        "INSERT INTO review_invitation_consents VALUES (?,?,?,?,?,?,?,NULL)",
+        ("store", "test", "order_1", "a" * 64, "review_invitation", "synthetic-consent-1", 90),
+    )
     reviews.db.commit()
     mapping = {"v1": {"product_1": "policy", "product_2": "missing"}}
     with pytest.raises(ValueError):

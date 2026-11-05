@@ -1,12 +1,15 @@
 """Build a disposable, source-verified Reviews Worker bundle from a Git commit."""
 
 import hashlib
+import io
 import json
 import shutil
 import subprocess
 import tarfile
 import tempfile
 import tomllib
+import urllib.request
+import zipfile
 from importlib.metadata import PathDistribution
 from pathlib import Path
 
@@ -113,12 +116,30 @@ def main():
                     f"vendored package metadata does not match: {package_name}; "
                     "check that the Pyodide interpreter runs under the selected Node version"
                 )
+            locked_wheel = locked[package_name]["wheels"][0]
+            with urllib.request.urlopen(locked_wheel["url"], timeout=30) as response:
+                wheel_bytes = response.read()
+            if hashlib.sha256(wheel_bytes).hexdigest() != locked_wheel["hash"].removeprefix("sha256:"):
+                raise RuntimeError(f"locked wheel hash mismatch: {package_name}")
+            with zipfile.ZipFile(io.BytesIO(wheel_bytes)) as wheel:
+                for entry in wheel.infolist():
+                    if entry.is_dir() or entry.filename.endswith(".dist-info/RECORD"):
+                        continue  # installers rewrite RECORD to describe the installation
+                    parts = Path(entry.filename).parts
+                    if not parts or ".." in parts or Path(entry.filename).is_absolute():
+                        raise RuntimeError("unsafe wheel entry")
+                    installed = vendor / entry.filename
+                    if not installed.is_file() or installed.read_bytes() != wheel.read(entry):
+                        raise RuntimeError(f"vendored file differs from locked wheel: {entry.filename}")
         if not (vendor / "workers/__init__.py").is_file():
             raise RuntimeError("Workers SDK Python module missing from vendor directory")
-        for path in (path for path in vendor.rglob("*") if path.is_file()):
-            counterpart = bundled_vendor / path.relative_to(vendor)
-            if not counterpart.is_file() or path.read_bytes() != counterpart.read_bytes():
-                raise RuntimeError(f"vendored file missing or changed in bundle: {path.relative_to(vendor)}")
+        vendor_files = {path.relative_to(vendor) for path in vendor.rglob("*") if path.is_file()}
+        bundle_files = {path.relative_to(bundled_vendor) for path in bundled_vendor.rglob("*") if path.is_file()}
+        if vendor_files != bundle_files:
+            raise RuntimeError("vendored file set differs from bundle")
+        for relative in vendor_files:
+            if (vendor / relative).read_bytes() != (bundled_vendor / relative).read_bytes():
+                raise RuntimeError(f"vendored file changed in bundle: {relative}")
         hashes = {}
         for relative in SOURCES:
             source = (project / "modules/reviews/src" / relative).read_bytes()

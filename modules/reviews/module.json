@@ -14,7 +14,8 @@
     "migrations/0002_native_reviews.sql",
     "migrations/0003_native_lifecycle.sql",
     "migrations/0004_acquisition_invitations.sql",
-    "migrations/0005_subject_display_names.sql"
+    "migrations/0005_subject_display_names.sql",
+    "migrations/0006_review_invitation_consent.sql"
   ],
   "routes": [
     "GET /reviews/v1/subjects/{subject_id}/summary",

@@ -57,6 +57,11 @@ async def issue_from_settlement(
     subject_hash = _digest(acquisition.subject_ids)
     statements = [
         reviews_db.prepare(
+            "INSERT INTO native_guard SELECT CASE WHEN EXISTS(SELECT 1 FROM review_invitation_consents "
+            "WHERE store_key=? AND environment=? AND acquisition_id=? AND recipient_context_hash=? "
+            "AND purpose='review_invitation' AND granted_at<=? AND revoked_at IS NULL) THEN 1 ELSE 0 END"
+        ).bind(store, environment, acquisition.acquisition_id, recipient_context_hash, now),
+        reviews_db.prepare(
             "INSERT OR IGNORE INTO acquisition_invitations "
             "(store_key,environment,acquisition_id,source_event_id,recipient_context_hash,subject_set_hash,"
             "token_hash,expires_at,key_version) VALUES (?,?,?,?,?,?,?,?, 'v1')"

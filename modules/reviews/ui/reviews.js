@@ -15,7 +15,7 @@
     if (key) headers["Idempotency-Key"] = key;
     return fetch(path, {method: "POST", headers, body: JSON.stringify(data), cache: "no-store", referrerPolicy: "no-referrer"});
   }
-  function formFor(subject) {
+  function formFor(subject, invitationHash) {
     const form = element("form");
     const legend = element("h2", subject.public_name);
     form.append(legend);
@@ -23,7 +23,7 @@
       form.append(element("p", "Thank you. Your review has been submitted."));
       return form;
     }
-    const draftKey = `cartray-review-draft:${subject.subject_id}`;
+    const draftKey = `cartray-review-draft:${invitationHash}:${subject.subject_id}`;
     let saved = {};
     try { saved = JSON.parse(sessionStorage.getItem(draftKey) || "{}"); } catch (_) { /* storage is optional */ }
     const add = (labelText, name, tag = "input") => {
@@ -62,6 +62,7 @@
       const key = saved.fingerprint === fingerprint ? saved.requestKey : crypto.randomUUID();
       saved = {...value, fingerprint, requestKey: key}; persist(saved);
       button.disabled = true;
+      fields.forEach(field => { field.disabled = true; });
       try {
         const response = await post("/reviews/v1/contributions", payload, key);
         if (response.ok) {
@@ -72,7 +73,7 @@
         }
       } catch (_) {
         message.textContent = "We couldn't reach the store. Your draft is still here; please try again.";
-      } finally { button.disabled = false; }
+      } finally { button.disabled = false; fields.forEach(field => { field.disabled = false; }); }
     });
     return form;
   }
@@ -82,7 +83,9 @@
       const response = await post("/reviews/v1/invitation", {invitation_token: token});
       if (!response.ok) { message.textContent = unavailable; return; }
       const data = await response.json();
-      content.replaceChildren(element("p", `Your invitation from ${data.store_name}`), ...data.subjects.map(formFor));
+      const hashBytes = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(token));
+      const invitationHash = Array.from(new Uint8Array(hashBytes), byte => byte.toString(16).padStart(2, "0")).join("");
+      content.replaceChildren(element("p", `Your invitation from ${data.store_name}`), ...data.subjects.map(subject => formFor(subject, invitationHash)));
       message.textContent = confirmation || "Choose a product to review. Reviews are checked before they appear publicly.";
     } catch (_) { message.textContent = "We couldn't reach the store. Please try again shortly."; }
   }
