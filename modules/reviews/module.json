@@ -16,7 +16,8 @@
     "migrations/0004_acquisition_invitations.sql",
     "migrations/0005_subject_display_names.sql",
     "migrations/0006_review_invitation_consent.sql",
-    "migrations/0007_acquisition_rate_limits.sql"
+    "migrations/0007_acquisition_rate_limits.sql",
+    "migrations/0008_acquisition_rate_maintenance.sql"
   ],
   "routes": [
     "GET /reviews/v1/subjects/{subject_id}/summary",
