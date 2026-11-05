@@ -72,50 +72,51 @@ def main():
         try:
             subject = {"subject_id": "example-policy", "kind": "product", "path": "/example-policy/"}
             assert call("/reviews-admin/v1/subjects", subject)[0] == 401
-            started = time.monotonic()
-            with socket.create_connection(("127.0.0.1", PORT), timeout=5) as stalled:
-                stalled.settimeout(5)
-                stalled.sendall(
-                    b"POST /reviews-admin/v1/subjects HTTP/1.1\r\nHost: localhost\r\n"
-                    b"Content-Type: application/json\r\nContent-Length: 10\r\n\r\n{"
-                )
-                try:
-                    stalled_response = stalled.recv(1024)
-                    while stalled_response and b"\r\n" not in stalled_response:
-                        remaining = 5 - (time.monotonic() - started)
-                        if remaining <= 0:
-                            raise TimeoutError("stalled request exceeded deadline")
-                        stalled.settimeout(remaining)
-                        chunk = stalled.recv(1024)
-                        if not chunk:
-                            break
-                        stalled_response += chunk
-                    while (
-                        stalled_response.startswith(b"HTTP/1.1 500")
-                        and b"Network connection lost" not in stalled_response
-                        and len(stalled_response) < 4096
-                    ):
-                        remaining = 5 - (time.monotonic() - started)
-                        if remaining <= 0:
-                            raise TimeoutError("stalled request exceeded deadline")
-                        stalled.settimeout(remaining)
-                        chunk = stalled.recv(1024)
-                        if not chunk:
-                            break
-                        stalled_response += chunk
-                except ConnectionResetError:
-                    stalled_response = b""
-                rejected = not stalled_response or stalled_response.startswith((b"HTTP/1.1 401", b"HTTP/1.0 401"))
-                miniflare_closed = (
-                    stalled_response.startswith(b"HTTP/1.1 500") and b"Network connection lost" in stalled_response
-                )
-                assert rejected or miniflare_closed, stalled_response
-            assert time.monotonic() - started < 5
+
+            def incomplete_request(*, authorized):
+                """Reject an intentionally stalled client without accepting arbitrary errors."""
+                started = time.monotonic()
+                with socket.create_connection(("127.0.0.1", PORT), timeout=5) as stalled:
+                    stalled.settimeout(5)
+                    auth = ("Authorization: Bearer " + ADMIN + "\r\n").encode() if authorized else b""
+                    stalled.sendall(
+                        b"POST /reviews-admin/v1/subjects HTTP/1.1\r\nHost: localhost\r\n"
+                        b"Content-Type: application/json\r\nContent-Length: 10\r\n" + auth + b"\r\n{"
+                    )
+                    try:
+                        response = stalled.recv(1024)
+                        while response and b"\r\n" not in response:
+                            remaining = 5 - (time.monotonic() - started)
+                            if remaining <= 0:
+                                raise TimeoutError("stalled request exceeded deadline")
+                            stalled.settimeout(remaining)
+                            chunk = stalled.recv(1024)
+                            if not chunk:
+                                break
+                            response += chunk
+                    except ConnectionResetError:
+                        response = b""
+                    expected = b"400" if authorized else b"401"
+                    assert not response or response.startswith((b"HTTP/1.1 " + expected, b"HTTP/1.0 " + expected)), (
+                        response
+                    )
+                assert time.monotonic() - started < 5
+
+            incomplete_request(authorized=False)
             created = call("/reviews-admin/v1/subjects", subject, admin=True)
             assert created[0] == 201, created
             assert query("SELECT COUNT(*) n FROM native_audit")[0]["n"] == 0
             summary_path = "/reviews/v1/subjects/example-policy/summary"
             list_path = "/reviews/v1/subjects/example-policy/contributions"
+            for _ in range(10):
+                assert proc.poll() is None and call(summary_path)[0] == 200
+                time.sleep(1)
+            incomplete_request(authorized=True)
+            assert query("SELECT COUNT(*) n FROM review_subjects")[0]["n"] == 1
+            assert query("SELECT COUNT(*) n FROM native_audit")[0]["n"] == 0
+            for _ in range(10):
+                assert proc.poll() is None and call(summary_path)[0] == 200
+                time.sleep(1)
             assert call(summary_path)[1]["rating"] == {"average": None, "rated_count": 0}
             status, issued = call(
                 "/reviews-admin/v1/test-capabilities",

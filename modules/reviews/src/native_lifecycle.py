@@ -1,6 +1,5 @@
 """Test-only native Reviews lifecycle; no external identity or anti-abuse provider."""
 
-import asyncio
 import hashlib
 import hmac
 import json
@@ -8,7 +7,8 @@ import re
 import time
 from urllib.parse import parse_qs
 
-from js import Uint8Array, crypto
+from js import Promise, Uint8Array, clearTimeout, crypto, setTimeout
+from pyodide.ffi import create_proxy, to_js
 from workers import Response
 
 ID = re.compile(r"[A-Za-z0-9_-]{1,128}\Z")
@@ -47,12 +47,28 @@ def invalid_constant(_value):
 
 
 async def await_promise(promise, timeout):
-    """Bound an awaitable JavaScript stream operation."""
+    """Race a JS promise against a JS timer without cancelling its Python awaiter."""
+    marker = "reviews-stream-timeout"
+    timer_state = {}
 
-    async def wait():
-        return await promise
+    def executor(resolve, _reject):
+        callback = create_proxy(lambda: resolve(marker))
+        timer_state["callback"] = callback
+        timer_state["id"] = setTimeout(callback, max(1, int(timeout * 1000)))
 
-    return await asyncio.wait_for(wait(), timeout=timeout)
+    executor_proxy = create_proxy(executor)
+    try:
+        timer = Promise.new(executor_proxy)
+    finally:
+        executor_proxy.destroy()
+    try:
+        result = await Promise.race(to_js([promise, timer]))
+        if result == marker:
+            raise TimeoutError("body deadline")
+        return result
+    finally:
+        clearTimeout(timer_state["id"])
+        timer_state["callback"].destroy()
 
 
 async def discard_body(request):
