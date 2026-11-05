@@ -1,6 +1,7 @@
 """Synthetic acquisition issuance against the real local commerce and Reviews schemas."""
 
 import asyncio
+import hashlib
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -107,13 +108,60 @@ def test_invalid_capability_flood_does_not_exhaust_store_allowance(lifecycle):
     )
     path = "/reviews/v1/contributions"
     base = {"subject_id": "policy", "rating": 4}
+    reviews.db.execute("INSERT INTO native_rate_limits VALUES ('store','test','purchase-submit:old',-3000,1)")
+    reviews.db.execute("INSERT INTO native_rate_limits VALUES ('store','test','issue',-3000,1)")
+    reviews.db.execute("INSERT INTO acquisition_rate_backstop VALUES ('store','test',-3000,1)")
+    reviews.db.commit()
     with patch.object(lifecycle.time, "time", return_value=101):
         for index in range(40):
             invalid = format(index + 1, "064x")
             assert invoke(lifecycle, env, path, base | {"invitation_token": invalid}, key=f"bad-{index}").status == 429
-        assert reviews.db.execute("SELECT COUNT(*) FROM acquisition_rate_backstop").fetchone()[0] == 0
-        assert invoke(lifecycle, env, path, base | {"invitation_token": invitation["token"]}, key="valid").status == 202
+        assert reviews.db.execute("SELECT COUNT(*) FROM acquisition_rate_backstop").fetchone()[0] == 1
+        with patch.object(lifecycle, "random_token", return_value="00" * 32):
+            assert (
+                invoke(lifecycle, env, path, base | {"invitation_token": invitation["token"]}, key="valid").status
+                == 202
+            )
     assert reviews.db.execute("SELECT count FROM acquisition_rate_backstop").fetchone()[0] == 1
+    assert (
+        reviews.db.execute("SELECT COUNT(*) FROM native_rate_limits WHERE action='purchase-submit:old'").fetchone()[0]
+        == 0
+    )
+    assert reviews.db.execute("SELECT COUNT(*) FROM native_rate_limits WHERE action='issue'").fetchone()[0] == 1
+
+
+def test_one_capability_at_limit_does_not_block_another(lifecycle):
+    reviews, commerce = stores()
+    invitation = issue(reviews, commerce)
+    second_token = "f" * 64
+    second_hash = hashlib.sha256(second_token.encode()).hexdigest()
+    reviews.db.execute(
+        "INSERT INTO acquisition_invitations SELECT store_key,environment,'order_2',source_event_id,"
+        "recipient_context_hash,subject_set_hash,key_version,?,expires_at,NULL FROM acquisition_invitations",
+        (second_hash,),
+    )
+    reviews.db.execute("INSERT INTO acquisition_invitation_subjects VALUES ('store','test','order_2','policy',NULL)")
+    reviews.db.commit()
+    env = SimpleNamespace(
+        REVIEWS_DB=reviews,
+        CARTRAY_DB=commerce,
+        REVIEWS_STORE_KEY="store",
+        REVIEWS_ENVIRONMENT="test",
+        REVIEWS_MODE="verified_acquisition_only",
+        REVIEWS_TEST_ADMIN_TOKEN="a" * 40,
+        REVIEWS_SETTLEMENT_TOKEN="b" * 40,
+        REVIEWS_INVITATION_KEY="c" * 40,
+        REVIEWS_REVIEWER_KEY="d" * 40,
+    )
+    path = "/reviews/v1/contributions"
+    first = {"subject_id": "policy", "rating": 4, "invitation_token": invitation["token"]}
+    second = {"subject_id": "policy", "rating": 2, "invitation_token": second_token}
+    with patch.object(lifecycle.time, "time", return_value=101):
+        for _ in range(30):
+            assert invoke(lifecycle, env, path, first, key="first").status == 202
+        assert invoke(lifecycle, env, path, first, key="first").status == 429
+        assert invoke(lifecycle, env, path, second, key="second").status == 202
+    assert reviews.db.execute("SELECT COUNT(*) FROM native_reviews").fetchone()[0] == 2
 
 
 def test_customer_landing_uses_approved_names_and_scoped_nonconsuming_capability(lifecycle):

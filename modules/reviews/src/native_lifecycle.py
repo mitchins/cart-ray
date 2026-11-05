@@ -470,6 +470,18 @@ async def handle_write(request, env, path):
         if acquisition_mode:
             author = author.strip() or "Anonymous"
             token_hash = hashlib.sha256(proof.encode()).hexdigest()
+            eligible = rows(
+                await db.prepare(
+                    "SELECT 1 AS eligible FROM acquisition_invitations i JOIN acquisition_invitation_subjects s "
+                    "USING(store_key,environment,acquisition_id) WHERE i.store_key=? AND i.environment=? "
+                    "AND i.token_hash=? AND i.revoked_at IS NULL AND i.expires_at>? "
+                    "AND i.expires_at>unixepoch() AND s.subject_id=?"
+                )
+                .bind(store, environment, token_hash, now, sid)
+                .all()
+            )
+            if not eligible:
+                return fail(429, "submission unavailable; please try again later")
             try:
                 await db.batch(
                     [
@@ -491,6 +503,26 @@ async def handle_write(request, env, path):
                 )
             except Exception:
                 return fail(429, "submission unavailable; please try again later")
+            # Amortized, bounded retention; no cleanup runs for invalid tokens
+            # and the normal request does not pay for a cleanup write.
+            if int(random_token()[:2], 16) == 0:
+                try:
+                    await db.batch(
+                        [
+                            db.prepare(
+                                "DELETE FROM native_rate_limits WHERE rowid IN (SELECT rowid FROM native_rate_limits "
+                                "WHERE store_key=? AND environment=? AND action LIKE 'purchase-submit:%' "
+                                "AND window<? LIMIT 128)"
+                            ).bind(store, environment, now // 60 - 1440),
+                            db.prepare(
+                                "DELETE FROM acquisition_rate_backstop WHERE rowid IN "
+                                "(SELECT rowid FROM acquisition_rate_backstop WHERE store_key=? AND environment=? "
+                                "AND window<? LIMIT 128)"
+                            ).bind(store, environment, now // 60 - 1440),
+                        ]
+                    )
+                except Exception:
+                    pass  # retention is best-effort and never changes submission semantics
             try:
                 result = await redeem_purchase(
                     db,
