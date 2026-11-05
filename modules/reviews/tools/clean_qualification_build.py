@@ -36,23 +36,30 @@ def run(args, cwd, **kwargs):
 
 
 def exercise_worker(project):
-    """Boot the isolated dependency set under local Workerd and execute fetch."""
+    """Execute Python modules from the built bundle directly under Workerd."""
     with socket.socket() as listener:
         listener.bind(("127.0.0.1", 0))
         port = listener.getsockname()[1]
+    bundle = project / "bundle"
+    main = bundle / "worker.py"
+    modules = [main, *sorted(path for path in bundle.rglob("*.py") if path != main)]
+    entries = [
+        f"(name = {json.dumps(str(path.relative_to(bundle)))}, "
+        f"pythonModule = embed {json.dumps(str(path.relative_to(project)))})"
+        for path in modules
+    ]
+    config = project / "direct-qualification.capnp"
+    config.write_text(
+        'using Workerd = import "/workerd/workerd.capnp";\n'
+        'const config :Workerd.Config = (services = [(name = "main", worker = (modules = ['
+        + ",".join(entries)
+        + '], compatibilityDate = "2026-08-31", '
+        'compatibilityFlags = ["python_workers", "disable_python_external_sdk"], '
+        'bindings = [(name = "REVIEWS_MODE", text = "disabled")]))], '
+        f'sockets = [(name = "http", address = "127.0.0.1:{port}", http = (), service = "main")]);'
+    )
     process = subprocess.Popen(
-        [
-            str(project / ".venv/bin/pywrangler"),
-            "dev",
-            "--config",
-            "qualification.toml",
-            "--local",
-            "--port",
-            str(port),
-            "--persist-to",
-            str(project / "workerd-state"),
-            "--log-level=error",
-        ],
+        [str(project / "node_modules/.bin/workerd"), "serve", str(config)],
         cwd=project,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
