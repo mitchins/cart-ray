@@ -67,7 +67,7 @@ def main():
                         if not chunk:
                             break
                         response += chunk
-                    assert response.startswith(b"HTTP/1.1 400 "), repr(response)
+                    assert b"\r\n" in response and response.startswith(b"HTTP/1.1 400 "), repr(response)
                 for _ in range(10):
                     assert process.poll() is None
                     health(port)
