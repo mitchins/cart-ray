@@ -930,3 +930,82 @@ def test_unsent_cancellation_cannot_override_concurrent_dispatch_claim():
             )
         )
     assert reviews.db.execute("SELECT state FROM invitation_generations").fetchone()[0] == "dispatching"
+
+
+def test_scoped_management_edits_and_withdraws_without_public_leak(lifecycle):
+    reviews, commerce = stores()
+    reviews.db.execute(
+        "INSERT INTO native_publication_versions(store_key,environment,subject_id) VALUES ('store','test','policy')"
+    )
+    reviews.db.commit()
+    invitation = issue(reviews, commerce)
+    env = SimpleNamespace(
+        REVIEWS_DB=reviews,
+        CARTRAY_DB=commerce,
+        REVIEWS_STORE_KEY="store",
+        REVIEWS_ENVIRONMENT="test",
+        REVIEWS_MODE="verified_acquisition_only",
+        REVIEWS_TEST_ADMIN_TOKEN="a" * 40,
+        REVIEWS_SETTLEMENT_TOKEN="b" * 40,
+        REVIEWS_INVITATION_KEY="c" * 40,
+        REVIEWS_REVIEWER_KEY="d" * 40,
+    )
+    with patch.object(lifecycle.time, "time", return_value=101):
+        pending = invoke(
+            lifecycle,
+            env,
+            "/reviews/v1/contributions",
+            {
+                "subject_id": "policy",
+                "body": "Original private body",
+                "rating": 5,
+                "invitation_token": invitation["token"],
+            },
+            key="submission",
+        )
+        assert pending.status == 202
+        review = pending.body["review_id"]
+        token = pending.body["management_token"]
+        revision = pending.body["revision_id"]
+        approval = "/reviews-admin/v1/contributions/" + review + "/approve"
+        assert invoke(lifecycle, env, approval, {"revision_id": revision}, admin=True).status == 200
+        manage = f"/reviews/v1/manage/{review}/"
+        assert invoke(lifecycle, env, manage + "read", {"management_token": "0" * 64}).status == 409
+        assert (
+            invoke(lifecycle, env, manage + "read", {"management_token": token}).body["body"] == "Original private body"
+        )
+        payload = {
+            "management_token": token,
+            "revision_id": revision,
+            "update": {"body": "Corrected body", "rating": 2},
+        }
+        edited = invoke(lifecycle, env, manage + "edit", payload, key="edit-one")
+        assert edited.status == 200 and edited.body["status"] == "pending"
+        assert invoke(lifecycle, env, manage + "edit", payload, key="edit-one").body == edited.body
+        summary = asyncio.run(lifecycle.native_read(reviews, "store", "test", "policy", "summary", {}, 2))
+        assert summary.body["rating"] == {"average": None, "rated_count": 0}
+        listing = asyncio.run(lifecycle.native_read(reviews, "store", "test", "policy", "contributions", {}, 2))
+        assert listing.body["contributions"] == []
+        new_revision = edited.body["revision_id"]
+        assert new_revision != revision
+        assert invoke(lifecycle, env, approval, {"revision_id": new_revision}, admin=True).status == 200
+        summary = asyncio.run(lifecycle.native_read(reviews, "store", "test", "policy", "summary", {}, 3))
+        assert summary.body["rating"] == {"average": 2, "rated_count": 1}
+        withdraw = {"management_token": token, "revision_id": new_revision}
+        assert invoke(lifecycle, env, manage + "withdraw", withdraw, key="withdraw-one").body["status"] == "withdrawn"
+        assert invoke(lifecycle, env, manage + "withdraw", withdraw, key="withdraw-one").body["status"] == "withdrawn"
+        assert invoke(lifecycle, env, manage + "read", {"management_token": token}).status == 409
+        summary = asyncio.run(lifecycle.native_read(reviews, "store", "test", "policy", "summary", {}, 4))
+        assert summary.body["rating"] == {"average": None, "rated_count": 0}
+        public = asyncio.run(lifecycle.native_read(reviews, "store", "test", "policy", "contributions", {}, 4))
+        assert public.body["contributions"] == []
+        assert reviews.db.execute("SELECT COUNT(*) FROM native_revisions").fetchone()[0] == 2
+        assert (
+            reviews.db.execute("SELECT COUNT(*) FROM native_audit WHERE actor='reviewer_capability'").fetchone()[0] == 2
+        )
+        used = reviews.db.execute(
+            "SELECT count FROM native_rate_limits WHERE action LIKE 'review-manage:%'"
+        ).fetchone()[0]
+        for _ in range(30 - used):
+            assert invoke(lifecycle, env, manage + "read", {"management_token": token}).status == 409
+        assert invoke(lifecycle, env, manage + "read", {"management_token": token}).status == 429

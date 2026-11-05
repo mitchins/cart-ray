@@ -138,13 +138,14 @@ def main():
             [wrangler, "d1", "migrations", "apply", "cartray-acquisition-local-test", *common], cwd=ROOT, check=True
         )
         sql = Path(directory) / "synthetic.sql"
-        manifest, event_ids, _order_ids = synthetic_settlement(sql)
+        manifest, event_ids, order_ids = synthetic_settlement(sql)
         subprocess.run(
             [wrangler, "d1", "execute", "cartray-acquisition-local-test", *common, "--file", str(sql)],
             cwd=ROOT,
             check=True,
         )
         recipients = ("buyer@example.test", "second@example.test")
+        trusted_recipients = dict(zip(order_ids, recipients, strict=True))
         recipient_hashes = [hashlib.sha256(recipient.encode()).hexdigest() for recipient in recipients]
         process = start(
             "wrangler.acquisition.test.toml",
@@ -225,7 +226,7 @@ def main():
             capability = {"invitation_token": invitation["token"]}
             assert call(landing, capability)[0] == 404
             sys.path.insert(0, str(MODULE / "tools"))
-            from test_mailbox import deliver_invitation
+            from test_mailbox import deliver_bound_invitation
 
             mailbox_path = Path(directory) / "synthetic-mail"
             first_claim = {
@@ -234,9 +235,11 @@ def main():
                 "delivery_identity": invitation["delivery_identity"],
             }
             assert internal("/reviews-internal/v1/invitations/delivery-claim", first_claim, DELIVERY_TOKEN)[0] == 200
-            message_id = deliver_invitation(
+            message_id = deliver_bound_invitation(
                 mailbox_path,
-                recipient=recipients[0],
+                acquisition_id=invitation["acquisition_id"],
+                expected_recipient_hash=recipient_hashes[0],
+                resolve_recipient=trusted_recipients.get,
                 store_name="Example Store",
                 landing_url="http://127.0.0.1:3000/review/",
                 token=invitation["token"],
@@ -313,9 +316,11 @@ def main():
             assert (
                 internal("/reviews-internal/v1/invitations/delivery-claim", replacement_claim, DELIVERY_TOKEN)[0] == 200
             )
-            deliver_invitation(
+            deliver_bound_invitation(
                 mailbox_path,
-                recipient=recipients[0],
+                acquisition_id=invitation["acquisition_id"],
+                expected_recipient_hash=recipient_hashes[0],
+                resolve_recipient=trusted_recipients.get,
                 store_name="Example Store",
                 landing_url="http://127.0.0.1:3000/review/",
                 token=replacement["token"],
@@ -339,6 +344,24 @@ def main():
             second_action = "/reviews-admin/v1/contributions/" + second["review_id"] + "/approve"
             assert call(second_action, {"revision_id": second["revision_id"]}, admin=True)[0] == 200
             assert call("/reviews/v1/subjects/example-bundle/summary")[1]["rating"] == {"average": 2, "rated_count": 1}
+            management = "/reviews/v1/manage/" + second["review_id"] + "/"
+            management_capability = second["management_token"]
+            assert call(management + "read", {"management_token": management_capability})[1]["rating"] == 2
+            edit = {
+                "management_token": management_capability,
+                "revision_id": second["revision_id"],
+                "update": {"body": "Updated synthetic feedback", "rating": None},
+            }
+            edit_status, edited = call(management + "edit", edit, key="edit-second")
+            assert edit_status == 200 and edited["status"] == "pending"
+            assert call(management + "edit", edit, key="edit-second") == (edit_status, edited)
+            assert call("/reviews/v1/subjects/example-bundle/summary")[1]["rating"]["rated_count"] == 0
+            assert call(second_action, {"revision_id": edited["revision_id"]}, admin=True)[0] == 200
+            assert call("/reviews/v1/subjects/example-bundle/summary")[1]["contribution_count"] == 1
+            withdrawal = {"management_token": management_capability, "revision_id": edited["revision_id"]}
+            assert call(management + "withdraw", withdrawal, key="withdraw-second")[1]["status"] == "withdrawn"
+            assert call(management + "read", {"management_token": management_capability})[0] == 409
+            assert call("/reviews/v1/subjects/example-bundle/summary")[1]["contribution_count"] == 0
             revoke = "/reviews-internal/v1/invitations/revoke"
             assert internal(revoke, capability, ADMIN)[0] == 401
             assert internal(revoke, capability, ISSUER)[0] == 200
@@ -356,9 +379,11 @@ def main():
                 "delivery_identity": fresh["delivery_identity"],
             }
             assert internal("/reviews-internal/v1/invitations/delivery-claim", second_claim, DELIVERY_TOKEN)[0] == 200
-            deliver_invitation(
+            deliver_bound_invitation(
                 mailbox_path,
-                recipient=recipients[1],
+                acquisition_id=fresh["acquisition_id"],
+                expected_recipient_hash=recipient_hashes[1],
+                resolve_recipient=trusted_recipients.get,
                 store_name="Example Store",
                 landing_url="http://127.0.0.1:3000/review/",
                 token=fresh["token"],

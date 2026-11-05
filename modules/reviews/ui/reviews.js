@@ -21,6 +21,11 @@
     form.append(legend);
     if (subject.progress !== "available") {
       form.append(element("p", "Thank you. Your review has been submitted."));
+      if (subject.review_id && subject.management_token) {
+        const link = element("a", "Correct or withdraw this review");
+        link.href = `./manage.html#review=${encodeURIComponent(subject.review_id)}&token=${encodeURIComponent(subject.management_token)}`;
+        form.append(link);
+      }
       return form;
     }
     const draftKey = `cartray-review-draft:${invitationHash}:${subject.subject_id}`;

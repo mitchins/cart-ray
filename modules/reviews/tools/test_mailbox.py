@@ -4,11 +4,26 @@ This module deliberately has no production transport. Callers must establish
 recipient binding and purpose-bound consent before invoking the test sink.
 """
 
+import hashlib
+import hmac
 import mailbox
 import re
 from email.message import EmailMessage
 from pathlib import Path
 from urllib.parse import urlsplit, urlunsplit
+
+
+def deliver_bound_invitation(directory, *, acquisition_id, expected_recipient_hash, resolve_recipient, **message):
+    """Resolve a synthetic recipient from the trusted acquisition binding."""
+    recipient = resolve_recipient(acquisition_id)
+    if not isinstance(recipient, str) or not isinstance(expected_recipient_hash, str):
+        raise ValueError("recipient unavailable")
+    # This test-only fixture uses SHA-256; a real recipient adapter must use its
+    # own authenticated, privacy-preserving binding and transport.
+    actual = hashlib.sha256(recipient.encode()).hexdigest()
+    if not hmac.compare_digest(actual, expected_recipient_hash):
+        raise ValueError("recipient unavailable")
+    return deliver_invitation(directory, recipient=recipient, **message)
 
 
 def deliver_invitation(directory, *, recipient, store_name, landing_url, token):

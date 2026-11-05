@@ -17,6 +17,7 @@ from cartray_reviews.invitations import (
     redeem_purchase,
     revoke_purchase,
 )
+from cartray_reviews.management import manage_review, management_token
 from js import Promise, Uint8Array, clearTimeout, crypto, setTimeout
 from pyodide.ffi import create_proxy, to_js
 from workers import Response
@@ -208,6 +209,30 @@ def rate(db, store, environment, action, now):
         "INSERT INTO native_rate_limits VALUES (?,?,?,?,1) "
         "ON CONFLICT(store_key,environment,action,window) DO UPDATE SET count=count+1"
     ).bind(store, environment, action, now // 60)
+
+
+async def cleanup_rates(db, store, environment, operations, now):
+    """Occasionally remove bounded expired rate rows after verified requests."""
+    if operations % 64:
+        return
+    try:
+        await db.batch(
+            [
+                db.prepare(
+                    "DELETE FROM native_rate_limits WHERE rowid IN (SELECT rowid FROM native_rate_limits "
+                    "WHERE store_key=? AND environment=? AND "
+                    "(action LIKE 'purchase-submit:%' OR action LIKE 'review-manage:%') "
+                    "AND window<? LIMIT 128)"
+                ).bind(store, environment, now // 60 - 1440),
+                db.prepare(
+                    "DELETE FROM acquisition_rate_backstop WHERE rowid IN "
+                    "(SELECT rowid FROM acquisition_rate_backstop WHERE store_key=? AND environment=? "
+                    "AND window<? LIMIT 128)"
+                ).bind(store, environment, now // 60 - 1440),
+            ]
+        )
+    except Exception:
+        pass  # retention does not change the result of a verified operation
 
 
 async def handle_write(request, env, path):
@@ -404,6 +429,79 @@ async def handle_write(request, env, path):
         data = await read_json(request)
     except (ValueError, TypeError, json.JSONDecodeError):
         return fail(400, "invalid request")
+    customer_management = re.fullmatch(r"/reviews/v1/manage/([0-9a-f]{64})/(read|edit|withdraw)", path)
+    if customer_management:
+        if not acquisition_mode:
+            return fail(404, "not found")
+        review_id, operation = customer_management.groups()
+        capability = data.get("management_token")
+        secret = str(getattr(env, "REVIEWS_REVIEWER_KEY", "")).encode()
+        if not isinstance(capability, str) or not re.fullmatch(r"[0-9a-f]{64}", capability):
+            return fail(409, "management unavailable")
+        if not hmac.compare_digest(
+            management_token(secret, store=store, environment=environment, review_id=review_id), capability
+        ):
+            return fail(409, "management unavailable")
+        try:
+            managed_rate = await db.batch(
+                [
+                    rate(
+                        db, store, environment, "review-manage:" + hashlib.sha256(capability.encode()).hexdigest(), now
+                    ),
+                    db.prepare(
+                        "INSERT INTO acquisition_rate_backstop VALUES (?,?,?,1) "
+                        "ON CONFLICT(store_key,environment,window) DO UPDATE SET count=count+1"
+                    ).bind(store, environment, now // 60),
+                    db.prepare(
+                        "INSERT INTO acquisition_rate_maintenance VALUES (?,?,1) "
+                        "ON CONFLICT(store_key,environment) DO UPDATE SET operations=operations+1"
+                    ).bind(store, environment),
+                    db.prepare(
+                        "SELECT operations FROM acquisition_rate_maintenance WHERE store_key=? AND environment=?"
+                    ).bind(store, environment),
+                ]
+            )
+        except Exception:
+            return fail(429, "management unavailable; please try again later")
+        await cleanup_rates(db, store, environment, rows(managed_rate[-1])[0]["operations"], now)
+        if operation == "read":
+            if set(data) != {"management_token"}:
+                return fail(400, "invalid request")
+            result = rows(
+                await db.prepare(
+                    "SELECT r.state,r.revision_id,v.author,v.title,v.body,v.rating FROM native_reviews r "
+                    "JOIN native_review_acquisitions a ON a.store_key=r.store_key AND a.environment=r.environment "
+                    "AND a.review_id=r.review_id JOIN native_revisions v ON v.store_key=r.store_key "
+                    "AND v.environment=r.environment AND v.revision_id=r.revision_id AND v.review_id=r.review_id "
+                    "WHERE r.store_key=? AND r.environment=? AND r.review_id=? AND r.state<>'withdrawn'"
+                )
+                .bind(store, environment, review_id)
+                .all()
+            )
+            if len(result) != 1:
+                return fail(409, "management unavailable")
+            return Response.json(result[0], headers={"Cache-Control": "no-store"})
+        expected_fields = {"management_token", "revision_id"} | ({"update"} if operation == "edit" else set())
+        if set(data) != expected_fields:
+            return fail(400, "invalid request")
+        try:
+            result = await manage_review(
+                db,
+                store=store,
+                environment=environment,
+                review_id=review_id,
+                capability=capability,
+                secret=secret,
+                action=operation,
+                revision=data["revision_id"],
+                data=data.get("update", {}),
+                request_key=str(request.headers.get("Idempotency-Key") or ""),
+                now=now,
+                random_token=random_token,
+            )
+        except ValueError:
+            return fail(409, "management unavailable")
+        return Response.json(result, headers={"Cache-Control": "no-store"})
     if path == "/reviews/v1/invitation":
         if not acquisition_mode or set(data) != {"invitation_token"}:
             return fail(404, "invitation unavailable")
@@ -415,10 +513,12 @@ async def handle_write(request, env, path):
         subjects = rows(
             await db.prepare(
                 "SELECT s.subject_id, n.public_name, CASE WHEN s.consumed_at IS NULL THEN 'available' "
-                "ELSE 'submitted' END progress FROM acquisition_invitations i "
+                "ELSE 'submitted' END progress, COALESCE(a.review_id,'') review_id FROM acquisition_invitations i "
                 "JOIN acquisition_invitation_subjects s USING(store_key,environment,acquisition_id) "
                 "JOIN review_subject_display_names n ON n.store_key=s.store_key AND n.environment=s.environment "
-                "AND n.subject_id=s.subject_id WHERE i.store_key=? AND i.environment=? AND i.token_hash=? "
+                "AND n.subject_id=s.subject_id LEFT JOIN native_review_acquisitions a "
+                "ON a.store_key=s.store_key AND a.environment=s.environment AND a.acquisition_id=s.acquisition_id "
+                "AND a.subject_id=s.subject_id WHERE i.store_key=? AND i.environment=? AND i.token_hash=? "
                 "AND i.revoked_at IS NULL AND i.expires_at>? AND i.expires_at>unixepoch() "
                 "ORDER BY n.public_name,s.subject_id LIMIT 101"
             )
@@ -438,6 +538,13 @@ async def handle_write(request, env, path):
         )[0]["count"]
         if not subjects or len(subjects) != expected or len(subjects) > 100:
             return fail(404, "invitation unavailable")
+        for subject in subjects:
+            review_id = subject.pop("review_id")
+            if review_id:
+                subject["review_id"] = review_id
+                subject["management_token"] = management_token(
+                    str(env.REVIEWS_REVIEWER_KEY).encode(), store=store, environment=environment, review_id=review_id
+                )
         return Response.json(
             {"store_name": store_name, "subjects": subjects},
             headers={"Cache-Control": "no-store", "Referrer-Policy": "no-referrer"},
@@ -617,26 +724,7 @@ async def handle_write(request, env, path):
                 )
             except Exception:
                 return fail(429, "submission unavailable; please try again later")
-            # Amortized, bounded retention; no cleanup runs for invalid tokens
-            # and the normal request does not pay for a cleanup write.
-            if rows(rate_results[-2])[0]["operations"] % 64 == 0:
-                try:
-                    await db.batch(
-                        [
-                            db.prepare(
-                                "DELETE FROM native_rate_limits WHERE rowid IN (SELECT rowid FROM native_rate_limits "
-                                "WHERE store_key=? AND environment=? AND action LIKE 'purchase-submit:%' "
-                                "AND window<? LIMIT 128)"
-                            ).bind(store, environment, now // 60 - 1440),
-                            db.prepare(
-                                "DELETE FROM acquisition_rate_backstop WHERE rowid IN "
-                                "(SELECT rowid FROM acquisition_rate_backstop WHERE store_key=? AND environment=? "
-                                "AND window<? LIMIT 128)"
-                            ).bind(store, environment, now // 60 - 1440),
-                        ]
-                    )
-                except Exception:
-                    pass  # retention is best-effort and never changes submission semantics
+            await cleanup_rates(db, store, environment, rows(rate_results[-2])[0]["operations"], now)
             try:
                 result = await redeem_purchase(
                     db,
@@ -655,6 +743,12 @@ async def handle_write(request, env, path):
                 )
             except ValueError:
                 return fail(409, "submission unavailable")
+            result["management_token"] = management_token(
+                str(env.REVIEWS_REVIEWER_KEY).encode(),
+                store=store,
+                environment=environment,
+                review_id=result["review_id"],
+            )
             return Response.json(result, status=202, headers={"Cache-Control": "no-store"})
         digest = hashlib.sha256(
             json.dumps([sid, author, title, body, rating], ensure_ascii=True, separators=(",", ":")).encode()

@@ -19,7 +19,8 @@
     "migrations/0007_acquisition_rate_limits.sql",
     "migrations/0008_acquisition_rate_maintenance.sql",
     "migrations/0009_invitation_generations.sql",
-    "migrations/0010_invitation_delivery_claim.sql"
+    "migrations/0010_invitation_delivery_claim.sql",
+    "migrations/0011_review_management.sql"
   ],
   "routes": [
     "GET /reviews/v1/subjects/{subject_id}/summary",
@@ -34,6 +35,7 @@
     "POST /reviews-internal/v1/invitations/delivery-claim (verified_acquisition_only, test only)",
     "POST /reviews-internal/v1/invitations/delivery-outcome (verified_acquisition_only, test only)",
     "POST /reviews/v1/invitation (verified_acquisition_only, test only)",
+    "POST /reviews/v1/manage/{review_id}/{read|edit|withdraw} (verified_acquisition_only, test only)",
     "POST /reviews/v1/contributions (verified_acquisition_only, test only)"
   ],
   "subscriptions": [],

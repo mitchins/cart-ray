@@ -43,3 +43,23 @@ def test_test_mailbox_refuses_nonlocal_or_fragment_urls(tmp_path, url):
             landing_url=url,
             token="a" * 64,
         )
+
+
+def test_bound_delivery_rejects_redirected_or_unknown_recipient(tmp_path):
+    import hashlib
+
+    address = "buyer@example.test"
+    kwargs = dict(
+        acquisition_id="purchase-1",
+        expected_recipient_hash=hashlib.sha256(address.encode()).hexdigest(),
+        store_name="Store",
+        landing_url="http://localhost/review/",
+        token="a" * 64,
+    )
+    for resolver in (lambda _: "different@example.test", lambda _: None):
+        with pytest.raises(ValueError):
+            sink.deliver_bound_invitation(tmp_path / "mail", resolve_recipient=resolver, **kwargs)
+    assert not (tmp_path / "mail").exists()
+    sink.deliver_bound_invitation(tmp_path / "mail", resolve_recipient=lambda _: address, **kwargs)
+    box = mailbox.Maildir(tmp_path / "mail", create=False)
+    assert len(box) == 1
