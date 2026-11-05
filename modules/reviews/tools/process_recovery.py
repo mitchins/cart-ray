@@ -19,6 +19,10 @@ def process_one(
     if item is None:
         return {"status": "empty"}
     recipient = resolve_recipient(item["acquisition_id"])
+    # A missing lookup result can mean a temporarily unavailable recipient
+    # adapter. Leave the durable request pending for a safe retry.
+    if recipient is None:
+        return {"status": "recipient temporarily unavailable"}
     if not isinstance(recipient, str) or not hmac.compare_digest(
         hashlib.sha256(recipient.encode()).hexdigest(), item["recipient_context_hash"]
     ):

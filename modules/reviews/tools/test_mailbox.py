@@ -28,7 +28,13 @@ def deliver_bound_invitation(directory, *, acquisition_id, expected_recipient_ha
 
 def deliver_invitation(directory, *, recipient, store_name, landing_url, token, delivery_identity=None):
     """Write one synthetic email into a local Maildir and return its key."""
-    if not isinstance(recipient, str) or not re.fullmatch(r"[^\s@<>]+@[^\s@<>]+\.[^\s@<>]+", recipient):
+    if not isinstance(recipient, str) or (
+        len(recipient) > 254
+        or recipient.count("@") != 1
+        or any(c.isspace() or c in "<>" for c in recipient)
+        or "." not in recipient.rsplit("@", 1)[-1]
+        or any(not part for part in recipient.rsplit("@", 1))
+    ):
         raise ValueError("invalid synthetic recipient")
     if not isinstance(store_name, str) or not 1 <= len(store_name.strip()) <= 200 or "\n" in store_name:
         raise ValueError("invalid store name")

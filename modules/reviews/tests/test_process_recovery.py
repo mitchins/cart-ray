@@ -72,6 +72,10 @@ def test_local_recovery_delivers_only_to_the_bound_recipient(lifecycle, tmp_path
             env.REVIEWS_SETTLEMENT_TOKEN,
         )
         assert prepared["state"] == "prepared"
+        assert processor.process_one(post, resolve_recipient=lambda _: None, **args) == {
+            "status": "recipient temporarily unavailable"
+        }
+        assert reviews.db.execute("SELECT state FROM review_recovery_requests").fetchone()[0] == "pending"
         assert processor.process_one(post, resolve_recipient=lambda _: "redirect@example.test", **args) == {
             "status": "recipient unavailable"
         }
