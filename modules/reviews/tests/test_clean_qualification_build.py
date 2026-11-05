@@ -1,9 +1,13 @@
 """Exercise the actual clean qualification build, including locked vendoring."""
 
+import os
 import runpy
 from pathlib import Path
 
+import pytest
 
+
+@pytest.mark.skipif(os.environ.get("REVIEWS_QUALIFICATION_BUILD") != "1", reason="commit-only qualification")
 def test_clean_qualification_build():
     """A clean archived head must produce a bundle containing its runtime sources."""
     script = Path(__file__).resolve().parents[1] / "tools/clean_qualification_build.py"

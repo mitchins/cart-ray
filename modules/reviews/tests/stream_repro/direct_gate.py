@@ -56,7 +56,17 @@ def main():
                     stalled.settimeout(5)
                     stalled.sendall(b"POST / HTTP/1.1\r\nHost: localhost\r\nContent-Length: 10\r\n\r\n{")
                     health(port)
-                    response = stalled.recv(1024)
+                    response = b""
+                    deadline = time.monotonic() + 5
+                    while b"\r\n" not in response and len(response) < 1024:
+                        remaining = deadline - time.monotonic()
+                        if remaining <= 0:
+                            raise TimeoutError("incomplete status line")
+                        stalled.settimeout(remaining)
+                        chunk = stalled.recv(1024 - len(response))
+                        if not chunk:
+                            break
+                        response += chunk
                     assert response.startswith(b"HTTP/1.1 400 "), repr(response)
                 for _ in range(10):
                     assert process.poll() is None
