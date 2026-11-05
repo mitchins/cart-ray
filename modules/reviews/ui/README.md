@@ -4,4 +4,4 @@ These static files are a reusable, test-only customer form. Serve them from the 
 
 The form keeps its draft and retry identifier in tab-scoped session storage. It does not store the invitation token there. A bearer link can be forwarded, so it verifies acquisition eligibility, not the identity of the person who opens it.
 
-This is not a production release: consent integration, invitation replacement and self-service recovery, ingress controls, real staff identity and sending are not yet qualified.
+This is not a production release. The local flow supports replacement requests and review management, but automatic recovery dispatch, real recipient integration, real staff identity, live sending and production qualification remain open.
