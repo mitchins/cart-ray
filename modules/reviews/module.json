@@ -26,6 +26,7 @@
     "GET /reviews-admin/v1/pending (collect, test only)",
     "POST /reviews-admin/v1/* (collect, test only)",
     "POST /reviews-internal/v1/settlements (verified_acquisition_only, test only)",
+    "POST /reviews-internal/v1/consents (verified_acquisition_only, test only)",
     "POST /reviews-internal/v1/invitations/revoke (verified_acquisition_only, test only)",
     "POST /reviews/v1/invitation (verified_acquisition_only, test only)",
     "POST /reviews/v1/contributions (verified_acquisition_only, test only)"

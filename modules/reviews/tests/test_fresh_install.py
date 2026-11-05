@@ -1,3 +1,4 @@
+import hashlib
 import json
 import sqlite3
 from pathlib import Path
@@ -5,6 +6,26 @@ from pathlib import Path
 import pytest
 
 MODULE = Path(__file__).resolve().parents[1]
+
+
+def test_rate_maintenance_upgrades_database_without_modifying_applied_migration():
+    """An existing 0007 ledger entry remains valid when 0008 is installed."""
+    descriptor = json.loads((MODULE / "module.json").read_text())
+    old = MODULE / "migrations/0007_acquisition_rate_limits.sql"
+    assert (
+        hashlib.sha256(old.read_bytes()).hexdigest()
+        == "30447c391008899b18c3e54bde6ca4837de0439690710aae8979ddf9397ac397"
+    )
+    assert descriptor["migrations"][-2:] == [
+        "migrations/0007_acquisition_rate_limits.sql",
+        "migrations/0008_acquisition_rate_maintenance.sql",
+    ]
+    connection = sqlite3.connect(":memory:")
+    connection.executescript(old.read_text())
+    connection.execute("INSERT INTO acquisition_rate_backstop VALUES ('store','test',1,1)")
+    connection.executescript((MODULE / descriptor["migrations"][-1]).read_text())
+    assert connection.execute("SELECT count FROM acquisition_rate_backstop").fetchone() == (1,)
+    assert connection.execute("SELECT COUNT(*) FROM acquisition_rate_maintenance").fetchone() == (0,)
 
 
 def test_fresh_install_is_explicit_disabled_and_has_no_import_prerequisite():

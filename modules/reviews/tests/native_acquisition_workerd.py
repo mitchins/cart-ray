@@ -29,6 +29,7 @@ from cartray.store import SqliteOrderStore
 from cartray.stripe import CheckoutMetadataSealer, CheckoutMetadataVerifier
 
 ISSUER = "synthetic-settlement-issuer-token-0123456789"
+CONSENT_SECRET = "e" * 40
 
 
 def synthetic_settlement(sql_path):
@@ -56,12 +57,15 @@ def synthetic_settlement(sql_path):
     signature = SyntheticSignature()
     events, orders = [], []
     for index in range(2):
+        items = (CanonicalItem("TEST-TEMPLATE", 1),)
+        if index == 0:
+            items += (CanonicalItem("TEST-BUNDLE", 1),)
         _spec, session, event = _checkout_session(
             checkout,
             checkout.gateway,
-            CheckoutRequest(f"reviews-synthetic-{index}", catalogue.version, (CanonicalItem("TEST-TEMPLATE", 1),)),
+            CheckoutRequest(f"reviews-synthetic-{index}", catalogue.version, items),
             payment_status="paid",
-            amount_total_minor=5000,
+            amount_total_minor=7500 if index == 0 else 5000,
         )
         metadata = asyncio.run(
             CheckoutMetadataSealer("test", "synthetic", signature).seal(
@@ -78,7 +82,7 @@ def synthetic_settlement(sql_path):
     dumps = list(checkout.store.connection.iterdump())
     tables = ("orders", "order_items", "stripe_events", "checkout_sessions")
     inserts = [line for table in tables for line in dumps if line.startswith(f'INSERT INTO "{table}"')]
-    assert len(inserts) == 8
+    assert len(inserts) == 9
     sql_path.write_text("\n".join(inserts) + "\n")
     return catalogue.version, events, orders
 
@@ -97,6 +101,30 @@ def internal(path, payload, token):
         return exc.code, json.loads(exc.read())
 
 
+def signed_consent(event_id, recipient_hash):
+    payload = {
+        "event_id": event_id,
+        "recipient_context_hash": recipient_hash,
+        "evidence_reference": "synthetic-consent",
+        "granted_at": 1,
+    }
+    signed = json.dumps(
+        ["reviews-consent-v1", "example-store", "test", payload],
+        ensure_ascii=True,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode()
+    signature = hmac.new(CONSENT_SECRET.encode(), signed, hashlib.sha256).hexdigest()
+    request = urllib.request.Request(
+        BASE + "/reviews-internal/v1/consents",
+        data=json.dumps(payload).encode(),
+        headers={"Content-Type": "application/json", "X-Reviews-Consent-Signature": signature},
+        method="POST",
+    )
+    with urllib.request.urlopen(request, timeout=10) as response:
+        return response.status
+
+
 def main():
     with tempfile.TemporaryDirectory(prefix="reviews-acquisition-d1-") as directory:
         env = os.environ | {"REVIEWS_LOCAL_PERSIST_DIR": directory}
@@ -108,29 +136,14 @@ def main():
             [wrangler, "d1", "migrations", "apply", "cartray-acquisition-local-test", *common], cwd=ROOT, check=True
         )
         sql = Path(directory) / "synthetic.sql"
-        manifest, event_ids, order_ids = synthetic_settlement(sql)
+        manifest, event_ids, _order_ids = synthetic_settlement(sql)
         subprocess.run(
             [wrangler, "d1", "execute", "cartray-acquisition-local-test", *common, "--file", str(sql)],
             cwd=ROOT,
             check=True,
         )
-        # Synthetic purpose-bound consent is provisioned independently from
-        # CartRay settlement, as a trusted consent adapter would do.
-        consent_sql = Path(directory) / "consent.sql"
         recipients = ("buyer@example.test", "second@example.test")
         recipient_hashes = [hashlib.sha256(recipient.encode()).hexdigest() for recipient in recipients]
-        consent_rows = list(
-            "INSERT INTO review_invitation_consents VALUES "
-            f"('example-store','test','{order_id}','{recipient_hash}','review_invitation',"
-            "'synthetic-consent',1,NULL);"
-            for order_id, recipient_hash in zip(order_ids, recipient_hashes, strict=True)
-        )
-        consent_sql.write_text(consent_rows[1])
-        subprocess.run(
-            [wrangler, "d1", "execute", "cartray-reviews-local-test", *common, "--file", str(consent_sql)],
-            cwd=ROOT,
-            check=True,
-        )
         process = start(
             "wrangler.acquisition.test.toml",
             directory,
@@ -140,15 +153,33 @@ def main():
                 "REVIEWS_SETTLEMENT_TOKEN": ISSUER,
                 "REVIEWS_INVITATION_KEY": "i" * 40,
                 "REVIEWS_REVIEWER_KEY": "r" * 40,
+                "REVIEWS_CONSENT_SECRET": CONSENT_SECRET,
                 "REVIEWS_PUBLIC_STORE_NAME": "Example Store",
                 "REVIEWS_SUBJECT_MAPS": json.dumps(
-                    {manifest: {"TEST-TEMPLATE": "example-policy"}}, separators=(",", ":")
+                    {manifest: {"TEST-TEMPLATE": "example-policy", "TEST-BUNDLE": "example-bundle"}},
+                    separators=(",", ":"),
                 ),
             },
         )
         try:
             subject = {"subject_id": "example-policy", "kind": "product", "path": "/example-policy/"}
             assert call("/reviews-admin/v1/subjects", subject, admin=True)[0] == 201
+            assert (
+                call(
+                    "/reviews-admin/v1/subjects",
+                    {"subject_id": "example-bundle", "kind": "product", "path": "/example-bundle/"},
+                    admin=True,
+                )[0]
+                == 201
+            )
+            assert (
+                call(
+                    "/reviews-admin/v1/subject-display-names",
+                    {"subject_id": "example-bundle", "public_name": "Example bundle"},
+                    admin=True,
+                )[0]
+                == 200
+            )
             assert (
                 call(
                     "/reviews-admin/v1/subject-display-names",
@@ -178,12 +209,8 @@ def main():
                 text=True,
             )
             assert json.loads(counts.stdout)[0]["results"][0]["count"] == 0
-            consent_sql.write_text(consent_rows[0])
-            subprocess.run(
-                [wrangler, "d1", "execute", "cartray-reviews-local-test", *common, "--file", str(consent_sql)],
-                cwd=ROOT,
-                check=True,
-            )
+            assert signed_consent(event_ids[0], recipient_hashes[0]) == 201
+            assert signed_consent(event_ids[1], recipient_hashes[1]) == 201
             status, invitation = internal(endpoint, event, ISSUER)
             assert status == 201, (status, invitation)
             assert internal(endpoint, event, ISSUER) == (status, invitation)
@@ -209,7 +236,8 @@ def main():
                 {
                     "store_name": "Example Store",
                     "subjects": [
-                        {"subject_id": "example-policy", "public_name": "Example policy", "progress": "available"}
+                        {"subject_id": "example-bundle", "public_name": "Example bundle", "progress": "available"},
+                        {"subject_id": "example-policy", "public_name": "Example policy", "progress": "available"},
                     ],
                 },
             )
@@ -237,7 +265,7 @@ def main():
             assert sorted(result[0] for _, result in outcomes) == [202, 409], outcomes
             winning_key, (status, pending) = next(item for item in outcomes if item[1][0] == 202)
             assert call("/reviews/v1/contributions", body, key=winning_key) == (status, pending)
-            assert call(landing, capability)[1]["subjects"][0]["progress"] == "submitted"
+            assert [s["progress"] for s in call(landing, capability)[1]["subjects"]] == ["available", "submitted"]
             assert call("/reviews/v1/contributions", body, key="other-request")[0] == 409
             listing = "/reviews/v1/subjects/example-policy/contributions"
             assert call(listing)[1]["contributions"] == []
@@ -247,6 +275,13 @@ def main():
             public = call(listing)[1]
             assert public["contributions"][0]["verification"] == "cartray_verified_acquisition"
             assert invitation["token"] not in json.dumps(public)
+            second_body = {"subject_id": "example-bundle", "rating": 2, "invitation_token": emailed_token}
+            status, second = call("/reviews/v1/contributions", second_body, key="second-product")
+            assert status == 202
+            assert [s["progress"] for s in call(landing, capability)[1]["subjects"]] == ["submitted", "submitted"]
+            second_action = "/reviews-admin/v1/contributions/" + second["review_id"] + "/approve"
+            assert call(second_action, {"revision_id": second["revision_id"]}, admin=True)[0] == 200
+            assert call("/reviews/v1/subjects/example-bundle/summary")[1]["rating"] == {"average": 2, "rated_count": 1}
             revoke = "/reviews-internal/v1/invitations/revoke"
             assert internal(revoke, {"invitation_token": invitation["token"]}, ADMIN)[0] == 401
             assert internal(revoke, {"invitation_token": invitation["token"]}, ISSUER)[0] == 200

@@ -2,11 +2,13 @@
 
 import asyncio
 import hashlib
+import hmac
+import json
 from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
-from cartray_reviews.invitations import issue_from_settlement
+from cartray_reviews.invitations import issue_from_settlement, record_signed_consent
 from test_acquisition import Database as CommerceDatabase
 from test_native_lifecycle import Database as ReviewsDatabase
 from test_native_lifecycle import invoke
@@ -53,6 +55,81 @@ def test_missing_mismatched_or_revoked_consent_suppresses_invitation():
         with pytest.raises(ValueError, match="invitation unavailable"):
             issue(reviews, commerce)
         assert reviews.db.execute("SELECT COUNT(*) FROM acquisition_invitations").fetchone()[0] == 0
+
+
+def test_authenticated_consent_is_bound_to_confirmed_acquisition_and_recipient():
+    reviews, commerce = stores()
+    reviews.db.execute("DELETE FROM review_invitation_consents")
+    reviews.db.commit()
+    data = {
+        "event_id": "event_1",
+        "recipient_context_hash": "a" * 64,
+        "evidence_reference": "proof-1",
+        "granted_at": 90,
+    }
+    secret = b"s" * 32
+    signed = json.dumps(
+        ["reviews-consent-v1", "store", "test", data], ensure_ascii=True, sort_keys=True, separators=(",", ":")
+    ).encode()
+    signature = hmac.new(secret, signed, hashlib.sha256).hexdigest()
+    args = dict(
+        store="store",
+        environment="test",
+        data=data,
+        signature=signature,
+        secret=secret,
+        subject_maps={"v1": {"product_1": "policy"}},
+        now=100,
+    )
+    with pytest.raises(ValueError):
+        asyncio.run(record_signed_consent(reviews, commerce, **(args | {"signature": "0" * 64})))
+    assert reviews.db.execute("SELECT COUNT(*) FROM review_invitation_consents").fetchone()[0] == 0
+    asyncio.run(record_signed_consent(reviews, commerce, **args))
+    asyncio.run(record_signed_consent(reviews, commerce, **args))
+    assert issue(reviews, commerce)["subjects"] == ("policy",)
+    with pytest.raises(ValueError):
+        asyncio.run(record_signed_consent(reviews, commerce, **(args | {"store": "other"})))
+
+
+def test_signed_consent_route_rejects_forgery_and_records_verified_evidence(lifecycle):
+    reviews, commerce = stores()
+    reviews.db.execute("DELETE FROM review_invitation_consents")
+    reviews.db.commit()
+    data = {
+        "event_id": "event_1",
+        "recipient_context_hash": "a" * 64,
+        "evidence_reference": "proof-1",
+        "granted_at": 90,
+    }
+    env = SimpleNamespace(
+        REVIEWS_DB=reviews,
+        CARTRAY_DB=commerce,
+        REVIEWS_STORE_KEY="store",
+        REVIEWS_ENVIRONMENT="test",
+        REVIEWS_MODE="verified_acquisition_only",
+        REVIEWS_TEST_ADMIN_TOKEN="a" * 40,
+        REVIEWS_SETTLEMENT_TOKEN="b" * 40,
+        REVIEWS_INVITATION_KEY="c" * 40,
+        REVIEWS_REVIEWER_KEY="d" * 40,
+        REVIEWS_CONSENT_SECRET="e" * 40,
+        REVIEWS_SUBJECT_MAPS=json.dumps({"v1": {"product_1": "policy"}}),
+    )
+    body = json.dumps(
+        ["reviews-consent-v1", "store", "test", data], ensure_ascii=True, sort_keys=True, separators=(",", ":")
+    ).encode()
+    signature = hmac.new(env.REVIEWS_CONSENT_SECRET.encode(), body, hashlib.sha256).hexdigest()
+
+    def post(signature_value):
+        request = SimpleNamespace(
+            method="POST", headers={"X-Reviews-Consent-Signature": signature_value}, data=data, body=None
+        )
+        return asyncio.run(lifecycle.handle_write(request, env, "/reviews-internal/v1/consents"))
+
+    with patch.object(lifecycle.time, "time", return_value=101):
+        assert post("0" * 64).status == 409
+        assert post(signature).status == 201
+        assert post(signature).status == 201
+    assert reviews.db.execute("SELECT COUNT(*) FROM review_invitation_consents").fetchone()[0] == 1
 
 
 def test_issue_opaque_scoped_invitation_is_idempotent():

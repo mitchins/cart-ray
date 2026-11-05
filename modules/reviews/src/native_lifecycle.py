@@ -7,7 +7,7 @@ import re
 import time
 from urllib.parse import parse_qs
 
-from cartray_reviews.invitations import issue_from_settlement, redeem_purchase, revoke_purchase
+from cartray_reviews.invitations import issue_from_settlement, record_signed_consent, redeem_purchase, revoke_purchase
 from js import Promise, Uint8Array, clearTimeout, crypto, setTimeout
 from pyodide.ffi import create_proxy, to_js
 from workers import Response
@@ -225,6 +225,27 @@ async def handle_write(request, env, path):
         ):
             await discard_body(request)
             return fail(503, "collection unavailable")
+    if path == "/reviews-internal/v1/consents":
+        consent_secret = str(getattr(env, "REVIEWS_CONSENT_SECRET", ""))
+        if not acquisition_mode or len(consent_secret) < 32 or consent_secret in secrets:
+            await discard_body(request)
+            return fail(503, "consent unavailable")
+        try:
+            consent_data = await read_json(request)
+            await record_signed_consent(
+                env.REVIEWS_DB,
+                env.CARTRAY_DB,
+                store=store,
+                environment=environment,
+                data=consent_data,
+                signature=str(request.headers.get("X-Reviews-Consent-Signature") or ""),
+                secret=consent_secret.encode(),
+                subject_maps=json.loads(str(getattr(env, "REVIEWS_SUBJECT_MAPS", ""))),
+                now=int(time.time()),
+            )
+            return Response.json({"status": "recorded"}, status=201, headers={"Cache-Control": "no-store"})
+        except (ValueError, TypeError, AttributeError, KeyError):
+            return fail(409, "consent unavailable")
     if path in ("/reviews-internal/v1/settlements", "/reviews-internal/v1/invitations/revoke"):
         issuer = str(getattr(env, "REVIEWS_SETTLEMENT_TOKEN", ""))
         supplied = str(request.headers.get("Authorization") or "")

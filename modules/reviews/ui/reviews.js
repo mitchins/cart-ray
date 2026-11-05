@@ -69,7 +69,11 @@
           try { sessionStorage.removeItem(draftKey); } catch (_) { /* no action needed */ }
           await load("Thank you. Your review was submitted and is awaiting moderation.");
         } else {
-          message.textContent = "We couldn't submit your review. Your draft is still here; please try again or contact the store.";
+          message.textContent = response.status === 429
+            ? "Too many attempts. Your draft is still here; please wait a little and try again."
+            : response.status === 409
+              ? "This review could not be submitted. It may already have been submitted or the invitation may be unavailable. Your draft is still here; please contact the store if you need help."
+              : "We couldn't submit your review. Your draft is still here; please try again or contact the store.";
         }
       } catch (_) {
         message.textContent = "We couldn't reach the store. Your draft is still here; please try again.";
