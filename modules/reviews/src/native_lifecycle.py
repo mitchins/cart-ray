@@ -76,7 +76,7 @@ async def discard_body(request):
     reader = None
     try:
         length = request.headers.get("Content-Length")
-        if length == "0" or request.body is None or request.bodyUsed:
+        if length == "0" or request.body is None:
             return
         reader = request.body.getReader()
         if not length or not str(length).isdigit() or int(length) > 16384:
