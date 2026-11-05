@@ -300,6 +300,21 @@ def test_body_validation_and_single_reader_cleanup(lifecycle):
     with pytest.raises(ValueError):
         asyncio.run(lifecycle.actual_read_json(request))
     assert body.acquired == 1 and reader.cancelled == 1 and reader.released == 1
+    reader = Reader([b"abc"])
+    body = Body(reader)
+    request = types.SimpleNamespace(headers={"Content-Length": "3"}, body=body)
+    asyncio.run(lifecycle.discard_body(request))
+    assert body.acquired == 1 and reader.released == 1 and reader.cancelled == 0
+    reader = Reader([])
+    body = Body(reader)
+    request = types.SimpleNamespace(headers={"Content-Length": "20000"}, body=body)
+    asyncio.run(lifecycle.discard_body(request))
+    assert body.acquired == 1 and reader.cancelled == 1 and reader.released == 1
+    reader = Reader([b"timeout"])
+    body = Body(reader)
+    request = types.SimpleNamespace(headers={"Content-Length": "10"}, body=body)
+    asyncio.run(lifecycle.discard_body(request))
+    assert body.acquired == 1 and reader.cancelled == 1 and reader.released == 1
 
 
 def test_moderation_queue_is_scoped_and_private(lifecycle):
