@@ -33,10 +33,15 @@ class Database:
     def prepare(self, sql):
         return Statement(self.connection, sql)
 
-    def add_purchase(self, state="confirmed", payment="paid", amount=100):
+    def add_purchase(self, state="confirmed", payment="paid", amount=100, second=False):
         c = self.connection
-        c.execute("INSERT INTO orders VALUES ('order_1','request_1','fingerprint','v1','digest','aud',100,1)")
+        c.execute(
+            "INSERT INTO orders VALUES ('order_1','request_1','fingerprint','v1','digest','aud',?,1)",
+            (200 if second else 100,),
+        )
         c.execute("INSERT INTO order_items VALUES ('order_1','product_1',1,'price_1',100,'[]')")
+        if second:
+            c.execute("INSERT INTO order_items VALUES ('order_1','product_2',1,'price_2',100,'[]')")
         c.execute(
             "INSERT INTO stripe_events (stripe_event_id,event_type,session_id,payload_json,received_at,"
             "processed_at,payload_sha256,processing_state) VALUES ('event_1','checkout.session.completed',"

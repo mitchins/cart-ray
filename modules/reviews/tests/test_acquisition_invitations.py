@@ -212,3 +212,53 @@ def test_settlement_to_pending_approval_and_public_verified_review(lifecycle):
     public = asyncio.run(lifecycle.native_read(reviews, "store", "test", "policy", "contributions", {}, 1))
     assert public.body["contributions"][0]["verification"] == "cartray_verified_acquisition"
     assert invitation.body["token"] not in json.dumps(public.body)
+
+
+def test_one_invitation_covers_two_paid_subjects_without_resetting_consumption():
+    import secrets
+
+    from cartray_reviews.invitations import redeem_purchase
+
+    commerce = CommerceDatabase()
+    commerce.add_purchase(second=True, amount=200)
+    reviews = ReviewsDatabase()
+    reviews.db.create_function("unixepoch", 0, lambda: 100)
+    for subject in ("policy", "other-policy"):
+        reviews.db.execute("INSERT INTO review_subjects VALUES ('store','test',?,'product','/')", (subject,))
+    reviews.db.commit()
+    mapping = {"v1": {"product_1": "policy", "product_2": "other-policy"}}
+    invitation = issue(reviews, commerce, subject_maps=mapping)
+    assert invitation["subjects"] == ("other-policy", "policy")
+    common = {
+        "store": "store",
+        "environment": "test",
+        "token": invitation["token"],
+        "author": "Guest",
+        "title": None,
+        "body": "Text",
+        "rating": 5,
+        "reviewer_key_secret": b"r" * 32,
+        "now": 101,
+        "random_token": lambda: secrets.token_hex(32),
+    }
+    first = asyncio.run(redeem_purchase(reviews, **(common | {"subject": "policy", "request_key": "first"})))
+    assert first["status"] == "pending"
+    assert issue(reviews, commerce, subject_maps=mapping, now=102) == invitation
+    with pytest.raises(ValueError):
+        asyncio.run(redeem_purchase(reviews, **(common | {"subject": "policy", "request_key": "duplicate"})))
+    second = asyncio.run(redeem_purchase(reviews, **(common | {"subject": "other-policy", "request_key": "second"})))
+    assert second["status"] == "pending" and second["review_id"] != first["review_id"]
+    assert reviews.db.execute("SELECT COUNT(*) FROM native_review_acquisitions").fetchone()[0] == 2
+
+
+def test_missing_one_eligible_subject_rolls_back_entire_issuance():
+    commerce = CommerceDatabase()
+    commerce.add_purchase(second=True, amount=200)
+    reviews = ReviewsDatabase()
+    reviews.db.execute("INSERT INTO review_subjects VALUES ('store','test','policy','product','/')")
+    reviews.db.commit()
+    mapping = {"v1": {"product_1": "policy", "product_2": "missing"}}
+    with pytest.raises(ValueError):
+        issue(reviews, commerce, subject_maps=mapping)
+    assert reviews.db.execute("SELECT COUNT(*) FROM acquisition_invitations").fetchone()[0] == 0
+    assert reviews.db.execute("SELECT COUNT(*) FROM acquisition_invitation_subjects").fetchone()[0] == 0
