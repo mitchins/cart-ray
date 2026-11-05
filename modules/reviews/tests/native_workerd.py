@@ -7,6 +7,7 @@ import socket
 import subprocess
 import sys
 import tempfile
+import time
 import urllib.error
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor
@@ -71,15 +72,33 @@ def main():
         try:
             subject = {"subject_id": "example-policy", "kind": "product", "path": "/example-policy/"}
             assert call("/reviews-admin/v1/subjects", subject)[0] == 401
+            started = time.monotonic()
             with socket.create_connection(("127.0.0.1", PORT), timeout=5) as stalled:
                 stalled.settimeout(5)
                 stalled.sendall(
                     b"POST /reviews-admin/v1/subjects HTTP/1.1\r\nHost: localhost\r\n"
                     b"Content-Type: application/json\r\nContent-Length: 10\r\n\r\n{"
                 )
-                assert b"401" in stalled.recv(1024)
+                try:
+                    stalled_response = stalled.recv(1024)
+                    while stalled_response and b"\r\n" not in stalled_response:
+                        remaining = 5 - (time.monotonic() - started)
+                        if remaining <= 0:
+                            raise TimeoutError("stalled request exceeded deadline")
+                        stalled.settimeout(remaining)
+                        chunk = stalled.recv(1024)
+                        if not chunk:
+                            break
+                        stalled_response += chunk
+                except ConnectionResetError:
+                    stalled_response = b""
+                assert not stalled_response or stalled_response.startswith((b"HTTP/1.1 401", b"HTTP/1.0 401")), (
+                    stalled_response
+                )
+            assert time.monotonic() - started < 5
             created = call("/reviews-admin/v1/subjects", subject, admin=True)
             assert created[0] == 201, created
+            assert query("SELECT COUNT(*) n FROM native_audit")[0]["n"] == 0
             summary_path = "/reviews/v1/subjects/example-policy/summary"
             list_path = "/reviews/v1/subjects/example-policy/contributions"
             assert call(summary_path)[1]["rating"] == {"average": None, "rated_count": 0}
