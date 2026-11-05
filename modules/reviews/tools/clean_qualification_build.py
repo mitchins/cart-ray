@@ -3,11 +3,16 @@
 import hashlib
 import io
 import json
+import os
 import shutil
+import signal
+import socket
 import subprocess
 import tarfile
 import tempfile
+import time
 import tomllib
+import urllib.error
 import urllib.request
 import zipfile
 from importlib.metadata import PathDistribution
@@ -28,6 +33,51 @@ SOURCES = (
 def run(args, cwd, **kwargs):
     """Run a required build step and retain any failure."""
     return subprocess.run(args, cwd=cwd, check=True, **kwargs)
+
+
+def exercise_worker(project):
+    """Boot the isolated dependency set under local Workerd and execute fetch."""
+    with socket.socket() as listener:
+        listener.bind(("127.0.0.1", 0))
+        port = listener.getsockname()[1]
+    process = subprocess.Popen(
+        [
+            str(project / ".venv/bin/pywrangler"),
+            "dev",
+            "--config",
+            "qualification.toml",
+            "--local",
+            "--port",
+            str(port),
+            "--persist-to",
+            str(project / "workerd-state"),
+            "--log-level=error",
+        ],
+        cwd=project,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        start_new_session=True,
+    )
+    try:
+        deadline = time.monotonic() + 60
+        while time.monotonic() < deadline:
+            if process.poll() is not None:
+                raise RuntimeError("isolated Reviews Workerd exited before readiness")
+            try:
+                urllib.request.urlopen(f"http://127.0.0.1:{port}/reviews/v1/subjects/test/summary", timeout=1)
+            except urllib.error.HTTPError as error:
+                if error.code == 404 and json.loads(error.read()) == {"error": "not found"}:
+                    return
+                raise RuntimeError(f"isolated Reviews Workerd returned HTTP {error.code}") from error
+            except (urllib.error.URLError, TimeoutError, ConnectionError):
+                time.sleep(0.25)
+        raise RuntimeError("isolated Reviews Workerd did not become ready")
+    finally:
+        try:
+            os.killpg(process.pid, signal.SIGTERM)
+        except ProcessLookupError:
+            pass
+        process.wait(timeout=10)
 
 
 def main():
@@ -140,6 +190,7 @@ def main():
         for relative in vendor_files:
             if (vendor / relative).read_bytes() != (bundled_vendor / relative).read_bytes():
                 raise RuntimeError(f"vendored file changed in bundle: {relative}")
+        exercise_worker(project)
         hashes = {}
         for relative in SOURCES:
             source = (project / "modules/reviews/src" / relative).read_bytes()
