@@ -26,7 +26,7 @@ def deliver_bound_invitation(directory, *, acquisition_id, expected_recipient_ha
     return deliver_invitation(directory, recipient=recipient, **message)
 
 
-def deliver_invitation(directory, *, recipient, store_name, landing_url, token):
+def deliver_invitation(directory, *, recipient, store_name, landing_url, token, delivery_identity=None):
     """Write one synthetic email into a local Maildir and return its key."""
     if not isinstance(recipient, str) or not re.fullmatch(r"[^\s@<>]+@[^\s@<>]+\.[^\s@<>]+", recipient):
         raise ValueError("invalid synthetic recipient")
@@ -34,6 +34,10 @@ def deliver_invitation(directory, *, recipient, store_name, landing_url, token):
         raise ValueError("invalid store name")
     if not isinstance(token, str) or not re.fullmatch(r"[0-9a-f]{64}", token):
         raise ValueError("invalid invitation capability")
+    if delivery_identity is not None and (
+        not isinstance(delivery_identity, str) or not re.fullmatch(r"[0-9a-f]{64}", delivery_identity)
+    ):
+        raise ValueError("invalid delivery identity")
     url = urlsplit(landing_url)
     if url.scheme != "http" or url.hostname not in ("localhost", "127.0.0.1") or url.fragment or url.query:
         raise ValueError("test mailbox requires a local landing URL")
@@ -42,6 +46,8 @@ def deliver_invitation(directory, *, recipient, store_name, landing_url, token):
     message["From"] = "reviews@example.test"
     message["To"] = recipient
     message["Subject"] = f"Share your experience with {store_name.strip()}"
+    if delivery_identity is not None:
+        message["X-Reviews-Delivery-Identity"] = delivery_identity
     message.set_content(
         f"Thank you for your purchase from {store_name.strip()}.\n\n"
         "If you would like to share your experience, you can leave a review here:\n\n"

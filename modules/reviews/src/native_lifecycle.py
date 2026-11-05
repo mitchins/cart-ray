@@ -351,6 +351,9 @@ async def handle_write(request, env, path):
         "/reviews-internal/v1/settlements",
         "/reviews-internal/v1/invitations/revoke",
         "/reviews-internal/v1/invitations/replacement",
+        "/reviews-internal/v1/invitations/recovery-next",
+        "/reviews-internal/v1/invitations/recovery-prepare",
+        "/reviews-internal/v1/invitations/recovery-cancel",
     ):
         issuer = str(getattr(env, "REVIEWS_SETTLEMENT_TOKEN", ""))
         supplied = str(request.headers.get("Authorization") or "")
@@ -364,6 +367,96 @@ async def handle_write(request, env, path):
             return fail(401, "unauthorized")
         try:
             data = await read_json(request)
+            if path == "/reviews-internal/v1/invitations/recovery-next":
+                if data:
+                    return fail(400, "invalid request")
+                pending = rows(
+                    await env.REVIEWS_DB.prepare(
+                        "SELECT r.acquisition_id,r.request_id,r.requested_at,i.source_event_id, "
+                        "i.recipient_context_hash "
+                        "FROM review_recovery_requests r JOIN acquisition_invitations i "
+                        "USING(store_key,environment,acquisition_id) JOIN review_invitation_consents c "
+                        "USING(store_key,environment,acquisition_id) WHERE r.store_key=? AND r.environment=? "
+                        "AND r.state='pending' AND c.revoked_at IS NULL AND c.purpose='review_invitation' "
+                        "AND c.recipient_context_hash=i.recipient_context_hash "
+                        "AND NOT EXISTS(SELECT 1 FROM invitation_generations g WHERE g.store_key=r.store_key "
+                        "AND g.environment=r.environment AND g.acquisition_id=r.acquisition_id "
+                        "AND g.state IN ('prepared','dispatching','uncertain') "
+                        "AND (g.request_key<>'recovery-'||r.request_id OR g.state<>'prepared')) "
+                        "ORDER BY r.requested_at,r.acquisition_id LIMIT 1"
+                    )
+                    .bind(store, environment)
+                    .all()
+                )
+                return Response.json(
+                    {"pending": pending[0] if pending else None}, headers={"Cache-Control": "no-store"}
+                )
+            if path == "/reviews-internal/v1/invitations/recovery-cancel":
+                if (
+                    set(data) != {"request_id"}
+                    or not isinstance(data["request_id"], str)
+                    or not re.fullmatch(r"[0-9a-f]{64}", data["request_id"])
+                ):
+                    return fail(400, "invalid recovery request")
+                try:
+                    await env.REVIEWS_DB.batch(
+                        [
+                            env.REVIEWS_DB.prepare(
+                                "INSERT INTO native_guard SELECT CASE WHEN EXISTS("
+                                "SELECT 1 FROM review_recovery_requests r "
+                                "WHERE r.store_key=? AND r.environment=? AND r.request_id=? AND r.state='pending' "
+                                "AND NOT EXISTS(SELECT 1 FROM invitation_generations g WHERE g.store_key=r.store_key "
+                                "AND g.environment=r.environment AND g.acquisition_id=r.acquisition_id "
+                                "AND g.request_key='recovery-'||r.request_id "
+                                "AND g.state IN ('dispatching','uncertain'))) "
+                                "THEN 1 ELSE 0 END"
+                            ).bind(store, environment, data["request_id"]),
+                            env.REVIEWS_DB.prepare(
+                                "UPDATE invitation_generations SET state='failed' WHERE store_key=? AND environment=? "
+                                "AND request_key='recovery-'||? AND state='prepared'"
+                            ).bind(store, environment, data["request_id"]),
+                            env.REVIEWS_DB.prepare(
+                                "UPDATE review_recovery_requests SET state='failed' "
+                                "WHERE store_key=? AND environment=? "
+                                "AND request_id=? AND state='pending'"
+                            ).bind(store, environment, data["request_id"]),
+                            env.REVIEWS_DB.prepare("DELETE FROM native_guard"),
+                        ]
+                    )
+                except Exception:
+                    return fail(409, "recovery unavailable")
+                return Response.json({"status": "cancelled"}, headers={"Cache-Control": "no-store"})
+            if path == "/reviews-internal/v1/invitations/recovery-prepare":
+                if (
+                    set(data) != {"event_id", "request_id"}
+                    or not isinstance(data["request_id"], str)
+                    or not re.fullmatch(r"[0-9a-f]{64}", data["request_id"])
+                ):
+                    return fail(400, "invalid recovery request")
+                acquisition = await confirmed_purchase(
+                    env.CARTRAY_DB,
+                    store=store,
+                    environment=environment,
+                    event_id=data["event_id"],
+                    subject_maps=json.loads(str(getattr(env, "REVIEWS_SUBJECT_MAPS", ""))),
+                )
+                result = await prepare_replacement(
+                    env.REVIEWS_DB,
+                    store=store,
+                    environment=environment,
+                    acquisition=acquisition.acquisition_id,
+                    request_key="recovery-" + data["request_id"],
+                    recovery_request_id=data["request_id"],
+                    key_version=str(getattr(env, "REVIEWS_INVITATION_KEY_VERSION", "v1")),
+                    secret=str(env.REVIEWS_INVITATION_KEY).encode(),
+                    now=int(time.time()),
+                    random_token=random_token,
+                )
+                return Response.json(
+                    result | {"acquisition_id": acquisition.acquisition_id},
+                    status=201,
+                    headers={"Cache-Control": "no-store"},
+                )
             if path == "/reviews-internal/v1/invitations/replacement":
                 if set(data) != {"event_id", "request_key"}:
                     return fail(400, "invalid replacement")
@@ -448,6 +541,41 @@ async def handle_write(request, env, path):
         data = await read_json(request)
     except (ValueError, TypeError, json.JSONDecodeError):
         return fail(400, "invalid request")
+    if path == "/reviews/v1/invitation-recovery":
+        if not acquisition_mode or set(data) != {"invitation_token"}:
+            return fail(400, "invalid request")
+        token = data["invitation_token"]
+        if isinstance(token, str) and re.fullmatch(r"[0-9a-f]{64}", token):
+            token_hash = hashlib.sha256(token.encode()).hexdigest()
+            candidates = rows(
+                await db.prepare(
+                    "SELECT i.acquisition_id FROM acquisition_invitations i "
+                    "JOIN review_invitation_consents c USING(store_key,environment,acquisition_id) "
+                    "WHERE i.store_key=? AND i.environment=? AND c.purpose='review_invitation' "
+                    "AND c.recipient_context_hash=i.recipient_context_hash AND c.revoked_at IS NULL AND "
+                    "((i.token_hash=? AND i.expires_at>0) OR EXISTS(SELECT 1 FROM invitation_generations g "
+                    "WHERE g.store_key=i.store_key AND g.environment=i.environment "
+                    "AND g.acquisition_id=i.acquisition_id AND g.token_hash=? AND g.accepted_at IS NOT NULL)) LIMIT 1"
+                )
+                .bind(store, environment, token_hash, token_hash)
+                .all()
+            )
+            if candidates:
+                try:
+                    await db.batch(
+                        [
+                            db.prepare(
+                                "INSERT INTO review_recovery_requests VALUES (?,?,?,?,?,'pending') "
+                                "ON CONFLICT(store_key,environment,acquisition_id) DO UPDATE SET "
+                                "request_id=excluded.request_id,requested_at=excluded.requested_at,state='pending' "
+                                "WHERE review_recovery_requests.state IN ('fulfilled','failed') "
+                                "AND review_recovery_requests.requested_at<=excluded.requested_at-86400"
+                            ).bind(store, environment, candidates[0]["acquisition_id"], random_token(), now)
+                        ]
+                    )
+                except Exception:
+                    return fail(503, "recovery temporarily unavailable")
+        return Response.json({"status": "requested"}, status=202, headers={"Cache-Control": "no-store"})
     customer_management = re.fullmatch(r"/reviews/v1/manage/([0-9a-f]{64})/(read|edit|withdraw)", path)
     if customer_management:
         if not acquisition_mode:
@@ -532,7 +660,8 @@ async def handle_write(request, env, path):
         subjects = rows(
             await db.prepare(
                 "SELECT s.subject_id, n.public_name, CASE WHEN s.consumed_at IS NULL THEN 'available' "
-                "ELSE 'submitted' END progress, COALESCE(a.review_id,'') review_id FROM acquisition_invitations i "
+                "ELSE 'submitted' END progress, COALESCE(a.review_id,'') review_id, "
+                "i.acquisition_id private_acquisition FROM acquisition_invitations i "
                 "JOIN acquisition_invitation_subjects s USING(store_key,environment,acquisition_id) "
                 "JOIN review_subject_display_names n ON n.store_key=s.store_key AND n.environment=s.environment "
                 "AND n.subject_id=s.subject_id LEFT JOIN native_review_acquisitions a "
@@ -557,7 +686,14 @@ async def handle_write(request, env, path):
         )[0]["count"]
         if not subjects or len(subjects) != expected or len(subjects) > 100:
             return fail(404, "invitation unavailable")
+        private_acquisition = subjects[0]["private_acquisition"]
+        draft_scope = hmac.new(
+            str(env.REVIEWS_REVIEWER_KEY).encode(),
+            json.dumps(["reviews-draft-v1", store, environment, private_acquisition], separators=(",", ":")).encode(),
+            hashlib.sha256,
+        ).hexdigest()
         for subject in subjects:
+            subject.pop("private_acquisition")
             review_id = subject.pop("review_id")
             if review_id:
                 subject["review_id"] = review_id
@@ -565,7 +701,7 @@ async def handle_write(request, env, path):
                     str(env.REVIEWS_REVIEWER_KEY).encode(), store=store, environment=environment, review_id=review_id
                 )
         return Response.json(
-            {"store_name": store_name, "subjects": subjects},
+            {"store_name": store_name, "draft_scope": draft_scope, "subjects": subjects},
             headers={"Cache-Control": "no-store", "Referrer-Policy": "no-referrer"},
         )
     if path == "/reviews-admin/v1/subject-display-names":

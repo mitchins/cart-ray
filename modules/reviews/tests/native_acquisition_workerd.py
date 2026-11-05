@@ -257,10 +257,18 @@ def main():
             }
             assert internal("/reviews-internal/v1/invitations/delivery-outcome", delivery, DELIVERY_TOKEN)[0] == 200
             capability = {"invitation_token": emailed_token}
+            draft_scope = hmac.new(
+                ("r" * 40).encode(),
+                json.dumps(
+                    ["reviews-draft-v1", "example-store", "test", invitation["acquisition_id"]], separators=(",", ":")
+                ).encode(),
+                hashlib.sha256,
+            ).hexdigest()
             assert call(landing, capability) == (
                 200,
                 {
                     "store_name": "Example Store",
+                    "draft_scope": draft_scope,
                     "subjects": [
                         {"subject_id": "example-bundle", "public_name": "Example bundle", "progress": "available"},
                         {"subject_id": "example-policy", "public_name": "Example policy", "progress": "available"},
@@ -301,40 +309,62 @@ def main():
             public = call(listing)[1]
             assert public["contributions"][0]["verification"] == "cartray_verified_acquisition"
             assert invitation["token"] not in json.dumps(public)
-            replacement = internal(
-                "/reviews-internal/v1/invitations/replacement",
-                {"event_id": event_ids[0], "request_key": "replacement-1"},
-                ISSUER,
-            )
-            assert replacement[0] == 201
-            replacement = replacement[1]
-            replacement_claim = {
-                "acquisition_id": invitation["acquisition_id"],
-                "generation_id": replacement["generation_id"],
-                "delivery_identity": replacement["delivery_identity"],
-            }
-            assert (
-                internal("/reviews-internal/v1/invitations/delivery-claim", replacement_claim, DELIVERY_TOKEN)[0] == 200
-            )
-            deliver_bound_invitation(
-                mailbox_path,
-                acquisition_id=invitation["acquisition_id"],
-                expected_recipient_hash=recipient_hashes[0],
-                resolve_recipient=trusted_recipients.get,
-                store_name="Example Store",
-                landing_url="http://127.0.0.1:3000/review/",
-                token=replacement["token"],
-            )
-            assert (
-                internal(
-                    "/reviews-internal/v1/invitations/delivery-outcome",
-                    replacement_claim | {"outcome": "accepted", "accepted_at": int(time.time())},
-                    DELIVERY_TOKEN,
-                )[0]
-                == 200
+            subprocess.run(
+                [
+                    wrangler,
+                    "d1",
+                    "execute",
+                    "cartray-reviews-local-test",
+                    *common,
+                    "--command",
+                    "UPDATE acquisition_invitations SET expires_at=unixepoch()-1 "
+                    f"WHERE source_event_id='{event_ids[0]}'",
+                ],
+                cwd=ROOT,
+                check=True,
+                capture_output=True,
+                text=True,
             )
             assert call(landing, capability)[0] == 404
-            capability = {"invitation_token": replacement["token"]}
+            assert call("/reviews/v1/invitation-recovery", capability) == (202, {"status": "requested"})
+            queued = internal("/reviews-internal/v1/invitations/recovery-next", {}, ISSUER)[1]["pending"]
+            assert queued["acquisition_id"] == invitation["acquisition_id"]
+            previous_messages = set(mailbox.Maildir(mailbox_path, create=False).keys())
+            from process_recovery import process_one
+
+            def delivery_post(path, payload, credential):
+                result_status, result = internal(path, payload, credential)
+                if result_status >= 400:
+                    raise ValueError("delivery unavailable")
+                return result
+
+            assert process_one(
+                delivery_post,
+                issuer=ISSUER,
+                delivery_token=DELIVERY_TOKEN,
+                resolve_recipient=trusted_recipients.get,
+                mailbox_path=mailbox_path,
+                store_name="Example Store",
+                landing_url="http://127.0.0.1:3000/review/",
+            ) == {"status": "accepted"}
+            inbox = mailbox.Maildir(mailbox_path, create=False)
+            new_messages = set(inbox.keys()) - previous_messages
+            assert len(new_messages) == 1
+            replacement_email = inbox[new_messages.pop()].get_payload(decode=True).decode()
+            replacement_url = next(line for line in replacement_email.splitlines() if line.startswith("http://"))
+            replacement_token = parse_qs(urlsplit(replacement_url).fragment)["invitation"][0]
+            assert internal("/reviews-internal/v1/invitations/recovery-next", {}, ISSUER)[1]["pending"] is None
+            assert (
+                internal(
+                    "/reviews-internal/v1/invitations/recovery-prepare",
+                    {"event_id": event_ids[0], "request_id": queued["request_id"]},
+                    ISSUER,
+                )[0]
+                == 409
+            )
+            assert call(landing, capability)[0] == 404
+            capability = {"invitation_token": replacement_token}
+            assert call(landing, capability)[1]["draft_scope"] == draft_scope
             assert [s["progress"] for s in call(landing, capability)[1]["subjects"]] == ["available", "submitted"]
             assert call("/reviews/v1/contributions", body | capability, key=winning_key) == (status, pending)
             second_body = {"subject_id": "example-bundle", "rating": 2, **capability}

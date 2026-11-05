@@ -330,6 +330,14 @@ async def revoke_purchase(reviews_db, *, store, environment, token, now):
                     "WHERE store_key=? AND environment=? AND token_hash=?"
                 ).bind(now, store, environment, token_hash),
                 reviews_db.prepare(
+                    "UPDATE review_recovery_requests SET state='failed' WHERE store_key=? AND environment=? "
+                    "AND state='pending' AND request_id IN "
+                    "(SELECT substr(g.request_key,10) FROM invitation_generations g "
+                    "JOIN acquisition_invitations i USING(store_key,environment,acquisition_id) "
+                    "WHERE i.store_key=? AND i.environment=? AND i.token_hash=? AND g.state='prepared' "
+                    "AND g.request_key LIKE 'recovery-%')"
+                ).bind(store, environment, store, environment, token_hash),
+                reviews_db.prepare(
                     "UPDATE invitation_generations SET state='failed' WHERE store_key=? AND environment=? "
                     "AND state='prepared' AND acquisition_id IN (SELECT acquisition_id FROM acquisition_invitations "
                     "WHERE store_key=? AND environment=? AND token_hash=?)"
@@ -351,7 +359,17 @@ def _generation_token(secret, *, store, environment, acquisition, generation, re
 
 
 async def prepare_replacement(
-    db, *, store, environment, acquisition, request_key, key_version, secret, now, random_token
+    db,
+    *,
+    store,
+    environment,
+    acquisition,
+    request_key,
+    key_version,
+    secret,
+    now,
+    random_token,
+    recovery_request_id=None,
 ):
     """Prepare one replacement without activating it or recording a send.
 
@@ -364,11 +382,31 @@ async def prepare_replacement(
         or len(secret) < 32
         or not isinstance(request_key, str)
         or not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", request_key)
+        or (request_key.startswith("recovery-") and recovery_request_id is None)
+        or (
+            recovery_request_id is not None
+            and (
+                not isinstance(recovery_request_id, str)
+                or not re.fullmatch(r"[0-9a-f]{64}", recovery_request_id)
+                or request_key != "recovery-" + recovery_request_id
+            )
+        )
         or not isinstance(key_version, str)
         or not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", key_version)
         or type(now) is not int
     ):
         raise ValueError("invitation unavailable")
+    if recovery_request_id is not None:
+        pending = _rows(
+            await db.prepare(
+                "SELECT 1 ok FROM review_recovery_requests WHERE store_key=? AND environment=? "
+                "AND acquisition_id=? AND request_id=? AND state='pending'"
+            )
+            .bind(store, environment, acquisition, recovery_request_id)
+            .all()
+        )
+        if not pending:
+            raise ValueError("invitation unavailable")
     anchors = _rows(
         await db.prepare(
             "SELECT i.recipient_context_hash,i.token_hash,i.revocation_epoch, "
@@ -434,6 +472,10 @@ async def prepare_replacement(
                     "WHERE i.store_key=? AND i.environment=? AND i.acquisition_id=? AND i.token_hash=? "
                     "AND (CASE WHEN i.revoked_at IS NULL THEN 0 ELSE 1 END)=? "
                     "AND i.revocation_epoch=? "
+                    "AND (?='' OR EXISTS(SELECT 1 FROM review_recovery_requests r "
+                    "WHERE r.store_key=i.store_key AND r.environment=i.environment "
+                    "AND r.acquisition_id=i.acquisition_id "
+                    "AND r.request_id=? AND r.state='pending')) "
                     "AND c.recipient_context_hash=i.recipient_context_hash AND c.revoked_at IS NULL "
                     "AND c.purpose='review_invitation' AND c.granted_at<=?) THEN 1 ELSE 0 END"
                 ).bind(
@@ -443,6 +485,8 @@ async def prepare_replacement(
                     anchors[0]["token_hash"],
                     anchors[0]["revoked"],
                     anchors[0]["revocation_epoch"],
+                    recovery_request_id or "",
+                    recovery_request_id or "",
                     now,
                 ),
                 db.prepare(
@@ -488,6 +532,7 @@ async def prepare_replacement(
                 secret=secret,
                 now=now,
                 random_token=random_token,
+                recovery_request_id=recovery_request_id,
             )
         raise ValueError("invitation unavailable") from exc
     return {"token": token, "generation_id": generation, "delivery_identity": delivery, "state": "prepared"}
@@ -515,6 +560,10 @@ async def claim_delivery(db, *, store, environment, acquisition, generation, del
                     "AND g.delivery_identity=? AND g.state='prepared' AND i.token_hash=g.expected_token_hash "
                     "AND i.revocation_epoch=g.expected_revocation_epoch AND c.revoked_at IS NULL "
                     "AND c.purpose='review_invitation' AND c.granted_at<=? "
+                    "AND (g.request_key NOT LIKE 'recovery-%' OR EXISTS(SELECT 1 FROM review_recovery_requests r "
+                    "WHERE r.store_key=g.store_key AND r.environment=g.environment "
+                    "AND r.acquisition_id=g.acquisition_id "
+                    "AND r.request_id=substr(g.request_key,10) AND r.state='pending')) "
                     "AND c.recipient_context_hash=i.recipient_context_hash) THEN 1 ELSE 0 END"
                 ).bind(store, environment, acquisition, generation, delivery, now),
                 db.prepare(
@@ -549,7 +598,8 @@ async def record_delivery_outcome(
         raise ValueError("delivery unavailable")
     current = _rows(
         await db.prepare(
-            "SELECT token_hash,expected_token_hash,expected_revoked,state,prepared_at,accepted_at,key_version "
+            "SELECT token_hash,expected_token_hash,expected_revoked,state,prepared_at,accepted_at, "
+            "key_version,request_key "
             "FROM invitation_generations "
             "WHERE store_key=? "
             "AND environment=? AND acquisition_id=? AND generation_id=? AND delivery_identity=?"
@@ -582,6 +632,9 @@ async def record_delivery_outcome(
             "AND i.token_hash=g.expected_token_hash "
             "AND (CASE WHEN i.revoked_at IS NULL THEN 0 ELSE 1 END)=g.expected_revoked "
             "AND i.revocation_epoch=g.expected_revocation_epoch "
+            "AND (g.request_key NOT LIKE 'recovery-%' OR EXISTS(SELECT 1 FROM review_recovery_requests r "
+            "WHERE r.store_key=g.store_key AND r.environment=g.environment AND r.acquisition_id=g.acquisition_id "
+            "AND r.request_id=substr(g.request_key,10) AND r.state='pending')) "
             "AND c.recipient_context_hash=i.recipient_context_hash AND c.revoked_at IS NULL "
             "AND c.purpose='review_invitation' AND c.granted_at<=?) THEN 1 ELSE 0 END"
         ).bind(store, environment, acquisition, generation, delivery, item["state"], now)
@@ -619,6 +672,13 @@ async def record_delivery_outcome(
                 ).bind(accepted_at, accepted_at + lifetime, store, environment, acquisition, generation),
             ]
         )
+        if item["request_key"].startswith("recovery-"):
+            statements.append(
+                db.prepare(
+                    "UPDATE review_recovery_requests SET state='fulfilled' WHERE store_key=? "
+                    "AND environment=? AND acquisition_id=? AND request_id=? AND state='pending'"
+                ).bind(store, environment, acquisition, item["request_key"][9:])
+            )
     else:
         statements.append(
             db.prepare(
@@ -626,6 +686,13 @@ async def record_delivery_outcome(
                 "AND generation_id=?"
             ).bind(outcome, store, environment, acquisition, generation)
         )
+        if outcome == "failed" and item["request_key"].startswith("recovery-"):
+            statements.append(
+                db.prepare(
+                    "UPDATE review_recovery_requests SET state='failed' WHERE store_key=? AND environment=? "
+                    "AND acquisition_id=? AND request_id=? AND state='pending'"
+                ).bind(store, environment, acquisition, item["request_key"][9:])
+            )
     statements.append(db.prepare("DELETE FROM native_guard"))
     try:
         await db.batch(statements)
@@ -634,7 +701,9 @@ async def record_delivery_outcome(
             await db.prepare(
                 "SELECT state,accepted_at FROM invitation_generations WHERE store_key=? AND environment=? "
                 "AND acquisition_id=? AND generation_id=? AND delivery_identity=?"
-            ).bind(store, environment, acquisition, generation, delivery).all()
+            )
+            .bind(store, environment, acquisition, generation, delivery)
+            .all()
         )
         if latest:
             state = latest[0]["state"]
@@ -653,7 +722,12 @@ async def record_delivery_outcome(
                             "WHERE g.store_key=? AND g.environment=? AND g.acquisition_id=? AND g.generation_id=? "
                             "AND g.delivery_identity=? AND g.state=? AND "
                             "(i.token_hash<>g.expected_token_hash OR i.revocation_epoch<>g.expected_revocation_epoch "
-                            "OR c.recipient_context_hash<>i.recipient_context_hash OR c.revoked_at IS NOT NULL)) "
+                            "OR c.recipient_context_hash<>i.recipient_context_hash OR c.revoked_at IS NOT NULL "
+                            "OR (g.request_key LIKE 'recovery-%' AND NOT EXISTS("
+                            "SELECT 1 FROM review_recovery_requests r "
+                            "WHERE r.store_key=g.store_key AND r.environment=g.environment "
+                            "AND r.acquisition_id=g.acquisition_id AND r.request_id=substr(g.request_key,10) "
+                            "AND r.state='pending')))) "
                             "THEN 1 ELSE 0 END"
                         ).bind(store, environment, acquisition, generation, delivery, item["state"]),
                         db.prepare(
@@ -661,6 +735,15 @@ async def record_delivery_outcome(
                             "WHERE store_key=? AND environment=? AND acquisition_id=? AND generation_id=? "
                             "AND state IN ('dispatching','uncertain')"
                         ).bind(accepted_at, accepted_at + lifetime, store, environment, acquisition, generation),
+                        db.prepare(
+                            "UPDATE review_recovery_requests SET state='failed' WHERE store_key=? AND environment=? "
+                            "AND acquisition_id=? AND request_id=? AND state='pending'"
+                        ).bind(
+                            store,
+                            environment,
+                            acquisition,
+                            item["request_key"][9:] if item["request_key"].startswith("recovery-") else "",
+                        ),
                         db.prepare("DELETE FROM native_guard"),
                     ]
                 )

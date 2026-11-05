@@ -15,7 +15,7 @@
     if (key) headers["Idempotency-Key"] = key;
     return fetch(path, {method: "POST", headers, body: JSON.stringify(data), cache: "no-store", referrerPolicy: "no-referrer"});
   }
-  function formFor(subject, invitationHash) {
+  function formFor(subject, draftScope) {
     const form = element("form");
     const legend = element("h2", subject.public_name);
     form.append(legend);
@@ -28,7 +28,7 @@
       }
       return form;
     }
-    const draftKey = `cartray-review-draft:${invitationHash}:${subject.subject_id}`;
+    const draftKey = `cartray-review-draft:${draftScope}:${subject.subject_id}`;
     let saved = {};
     try { saved = JSON.parse(sessionStorage.getItem(draftKey) || "{}"); } catch (_) { /* storage is optional */ }
     const add = (labelText, name, tag = "input") => {
@@ -96,12 +96,25 @@
           : response.status === 503
             ? "The review service is temporarily unavailable. Please try again shortly."
             : unavailable;
+        if (response.status === 404 || response.status === 409) {
+          const recover = element("button", "Request a replacement invitation");
+          recover.type = "button";
+          recover.addEventListener("click", async () => {
+            recover.disabled = true;
+            try {
+              const request = await post("/reviews/v1/invitation-recovery", {invitation_token: token});
+              message.textContent = request.ok
+                ? "If this invitation is eligible, your request has been recorded. Please contact the store if you need further help."
+                : "We couldn't record your request. Please try again or contact the store.";
+            } catch (_) { message.textContent = "We couldn't reach the store. Please try again."; }
+            finally { recover.disabled = false; }
+          });
+          content.replaceChildren(recover);
+        }
         return;
       }
       const data = await response.json();
-      const hashBytes = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(token));
-      const invitationHash = Array.from(new Uint8Array(hashBytes), byte => byte.toString(16).padStart(2, "0")).join("");
-      content.replaceChildren(element("p", `Your invitation from ${data.store_name}`), ...data.subjects.map(subject => formFor(subject, invitationHash)));
+      content.replaceChildren(element("p", `Your invitation from ${data.store_name}`), ...data.subjects.map(subject => formFor(subject, data.draft_scope)));
       message.textContent = confirmation || "Choose a product to review. Reviews are checked before they appear publicly.";
     } catch (_) { message.textContent = "We couldn't reach the store. Please try again shortly."; }
   }

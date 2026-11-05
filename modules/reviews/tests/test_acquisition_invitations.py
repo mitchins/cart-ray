@@ -271,8 +271,14 @@ def test_customer_landing_uses_approved_names_and_scoped_nonconsuming_capability
             )
         result = invoke(lifecycle, env, landing, data)
         assert result.status == 200
+        draft_scope = hmac.new(
+            b"d" * 40,
+            json.dumps(["reviews-draft-v1", "store", "test", "order_1"], separators=(",", ":")).encode(),
+            hashlib.sha256,
+        ).hexdigest()
         assert result.body == {
             "store_name": "Example Store",
+            "draft_scope": draft_scope,
             "subjects": [
                 {"subject_id": "policy", "public_name": "Policy", "progress": "available"},
                 {"subject_id": "second", "public_name": "Second product", "progress": "available"},
@@ -1053,3 +1059,156 @@ def test_edge_admission_rejects_before_d1_and_fails_closed(lifecycle):
         assert asyncio.run(lifecycle.handle_write(obj, env, "/reviews/v1/contributions")).status == 429
     assert observed[0] != observed[1]
     assert all("192.0.2." not in key for key in observed)
+
+
+def test_recovery_request_is_generic_bounded_and_does_not_accept_an_address(lifecycle):
+    from cartray_reviews.invitations import revoke_purchase
+
+    reviews, commerce = stores()
+    original = issue(reviews, commerce)
+    asyncio.run(revoke_purchase(reviews, store="store", environment="test", token=original["token"], now=100))
+    env = SimpleNamespace(
+        REVIEWS_DB=reviews,
+        CARTRAY_DB=commerce,
+        REVIEWS_STORE_KEY="store",
+        REVIEWS_ENVIRONMENT="test",
+        REVIEWS_MODE="verified_acquisition_only",
+        REVIEWS_TEST_ADMIN_TOKEN="a" * 40,
+        REVIEWS_SETTLEMENT_TOKEN="b" * 40,
+        REVIEWS_INVITATION_KEY="c" * 40,
+        REVIEWS_REVIEWER_KEY="d" * 40,
+        REVIEWS_DELIVERY_TOKEN="f" * 40,
+        REVIEWS_SUBJECT_MAPS=json.dumps({"v1": {"product_1": "policy"}}),
+    )
+    path = "/reviews/v1/invitation-recovery"
+    with patch.object(lifecycle.time, "time", return_value=101):
+        unknown = invoke(lifecycle, env, path, {"invitation_token": "0" * 64})
+        genuine = invoke(lifecycle, env, path, {"invitation_token": original["token"]})
+        assert unknown.status == genuine.status == 202 and unknown.body == genuine.body == {"status": "requested"}
+        assert (
+            invoke(lifecycle, env, path, {"invitation_token": original["token"], "email": "other@example.test"}).status
+            == 400
+        )
+        assert invoke(lifecycle, env, path, {"invitation_token": original["token"]}).status == 202
+        assert reviews.db.execute("SELECT COUNT(*) FROM review_recovery_requests").fetchone()[0] == 1
+        request = SimpleNamespace(
+            method="POST", headers={"Authorization": "Bearer " + env.REVIEWS_SETTLEMENT_TOKEN}, data={}, body=None
+        )
+        pending = asyncio.run(lifecycle.handle_write(request, env, "/reviews-internal/v1/invitations/recovery-next"))
+        assert pending.status == 200 and pending.body["pending"]["acquisition_id"] == "order_1"
+        assert original["token"] not in json.dumps(pending.body)
+        recovery_id = pending.body["pending"]["request_id"]
+        prepare_data = {"event_id": "event_1", "request_id": recovery_id}
+        request.data = prepare_data
+        prepared = asyncio.run(
+            lifecycle.handle_write(request, env, "/reviews-internal/v1/invitations/recovery-prepare")
+        )
+        assert prepared.status == 201
+        assert (
+            asyncio.run(lifecycle.handle_write(request, env, "/reviews-internal/v1/invitations/recovery-prepare")).body
+            == prepared.body
+        )
+        claim = {
+            "acquisition_id": "order_1",
+            "generation_id": prepared.body["generation_id"],
+            "delivery_identity": prepared.body["delivery_identity"],
+        }
+        delivery_request = SimpleNamespace(
+            method="POST", headers={"Authorization": "Bearer " + env.REVIEWS_DELIVERY_TOKEN}, data=claim, body=None
+        )
+        assert (
+            asyncio.run(
+                lifecycle.handle_write(delivery_request, env, "/reviews-internal/v1/invitations/delivery-claim")
+            ).status
+            == 200
+        )
+        delivery_request.data = claim | {"outcome": "accepted", "accepted_at": 101}
+        assert (
+            asyncio.run(
+                lifecycle.handle_write(delivery_request, env, "/reviews-internal/v1/invitations/delivery-outcome")
+            ).status
+            == 200
+        )
+        assert reviews.db.execute("SELECT state FROM review_recovery_requests").fetchone()[0] == "fulfilled"
+        assert (
+            asyncio.run(
+                lifecycle.handle_write(request, env, "/reviews-internal/v1/invitations/recovery-prepare")
+            ).status
+            == 409
+        )
+
+
+def test_recovery_queue_skips_revoked_consent_and_claimed_deliveries(lifecycle):
+    import secrets
+
+    from cartray_reviews.invitations import prepare_replacement
+
+    reviews, commerce = stores()
+    original = issue(reviews, commerce)
+    reviews.db.execute(
+        "INSERT INTO acquisition_invitations (store_key,environment,acquisition_id,source_event_id,"
+        "recipient_context_hash,subject_set_hash,key_version,token_hash,expires_at) "
+        "SELECT store_key,environment,'order_2',source_event_id,recipient_context_hash,subject_set_hash, "
+        "key_version,?,expires_at "
+        "FROM acquisition_invitations",
+        ("e" * 64,),
+    )
+    reviews.db.execute(
+        "INSERT INTO review_invitation_consents VALUES (?,?,?,?,?,?,?,NULL)",
+        ("store", "test", "order_2", "a" * 64, "review_invitation", "consent-2", 90),
+    )
+    reviews.db.execute("UPDATE review_invitation_consents SET revoked_at=101 WHERE acquisition_id='order_1'")
+    reviews.db.execute(
+        "INSERT INTO review_recovery_requests VALUES ('store','test','order_1',?,1,'pending')", ("1" * 64,)
+    )
+    reviews.db.execute(
+        "INSERT INTO review_recovery_requests VALUES ('store','test','order_2',?,2,'pending')", ("2" * 64,)
+    )
+    reviews.db.commit()
+    env = SimpleNamespace(
+        REVIEWS_DB=reviews,
+        CARTRAY_DB=commerce,
+        REVIEWS_STORE_KEY="store",
+        REVIEWS_ENVIRONMENT="test",
+        REVIEWS_MODE="verified_acquisition_only",
+        REVIEWS_TEST_ADMIN_TOKEN="a" * 40,
+        REVIEWS_SETTLEMENT_TOKEN="b" * 40,
+        REVIEWS_INVITATION_KEY="c" * 40,
+        REVIEWS_REVIEWER_KEY="d" * 40,
+    )
+    req = SimpleNamespace(
+        method="POST", headers={"Authorization": "Bearer " + env.REVIEWS_SETTLEMENT_TOKEN}, data={}, body=None
+    )
+    result = asyncio.run(lifecycle.handle_write(req, env, "/reviews-internal/v1/invitations/recovery-next"))
+    assert result.status == 200 and result.body["pending"]["acquisition_id"] == "order_2"
+    assert original["token"] not in json.dumps(result.body)
+    reviews.db.execute(
+        "INSERT INTO acquisition_invitations (store_key,environment,acquisition_id,source_event_id,"
+        "recipient_context_hash,subject_set_hash,key_version,token_hash,expires_at) "
+        "SELECT store_key,environment,'order_3',source_event_id,recipient_context_hash,subject_set_hash, "
+        "key_version,?,expires_at FROM acquisition_invitations WHERE acquisition_id='order_2'",
+        ("f" * 64,),
+    )
+    reviews.db.execute(
+        "INSERT INTO review_invitation_consents VALUES (?,?,?,?,?,?,?,NULL)",
+        ("store", "test", "order_3", "a" * 64, "review_invitation", "consent-3", 90),
+    )
+    reviews.db.execute(
+        "INSERT INTO review_recovery_requests VALUES ('store','test','order_3',?,3,'pending')", ("3" * 64,)
+    )
+    reviews.db.commit()
+    asyncio.run(
+        prepare_replacement(
+            reviews,
+            store="store",
+            environment="test",
+            acquisition="order_2",
+            request_key="manual-pending",
+            key_version="v1",
+            secret=b"c" * 40,
+            now=102,
+            random_token=lambda: secrets.token_hex(32),
+        )
+    )
+    result = asyncio.run(lifecycle.handle_write(req, env, "/reviews-internal/v1/invitations/recovery-next"))
+    assert result.status == 200 and result.body["pending"]["acquisition_id"] == "order_3"
