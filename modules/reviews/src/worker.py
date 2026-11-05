@@ -31,21 +31,21 @@ def public_contribution(row):
 class Default(WorkerEntrypoint):
     async def fetch(self, request):
         mode = str(getattr(self.env, "REVIEWS_MODE", "disabled"))
-        if mode not in ("read_only", "collect"):
+        if mode not in ("read_only", "collect", "verified_acquisition_only"):
             if str(request.method) != "GET":
                 await discard_body(request)
             return Response.json({"error": "not found"}, status=404)
         url = urlparse(str(request.url))
         if str(request.method) == "GET" and url.path == "/reviews-admin/v1/pending":
-            if mode != "collect":
+            if mode not in ("collect", "verified_acquisition_only"):
                 return Response.json({"error": "not found"}, status=404)
             return await pending_read(request, self.env, url.query)
         if str(request.method) != "GET":
-            if mode != "collect" or url.query:
+            if mode not in ("collect", "verified_acquisition_only") or url.query:
                 await discard_body(request)
                 return Response.json({"error": "method not allowed"}, status=405)
             return await handle_write(request, self.env, url.path)
-        if mode == "collect" and str(self.env.REVIEWS_ENVIRONMENT) != "test":
+        if mode in ("collect", "verified_acquisition_only") and str(self.env.REVIEWS_ENVIRONMENT) != "test":
             return Response.json({"error": "collection unavailable"}, status=503)
         if len(url.query) > 512:
             return Response.json({"error": "invalid query"}, status=400)
