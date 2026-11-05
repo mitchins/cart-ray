@@ -35,6 +35,7 @@
     "POST /reviews-internal/v1/invitations/revoke (verified_acquisition_only, test only)",
     "POST /reviews-internal/v1/invitations/replacement (verified_acquisition_only, test only)",
     "POST /reviews-internal/v1/invitations/recovery-next (verified_acquisition_only, test only)",
+    "POST /reviews-internal/v1/invitations/recovery-command (verified_acquisition_only, test only)",
     "POST /reviews-internal/v1/invitations/recovery-prepare (verified_acquisition_only, test only)",
     "POST /reviews-internal/v1/invitations/recovery-cancel (verified_acquisition_only, test only)",
     "POST /reviews-internal/v1/invitations/recovery-defer (verified_acquisition_only, test only)",

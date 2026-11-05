@@ -1220,3 +1220,95 @@ def test_recovery_queue_skips_revoked_consent_and_claimed_deliveries(lifecycle):
     )
     result = asyncio.run(lifecycle.handle_write(req, env, "/reviews-internal/v1/invitations/recovery-next"))
     assert result.status == 200 and result.body["pending"]["acquisition_id"] == "order_3"
+
+
+def test_queued_recovery_is_durable_before_d1_and_selects_canonical_request(lifecycle):
+    from cartray_reviews.invitations import revoke_purchase
+
+    reviews, commerce = stores()
+    original = issue(reviews, commerce)
+    asyncio.run(revoke_purchase(reviews, store="store", environment="test", token=original["token"], now=100))
+    messages = []
+
+    async def enqueue(message):
+        messages.append(message)
+
+    env = SimpleNamespace(
+        REVIEWS_DB=reviews,
+        CARTRAY_DB=commerce,
+        REVIEWS_STORE_KEY="store",
+        REVIEWS_ENVIRONMENT="test",
+        REVIEWS_MODE="verified_acquisition_only",
+        REVIEWS_TEST_ADMIN_TOKEN="a" * 40,
+        REVIEWS_SETTLEMENT_TOKEN="b" * 40,
+        REVIEWS_INVITATION_KEY="c" * 40,
+        REVIEWS_REVIEWER_KEY="d" * 40,
+        REVIEWS_RECOVERY_AUTOMATIC="1",
+        REVIEWS_RECOVERY_QUEUE=SimpleNamespace(send=enqueue),
+    )
+    with patch.object(lifecycle.time, "time", return_value=101):
+        assert (
+            invoke(lifecycle, env, "/reviews/v1/invitation-recovery", {"invitation_token": original["token"]}).status
+            == 202
+        )
+        assert (
+            invoke(lifecycle, env, "/reviews/v1/invitation-recovery", {"invitation_token": original["token"]}).status
+            == 202
+        )
+        assert reviews.db.execute("SELECT COUNT(*) FROM review_recovery_requests").fetchone()[0] == 0
+        assert len(messages) == 2
+        assert original["token"] not in json.dumps(messages)
+
+        def command(message):
+            request = SimpleNamespace(
+                method="POST",
+                headers={"Authorization": "Bearer " + env.REVIEWS_SETTLEMENT_TOKEN},
+                data=message,
+                body=None,
+            )
+            return asyncio.run(
+                lifecycle.handle_write(request, env, "/reviews-internal/v1/invitations/recovery-command")
+            )
+
+        first = command(messages[0])
+        second = command(messages[1])
+        assert first.status == second.status == 200
+        assert first.body["pending"]["request_id"] == second.body["pending"]["request_id"] == messages[0]["request_id"]
+        assert command(messages[0]).body == first.body
+        reviews.db.execute("UPDATE review_recovery_requests SET state='fulfilled'")
+        reviews.db.commit()
+    with patch.object(lifecycle.time, "time", return_value=101 + 86400):
+        assert command(messages[1]).status == 409
+        assert reviews.db.execute("SELECT state FROM review_recovery_requests").fetchone()[0] == "fulfilled"
+    env.REVIEWS_RECOVERY_QUEUE = None
+    assert (
+        invoke(lifecycle, env, "/reviews/v1/invitation-recovery", {"invitation_token": original["token"]}).status == 503
+    )
+
+
+def test_stale_recovery_command_never_rearms_during_fulfilment():
+    from cartray_reviews.recovery import accept_recovery_command
+
+    reviews, commerce = stores()
+    original = issue(reviews, commerce)
+    reviews.db.execute(
+        "INSERT INTO review_recovery_requests VALUES ('store','test','order_1',?,1,'pending')", ("1" * 64,)
+    )
+    reviews.db.commit()
+
+    async def no_write(_statements):
+        raise AssertionError("a stale command must never write")
+
+    reviews.batch = no_write
+    result = asyncio.run(
+        accept_recovery_command(
+            reviews,
+            store="store",
+            environment="test",
+            token_hash=hashlib.sha256(original["token"].encode()).hexdigest(),
+            request_id="2" * 64,
+            issued_at=1,
+            now=86401,
+        )
+    )
+    assert result["request_id"] == "1" * 64

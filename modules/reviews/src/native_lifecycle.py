@@ -18,6 +18,7 @@ from cartray_reviews.invitations import (
     revoke_purchase,
 )
 from cartray_reviews.management import manage_review, management_token
+from cartray_reviews.recovery import accept_recovery_command
 from js import Object, Promise, Uint8Array, clearTimeout, crypto, setTimeout
 from pyodide.ffi import create_proxy, to_js
 from workers import Response
@@ -352,6 +353,7 @@ async def handle_write(request, env, path):
         "/reviews-internal/v1/invitations/revoke",
         "/reviews-internal/v1/invitations/replacement",
         "/reviews-internal/v1/invitations/recovery-next",
+        "/reviews-internal/v1/invitations/recovery-command",
         "/reviews-internal/v1/invitations/recovery-prepare",
         "/reviews-internal/v1/invitations/recovery-cancel",
         "/reviews-internal/v1/invitations/recovery-defer",
@@ -368,6 +370,19 @@ async def handle_write(request, env, path):
             return fail(401, "unauthorized")
         try:
             data = await read_json(request)
+            if path == "/reviews-internal/v1/invitations/recovery-command":
+                if set(data) != {"token_hash", "request_id", "issued_at"}:
+                    return fail(400, "invalid recovery request")
+                pending = await accept_recovery_command(
+                    env.REVIEWS_DB,
+                    store=store,
+                    environment=environment,
+                    token_hash=data["token_hash"],
+                    request_id=data["request_id"],
+                    issued_at=data["issued_at"],
+                    now=int(time.time()),
+                )
+                return Response.json({"pending": pending}, headers={"Cache-Control": "no-store"})
             if path == "/reviews-internal/v1/invitations/recovery-next":
                 if data:
                     return fail(400, "invalid request")
@@ -572,6 +587,23 @@ async def handle_write(request, env, path):
         if not acquisition_mode or set(data) != {"invitation_token"}:
             return fail(400, "invalid request")
         token = data["invitation_token"]
+        queue = getattr(env, "REVIEWS_RECOVERY_QUEUE", None)
+        if str(getattr(env, "REVIEWS_RECOVERY_AUTOMATIC", "")) == "1" and queue is None:
+            return fail(503, "recovery temporarily unavailable")
+        if queue is not None:
+            # The queued command is the durable authority: it is persisted
+            # before any consumer writes the recovery request to D1.
+            token_hash = hashlib.sha256(str(token).encode()).hexdigest()
+            try:
+                await queue.send(
+                    to_js(
+                        {"token_hash": token_hash, "request_id": random_token(), "issued_at": int(time.time())},
+                        dict_converter=Object.fromEntries,
+                    )
+                )
+            except Exception:
+                return fail(503, "recovery temporarily unavailable")
+            return Response.json({"status": "requested"}, status=202, headers={"Cache-Control": "no-store"})
         if isinstance(token, str) and re.fullmatch(r"[0-9a-f]{64}", token):
             token_hash = hashlib.sha256(token.encode()).hexdigest()
             candidates = rows(

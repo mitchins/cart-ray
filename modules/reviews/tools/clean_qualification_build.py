@@ -26,6 +26,7 @@ SOURCES = (
     "cartray_reviews/acquisition.py",
     "cartray_reviews/invitations.py",
     "cartray_reviews/management.py",
+    "cartray_reviews/recovery.py",
     "cartray_reviews/snapshot.py",
     "cartray_reviews/storage.py",
 )
