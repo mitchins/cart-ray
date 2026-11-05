@@ -70,7 +70,8 @@ def main():
         try:
             subject = {"subject_id": "example-policy", "kind": "product", "path": "/example-policy/"}
             assert call("/reviews-admin/v1/subjects", subject)[0] == 401
-            assert call("/reviews-admin/v1/subjects", subject, admin=True)[0] == 201
+            created = call("/reviews-admin/v1/subjects", subject, admin=True)
+            assert created[0] == 201, created
             summary_path = "/reviews/v1/subjects/example-policy/summary"
             list_path = "/reviews/v1/subjects/example-policy/contributions"
             assert call(summary_path)[1]["rating"] == {"average": None, "rated_count": 0}
