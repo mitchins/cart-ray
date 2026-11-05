@@ -403,7 +403,10 @@ async def handle_write(request, env, path):
         ):
             return fail(400, "invalid submission")
         body = body or ""
-        if rating is None and len(body.strip()) < 3:
+        if rating is None and (
+            (acquisition_mode and len(body.strip()) < 3)
+            or (not acquisition_mode and not body.strip() and not (title and title.strip()))
+        ):
             return fail(400, "empty submission")
         if acquisition_mode:
             author = author.strip() or "Anonymous"
