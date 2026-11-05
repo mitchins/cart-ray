@@ -90,11 +90,26 @@ def main():
                         if not chunk:
                             break
                         stalled_response += chunk
+                    while (
+                        stalled_response.startswith(b"HTTP/1.1 500")
+                        and b"Network connection lost" not in stalled_response
+                        and len(stalled_response) < 4096
+                    ):
+                        remaining = 5 - (time.monotonic() - started)
+                        if remaining <= 0:
+                            raise TimeoutError("stalled request exceeded deadline")
+                        stalled.settimeout(remaining)
+                        chunk = stalled.recv(1024)
+                        if not chunk:
+                            break
+                        stalled_response += chunk
                 except ConnectionResetError:
                     stalled_response = b""
-                assert not stalled_response or stalled_response.startswith((b"HTTP/1.1 401", b"HTTP/1.0 401")), (
-                    stalled_response
+                rejected = not stalled_response or stalled_response.startswith((b"HTTP/1.1 401", b"HTTP/1.0 401"))
+                miniflare_closed = (
+                    stalled_response.startswith(b"HTTP/1.1 500") and b"Network connection lost" in stalled_response
                 )
+                assert rejected or miniflare_closed, stalled_response
             assert time.monotonic() - started < 5
             created = call("/reviews-admin/v1/subjects", subject, admin=True)
             assert created[0] == 201, created
