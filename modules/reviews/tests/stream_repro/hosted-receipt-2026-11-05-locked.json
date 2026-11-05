@@ -4,15 +4,31 @@
   "local_workerd_version": "2026-08-28",
   "build_python": "3.12.8",
   "pyodide_build_python": "3.13.2",
-  "hosted_python_version": null,
-  "vendored_packages": {"kinglet": "1.8.3", "workers-runtime-sdk": "1.8.1"},
+  "hosted_python_version": "3.13.2 (separately deployed probe, same compatibility date)",
+  "vendored_packages": {
+    "kinglet": "1.8.3",
+    "workers-runtime-sdk": "1.8.1"
+  },
   "bundle_content_sha256": "a7de7af11d0d24bafba873f5843a023e871a44b5c07e3c9823f86c96a76e08c3",
   "source_sha256": {
     "worker.py": "16ef9cc411aa100037cf426d699a5f28661d0ce0d275ccd7a8501601f2479ecc",
     "native_lifecycle.py": "5c4112a8752b7e8a907ae527bb154441c8ef4f506d6c8e60b0bc2d0ddafdd1c1"
   },
-  "completed_requests": {"authorized_malformed": 400, "unauthorized": 401, "subject_creation": 201, "review_submission": 202},
-  "reviews_flow": {"pending_rated_count": 0, "approved_average": 2.0, "approved_rated_count": 1, "approved_contribution_count": 2, "withdrawn_average": null, "withdrawn_rated_count": 0, "withdrawn_contribution_count": 1},
+  "completed_requests": {
+    "authorized_malformed": 400,
+    "unauthorized": 401,
+    "subject_creation": 201,
+    "review_submission": 202
+  },
+  "reviews_flow": {
+    "pending_rated_count": 0,
+    "approved_average": 2.0,
+    "approved_rated_count": 1,
+    "approved_contribution_count": 2,
+    "withdrawn_average": null,
+    "withdrawn_rated_count": 0,
+    "withdrawn_contribution_count": 1
+  },
   "incomplete_requests": {
     "authorized": "connection reset after 15.1 seconds",
     "unauthorized": "connection reset after 15.1 seconds",
@@ -21,6 +37,13 @@
     "protected_d1_tables_unchanged": 8,
     "qualification": "Single observed run; connection reset is a transport outcome, not an application response."
   },
-  "resources_deleted": {"workers": 1, "d1_databases": 1},
-  "limitations": ["Eight-table before/after comparison for the longer run covered the authorized stall; the earlier locked deployment compared both shorter stalls.", "Hosted Python runtime version was not collected.", "A reusable resource-creation and teardown harness remains to be implemented."]
+  "resources_deleted": {
+    "workers": 1,
+    "d1_databases": 1
+  },
+  "limitations": [
+    "Eight-table before/after comparison for the longer run covered the authorized stall; the earlier locked deployment compared both shorter stalls.",
+    "A reusable resource-creation and teardown harness remains to be implemented."
+  ],
+  "moderation_race": "20 additional local Workerd/D1 races: one success and one conflict each; both outcomes won at least once; one earlier uninstrumented failure remains unexplained."
 }
