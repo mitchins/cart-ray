@@ -51,7 +51,9 @@ def main():
         uv_lock = tomllib.loads((project / "uv.lock").read_text())
         locked = {package["name"]: package for package in uv_lock["package"]}
         seed = ['lock-version = "1.0"', 'created-by = "uv"', 'requires-python = ">=3.13.2"']
-        for package_name in ("kinglet", "workers-runtime-sdk"):
+        # Reviews imports `workers`, provided by this SDK. Kinglet belongs to
+        # CartRay's commerce Worker and is not a Reviews runtime dependency.
+        for package_name in ("workers-runtime-sdk",):
             package = locked[package_name]
             wheel = package["wheels"][0]
             sha256 = wheel["hash"].removeprefix("sha256:")
@@ -86,7 +88,7 @@ def main():
         )
         vendor_lock = tomllib.loads((project / "pylock.toml").read_text())
         versions = {package["name"]: package["version"] for package in vendor_lock["packages"]}
-        if set(versions) != {"kinglet", "workers-runtime-sdk"} or any(
+        if set(versions) != {"workers-runtime-sdk"} or any(
             name not in locked or locked[name]["version"] != version for name, version in versions.items()
         ):
             raise RuntimeError("vendored dependency versions do not match uv.lock")
@@ -95,11 +97,22 @@ def main():
             actual = {wheel["hashes"]["sha256"] for wheel in package["wheels"]}
             if not actual or not actual <= expected:
                 raise RuntimeError(f"vendored artifact hashes do not match uv.lock: {package['name']}")
+        vendor = project / "python_modules"
+        bundled_vendor = project / "bundle/python_modules"
         for package_name, version in versions.items():
             normalized = package_name.replace("-", "_")
-            metadata = list((project / "python_modules").glob(f"{normalized}-*.dist-info"))
+            metadata = list(vendor.glob(f"{normalized}-*.dist-info"))
             if len(metadata) != 1 or PathDistribution(metadata[0]).version != version:
-                raise RuntimeError(f"vendored package metadata does not match: {package_name}")
+                raise RuntimeError(
+                    f"vendored package metadata does not match: {package_name}; "
+                    "check that the Pyodide interpreter runs under the selected Node version"
+                )
+        if not (vendor / "workers/__init__.py").is_file():
+            raise RuntimeError("Workers SDK Python module missing from vendor directory")
+        for path in (path for path in vendor.rglob("*") if path.is_file()):
+            counterpart = bundled_vendor / path.relative_to(vendor)
+            if not counterpart.is_file() or path.read_bytes() != counterpart.read_bytes():
+                raise RuntimeError(f"vendored file missing or changed in bundle: {path.relative_to(vendor)}")
         hashes = {}
         for relative in SOURCES:
             source = (project / "modules/reviews/src" / relative).read_bytes()
