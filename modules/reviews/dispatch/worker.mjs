@@ -20,6 +20,18 @@ export async function processCommand(command, env, now = () => Math.floor(Date.n
   if (env.REVIEWS_ENVIRONMENT !== "test" || !env.REVIEWS_ISSUER || !env.REVIEWS_DELIVERY_TOKEN || !env.REVIEWS_API || !env.MAIL) {
     throw new Error("test delivery not configured");
   }
+  const sender = env.SYNTHETIC_SENDER;
+  const storeName = env.REVIEWS_PUBLIC_STORE_NAME;
+  if (typeof sender !== "string" || sender.length > 254 || sender.split("@").length !== 2 ||
+      sender.split("@").some(part => !part) || !sender.split("@")[1].includes(".") ||
+      /[^\x21-\x7e]|[<>,;:"\\()[\]]/.test(sender) ||
+      typeof storeName !== "string" || !storeName.trim() || storeName.length > 200 || /[\x00-\x1f\x7f-\x9f]/.test(storeName)) {
+    throw new Error("test delivery not configured");
+  }
+  let landing;
+  try { landing = new URL(env.REVIEWS_LANDING_URL); }
+  catch (_) { throw new Error("invalid landing URL"); }
+  if (landing.protocol !== "https:" || landing.search || landing.hash || landing.username || landing.password) throw new Error("invalid landing URL");
   const isHex = value => typeof value === "string" && /^[0-9a-f]{64}$/.test(value);
   if (!command || !isHex(command.token_hash) || !isHex(command.request_id) || !Number.isSafeInteger(command.issued_at)) return "discard";
   const age = now() - command.issued_at;
@@ -42,11 +54,8 @@ export async function processCommand(command, env, now = () => Math.floor(Date.n
   const claim = {acquisition_id: pending.acquisition_id, generation_id: draft.generation_id, delivery_identity: draft.delivery_identity};
   const claimed = await post(api, prefix + "delivery-claim", claim, env.REVIEWS_DELIVERY_TOKEN);
   if (claimed.state !== "dispatching") throw new Error("delivery not claimed");
-  let landing;
+  landing.hash = `invitation=${draft.token}`;
   try {
-    landing = new URL(env.REVIEWS_LANDING_URL);
-    if (landing.protocol !== "https:" || landing.search || landing.hash) throw new Error("invalid landing URL");
-    landing.hash = `invitation=${draft.token}`;
     await env.MAIL.send({
       from: env.SYNTHETIC_SENDER, to: recipient,
       subject: `Share your experience with ${env.REVIEWS_PUBLIC_STORE_NAME}`,

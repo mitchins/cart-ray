@@ -6,10 +6,11 @@ const recipient = "buyer@example.test";
 const digest = async text => Array.from(new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text))), x => x.toString(16).padStart(2, "0")).join("");
 
 async function fixture() {
-  let state = "pending", sends = 0, outcomeAttempts = 0, breakOutcome = false;
+  let state = "pending", sends = 0, outcomeAttempts = 0, breakOutcome = false, apiCalls = 0;
   const hash = await digest(recipient);
   const pending = {acquisition_id:"order", request_id:"a".repeat(64), source_event_id:"event", recipient_context_hash:hash};
   const api = {async fetch(url, init) {
+    apiCalls++;
     const path = new URL(url).pathname;
     const expected = path.endsWith("delivery-claim") || path.endsWith("delivery-outcome") ? "delivery" : "issuer";
     assert.equal(init.headers.authorization, `Bearer ${expected}`);
@@ -22,7 +23,7 @@ async function fixture() {
   const env = {REVIEWS_ENVIRONMENT:"test", REVIEWS_ISSUER:"issuer", REVIEWS_DELIVERY_TOKEN:"delivery", REVIEWS_API:api,
     SYNTHETIC_RECIPIENT:recipient, SYNTHETIC_SENDER:"noreply@example.test", REVIEWS_LANDING_URL:"https://example.test/review/", REVIEWS_PUBLIC_STORE_NAME:"Store",
     MAIL:{async send(message) {sends++; assert.equal(message.to,recipient); assert.equal(message.text.split("\n").find(line => line.startsWith("https://")), "https://example.test/review/#invitation=" + "b".repeat(64));}}};
-  return {env, command:{token_hash:"e".repeat(64),request_id:"f".repeat(64),issued_at:100}, sends:()=>sends, outcomeAttempts:()=>outcomeAttempts, failOutcome:()=>{breakOutcome=true;}};
+  return {env, command:{token_hash:"e".repeat(64),request_id:"f".repeat(64),issued_at:100}, sends:()=>sends, outcomeAttempts:()=>outcomeAttempts, apiCalls:()=>apiCalls, failOutcome:()=>{breakOutcome=true;}};
 }
 
 test("duplicate delivery commands cannot resend an accepted invitation", async () => {
@@ -65,4 +66,13 @@ test("missing delivery configuration fails closed", async () => {
   let retries=0, acks=0;
   await worker.queue({messages:[{body:f.command,ack(){acks++;},retry(){retries++;}}]},f.env);
   assert.equal(retries,1); assert.equal(acks,0); assert.equal(f.sends(),0);
+});
+
+
+test("invalid delivery configuration fails before any claim or API mutation", async () => {
+  for (const [key, value] of [["REVIEWS_LANDING_URL", "http://example.test/review/"], ["REVIEWS_LANDING_URL", "https://example.test/?query=1"], ["SYNTHETIC_SENDER", ""], ["SYNTHETIC_SENDER", "invalid"], ["REVIEWS_PUBLIC_STORE_NAME", ""], ["REVIEWS_PUBLIC_STORE_NAME", "Store\nInjected"], ["REVIEWS_PUBLIC_STORE_NAME", "Store\x00Injected"]]) {
+    const f=await fixture(); f.env[key]=value;
+    await assert.rejects(processCommand(f.command,f.env,()=>101));
+    assert.equal(f.apiCalls(),0); assert.equal(f.sends(),0);
+  }
 });
