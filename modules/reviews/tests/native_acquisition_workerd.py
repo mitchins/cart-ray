@@ -4,6 +4,7 @@ import asyncio
 import hashlib
 import hmac
 import json
+import mailbox
 import os
 import subprocess
 import sys
@@ -13,6 +14,7 @@ import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from pathlib import Path
+from urllib.parse import parse_qs, urlsplit
 
 from native_workerd import ADMIN, BASE, call
 from workerd_integration import MODULE, ROOT, start, stop
@@ -115,14 +117,15 @@ def main():
         # Synthetic purpose-bound consent is provisioned independently from
         # CartRay settlement, as a trusted consent adapter would do.
         consent_sql = Path(directory) / "consent.sql"
-        consent_sql.write_text(
-            "\n".join(
-                "INSERT INTO review_invitation_consents VALUES "
-                f"('example-store','test','{order_id}','{recipient * 64}','review_invitation',"
-                "'synthetic-consent',1,NULL);"
-                for order_id, recipient in zip(order_ids, ("a", "b"), strict=True)
-            )
+        recipients = ("buyer@example.test", "second@example.test")
+        recipient_hashes = [hashlib.sha256(recipient.encode()).hexdigest() for recipient in recipients]
+        consent_rows = list(
+            "INSERT INTO review_invitation_consents VALUES "
+            f"('example-store','test','{order_id}','{recipient_hash}','review_invitation',"
+            "'synthetic-consent',1,NULL);"
+            for order_id, recipient_hash in zip(order_ids, recipient_hashes, strict=True)
         )
+        consent_sql.write_text(consent_rows[1])
         subprocess.run(
             [wrangler, "d1", "execute", "cartray-reviews-local-test", *common, "--file", str(consent_sql)],
             cwd=ROOT,
@@ -154,14 +157,53 @@ def main():
                 )[0]
                 == 200
             )
-            event = {"event_id": event_ids[0], "recipient_context_hash": "a" * 64}
+            event = {"event_id": event_ids[0], "recipient_context_hash": recipient_hashes[0]}
             endpoint = "/reviews-internal/v1/settlements"
             assert internal(endpoint, event, ADMIN)[0] == 401
+            assert internal(endpoint, event, ISSUER)[0] == 409
+            counts = subprocess.run(
+                [
+                    wrangler,
+                    "d1",
+                    "execute",
+                    "cartray-reviews-local-test",
+                    *common,
+                    "--json",
+                    "--command",
+                    "SELECT COUNT(*) AS count FROM acquisition_invitations",
+                ],
+                cwd=ROOT,
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            assert json.loads(counts.stdout)[0]["results"][0]["count"] == 0
+            consent_sql.write_text(consent_rows[0])
+            subprocess.run(
+                [wrangler, "d1", "execute", "cartray-reviews-local-test", *common, "--file", str(consent_sql)],
+                cwd=ROOT,
+                check=True,
+            )
             status, invitation = internal(endpoint, event, ISSUER)
             assert status == 201, (status, invitation)
             assert internal(endpoint, event, ISSUER) == (status, invitation)
+            sys.path.insert(0, str(MODULE / "tools"))
+            from test_mailbox import deliver_invitation
+
+            mailbox_path = Path(directory) / "synthetic-mail"
+            message_id = deliver_invitation(
+                mailbox_path,
+                recipient=recipients[0],
+                store_name="Example Store",
+                landing_url="http://127.0.0.1:3000/review/",
+                token=invitation["token"],
+            )
+            email = mailbox.Maildir(mailbox_path, create=False)[message_id].get_payload(decode=True).decode()
+            url = next(line for line in email.splitlines() if line.startswith("http://"))
+            emailed_token = parse_qs(urlsplit(url).fragment)["invitation"][0]
+            assert emailed_token == invitation["token"]
             landing = "/reviews/v1/invitation"
-            capability = {"invitation_token": invitation["token"]}
+            capability = {"invitation_token": emailed_token}
             assert call(landing, capability) == (
                 200,
                 {
@@ -210,7 +252,9 @@ def main():
             assert internal(revoke, {"invitation_token": invitation["token"]}, ISSUER)[0] == 200
             assert call("/reviews/v1/contributions", body, key=winning_key)[0] == 409
             assert len(call(listing)[1]["contributions"]) == 1
-            status, fresh = internal(endpoint, {"event_id": event_ids[1], "recipient_context_hash": "b" * 64}, ISSUER)
+            status, fresh = internal(
+                endpoint, {"event_id": event_ids[1], "recipient_context_hash": recipient_hashes[1]}, ISSUER
+            )
             assert status == 201
             fresh_body = body | {"invitation_token": fresh["token"], "body": "Racing review"}
             with ThreadPoolExecutor(max_workers=2) as pool:
