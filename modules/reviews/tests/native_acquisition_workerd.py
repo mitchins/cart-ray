@@ -255,7 +255,16 @@ def main():
                 "outcome": "accepted",
                 "accepted_at": int(time.time()),
             }
-            assert internal("/reviews-internal/v1/invitations/delivery-outcome", delivery, DELIVERY_TOKEN)[0] == 200
+            with ThreadPoolExecutor(max_workers=2) as pool:
+                outcomes = list(
+                    pool.map(
+                        lambda _: internal(
+                            "/reviews-internal/v1/invitations/delivery-outcome", delivery, DELIVERY_TOKEN
+                        ),
+                        range(2),
+                    )
+                )
+            assert outcomes == [(200, {"state": "accepted"}), (200, {"state": "accepted"})], outcomes
             capability = {"invitation_token": emailed_token}
             draft_scope = hmac.new(
                 ("r" * 40).encode(),

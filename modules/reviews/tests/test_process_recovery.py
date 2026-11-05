@@ -228,3 +228,84 @@ def test_reconciliation_uses_provider_receipt_without_resending(lifecycle):
         }
     expires = reviews.db.execute("SELECT expires_at FROM acquisition_invitations").fetchone()[0]
     assert expires == 103 + 60 * 86400
+
+
+def test_outcome_retry_preserves_timestamp_and_does_not_resend(monkeypatch, tmp_path):
+    recipient = "buyer@example.test"
+    item = {
+        "acquisition_id": "purchase",
+        "request_id": "a" * 64,
+        "source_event_id": "event",
+        "recipient_context_hash": hashlib.sha256(recipient.encode()).hexdigest(),
+    }
+    writes, outcomes, delays = [], [], []
+
+    def post(path, data, _token):
+        if path.endswith("recovery-next"):
+            return {"pending": item}
+        if path.endswith("recovery-prepare"):
+            return {"state": "prepared", "token": "b" * 64, "generation_id": "c" * 64, "delivery_identity": "d" * 64}
+        if path.endswith("delivery-claim"):
+            return {"state": "dispatching"}
+        outcomes.append(data)
+        if len(outcomes) < 3:
+            raise ConnectionError("outcome unavailable")
+        return {"state": "accepted"}
+
+    monkeypatch.setattr(processor, "deliver_bound_invitation", lambda *args, **kwargs: writes.append(kwargs))
+    result = processor.process_one(
+        post,
+        issuer="issuer",
+        delivery_token="delivery",
+        resolve_recipient=lambda _: recipient,
+        mailbox_path=tmp_path / "mail",
+        store_name="Example",
+        landing_url="http://localhost/review/",
+        clock=lambda: 123,
+        sleep=delays.append,
+    )
+    assert result == {"status": "accepted"}
+    assert len(writes) == 1
+    assert len(outcomes) == 3
+    assert all(outcome == outcomes[0] for outcome in outcomes)
+    assert outcomes[0]["accepted_at"] == 123
+    assert delays == [1, 1]
+
+
+def test_delivery_exception_stays_uncertain_and_never_resends(monkeypatch, tmp_path):
+    recipient = "buyer@example.test"
+    item = {
+        "acquisition_id": "purchase",
+        "request_id": "a" * 64,
+        "source_event_id": "event",
+        "recipient_context_hash": hashlib.sha256(recipient.encode()).hexdigest(),
+    }
+    writes, outcomes = [], []
+
+    def post(path, data, _token):
+        if path.endswith("recovery-next"):
+            return {"pending": item}
+        if path.endswith("recovery-prepare"):
+            return {"state": "prepared", "token": "b" * 64, "generation_id": "c" * 64, "delivery_identity": "d" * 64}
+        if path.endswith("delivery-claim"):
+            return {"state": "dispatching"}
+        outcomes.append(data)
+        return {"state": "uncertain"}
+
+    def ambiguous_send(*_args, **_kwargs):
+        writes.append(True)
+        raise OSError("acceptance unknown")
+
+    monkeypatch.setattr(processor, "deliver_bound_invitation", ambiguous_send)
+    result = processor.process_one(
+        post,
+        issuer="issuer",
+        delivery_token="delivery",
+        resolve_recipient=lambda _: recipient,
+        mailbox_path=tmp_path / "mail",
+        store_name="Example",
+        landing_url="http://localhost/review/",
+    )
+    assert result == {"status": "reconciliation required"}
+    assert len(writes) == 1
+    assert [outcome["outcome"] for outcome in outcomes] == ["uncertain"]

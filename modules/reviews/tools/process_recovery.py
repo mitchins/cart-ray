@@ -12,9 +12,21 @@ from test_mailbox import deliver_bound_invitation
 
 
 def process_one(
-    post, *, issuer, delivery_token, resolve_recipient, mailbox_path, store_name, landing_url, clock=time.time
+    post,
+    *,
+    issuer,
+    delivery_token,
+    resolve_recipient,
+    mailbox_path,
+    store_name,
+    landing_url,
+    clock=time.time,
+    sleep=time.sleep,
 ):
-    """Process one pending item without blindly retrying a claimed delivery."""
+    """Process one pending item without blindly retrying a claimed delivery.
+
+    The authenticated post adapter must enforce a bounded network deadline.
+    """
     item = post("/reviews-internal/v1/invitations/recovery-next", {}, issuer)["pending"]
     if item is None:
         return {"status": "empty"}
@@ -62,18 +74,23 @@ def process_one(
             delivery_identity=draft["delivery_identity"],
         )
     except Exception:
+        # The adapter cannot prove whether any particular exception occurred
+        # before acceptance. Hold for authoritative reconciliation; never resend.
         post("/reviews-internal/v1/invitations/delivery-outcome", claim | {"outcome": "uncertain"}, delivery_token)
         return {"status": "reconciliation required"}
     accepted_at = int(clock())
-    try:
-        result = post(
-            "/reviews-internal/v1/invitations/delivery-outcome",
-            claim | {"outcome": "accepted", "accepted_at": accepted_at},
-            delivery_token,
-        )
-    except Exception:
-        return {"status": "reconciliation required"}
-    return {"status": result["state"]}
+    for attempt in range(3):
+        try:
+            result = post(
+                "/reviews-internal/v1/invitations/delivery-outcome",
+                claim | {"outcome": "accepted", "accepted_at": accepted_at},
+                delivery_token,
+            )
+            return {"status": result["state"]}
+        except Exception:
+            if attempt < 2:
+                sleep(1)
+    return {"status": "reconciliation required"}
 
 
 def reconcile_delivery(post, *, delivery_token, claim, lookup):
