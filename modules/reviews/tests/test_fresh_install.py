@@ -90,3 +90,33 @@ def test_core_import_does_not_load_reviews_package():
         env=env,
         check=True,
     )
+
+
+def test_generation_migration_preserves_pending_delivery():
+    descriptor = json.loads((MODULE / "module.json").read_text())
+    connection = sqlite3.connect(":memory:")
+    for name in descriptor["migrations"]:
+        if name.endswith("0010_invitation_delivery_claim.sql"):
+            break
+        connection.executescript((MODULE / name).read_text())
+    connection.execute(
+        "INSERT INTO acquisition_invitations "
+        "(store_key,environment,acquisition_id,source_event_id,recipient_context_hash,subject_set_hash,"
+        "key_version,token_hash,expires_at) VALUES (?,?,?,?,?,?,?,?,?)",
+        ("store", "test", "purchase", "event", "a" * 64, "b" * 64, "v1", "c" * 64, 0),
+    )
+    connection.execute(
+        "INSERT INTO invitation_generations "
+        "(store_key,environment,acquisition_id,generation_id,request_key,token_hash,key_version,"
+        "expected_token_hash,expected_revoked,expected_revocation_epoch,delivery_identity,state,prepared_at) "
+        "VALUES (?,?,?,?,?,?,?,?,?,?,?,'prepared',?)",
+        ("store", "test", "purchase", "d" * 64, "request", "e" * 64, "v1", "c" * 64, 0, 0, "f" * 64, 1),
+    )
+    connection.commit()
+    connection.executescript((MODULE / "migrations/0010_invitation_delivery_claim.sql").read_text())
+    assert connection.execute("SELECT state,delivery_identity FROM invitation_generations").fetchone() == (
+        "prepared",
+        "f" * 64,
+    )
+    connection.execute("UPDATE invitation_generations SET state='dispatching'")
+    assert connection.execute("SELECT state FROM invitation_generations").fetchone() == ("dispatching",)

@@ -429,6 +429,7 @@ def test_settlement_to_pending_approval_and_public_verified_review(lifecycle):
         REVIEWS_SETTLEMENT_TOKEN="s" * 40,
         REVIEWS_INVITATION_KEY="i" * 40,
         REVIEWS_REVIEWER_KEY="r" * 40,
+        REVIEWS_DELIVERY_TOKEN="d" * 40,
         REVIEWS_SUBJECT_MAPS=json.dumps({"v1": {"product_1": "policy"}}),
     )
 
@@ -437,7 +438,7 @@ def test_settlement_to_pending_approval_and_public_verified_review(lifecycle):
         return asyncio.run(lifecycle.handle_write(request, env, path))
 
     settlement = "/reviews-internal/v1/settlements"
-    event = {"event_id": "event_1", "recipient_context_hash": "a" * 64}
+    event = {"event_id": "event_1", "recipient_context_hash": "a" * 64, "request_key": "initial"}
     assert internal(settlement, event, env.REVIEWS_TEST_ADMIN_TOKEN).status == 401
     env.REVIEWS_REVIEWER_KEY = env.REVIEWS_SETTLEMENT_TOKEN
     assert internal(settlement, event, env.REVIEWS_SETTLEMENT_TOKEN).status == 503
@@ -445,6 +446,19 @@ def test_settlement_to_pending_approval_and_public_verified_review(lifecycle):
     invitation = internal(settlement, event, env.REVIEWS_SETTLEMENT_TOKEN)
     assert invitation.status == 201
     assert internal(settlement, event, env.REVIEWS_SETTLEMENT_TOKEN).body == invitation.body
+    delivery = {
+        "acquisition_id": invitation.body["acquisition_id"],
+        "generation_id": invitation.body["generation_id"],
+        "delivery_identity": invitation.body["delivery_identity"],
+        "outcome": "accepted",
+        "accepted_at": int(lifecycle.time.time()),
+    }
+    claim = {key: value for key, value in delivery.items() if key not in ("outcome", "accepted_at")}
+    assert internal("/reviews-internal/v1/invitations/delivery-claim", claim, env.REVIEWS_DELIVERY_TOKEN).status == 200
+    assert (
+        internal("/reviews-internal/v1/invitations/delivery-outcome", delivery, env.REVIEWS_DELIVERY_TOKEN).status
+        == 200
+    )
     assert invoke(lifecycle, env, "/reviews-admin/v1/test-capabilities", {}, admin=True).status == 404
     body = {
         "subject_id": "policy",
@@ -527,7 +541,12 @@ def test_missing_one_eligible_subject_rolls_back_entire_issuance():
 def test_replacement_is_pending_until_delivery_and_preserves_consumed_subjects():
     import secrets
 
-    from cartray_reviews.invitations import prepare_replacement, record_delivery_outcome, redeem_purchase
+    from cartray_reviews.invitations import (
+        claim_delivery,
+        prepare_replacement,
+        record_delivery_outcome,
+        redeem_purchase,
+    )
 
     commerce = CommerceDatabase()
     commerce.add_purchase(second=True, amount=200)
@@ -586,6 +605,10 @@ def test_replacement_is_pending_until_delivery_and_preserves_consumed_subjects()
         delivery=replacement["delivery_identity"],
         now=200,
     )
+    claim = {k: v for k, v in outcome.items() if k != "now"} | {"now": 102}
+    assert asyncio.run(claim_delivery(reviews, **claim)) == {"state": "dispatching"}
+    with pytest.raises(ValueError):
+        asyncio.run(claim_delivery(reviews, **claim))
     assert asyncio.run(record_delivery_outcome(reviews, **outcome, outcome="accepted", accepted_at=103)) == {
         "state": "accepted"
     }
@@ -611,7 +634,7 @@ def test_replacement_is_pending_until_delivery_and_preserves_consumed_subjects()
 def test_uncertain_delivery_cannot_be_replaced_or_activated_without_resolution():
     import secrets
 
-    from cartray_reviews.invitations import prepare_replacement, record_delivery_outcome
+    from cartray_reviews.invitations import claim_delivery, prepare_replacement, record_delivery_outcome
 
     reviews, commerce = stores()
     issue(reviews, commerce)
@@ -634,6 +657,7 @@ def test_uncertain_delivery_cannot_be_replaced_or_activated_without_resolution()
         delivery=draft["delivery_identity"],
         now=103,
     )
+    assert asyncio.run(claim_delivery(reviews, **(outcome | {"now": 102}))) == {"state": "dispatching"}
     assert asyncio.run(record_delivery_outcome(reviews, **outcome, outcome="uncertain")) == {"state": "uncertain"}
     assert "token" not in asyncio.run(prepare_replacement(reviews, **params))
     with pytest.raises(ValueError):
@@ -684,13 +708,20 @@ def test_replacement_endpoints_separate_issuer_and_delivery_credentials(lifecycl
             "accepted_at": 101,
         }
         assert post(outcome_path, payload, env.REVIEWS_SETTLEMENT_TOKEN).status == 401
+        claim = {k: v for k, v in payload.items() if k not in ("outcome", "accepted_at")}
+        assert post("/reviews-internal/v1/invitations/delivery-claim", claim, env.REVIEWS_DELIVERY_TOKEN).status == 200
         assert post(outcome_path, payload, env.REVIEWS_DELIVERY_TOKEN).body == {"state": "accepted"}
 
 
 def test_revocation_after_preparation_cannot_be_undone_by_delivery_acknowledgement():
     import secrets
 
-    from cartray_reviews.invitations import prepare_replacement, record_delivery_outcome, revoke_purchase
+    from cartray_reviews.invitations import (
+        claim_delivery,
+        prepare_replacement,
+        record_delivery_outcome,
+        revoke_purchase,
+    )
 
     reviews, commerce = stores()
     initial = issue(reviews, commerce)
@@ -705,6 +736,17 @@ def test_revocation_after_preparation_cannot_be_undone_by_delivery_acknowledgeme
         random_token=lambda: secrets.token_hex(32),
     )
     draft = asyncio.run(prepare_replacement(reviews, **params))
+    asyncio.run(
+        claim_delivery(
+            reviews,
+            store="store",
+            environment="test",
+            acquisition="order_1",
+            generation=draft["generation_id"],
+            delivery=draft["delivery_identity"],
+            now=102,
+        )
+    )
     asyncio.run(revoke_purchase(reviews, store="store", environment="test", token=initial["token"], now=103))
     assert asyncio.run(
         record_delivery_outcome(
@@ -723,6 +765,17 @@ def test_revocation_after_preparation_cannot_be_undone_by_delivery_acknowledgeme
     assert row[1] == 103
     assert row[0] == hashlib.sha256(initial["token"].encode()).hexdigest()
     second = asyncio.run(prepare_replacement(reviews, **(params | {"request_key": "retry", "now": 106})))
+    asyncio.run(
+        claim_delivery(
+            reviews,
+            store="store",
+            environment="test",
+            acquisition="order_1",
+            generation=second["generation_id"],
+            delivery=second["delivery_identity"],
+            now=106,
+        )
+    )
     asyncio.run(revoke_purchase(reviews, store="store", environment="test", token=initial["token"], now=107))
     assert asyncio.run(
         record_delivery_outcome(
@@ -737,3 +790,143 @@ def test_revocation_after_preparation_cannot_be_undone_by_delivery_acknowledgeme
             accepted_at=108,
         )
     ) == {"state": "revoked"}
+
+
+def test_initial_capability_is_inactive_until_provider_acceptance():
+    import secrets
+
+    from cartray_reviews.invitations import (
+        claim_delivery,
+        prepare_initial_delivery,
+        record_delivery_outcome,
+        redeem_purchase,
+    )
+
+    reviews, commerce = stores()
+    params = dict(
+        store="store",
+        environment="test",
+        event_id="event_1",
+        subject_maps={"v1": {"product_1": "policy"}},
+        recipient_context_hash="a" * 64,
+        request_key="initial",
+        key_version="v3",
+        secret=b"z" * 32,
+        now=100,
+        random_token=lambda: secrets.token_hex(32),
+    )
+    draft = asyncio.run(prepare_initial_delivery(reviews, commerce, **params))
+    assert draft == asyncio.run(prepare_initial_delivery(reviews, commerce, **params))
+    assert reviews.db.execute("SELECT expires_at FROM acquisition_invitations").fetchone()[0] == 0
+    attempt = dict(
+        store="store",
+        environment="test",
+        subject="policy",
+        token=draft["token"],
+        request_key="review",
+        author="Guest",
+        title=None,
+        body="",
+        rating=4,
+        reviewer_key_secret=b"r" * 32,
+        now=101,
+        random_token=lambda: secrets.token_hex(32),
+    )
+    with pytest.raises(ValueError):
+        asyncio.run(redeem_purchase(reviews, **attempt))
+    outcome = dict(
+        store="store",
+        environment="test",
+        acquisition="order_1",
+        generation=draft["generation_id"],
+        delivery=draft["delivery_identity"],
+        outcome="accepted",
+        accepted_at=120,
+        now=150,
+    )
+    assert asyncio.run(
+        claim_delivery(
+            reviews, **{k: v for k, v in outcome.items() if k not in ("outcome", "accepted_at", "now")}, now=101
+        )
+    ) == {"state": "dispatching"}
+    assert asyncio.run(record_delivery_outcome(reviews, **outcome)) == {"state": "accepted"}
+    assert reviews.db.execute("SELECT expires_at,active_key_version FROM acquisition_invitations").fetchone()[:] == (
+        120 + 60 * 86400,
+        "v3",
+    )
+    assert asyncio.run(redeem_purchase(reviews, **(attempt | {"now": 151})))["status"] == "pending"
+
+
+def test_revocation_before_dispatch_closes_preparation_and_allows_recovery():
+    import secrets
+
+    from cartray_reviews.invitations import prepare_replacement, revoke_purchase
+
+    reviews, commerce = stores()
+    original = issue(reviews, commerce)
+    params = dict(
+        store="store",
+        environment="test",
+        acquisition="order_1",
+        request_key="first-draft",
+        key_version="v1",
+        secret=b"z" * 32,
+        now=102,
+        random_token=lambda: secrets.token_hex(32),
+    )
+    first = asyncio.run(prepare_replacement(reviews, **params))
+    asyncio.run(revoke_purchase(reviews, store="store", environment="test", token=original["token"], now=103))
+    assert (
+        reviews.db.execute(
+            "SELECT state FROM invitation_generations WHERE generation_id=?", (first["generation_id"],)
+        ).fetchone()[0]
+        == "failed"
+    )
+    second = asyncio.run(prepare_replacement(reviews, **(params | {"request_key": "second-draft", "now": 104})))
+    assert second["state"] == "prepared" and second["token"] != first["token"]
+
+
+def test_unsent_cancellation_cannot_override_concurrent_dispatch_claim():
+    import secrets
+
+    from cartray_reviews.invitations import prepare_replacement, record_delivery_outcome
+
+    reviews, commerce = stores()
+    issue(reviews, commerce)
+    draft = asyncio.run(
+        prepare_replacement(
+            reviews,
+            store="store",
+            environment="test",
+            acquisition="order_1",
+            request_key="race-cancel",
+            key_version="v1",
+            secret=b"z" * 32,
+            now=102,
+            random_token=lambda: secrets.token_hex(32),
+        )
+    )
+    original_batch = reviews.batch
+
+    async def racing_batch(statements):
+        reviews.db.execute(
+            "UPDATE invitation_generations SET state='dispatching' WHERE generation_id=?", (draft["generation_id"],)
+        )
+        reviews.db.commit()
+        return await original_batch(statements)
+
+    reviews.batch = racing_batch
+    with pytest.raises(ValueError):
+        asyncio.run(
+            record_delivery_outcome(
+                reviews,
+                store="store",
+                environment="test",
+                acquisition="order_1",
+                generation=draft["generation_id"],
+                delivery=draft["delivery_identity"],
+                outcome="failed",
+                now=103,
+            )
+        )
+    assert reviews.db.execute("SELECT state FROM invitation_generations").fetchone()[0] == "dispatching"

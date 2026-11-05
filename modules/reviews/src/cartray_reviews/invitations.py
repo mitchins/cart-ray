@@ -78,7 +78,8 @@ async def issue_from_settlement(
     recipient_context_hash,
     token_key,
     now,
-    lifetime=604800,
+    lifetime=60 * 86400,
+    pending=False,
 ):
     """Issue a deterministic opaque token after reading trusted settlement state.
 
@@ -90,7 +91,12 @@ async def issue_from_settlement(
         raise ValueError("invalid recipient context")
     if not isinstance(token_key, bytes) or len(token_key) < 32:
         raise ValueError("invalid invitation key")
-    if type(now) is not int or type(lifetime) is not int or not 1 <= lifetime <= 604800:
+    if (
+        type(now) is not int
+        or type(lifetime) is not int
+        or not 1 <= lifetime <= 365 * 86400
+        or type(pending) is not bool
+    ):
         raise ValueError("invalid invitation lifetime")
     acquisition = await confirmed_purchase(
         commerce_db, store=store, environment=environment, event_id=event_id, subject_maps=subject_maps
@@ -124,13 +130,13 @@ async def issue_from_settlement(
             recipient_context_hash,
             subject_hash,
             token_hash,
-            now + lifetime,
+            0 if pending else now + lifetime,
         ),
         reviews_db.prepare(
             "INSERT INTO native_guard SELECT CASE WHEN EXISTS(SELECT 1 FROM acquisition_invitations "
             "WHERE store_key=? AND environment=? AND acquisition_id=? AND source_event_id=? "
             "AND recipient_context_hash=? AND subject_set_hash=? AND token_hash=? "
-            "AND revoked_at IS NULL AND expires_at>?) THEN 1 ELSE 0 END"
+            "AND revoked_at IS NULL AND (expires_at>? OR (?=1 AND expires_at=0))) THEN 1 ELSE 0 END"
         ).bind(
             store,
             environment,
@@ -140,6 +146,7 @@ async def issue_from_settlement(
             subject_hash,
             token_hash,
             now,
+            int(pending),
         ),
     ]
     for subject in acquisition.subject_ids:
@@ -322,6 +329,11 @@ async def revoke_purchase(reviews_db, *, store, environment, token, now):
                     "revocation_epoch=revocation_epoch+1 "
                     "WHERE store_key=? AND environment=? AND token_hash=?"
                 ).bind(now, store, environment, token_hash),
+                reviews_db.prepare(
+                    "UPDATE invitation_generations SET state='failed' WHERE store_key=? AND environment=? "
+                    "AND state='prepared' AND acquisition_id IN (SELECT acquisition_id FROM acquisition_invitations "
+                    "WHERE store_key=? AND environment=? AND token_hash=?)"
+                ).bind(store, environment, store, environment, token_hash),
                 reviews_db.prepare("DELETE FROM native_guard"),
             ]
         )
@@ -481,6 +493,42 @@ async def prepare_replacement(
     return {"token": token, "generation_id": generation, "delivery_identity": delivery, "state": "prepared"}
 
 
+async def claim_delivery(db, *, store, environment, acquisition, generation, delivery, now):
+    """Claim a prepared delivery once; an unknown result must be reconciled."""
+    if (
+        environment != "test"
+        or type(now) is not int
+        or not isinstance(generation, str)
+        or not re.fullmatch(r"[0-9a-f]{64}", generation)
+        or not isinstance(delivery, str)
+        or not re.fullmatch(r"[0-9a-f]{64}", delivery)
+    ):
+        raise ValueError("delivery unavailable")
+    try:
+        await db.batch(
+            [
+                db.prepare(
+                    "INSERT INTO native_guard SELECT CASE WHEN EXISTS(SELECT 1 FROM invitation_generations g "
+                    "JOIN acquisition_invitations i USING(store_key,environment,acquisition_id) "
+                    "JOIN review_invitation_consents c USING(store_key,environment,acquisition_id) "
+                    "WHERE g.store_key=? AND g.environment=? AND g.acquisition_id=? AND g.generation_id=? "
+                    "AND g.delivery_identity=? AND g.state='prepared' AND i.token_hash=g.expected_token_hash "
+                    "AND i.revocation_epoch=g.expected_revocation_epoch AND c.revoked_at IS NULL "
+                    "AND c.purpose='review_invitation' AND c.granted_at<=? "
+                    "AND c.recipient_context_hash=i.recipient_context_hash) THEN 1 ELSE 0 END"
+                ).bind(store, environment, acquisition, generation, delivery, now),
+                db.prepare(
+                    "UPDATE invitation_generations SET state='dispatching' WHERE store_key=? AND environment=? "
+                    "AND acquisition_id=? AND generation_id=? AND state='prepared'"
+                ).bind(store, environment, acquisition, generation),
+                db.prepare("DELETE FROM native_guard"),
+            ]
+        )
+    except Exception as exc:
+        raise ValueError("delivery unavailable") from exc
+    return {"state": "dispatching"}
+
+
 async def record_delivery_outcome(
     db, *, store, environment, acquisition, generation, delivery, outcome, now, accepted_at=None, lifetime=60 * 86400
 ):
@@ -520,7 +568,9 @@ async def record_delivery_outcome(
         return {"state": outcome}
     if outcome == "accepted" and accepted_at < item["prepared_at"]:
         raise ValueError("delivery unavailable")
-    if item["state"] not in ("prepared", "uncertain") or (item["state"] == "uncertain" and outcome == "uncertain"):
+    if item["state"] not in ("prepared", "dispatching", "uncertain") or (
+        item["state"] == "prepared" and outcome != "failed"
+    ):
         raise ValueError("delivery unavailable")
     if outcome == "accepted":
         guard = db.prepare(
@@ -528,20 +578,21 @@ async def record_delivery_outcome(
             "JOIN acquisition_invitations i USING(store_key,environment,acquisition_id) "
             "JOIN review_invitation_consents c USING(store_key,environment,acquisition_id) "
             "WHERE g.store_key=? AND g.environment=? AND g.acquisition_id=? AND g.generation_id=? "
-            "AND g.delivery_identity=? AND g.state IN ('prepared','uncertain') AND i.token_hash=g.expected_token_hash "
+            "AND g.delivery_identity=? AND g.state=? "
+            "AND i.token_hash=g.expected_token_hash "
             "AND (CASE WHEN i.revoked_at IS NULL THEN 0 ELSE 1 END)=g.expected_revoked "
             "AND i.revocation_epoch=g.expected_revocation_epoch "
             "AND c.recipient_context_hash=i.recipient_context_hash AND c.revoked_at IS NULL "
             "AND c.purpose='review_invitation' AND c.granted_at<=?) THEN 1 ELSE 0 END"
-        ).bind(store, environment, acquisition, generation, delivery, now)
+        ).bind(store, environment, acquisition, generation, delivery, item["state"], now)
     else:
         # Recording a failure or an uncertain outcome must remain possible
         # even if consent or the previous invitation was revoked meanwhile.
         guard = db.prepare(
             "INSERT INTO native_guard SELECT CASE WHEN EXISTS(SELECT 1 FROM invitation_generations "
             "WHERE store_key=? AND environment=? AND acquisition_id=? AND generation_id=? "
-            "AND delivery_identity=? AND state IN ('prepared','uncertain')) THEN 1 ELSE 0 END"
-        ).bind(store, environment, acquisition, generation, delivery)
+            "AND delivery_identity=? AND state=?) THEN 1 ELSE 0 END"
+        ).bind(store, environment, acquisition, generation, delivery, item["state"])
     statements = [guard]
     if outcome == "accepted":
         statements.extend(
@@ -579,6 +630,18 @@ async def record_delivery_outcome(
     try:
         await db.batch(statements)
     except Exception as exc:
+        latest = _rows(
+            await db.prepare(
+                "SELECT state,accepted_at FROM invitation_generations WHERE store_key=? AND environment=? "
+                "AND acquisition_id=? AND generation_id=? AND delivery_identity=?"
+            ).bind(store, environment, acquisition, generation, delivery).all()
+        )
+        if latest:
+            state = latest[0]["state"]
+            if state == outcome and (outcome != "accepted" or latest[0]["accepted_at"] == accepted_at):
+                return {"state": state}
+            if state == "revoked" and outcome == "accepted" and latest[0]["accepted_at"] == accepted_at:
+                return {"state": "revoked"}
         if outcome == "accepted":
             try:
                 await db.batch(
@@ -588,15 +651,15 @@ async def record_delivery_outcome(
                             "JOIN acquisition_invitations i USING(store_key,environment,acquisition_id) "
                             "JOIN review_invitation_consents c USING(store_key,environment,acquisition_id) "
                             "WHERE g.store_key=? AND g.environment=? AND g.acquisition_id=? AND g.generation_id=? "
-                            "AND g.delivery_identity=? AND g.state IN ('prepared','uncertain') AND "
+                            "AND g.delivery_identity=? AND g.state=? AND "
                             "(i.token_hash<>g.expected_token_hash OR i.revocation_epoch<>g.expected_revocation_epoch "
                             "OR c.recipient_context_hash<>i.recipient_context_hash OR c.revoked_at IS NOT NULL)) "
                             "THEN 1 ELSE 0 END"
-                        ).bind(store, environment, acquisition, generation, delivery),
+                        ).bind(store, environment, acquisition, generation, delivery, item["state"]),
                         db.prepare(
                             "UPDATE invitation_generations SET state='revoked',accepted_at=?,expires_at=? "
                             "WHERE store_key=? AND environment=? AND acquisition_id=? AND generation_id=? "
-                            "AND state IN ('prepared','uncertain')"
+                            "AND state IN ('dispatching','uncertain')"
                         ).bind(accepted_at, accepted_at + lifetime, store, environment, acquisition, generation),
                         db.prepare("DELETE FROM native_guard"),
                     ]
@@ -606,3 +669,62 @@ async def record_delivery_outcome(
                 pass
         raise ValueError("delivery unavailable") from exc
     return {"state": outcome}
+
+
+async def prepare_initial_delivery(
+    reviews_db,
+    commerce_db,
+    *,
+    store,
+    environment,
+    event_id,
+    subject_maps,
+    recipient_context_hash,
+    request_key,
+    key_version,
+    secret,
+    now,
+    random_token,
+):
+    """Prepare an inactive initial generation for a confirmed, consented acquisition."""
+    acquisition = await confirmed_purchase(
+        commerce_db, store=store, environment=environment, event_id=event_id, subject_maps=subject_maps
+    )
+    existing = _rows(
+        await reviews_db.prepare(
+            "SELECT recipient_context_hash,subject_set_hash FROM acquisition_invitations "
+            "WHERE store_key=? AND environment=? AND acquisition_id=?"
+        )
+        .bind(store, environment, acquisition.acquisition_id)
+        .all()
+    )
+    if existing:
+        if existing[0]["recipient_context_hash"] != recipient_context_hash or existing[0][
+            "subject_set_hash"
+        ] != _digest(acquisition.subject_ids):
+            raise ValueError("invitation unavailable")
+    else:
+        await issue_from_settlement(
+            reviews_db,
+            commerce_db,
+            store=store,
+            environment=environment,
+            event_id=event_id,
+            subject_maps=subject_maps,
+            recipient_context_hash=recipient_context_hash,
+            token_key=secret,
+            now=now,
+            pending=True,
+        )
+    generation = await prepare_replacement(
+        reviews_db,
+        store=store,
+        environment=environment,
+        acquisition=acquisition.acquisition_id,
+        request_key=request_key,
+        key_version=key_version,
+        secret=secret,
+        now=now,
+        random_token=random_token,
+    )
+    return generation | {"acquisition_id": acquisition.acquisition_id, "subjects": acquisition.subject_ids}

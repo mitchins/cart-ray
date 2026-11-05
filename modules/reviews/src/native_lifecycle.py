@@ -9,7 +9,8 @@ from urllib.parse import parse_qs
 
 from cartray_reviews.acquisition import confirmed_purchase
 from cartray_reviews.invitations import (
-    issue_from_settlement,
+    claim_delivery,
+    prepare_initial_delivery,
     prepare_replacement,
     record_delivery_outcome,
     record_signed_consent,
@@ -254,7 +255,7 @@ async def handle_write(request, env, path):
             return Response.json({"status": "recorded"}, status=201, headers={"Cache-Control": "no-store"})
         except (ValueError, TypeError, AttributeError, KeyError):
             return fail(409, "consent unavailable")
-    if path == "/reviews-internal/v1/invitations/delivery-outcome":
+    if path in ("/reviews-internal/v1/invitations/delivery-claim", "/reviews-internal/v1/invitations/delivery-outcome"):
         delivery_token = str(getattr(env, "REVIEWS_DELIVERY_TOKEN", ""))
         supplied = str(request.headers.get("Authorization") or "")
         if (
@@ -268,6 +269,19 @@ async def handle_write(request, env, path):
             return fail(401, "unauthorized")
         try:
             data = await read_json(request)
+            if path.endswith("/delivery-claim"):
+                if set(data) != {"acquisition_id", "generation_id", "delivery_identity"}:
+                    return fail(400, "invalid delivery claim")
+                result = await claim_delivery(
+                    env.REVIEWS_DB,
+                    store=store,
+                    environment=environment,
+                    acquisition=data["acquisition_id"],
+                    generation=data["generation_id"],
+                    delivery=data["delivery_identity"],
+                    now=int(time.time()),
+                )
+                return Response.json(result, headers={"Cache-Control": "no-store"})
             expected = {"acquisition_id", "generation_id", "delivery_identity", "outcome"}
             if data.get("outcome") == "accepted":
                 expected.add("accepted_at")
@@ -339,7 +353,7 @@ async def handle_write(request, env, path):
                     now=int(time.time()),
                 )
                 return Response.json({"status": "revoked"}, headers={"Cache-Control": "no-store"})
-            if set(data) != {"event_id", "recipient_context_hash"}:
+            if set(data) != {"event_id", "recipient_context_hash", "request_key"}:
                 return fail(400, "invalid settlement")
             token_key = str(getattr(env, "REVIEWS_INVITATION_KEY", ""))
             reviewer_secret = str(getattr(env, "REVIEWS_REVIEWER_KEY", ""))
@@ -350,7 +364,7 @@ async def handle_write(request, env, path):
             ):
                 return fail(503, "collection unavailable")
             mappings = json.loads(str(getattr(env, "REVIEWS_SUBJECT_MAPS", "")))
-            result = await issue_from_settlement(
+            result = await prepare_initial_delivery(
                 env.REVIEWS_DB,
                 env.CARTRAY_DB,
                 store=store,
@@ -358,8 +372,11 @@ async def handle_write(request, env, path):
                 event_id=data["event_id"],
                 subject_maps=mappings,
                 recipient_context_hash=data["recipient_context_hash"],
-                token_key=token_key.encode(),
+                request_key=data["request_key"],
+                key_version=str(getattr(env, "REVIEWS_INVITATION_KEY_VERSION", "v1")),
+                secret=token_key.encode(),
                 now=int(time.time()),
+                random_token=random_token,
             )
             return Response.json(result, status=201, headers={"Cache-Control": "no-store"})
         except (ValueError, TypeError, AttributeError, KeyError):
