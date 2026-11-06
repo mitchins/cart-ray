@@ -47,6 +47,10 @@ def test_published_is_scoped_bounded_and_only_published(lifecycle):
         add_review(db, number)
     add_review(db, 99, state="pending")
     add_review(db, 100, store="other")
+    db.db.execute("INSERT INTO review_subjects VALUES (?,?,?,?,?)", ("store", "test", "policy", "product", "/policy/"))
+    db.db.execute(
+        "INSERT INTO review_subject_display_names VALUES (?,?,?,?)", ("store", "test", "policy", "Approved product")
+    )
     db.db.commit()
     env = environment(db)
     assert read_published(lifecycle, env, token="bad").status == 401
@@ -56,11 +60,12 @@ def test_published_is_scoped_bounded_and_only_published(lifecycle):
     first = read_published(lifecycle, env)
     assert first.status == 200 and first.headers["Cache-Control"] == "no-store"
     assert len(first.body["published"]) == 50 and first.body["next_after"] == f"{50:064x}"
-    assert first.body["published"][0]["subject_name"] is None
+    assert first.body["published"][0]["subject_name"] == "Approved product"
     assert "private-reviewer" not in str(first.body)
     second = read_published(lifecycle, env, "after=" + first.body["next_after"])
     assert len(second.body["published"]) == 2 and second.body["next_after"] is None
-    assert read_published(lifecycle, environment(db, store="other")).body["published"][0]["review_id"] == f"{100:064x}"
+    other = read_published(lifecycle, environment(db, store="other")).body["published"][0]
+    assert other["review_id"] == f"{100:064x}" and other["subject_name"] is None
 
 
 def test_scoped_revision_and_audit_history(lifecycle):
