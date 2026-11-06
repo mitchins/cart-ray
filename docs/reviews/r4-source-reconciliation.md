@@ -46,3 +46,22 @@ verification and voting semantics, and privacy review of public prose. The
 checked-in CartRay real-test catalogue currently contains two test products,
 which is not a complete authoritative mapping for these subjects. No records
 have been imported or published by this investigation.
+
+## Provisional development crosswalk
+
+A separate source review supplied provisional keys for exercising the adapter:
+`PROVISIONAL-WP-195`, `PROVISIONAL-WP-264`, `PROVISIONAL-WP-270`,
+`PROVISIONAL-WP-477`, `PROVISIONAL-WP-4067`, and `PROVISIONAL-WP-5283`.
+These are test labels, not CartRay commerce keys or approved production aliases.
+The candidate URL paths use the WordPress product slugs in the source. The
+handoff reports direct public-page observations for 195 and 264, search-result
+support for 270 and 5283, unconfirmed reachability for 477, and conflicting older
+public evidence for 4067. The latter two require particular care around retired,
+renamed, or changed products. All keys and canonical URLs remain unapproved.
+
+For a private local rehearsal only, these six labels plus a provisional
+store-level label for page 22 produced seven subjects, 17 approved roots, six
+replies and two unrated roots from the pinned candidate export. This exploratory
+label for page 22 is not a final classification. The adapter explicitly marked
+the resulting draft incomplete, and the importer rejected it as required. No
+real source content was imported into D1 or published.
