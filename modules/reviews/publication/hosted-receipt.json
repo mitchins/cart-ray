@@ -1,0 +1,61 @@
+{
+  "date_utc": "2026-11-06T11:32:00.903858+00:00",
+  "source_commit": "4c2dc92167963ed4ad7f2427e6264ca9657d999d",
+  "fixture_sha256": "00922725ca663b6258fc51d10ee695fbcfdefec021e2484390de004bdcec3c9f",
+  "frozen_sources_sha256": {
+    "worker.mjs": "550b0c2a036e1efccd75d08980110a100cffb3ae9397bb5f54eda907ebea560b",
+    "projection.mjs": "167b0ad0a92b4ec8d25fbadf400f6751031fe101a4ea4f9f57a50030a2937187",
+    "schema.sql": "428bf2604a07ffffa061338e2f3bee1289eddc692affaebdf18cb8d9c4f1c6e8",
+    "tests/synthetic_source.mjs": "c502446207884ae0d55c858778f204c39f910baf62d4b12254b154e65713cd63",
+    "tests/qualify.mjs": "1fdf4d6b46fbeed437cba2cce28719d1c0ceb74c2652683cf04c814cd52c4b24",
+    "tests/stalled_upload.mjs": "19449509198c51a13adc60ba715ab6fe5149f252e483effcea7cae7fff0a5cbc",
+    "tests/source_health.mjs": "13eb05ed7dcd8b3841a8025accdc084da11d6cc80eeed33f364088eca95c3814",
+    "tests/gate_source_health.mjs": "97670a2b2633d8291269d943beebedb554862b5d66081c072d44ffcc09b5aa70",
+    "tests/hosted_qualification.py": "d931bc0c8530ccda0122f8e174c50ad5bb7d974fb699595adacf656a3baa8ecb"
+  },
+  "deployed_source_bundle_sha256": "b5b4b5db209976264babec74d11f996084001b871a883679959c29fb3b748d24",
+  "deployed_gate_bundle_sha256": "39cb63f480e6bf1a11455110550c0aa0c32802f878d435437156a9b7d7d87fd7",
+  "wrangler_version": "4.127.1",
+  "node_version": "v24.21.0",
+  "source_kind": "synthetic replay of local R4 public projection",
+  "database_assertions": {
+    "media_count": 1,
+    "lineage_count": 2,
+    "gate_state": "safe"
+  },
+  "transport": [
+    {
+      "authorized": false,
+      "on_wire": "client_timeout",
+      "healthy_status": 503
+    },
+    {
+      "authorized": false,
+      "healthy_after_disconnect": 3
+    },
+    {
+      "authorized": true,
+      "on_wire": "client_timeout",
+      "healthy_status": 503
+    },
+    {
+      "authorized": true,
+      "healthy_after_disconnect": 3
+    }
+  ],
+  "transport_test_passed": false,
+  "measurements": {
+    "synthetic": true,
+    "approved_digest": "6311ae0e263667bf79528a05004f26d3b640f846c78df6a5a6cb4a151cd52493",
+    "withdrawn_digest": "3642a263bbd2062f2a4a1efcc4c418c766ad1bed9601fa96393e8ff157258be5",
+    "media_digest": "6b1048f8a6d40bac0b2954c18fefa40c4ea7a96120fc2e54b7317c0e43c2bbec",
+    "rated_count": 2,
+    "contribution_count": 3,
+    "withdraw_ack_ms": 133,
+    "post_withdraw_15_reads_ms": 604,
+    "old_publication_rejected": true,
+    "outage_recovery_tested": true
+  },
+  "cleanup": "all disposable resources deleted",
+  "qualification": "incomplete: stalled-upload transport"
+}
