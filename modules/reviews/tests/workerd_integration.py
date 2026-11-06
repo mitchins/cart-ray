@@ -327,6 +327,29 @@ def main():
             linked = next(item for item in linked_list if item["id"] == "n-native-one")
             assert linked["historical_provenance"]["anchors"] == ["review-r"]
             assert linked["replies"][0]["id"] == "h-a"
+            conflicting = json.loads(FIXTURE.read_bytes())
+            conflicting["snapshot_id"], conflicting["publication_revision"] = "linked-conflict", 2
+            conflicting["contributions"][0]["anchors"] = ["changed-anchor"]
+            conflict_file = Path(directory) / "linked-conflict.json"
+            conflict_file.write_text(json.dumps(conflicting))
+            failed = subprocess.run(
+                [
+                    sys.executable,
+                    str(MODULE / "tools/import_snapshot.py"),
+                    str(conflict_file),
+                    "--sha256",
+                    hashlib.sha256(conflict_file.read_bytes()).hexdigest(),
+                    "--store",
+                    "example-store",
+                    "--environment",
+                    "test",
+                ],
+                env=env,
+                cwd=ROOT,
+                capture_output=True,
+            )
+            assert failed.returncode != 0
+            assert json.loads(request("summary")[1])["snapshot_id"] == linked_summary["snapshot_id"]
             subprocess.run(
                 [
                     *command,
