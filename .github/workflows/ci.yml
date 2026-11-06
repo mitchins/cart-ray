@@ -31,6 +31,8 @@ jobs:
         run: REVIEWS_QUALIFICATION_BUILD=1 PYTHONPATH=modules/reviews/src uv run pytest modules/reviews/tests
       - name: Test Reviews recovery queue consumer
         run: node --test modules/reviews/tests/dispatch.test.mjs
+      - name: Test Reviews moderation console
+        run: node --test modules/reviews/console/tests/*.test.mjs
       - name: Build and inspect optional Reviews package
         run: |
           uv build modules/reviews --wheel --out-dir /tmp/cartray-reviews-wheel
@@ -105,6 +107,7 @@ jobs:
           node --test --experimental-test-coverage --test-reporter=spec --test-reporter-destination=stdout --test-reporter=lcov --test-reporter-destination=coverage/m11a.lcov tests/m11a_projection.test.mjs
           node --test --experimental-test-coverage --test-reporter=spec --test-reporter-destination=stdout --test-reporter=lcov --test-reporter-destination=coverage/reviews-dispatch.lcov modules/reviews/tests/dispatch.test.mjs
           node --test --experimental-test-coverage --test-reporter=spec --test-reporter-destination=stdout --test-reporter=lcov --test-reporter-destination=coverage/reviews-publication.lcov modules/reviews/publication/tests/*.test.mjs
+          node --test --experimental-test-coverage --test-reporter=spec --test-reporter-destination=stdout --test-reporter=lcov --test-reporter-destination=coverage/reviews-console.lcov modules/reviews/console/tests/*.test.mjs
       - name: Scan and await quality gate
         uses: SonarSource/sonarqube-scan-action@7006c4492b2e0ee0f816d36501671557c97f5995 # v8.1.0
         with:

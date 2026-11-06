@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex,nofollow">
+  <title>Review moderation</title>
+  <link rel="stylesheet" href="./styles.css">
+</head>
+<body>
+  <main class="shell">
+    <header><p class="eyebrow">CartRay Reviews · Test environment</p><h1>Review moderation</h1><p>Review customer feedback before it appears publicly.</p></header>
+    <section aria-labelledby="queue-title">
+      <div class="heading"><div><h2 id="queue-title">Awaiting review</h2><p>Approve feedback to publish it, or reject it to keep it private.</p></div><button id="refresh" type="button">Refresh queue</button></div>
+      <p id="status" role="status" aria-live="polite"></p>
+      <p id="error" role="alert" hidden></p>
+      <div id="queue" aria-busy="true"></div>
+      <button id="more" type="button" hidden>Load more reviews</button>
+    </section>
+    <aside aria-labelledby="scope-title"><h2 id="scope-title">Other operations</h2><p>Published-review withdrawal, replies, history, audit and delivery reconciliation are not yet available in this test console.</p></aside>
+  </main>
+  <script type="module" src="./console.mjs"></script>
+</body>
+</html>
