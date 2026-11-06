@@ -402,3 +402,59 @@ def test_adjudicated_identity_link_preserves_reply_and_withdrawal(lifecycle, mon
         assert db.db.execute("SELECT snapshot_id FROM review_publications").fetchone()[0] == "removed"
     with pytest.raises(Exception):
         db.db.execute("DELETE FROM review_identity_links")
+
+
+def test_scoped_public_attribution_never_exposes_private_source_identity(monkeypatch):
+    db = Database()
+
+    def execute(_flag, filename):
+        db.db.executescript("BEGIN;\n" + Path(filename).read_text() + "\nCOMMIT;")
+
+    monkeypatch.setattr(importer, "execute", execute)
+    data = json.loads((MODULE / "tests/fixtures/approved-synthetic.json").read_bytes())
+    data["schema"] = "cartray.reviews.snapshot.v3"
+    data["source"]["identity"] = "PRIVATE_SOURCE_IDENTITY"
+    data["source"]["public_attribution"] = "Example historical reviews"
+    for item in data["contributions"]:
+        item["title"] = None
+        item["date"]["source_local_raw"] = None
+        item["date"]["source_utc_raw"] = None
+    content = json.dumps(data).encode()
+    importer.import_snapshot(
+        content, digest=hashlib.sha256(content).hexdigest(), store="example-store", environment="test"
+    )
+    db.db.execute("INSERT INTO review_subjects VALUES ('example-store','test','example-policy','product','/product/')")
+    db.db.execute("INSERT INTO native_publication_versions VALUES ('example-store','test','example-policy',0,0,0,0)")
+    response = asyncio.run(
+        unified_read(db, "example-store", "test", "example-policy", "contributions", {}, TestResponse)
+    )
+    assert response.status == 200
+    assert all(
+        item["source"] == {"kind": "historical", "attribution": "Example historical reviews"}
+        for item in response.body["contributions"]
+    )
+    assert "PRIVATE_SOURCE_IDENTITY" not in json.dumps(response.body)
+    db.db.execute(
+        "INSERT INTO native_reviews VALUES ('example-store','test','native-id','example-policy',"
+        "'private-reviewer','published','native-revision',1735776000)"
+    )
+    db.db.execute(
+        "INSERT INTO native_revisions VALUES ('example-store','test','native-revision','native-id',"
+        "'Native',NULL,'Native text',2)"
+    )
+    db.db.execute("UPDATE native_publication_versions SET version=1,contribution_count=1,rated_count=1,rating_sum=2")
+    db.db.execute(
+        "INSERT INTO review_identity_links VALUES ('example-store','test','example-policy',"
+        "'PRIVATE_SOURCE_IDENTITY','r','r1',?,'native-id','native-revision',?)",
+        (hashlib.sha256(content).hexdigest(), "a" * 64),
+    )
+    linked = asyncio.run(
+        unified_read(db, "example-store", "test", "example-policy", "contributions", {}, TestResponse)
+    ).body
+    item = next(item for item in linked["contributions"] if item["id"] == "n-native-id")
+    assert item["source"] == {"kind": "native", "attribution": None}
+    assert item["historical_provenance"]["source"] == {
+        "kind": "historical",
+        "attribution": "Example historical reviews",
+    }
+    assert "PRIVATE_SOURCE_IDENTITY" not in json.dumps(linked)

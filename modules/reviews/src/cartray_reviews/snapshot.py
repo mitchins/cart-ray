@@ -3,6 +3,7 @@
 import hashlib
 import json
 import re
+import unicodedata
 from datetime import datetime
 from decimal import Decimal
 
@@ -56,10 +57,10 @@ def _utc_time(value):
 def _source_date(value, schema):
     """Retain source strings and declared precision without guessing an offset."""
     fields = ("original", "precision", "timezone_provenance", "utc")
-    if schema == "cartray.reviews.snapshot.v2":
+    if schema in ("cartray.reviews.snapshot.v2", "cartray.reviews.snapshot.v3"):
         fields += ("source_local_raw", "source_utc_raw")
     _object(value, fields)
-    if schema == "cartray.reviews.snapshot.v2":
+    if schema in ("cartray.reviews.snapshot.v2", "cartray.reviews.snapshot.v3"):
         for name in ("source_local_raw", "source_utc_raw"):
             if value[name] is not None:
                 if not isinstance(value[name], str) or not re.fullmatch(
@@ -110,7 +111,10 @@ def _source_date(value, schema):
             raise SnapshotError("invalid original timestamp") from exc
         if original.tzinfo is None or original != utc:
             _fail("original timestamp does not match UTC")
-        if schema == "cartray.reviews.snapshot.v2" and value["source_utc_raw"] is not None:
+        if (
+            schema in ("cartray.reviews.snapshot.v2", "cartray.reviews.snapshot.v3")
+            and value["source_utc_raw"] is not None
+        ):
             try:
                 source_utc = datetime.strptime(value["source_utc_raw"], "%Y-%m-%d %H:%M:%S")
             except ValueError as exc:
@@ -150,7 +154,8 @@ def load_snapshot(data: bytes, *, expected_sha256: str, store: str, environment:
         ),
     )
     if (
-        payload["schema"] not in ("cartray.reviews.snapshot.v1", "cartray.reviews.snapshot.v2")
+        payload["schema"]
+        not in ("cartray.reviews.snapshot.v1", "cartray.reviews.snapshot.v2", "cartray.reviews.snapshot.v3")
         or payload["store"] != store
         or payload["environment"] != environment
     ):
@@ -159,8 +164,16 @@ def load_snapshot(data: bytes, *, expected_sha256: str, store: str, environment:
         _string(payload[key])
     if not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", payload["snapshot_id"]):
         _fail("invalid snapshot identity")
-    _object(payload["source"], ("identity", "extracted_at", "sha256", "complete"))
+    source_fields = ("identity", "extracted_at", "sha256", "complete")
+    if payload["schema"] == "cartray.reviews.snapshot.v3":
+        source_fields += ("public_attribution",)
+    _object(payload["source"], source_fields)
     source = payload["source"]
+    if payload["schema"] == "cartray.reviews.snapshot.v3":
+        label = source["public_attribution"]
+        _string(label)
+        if len(label) > 120 or any(unicodedata.category(char).startswith("C") or char in "<>@" for char in label):
+            _fail("invalid public source attribution")
     _string(source["identity"])
     if not isinstance(source["sha256"], str) or not re.fullmatch(r"[a-f0-9]{64}", source["sha256"]):
         _fail("invalid source digest")
@@ -204,10 +217,13 @@ def load_snapshot(data: bytes, *, expected_sha256: str, store: str, environment:
             "anchors",
             "votes",
         )
-        if payload["schema"] == "cartray.reviews.snapshot.v2":
+        if payload["schema"] in ("cartray.reviews.snapshot.v2", "cartray.reviews.snapshot.v3"):
             fields += ("title",)
         _object(item, fields)
-        if payload["schema"] == "cartray.reviews.snapshot.v2" and item["title"] is not None:
+        if (
+            payload["schema"] in ("cartray.reviews.snapshot.v2", "cartray.reviews.snapshot.v3")
+            and item["title"] is not None
+        ):
             _string(item["title"])
         for key in ("id", "revision_id", "subject_id", "kind", "author", "body", "verification"):
             _string(item[key])

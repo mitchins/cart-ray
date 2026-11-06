@@ -55,7 +55,16 @@ def import_snapshot(data, *, digest, store, environment):
         f"INSERT OR IGNORE INTO review_snapshots VALUES ({scoped},{rev},{fingerprint});",
     ]
     source = snapshot["source"]
-    provenance = (store, environment, sid, source["identity"], source["extracted_at"], source["sha256"], 1)
+    provenance = (
+        store,
+        environment,
+        sid,
+        source["identity"],
+        source["extracted_at"],
+        source["sha256"],
+        1,
+        source.get("public_attribution"),
+    )
     lines.append(
         "INSERT INTO review_import_guard SELECT CASE WHEN NOT EXISTS("
         "SELECT 1 FROM review_publications p JOIN review_snapshot_provenance s "

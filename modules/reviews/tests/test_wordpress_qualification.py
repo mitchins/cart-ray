@@ -48,6 +48,7 @@ def make_inputs():
         "draft_sha256": h(draft_bytes),
         "report_sha256": h(report_bytes),
         "review_evidence_sha256": h(evidence),
+        "public_attribution": "Example legacy reviews",
         "store": "s",
         "environment": "test",
     }
@@ -57,11 +58,20 @@ def make_inputs():
 def test_pinned_scoped_qualification_keeps_original_incomplete():
     raw, mapping, draft, report, evidence, attestation = make_inputs()
     snapshot, receipt = MODULE.qualify(
-        raw, mapping, draft, report, evidence, attestation, expected_source="https://example.invalid", store="s"
+        raw,
+        mapping,
+        draft,
+        report,
+        evidence,
+        attestation,
+        expected_source="https://example.invalid",
+        store="s",
+        public_attribution="Example legacy reviews",
     )
     value = json.loads(snapshot)
     assert value["environment"] == "test" and value["source"]["complete"] is True
     assert value["source"]["identity"] == "wordpress-review-comment-graph:https://example.invalid"
+    assert value["source"]["public_attribution"] == "Example legacy reviews"
     assert json.loads(draft)["snapshot"]["source"]["complete"] is False
     assert json.loads(report)["complete"] is False and receipt["production_approval"] is False
 
@@ -78,10 +88,31 @@ def test_rejects_unpinned_evidence_or_live_scope():
             attestation,
             expected_source="https://example.invalid",
             store="s",
+            public_attribution="Example legacy reviews",
+        )
+    with pytest.raises(ValueError, match="attestation mismatch"):
+        MODULE.qualify(
+            raw,
+            mapping,
+            draft,
+            report,
+            evidence,
+            attestation,
+            expected_source="https://example.invalid",
+            store="s",
+            public_attribution="Unreviewed label",
         )
     live = copy.deepcopy(attestation)
     live["environment"] = "live"
     with pytest.raises(ValueError, match="attestation mismatch"):
         MODULE.qualify(
-            raw, mapping, draft, report, evidence, live, expected_source="https://example.invalid", store="s"
+            raw,
+            mapping,
+            draft,
+            report,
+            evidence,
+            live,
+            expected_source="https://example.invalid",
+            store="s",
+            public_attribution="Example legacy reviews",
         )

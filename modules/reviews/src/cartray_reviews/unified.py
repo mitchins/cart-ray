@@ -20,13 +20,16 @@ async def _query(db, sql, *args):
 async def _versions(db, store, environment, subject):
     return await _query(
         db,
-        "SELECT p.snapshot_id,v.version FROM review_publications p "
+        "SELECT p.snapshot_id,v.version,COALESCE(info.public_attribution,'') public_attribution "
+        "FROM review_publications p "
         "JOIN review_snapshot_subjects s ON s.store_key=p.store_key AND s.environment=p.environment "
         "AND s.snapshot_id=p.snapshot_id "
         "JOIN review_subjects n ON n.store_key=s.store_key AND n.environment=s.environment "
         "AND n.subject_id=s.subject_id AND n.kind=s.kind AND n.canonical_path=s.canonical_path "
         "JOIN native_publication_versions v ON v.store_key=n.store_key AND v.environment=n.environment "
-        "AND v.subject_id=n.subject_id WHERE p.store_key=? AND p.environment=? AND s.subject_id=?",
+        "AND v.subject_id=n.subject_id LEFT JOIN review_snapshot_provenance info "
+        "ON info.store_key=p.store_key AND info.environment=p.environment AND info.snapshot_id=p.snapshot_id "
+        "WHERE p.store_key=? AND p.environment=? AND s.subject_id=?",
         store,
         environment,
         subject,
@@ -38,11 +41,12 @@ def _version(row):
     return "unified-" + hashlib.sha256(payload).hexdigest()
 
 
-def _historic(row):
+def _historic(row, attribution):
     return {
         "id": "h-" + row["contribution_id"],
         "source_id": row["contribution_id"],
         "kind": row["kind"],
+        "source": {"kind": "historical", "attribution": attribution or None},
         "author": row["author"],
         "body": row["body"],
         "rating": row["rating"],
@@ -65,6 +69,7 @@ async def unified_read(db, store, environment, subject, endpoint, params, respon
     if len(versions) != 1:
         return fail(503, "subject conflict")
     snapshot = versions[0]["snapshot_id"]
+    attribution = versions[0]["public_attribution"]
     version = _version(versions[0])
     scope = (store, environment, snapshot, subject)
     links = await _query(
@@ -177,7 +182,7 @@ async def unified_read(db, store, environment, subject, endpoint, params, respon
         roots = []
         for row in historic:
             if not row["parent_id"] and row["contribution_id"] not in linked_ids:
-                item = _historic(row)
+                item = _historic(row, attribution)
                 if cursor_day is None or row["day"] < cursor_day or (row["day"] == cursor_day and item["id"] > after):
                     roots.append((row["day"], item))
         for row in native:
@@ -188,6 +193,7 @@ async def unified_read(db, store, environment, subject, endpoint, params, respon
                         "id": "n-" + row["review_id"],
                         "source_id": row["review_id"],
                         "kind": "review",
+                        "source": {"kind": "native", "attribution": None},
                         "author": row["author"],
                         "title": row["title"],
                         "body": row["body"],
@@ -209,9 +215,10 @@ async def unified_read(db, store, environment, subject, endpoint, params, respon
             source_id = native_links.get(item["source_id"])
             source = historical_by_id.get(source_id)
             if source is not None:
-                legacy = _historic(source)
+                legacy = _historic(source, attribution)
                 item["historical_provenance"] = {
                     "source_id": source_id,
+                    "source": legacy["source"],
                     "date": legacy["date"],
                     "verification": legacy["verification"],
                     "anchors": legacy["anchors"],
@@ -226,7 +233,7 @@ async def unified_read(db, store, environment, subject, endpoint, params, respon
                 if parent is None:
                     remaining.append(row)
                     continue
-                child = _historic(row)
+                child = _historic(row, attribution)
                 parent["replies"].append(child)
                 by_id[row["contribution_id"]] = child
             if len(remaining) == len(pending):

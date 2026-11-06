@@ -224,3 +224,18 @@ def test_source_timestamp_precision_is_not_invented():
         "utc": "2024-01-02T00:00:00.123456Z",
     }
     assert read(data)["contributions"][0]["date"]["original"].endswith(".123456Z")
+
+
+def test_snapshot_v3_requires_safe_public_attribution():
+    data = snapshot()
+    data["schema"] = "cartray.reviews.snapshot.v3"
+    data["source"]["public_attribution"] = "Example historical reviews"
+    for item in data["contributions"]:
+        item["title"] = None
+        item["date"]["source_local_raw"] = None
+        item["date"]["source_utc_raw"] = None
+    assert read(data)["source"]["public_attribution"] == "Example historical reviews"
+    for bad in ("private@example.invalid", "hello\nworld", "evil\u202elabel", "<script>"):
+        data["source"]["public_attribution"] = bad
+        with pytest.raises(SnapshotError, match="public source attribution"):
+            read(data)

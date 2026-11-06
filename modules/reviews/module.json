@@ -26,7 +26,8 @@
     "migrations/0014_unified_feed_index.sql",
     "migrations/0015_imported_titles.sql",
     "migrations/0016_snapshot_provenance.sql",
-    "migrations/0017_review_identity_links.sql"
+    "migrations/0017_review_identity_links.sql",
+    "migrations/0018_public_source_attribution.sql"
   ],
   "routes": [
     "GET /reviews/v1/subjects/{subject_id}/summary",

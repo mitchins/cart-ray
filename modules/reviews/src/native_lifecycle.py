@@ -1202,6 +1202,7 @@ async def native_read(db, store, environment, subject_id, endpoint, params, nati
         {
             "id": x["review_id"],
             "kind": "review",
+            "source": {"kind": "native", "attribution": None},
             "author": x["author"],
             "title": x["title"],
             "body": x["body"],

@@ -158,3 +158,15 @@ source, provisional mapping, draft, reconciliation report and review evidence
 by hash, uses a graph-specific source identity, and declares its environment as
 `test`. The original candidate remains incomplete. The tool verifies evidence
 bytes, not the reviewer's identity or authority; this is not production approval.
+
+The graph-scoped v3 test snapshot with the explicit label `Effective Policy
+legacy reviews` has SHA-256
+`ff9000e5b883899e0d2a735089daabb288f56574516031f2fbd2c08c03813c3e`.
+In disposable local D1 and Workerd it imported idempotently and returned all 17
+review roots and six replies, with 15 rated and two unrated roots. Public fields,
+timestamp objects, reply parentage and the explicit label matched the qualified
+test artifact; no captured source email or private source identity appeared in
+the responses. A synthetic native contribution on a provisional subject remained
+hidden while pending, changed the combined aggregate after approval, and was
+removed with the original aggregate restored on withdrawal. This is test-only
+evidence for the scoped graph, not production publication approval.

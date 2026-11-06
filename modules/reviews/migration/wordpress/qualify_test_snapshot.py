@@ -20,7 +20,9 @@ def digest(value):
     return hashlib.sha256(value).hexdigest()
 
 
-def qualify(raw, mapping_bytes, draft_bytes, report_bytes, evidence, attestation, *, expected_source, store):
+def qualify(
+    raw, mapping_bytes, draft_bytes, report_bytes, evidence, attestation, *, expected_source, store, public_attribution
+):
     """Recheck exact inputs and a human-reviewed test-only scope attestation."""
     if any(not isinstance(x, bytes) for x in (raw, mapping_bytes, draft_bytes, report_bytes, evidence)):
         raise ValueError("inputs must be bytes")
@@ -40,6 +42,7 @@ def qualify(raw, mapping_bytes, draft_bytes, report_bytes, evidence, attestation
         "draft_sha256": digest(draft_bytes),
         "report_sha256": digest(report_bytes),
         "review_evidence_sha256": digest(evidence),
+        "public_attribution": public_attribution,
         "store": store,
         "environment": "test",
     }
@@ -53,7 +56,9 @@ def qualify(raw, mapping_bytes, draft_bytes, report_bytes, evidence, attestation
     if reconcile(raw, draft, mapping, expected_source=expected_source, redact_source_emails=True) != report:
         raise ValueError("independent reconciliation mismatch")
     snapshot = draft["snapshot"]
+    snapshot["schema"] = "cartray.reviews.snapshot.v3"
     snapshot["source"]["identity"] = "wordpress-review-comment-graph:" + expected_source
+    snapshot["source"]["public_attribution"] = public_attribution
     snapshot["source"]["complete"] = True
     result = json.dumps(snapshot, ensure_ascii=True, sort_keys=True, separators=(",", ":")).encode()
     load_snapshot(result, expected_sha256=digest(result), store=store, environment="test")
@@ -66,6 +71,7 @@ def main():
         parser.add_argument("--" + name, type=Path, required=True)
     parser.add_argument("--expected-source", required=True)
     parser.add_argument("--store", required=True)
+    parser.add_argument("--public-attribution", required=True)
     parser.add_argument("--output-directory", type=Path, required=True)
     args = parser.parse_args()
 
@@ -86,7 +92,15 @@ def main():
     )
     attestation = json.loads(attestation, object_pairs_hook=_unique_pairs, parse_constant=_reject_constant)
     snapshot, receipt = qualify(
-        raw, mapping, draft, report, evidence, attestation, expected_source=args.expected_source, store=args.store
+        raw,
+        mapping,
+        draft,
+        report,
+        evidence,
+        attestation,
+        expected_source=args.expected_source,
+        store=args.store,
+        public_attribution=args.public_attribution,
     )
     args.output_directory.mkdir(mode=0o700, parents=False, exist_ok=False)
     for name, data in (("snapshot.json", snapshot), ("qualification.json", json.dumps(receipt, indent=2).encode())):

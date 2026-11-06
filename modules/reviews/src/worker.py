@@ -18,11 +18,14 @@ async def subject_sources(db, store, environment, subject_id):
     """Read both source memberships and versions in a single D1 statement."""
     return rows(
         await db.prepare(
-            "SELECT s.subject_id, s.snapshot_id, 0 native_version, 'imported' source_kind "
+            "SELECT s.subject_id, s.snapshot_id, 0 native_version, 'imported' source_kind, "
+            "COALESCE(info.public_attribution,'') source_attribution "
             "FROM review_snapshot_subjects s JOIN review_publications p "
             "ON p.store_key=s.store_key AND p.environment=s.environment AND p.snapshot_id=s.snapshot_id "
+            "LEFT JOIN review_snapshot_provenance info ON info.store_key=s.store_key "
+            "AND info.environment=s.environment AND info.snapshot_id=s.snapshot_id "
             "WHERE s.store_key=? AND s.environment=? AND s.subject_id=? UNION ALL "
-            "SELECT s.subject_id,'' snapshot_id,v.version native_version,'native' source_kind "
+            "SELECT s.subject_id,'' snapshot_id,v.version native_version,'native' source_kind,'' source_attribution "
             "FROM review_subjects s JOIN native_publication_versions v "
             "ON v.store_key=s.store_key AND v.environment=s.environment AND v.subject_id=s.subject_id "
             "WHERE s.store_key=? AND s.environment=? AND s.subject_id=? LIMIT 2"
@@ -40,11 +43,12 @@ async def publication_unchanged(db, store, environment, subject_id, expected):
     )
 
 
-def public_contribution(row):
+def public_contribution(row, attribution):
     """Construct an explicit public allowlist from a persisted contribution."""
     return {
         "id": row["contribution_id"],
         "kind": row["kind"],
+        "source": {"kind": "historical", "attribution": attribution or None},
         "author": row["author"],
         "body": row["body"],
         "title": row["public_title"],
@@ -189,7 +193,8 @@ class Default(WorkerEntrypoint):
         )
         if len(reply_rows) > 200:
             return Response.json({"error": "reply limit exceeded"}, status=503)
-        roots = [public_contribution(x) | {"replies": []} for x in result[:limit]]
+        attribution = subject[0]["source_attribution"]
+        roots = [public_contribution(x, attribution) | {"replies": []} for x in result[:limit]]
         by_id = {x["id"]: x for x in roots}
         pending = list(reply_rows)
         while pending:
@@ -199,7 +204,7 @@ class Default(WorkerEntrypoint):
                 if parent is None:
                     remaining.append(row)
                     continue
-                child = public_contribution(row) | {"replies": []}
+                child = public_contribution(row, attribution) | {"replies": []}
                 parent["replies"].append(child)
                 by_id[child["id"]] = child
             if len(remaining) == len(pending):

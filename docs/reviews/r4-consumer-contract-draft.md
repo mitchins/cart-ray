@@ -18,7 +18,13 @@ For an overlapping test subject, the summary contains `subject_id`, an opaque
 Unrated contributions count only in the latter. The contributions response has
 `subject_id`, `snapshot_id`, `contributions`, `next_after` and `has_more`.
 Source-prefixed IDs distinguish historical (`h-`) and native (`n-`) records;
-`source_id` retains the underlying identity. Imported entries retain their source
+`source_id` retains the underlying identity. Each contribution's `source` object
+contains `kind` (`historical` or `native`) and a nullable `attribution`. Snapshot
+v3 accepts an explicitly reviewed plain-text historical attribution; v1/v2
+snapshots return null rather than inventing a label. The private source-instance
+identity is retained for reconciliation and is not a public attribution. Linked
+native reviews carry their historical source label inside `historical_provenance`.
+Imported entries retain their source
 date object, title, legacy verification claim, approved fragment anchors, vote
 totals and nested replies. Native entries expose their creation time and may
 claim `cartray_verified_acquisition` only from native evidence. Public fields are

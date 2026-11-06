@@ -125,6 +125,11 @@ def main():
                 identity = item["id"]
                 require(identity in expected and identity not in observed, "unexpected public contribution")
                 original = expected[identity]
+                require(
+                    item.get("source")
+                    == {"kind": "historical", "attribution": snapshot["source"]["public_attribution"]},
+                    "public source attribution mismatch",
+                )
                 for field in ("author", "body", "title", "rating", "date", "verification", "anchors", "votes"):
                     require(item.get(field) == original.get(field), "public projection mismatch")
                 observed[identity] = item
@@ -153,6 +158,7 @@ def main():
             require(set(observed) == set(expected), "historical contribution coverage mismatch")
             joined = "\n".join(wire_text)
             require(not any(email in joined for email in emails), "source email leaked to public response")
+            require(snapshot["source"]["identity"].casefold() not in joined, "private source identity leaked")
             subject = subjects[args.exercise_subject]
             route = f"/reviews/v1/subjects/{subject['id']}/summary"
             before = call(route)[1]
@@ -203,6 +209,23 @@ def main():
                 after["contribution_count"] == before["contribution_count"] + 1
                 and after["rating"] == {"rated_count": rated + 1, "average": (prior * rated + 2) / (rated + 1)},
                 "combined aggregate mismatch",
+            )
+            mixed_page = call(listing_route)[1]
+            native_item = next(
+                (item for item in mixed_page["contributions"] if item["id"] == "n-" + review["review_id"]), None
+            )
+            require(
+                native_item is not None and native_item.get("source") == {"kind": "native", "attribution": None},
+                "native source attribution mismatch",
+            )
+            require(
+                all(
+                    item.get("source")
+                    == {"kind": "historical", "attribution": snapshot["source"]["public_attribution"]}
+                    for item in mixed_page["contributions"]
+                    if item["id"].startswith("h-")
+                ),
+                "mixed historical attribution mismatch",
             )
             status, _ = call(
                 "/reviews-admin/v1/contributions/" + review["review_id"] + "/withdraw",
