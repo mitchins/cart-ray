@@ -9,7 +9,8 @@ const escapeHtml = (value) => String(value).replaceAll('&', '&amp;').replaceAll(
 
 export function canonical(value) {
   if (Array.isArray(value)) return '[' + value.map(canonical).join(',') + ']';
-  if (value && typeof value === 'object') return '{' + Object.keys(value).sort().map((key) => JSON.stringify(key) + ':' + canonical(value[key])).join(',') + '}';
+  // Canonical hashes require deterministic UTF-16 code-unit ordering, not locale-dependent collation.
+  if (value && typeof value === 'object') return '{' + Object.keys(value).sort().map((key) => JSON.stringify(key) + ':' + canonical(value[key])).join(',') + '}'; // NOSONAR: locale-dependent sorting would change approved digests.
   return JSON.stringify(value);
 }
 export async function sha256(value) {
