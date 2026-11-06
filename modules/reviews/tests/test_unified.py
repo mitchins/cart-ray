@@ -375,5 +375,30 @@ def test_adjudicated_identity_link_preserves_reply_and_withdrawal(lifecycle, mon
     assert read("summary").body["contribution_count"] == 2
     public = json.dumps(read("contributions").body)
     assert "Updated" not in public and '"id": "h-r"' not in public and "reply-a" not in public
+    removed = json.loads(fixture)
+    removed["snapshot_id"], removed["publication_revision"] = "removed", 2
+    removed["contributions"] = [item for item in removed["contributions"] if item["id"] not in ("r", "a")]
+    removed["summaries"][0].update({"count": 1, "sum": 4, "histogram": [0, 0, 0, 1, 0]})
+    removed_bytes = json.dumps(removed).encode()
+    importer.import_snapshot(
+        removed_bytes, digest=hashlib.sha256(removed_bytes).hexdigest(), store="example-store", environment="test"
+    )
+    assert read("summary").body["rating"] == {"rated_count": 1, "average": 4}
+    assert '"id": "h-r"' not in json.dumps(read("contributions").body)
+    for parent, kind in (("u", "reply"), (None, "review")):
+        reappearing = json.loads(json.dumps(removed))
+        reappearing["snapshot_id"], reappearing["publication_revision"] = "reappearing", 3
+        old_reply = next(item for item in json.loads(fixture)["contributions"] if item["id"] == "a")
+        old_reply["parent_id"], old_reply["kind"] = parent, kind
+        reappearing["contributions"].append(old_reply)
+        reappearing_bytes = json.dumps(reappearing).encode()
+        with pytest.raises(Exception):
+            importer.import_snapshot(
+                reappearing_bytes,
+                digest=hashlib.sha256(reappearing_bytes).hexdigest(),
+                store="example-store",
+                environment="test",
+            )
+        assert db.db.execute("SELECT snapshot_id FROM review_publications").fetchone()[0] == "removed"
     with pytest.raises(Exception):
         db.db.execute("DELETE FROM review_identity_links")

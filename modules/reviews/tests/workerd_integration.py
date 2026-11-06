@@ -385,6 +385,61 @@ def main():
             )
             withdrawn = json.loads(request("contributions")[1])["contributions"]
             assert all(item["id"] not in ("n-native-one", "h-r") for item in withdrawn)
+            removed = json.loads(FIXTURE.read_bytes())
+            removed["snapshot_id"], removed["publication_revision"] = "removed", 2
+            removed["contributions"] = [item for item in removed["contributions"] if item["id"] not in ("r", "a")]
+            removed["summaries"][0].update({"count": 1, "sum": 4, "histogram": [0, 0, 0, 1, 0]})
+            removed_file = Path(directory) / "removed.json"
+            removed_file.write_text(json.dumps(removed))
+            subprocess.run(
+                [
+                    sys.executable,
+                    str(MODULE / "tools/import_snapshot.py"),
+                    str(removed_file),
+                    "--sha256",
+                    hashlib.sha256(removed_file.read_bytes()).hexdigest(),
+                    "--store",
+                    "example-store",
+                    "--environment",
+                    "test",
+                ],
+                env=env,
+                cwd=ROOT,
+                check=True,
+                capture_output=True,
+            )
+            final_summary = json.loads(request("summary")[1])
+            assert final_summary["contribution_count"] == 2
+            assert final_summary["rating"] == {"average": 4, "rated_count": 1}
+            assert all(
+                item["id"] not in ("n-native-one", "h-r")
+                for item in json.loads(request("contributions")[1])["contributions"]
+            )
+            reappearing = json.loads(json.dumps(removed))
+            reappearing["snapshot_id"], reappearing["publication_revision"] = "reappearing", 3
+            old_reply = next(item for item in json.loads(FIXTURE.read_bytes())["contributions"] if item["id"] == "a")
+            old_reply["parent_id"] = "u"
+            reappearing["contributions"].append(old_reply)
+            reappearing_file = Path(directory) / "reappearing.json"
+            reappearing_file.write_text(json.dumps(reappearing))
+            denied = subprocess.run(
+                [
+                    sys.executable,
+                    str(MODULE / "tools/import_snapshot.py"),
+                    str(reappearing_file),
+                    "--sha256",
+                    hashlib.sha256(reappearing_file.read_bytes()).hexdigest(),
+                    "--store",
+                    "example-store",
+                    "--environment",
+                    "test",
+                ],
+                env=env,
+                cwd=ROOT,
+                capture_output=True,
+            )
+            assert denied.returncode != 0
+            assert json.loads(request("summary")[1])["snapshot_id"] == final_summary["snapshot_id"]
             print("Workerd combined summary:", json.dumps(combined))
             print("Workerd summary:", json.dumps(summary))
             print("Workerd list: three reviews, one unrated, one attached reply")

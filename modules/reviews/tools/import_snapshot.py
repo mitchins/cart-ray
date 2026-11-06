@@ -108,12 +108,16 @@ def import_snapshot(data, *, digest, store, environment):
         if title is not None:
             values = (store, environment, sid, item["id"], title)
             lines.append("INSERT OR IGNORE INTO review_import_titles VALUES (" + ",".join(map(literal, values)) + ");")
-    # Until linked historical provenance is stored independently, never promote
-    # a snapshot that removes or changes a linked root or one of its replies.
+    # Preserve linked history while its native review can still be published.
+    # A withdrawn native review is a permanent tombstone, so its old source
+    # root and descendants may then be removed from a newer snapshot.
     lines.append(
         "INSERT INTO review_import_guard WITH RECURSIVE keep(id) AS ("
         "SELECT l.source_contribution_id FROM review_identity_links l "
         f"WHERE l.store_key={st} AND l.environment={env} AND l.source_identity={literal(source['identity'])} "
+        "AND NOT EXISTS(SELECT 1 FROM native_reviews n WHERE n.store_key=l.store_key "
+        "AND n.environment=l.environment AND n.review_id=l.native_review_id "
+        "AND n.subject_id=l.subject_id AND n.state='withdrawn') "
         "UNION SELECT c.contribution_id FROM review_contributions c JOIN keep k ON c.parent_id=k.id "
         "JOIN review_publications p ON p.store_key=c.store_key AND p.environment=c.environment "
         "AND p.snapshot_id=c.snapshot_id "
@@ -133,6 +137,30 @@ def import_snapshot(data, *, digest, store, environment):
         "AND snapshot_id=old.snapshot_id AND contribution_id=old.contribution_id) IS NOT "
         "(SELECT title FROM review_import_titles WHERE store_key=new.store_key AND environment=new.environment "
         "AND snapshot_id=new.snapshot_id AND contribution_id=new.contribution_id)) THEN 1 ELSE 0 END;"
+    )
+    # A withdrawn root suppresses all descendants, even across later snapshots.
+    # Search every retained snapshot for that source instance so omission cannot
+    # erase ancestry and permit a reply to reappear under another parent.
+    lines.append(
+        "INSERT INTO review_import_guard WITH RECURSIVE hidden(id) AS ("
+        "SELECT c.contribution_id FROM review_identity_links l JOIN native_reviews n "
+        "ON n.store_key=l.store_key AND n.environment=l.environment AND n.review_id=l.native_review_id "
+        "AND n.subject_id=l.subject_id AND n.state='withdrawn' "
+        "JOIN review_snapshot_provenance p ON p.store_key=l.store_key AND p.environment=l.environment "
+        "AND p.source_identity=l.source_identity "
+        "JOIN review_contributions c ON c.store_key=p.store_key AND c.environment=p.environment "
+        "AND c.snapshot_id=p.snapshot_id AND c.subject_id=l.subject_id AND c.parent_id=l.source_contribution_id "
+        f"WHERE l.store_key={st} AND l.environment={env} AND l.source_identity={literal(source['identity'])} "
+        "UNION SELECT c.contribution_id FROM hidden h JOIN review_contributions c ON c.parent_id=h.id "
+        "JOIN review_snapshot_provenance p ON p.store_key=c.store_key AND p.environment=c.environment "
+        "AND p.snapshot_id=c.snapshot_id "
+        f"WHERE c.store_key={st} AND c.environment={env} AND p.source_identity={literal(source['identity'])}) "
+        "SELECT CASE WHEN NOT EXISTS(SELECT 1 FROM hidden h JOIN review_contributions c "
+        "ON c.contribution_id=h.id "
+        f"WHERE c.store_key={st} AND c.environment={env} AND c.snapshot_id={snapshot_key} "
+        "AND NOT EXISTS(SELECT 1 FROM review_publications current "
+        f"WHERE current.store_key={st} AND current.environment={env} AND current.snapshot_id={snapshot_key})) "
+        "THEN 1 ELSE 0 END;"
     )
     lines += [
         f"INSERT INTO review_publications VALUES ({scoped},{rev}) ON CONFLICT(store_key,environment) "

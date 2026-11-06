@@ -55,8 +55,14 @@ approved native revision without heuristics. The immutable link suppresses the
 old root, preserves its anchors, source-date and verification attribution plus
 historical replies, and prevents withdrawal from resurrecting it. The linked
 native review controls visibility. Snapshot promotion fails closed if it would
-remove or change linked historical content or its descendants. This conservative
-rule needs an explicit withdrawal and correction workflow before production.
+remove or change linked historical content or its descendants while the native
+review can still be published. After native withdrawal, a newer snapshot may
+omit that history; the immutable link remains as a tombstone. The current
+implementation also relies on retained historical snapshots, provenance and
+contributions to recognize withdrawn descendants across later imports. Do not
+garbage-collect that ancestry until descendant tombstones have been persisted
+independently and qualified. Reviewed source corrections and the operational
+withdrawal workflow still require qualification.
 
 Before this contract is qualified, validate reconciliation completeness and
 approval, expose appropriately scoped source attribution, resolve source
