@@ -160,3 +160,40 @@ def test_v2_import_preserves_title_and_source_provenance(monkeypatch):
         db.db.execute("SELECT source_date FROM review_contributions WHERE contribution_id='r'").fetchone()[0]
     )
     assert date["source_local_raw"] == "2024-01-02 11:00:00"
+
+
+def test_source_id_collision_and_same_day_pagination(monkeypatch):
+    db = Database()
+
+    def execute(_flag, filename):
+        db.db.executescript("BEGIN;\n" + Path(filename).read_text() + "\nCOMMIT;")
+
+    monkeypatch.setattr(importer, "execute", execute)
+    fixture = (MODULE / "tests/fixtures/approved-synthetic.json").read_bytes()
+    importer.import_snapshot(
+        fixture, digest=hashlib.sha256(fixture).hexdigest(), store="example-store", environment="test"
+    )
+    db.db.execute("INSERT INTO review_subjects VALUES ('example-store','test','example-policy','product','/product/')")
+    db.db.execute("INSERT INTO native_publication_versions VALUES ('example-store','test','example-policy',1,1,1,3)")
+    db.db.execute(
+        "INSERT INTO native_reviews VALUES ('example-store','test','r','example-policy','private',"
+        "'published','revision-r',1704153600)"
+    )
+    db.db.execute(
+        "INSERT INTO native_revisions VALUES ('example-store','test','revision-r','r','Native',NULL,'text',3)"
+    )
+
+    def read(params):
+        return asyncio.run(
+            unified_read(db, "example-store", "test", "example-policy", "contributions", params, TestResponse)
+        )
+
+    params, found = {"limit": ["1"]}, []
+    while True:
+        page = read(params).body
+        found.extend(page["contributions"])
+        if not page["has_more"]:
+            break
+        params = {"limit": ["1"], "after": [page["next_after"]], "snapshot": [page["snapshot_id"]]}
+    assert [item["id"] for item in found] == ["h-u", "h-r", "h-r2", "n-r"]
+    assert found[1]["replies"][0]["id"] == "h-a"

@@ -107,7 +107,8 @@ async def unified_read(db, store, environment, subject, endpoint, params, respon
         # is paged in SQL using the cursor's day and source-qualified identity.
         historic = await _query(
             db,
-            "SELECT contribution_id,parent_id,kind,author,body,rating,source_date,verification,anchors_json,"
+            "SELECT contribution_id,COALESCE(parent_id,'') parent_id,kind,author,body,rating,source_date,"
+            "verification,anchors_json,"
             "votes_json,COALESCE(sort_day,'') day, (SELECT t.title FROM review_import_titles t "
             "WHERE t.store_key=review_contributions.store_key AND t.environment=review_contributions.environment "
             "AND t.snapshot_id=review_contributions.snapshot_id "
@@ -121,7 +122,7 @@ async def unified_read(db, store, environment, subject, endpoint, params, respon
         cursor_day = None
         if after and after.startswith("h-"):
             cursor_day = next(
-                (r["day"] for r in historic if r["parent_id"] is None and "h-" + r["contribution_id"] == after), None
+                (r["day"] for r in historic if not r["parent_id"] and "h-" + r["contribution_id"] == after), None
             )
         elif after:
             found = await _query(
@@ -160,7 +161,7 @@ async def unified_read(db, store, environment, subject, endpoint, params, respon
         )
         roots = []
         for row in historic:
-            if row["parent_id"] is None:
+            if not row["parent_id"]:
                 item = _historic(row)
                 if cursor_day is None or row["day"] < cursor_day or (row["day"] == cursor_day and item["id"] > after):
                     roots.append((row["day"], item))
@@ -186,7 +187,7 @@ async def unified_read(db, store, environment, subject, endpoint, params, respon
         roots.sort(key=lambda pair: pair[0], reverse=True)
         items = [item for _, item in roots[:limit]]
         by_id = {item["source_id"]: item for item in items if item["id"].startswith("h-")}
-        pending = [row for row in historic if row["parent_id"] is not None]
+        pending = [row for row in historic if row["parent_id"]]
         while pending:
             remaining = []
             for row in pending:

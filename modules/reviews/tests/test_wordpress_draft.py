@@ -49,6 +49,7 @@ def test_incomplete_draft_excludes_private_source_and_requires_explicit_mapping(
     )
     result = result["snapshot"]
     assert result["source"]["complete"] is False
+    assert result["source"]["identity"] == "wordpress:https://example.invalid"
     assert result["contributions"][0]["title"] == "Title"
     assert result["contributions"][0]["date"]["source_local_raw"] == "2024-01-02 11:00:00"
     assert "private-canary" not in json.dumps(result)

@@ -152,7 +152,7 @@ def build_draft(raw: bytes, mapping: dict, *, store: str, environment: str, expe
         "store": store,
         "environment": environment,
         "source": {
-            "identity": "wordpress-review-candidate",
+            "identity": "wordpress:" + expected_source,
             "extracted_at": source["captured_utc"],
             "sha256": digest,
             "complete": False,
