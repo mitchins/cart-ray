@@ -32,6 +32,7 @@ from cartray.stripe import CheckoutMetadataSealer, CheckoutMetadataVerifier
 ISSUER = "synthetic-settlement-issuer-token-0123456789"
 CONSENT_SECRET = "e" * 40
 DELIVERY_TOKEN = "f" * 40
+AUTOMATION_TOKEN = "automation-synthetic-issuer-token-0123456789"
 
 
 def synthetic_settlement(sql_path):
@@ -85,6 +86,11 @@ def synthetic_settlement(sql_path):
     tables = ("orders", "order_items", "stripe_events", "checkout_sessions")
     inserts = [line for table in tables for line in dumps if line.startswith(f'INSERT INTO "{table}"')]
     assert len(inserts) == 9
+    confirmed_outbox = [
+        line for line in dumps if line.startswith('INSERT INTO "outbox"') and "'OrderConfirmed'" in line
+    ]
+    assert len(confirmed_outbox) == 2
+    inserts.extend(confirmed_outbox)
     sql_path.write_text("\n".join(inserts) + "\n")
     return catalogue.version, events, orders
 
@@ -144,6 +150,36 @@ def main():
             cwd=ROOT,
             check=True,
         )
+        outbox_result = subprocess.run(
+            [
+                wrangler,
+                "d1",
+                "execute",
+                "cartray-acquisition-local-test",
+                *common,
+                "--json",
+                "--command",
+                "SELECT id FROM outbox WHERE event_type='OrderConfirmed' ORDER BY id LIMIT 1",
+            ],
+            cwd=ROOT,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        outbox_id = json.loads(outbox_result.stdout)[0]["results"][0]["id"]
+        subprocess.run(
+            [
+                wrangler,
+                "d1",
+                "execute",
+                "cartray-reviews-local-test",
+                *common,
+                "--command",
+                "INSERT INTO review_automation_activation VALUES('example-store','test',1,0,3600,86400,'test-v1')",
+            ],
+            cwd=ROOT,
+            check=True,
+        )
         recipients = ("buyer@example.test", "second@example.test")
         trusted_recipients = dict(zip(order_ids, recipients, strict=True))
         recipient_hashes = [hashlib.sha256(recipient.encode()).hexdigest() for recipient in recipients]
@@ -158,6 +194,8 @@ def main():
                 "REVIEWS_REVIEWER_KEY": "r" * 40,
                 "REVIEWS_CONSENT_SECRET": CONSENT_SECRET,
                 "REVIEWS_DELIVERY_TOKEN": DELIVERY_TOKEN,
+                "REVIEWS_AUTOMATION_INTAKE": "test",
+                "REVIEWS_AUTOMATION_INGRESS_TOKEN": AUTOMATION_TOKEN,
                 "REVIEWS_PUBLIC_STORE_NAME": "Example Store",
                 "REVIEWS_RECOVERY_MODE": "manual_test",
                 "REVIEWS_SUBJECT_MAPS": json.dumps(
@@ -167,6 +205,54 @@ def main():
             },
         )
         try:
+            intake_path = "/reviews-internal/v1/automation-intake"
+            assert internal(intake_path, {"outbox_id": outbox_id}, ISSUER)[0] == 401
+            with ThreadPoolExecutor(max_workers=4) as pool:
+                results = list(
+                    pool.map(lambda _: internal(intake_path, {"outbox_id": outbox_id}, AUTOMATION_TOKEN), range(4))
+                )
+            assert all(status == 200 and body["status"] == "accepted" for status, body in results)
+            intake_counts = subprocess.run(
+                [
+                    wrangler,
+                    "d1",
+                    "execute",
+                    "cartray-reviews-local-test",
+                    *common,
+                    "--json",
+                    "--command",
+                    "SELECT (SELECT COUNT(*) FROM review_automation_intake) AS acknowledgements, "
+                    "(SELECT COUNT(*) FROM review_automation_intents "
+                    "WHERE state='held_eligibility_recipient_consent') AS intents, "
+                    "(SELECT COUNT(*) FROM invitation_generations) AS generations",
+                ],
+                cwd=ROOT,
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            assert json.loads(intake_counts.stdout)[0]["results"][0] == {
+                "acknowledgements": 1,
+                "intents": 1,
+                "generations": 0,
+            }
+            checkout_ack = subprocess.run(
+                [
+                    wrangler,
+                    "d1",
+                    "execute",
+                    "cartray-acquisition-local-test",
+                    *common,
+                    "--json",
+                    "--command",
+                    f"SELECT delivered_at FROM outbox WHERE id={outbox_id}",
+                ],
+                cwd=ROOT,
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            assert json.loads(checkout_ack.stdout)[0]["results"][0]["delivered_at"] is None
             subject = {"subject_id": "example-policy", "kind": "product", "path": "/example-policy/"}
             assert call("/reviews-admin/v1/subjects", subject, admin=True)[0] == 201
             assert (
