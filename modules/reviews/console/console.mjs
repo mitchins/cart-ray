@@ -14,12 +14,16 @@ function history(item) {
   section.append(element('h4', 'Review history'));
   for (const kind of ['revisions', 'audit']) {
     const group = element('div', '', 'history-group'), results = element('div', '');
+    results.setAttribute('tabindex', '-1');
+    results.setAttribute('role', 'region');
+    results.setAttribute('aria-label', `${kind === 'revisions' ? 'Revision history' : 'Audit history'} for ${item.title || 'customer feedback'}`);
     const button = element('button', kind === 'revisions' ? 'Show revisions' : 'Show audit history'); button.type = 'button';
     button.setAttribute('aria-label', `${button.textContent}: ${item.title || 'customer feedback'} for ${item.subject_name || item.subject_id}`);
     let after = null, started = false;
     button.addEventListener('click', async () => {
       if (loading) return;
       busy(true); button.disabled = true; message();
+      let finished = false;
       try {
         const page = await client.history(item.review_id, kind, after);
         if (!started && !page.records.length) results.append(element('p', `No ${kind} found.`));
@@ -36,10 +40,11 @@ function history(item) {
           }
           results.append(line);
         }
-        started = true; after = page.next_after; button.hidden = !after;
+        started = true; after = page.next_after; button.hidden = !after; finished = !after;
         if (after) button.textContent = kind === 'revisions' ? 'Load more revisions' : 'Load more audit history';
+        status.textContent = `Loaded ${page.records.length} ${kind === 'revisions' ? 'revision' : 'audit'} record${page.records.length === 1 ? '' : 's'}.${finished ? ' No more records.' : ''}`;
       } catch (e) { message(friendly(e)); }
-      finally { button.disabled = false; busy(false); }
+      finally { button.disabled = false; busy(false); (finished ? results : button).focus(); }
     });
     group.append(button, results); section.append(group);
   }
@@ -99,10 +104,12 @@ async function load(replace) {
     description.textContent = mode === 'pending' ? 'Approve feedback to publish it, or reject it to keep it private.' : 'Review published feedback and withdraw it when needed.';
     shownMode = mode;
     status.textContent = records.length ? `Loaded ${records.length} review${records.length === 1 ? '' : 's'}.` : 'List is up to date.';
+    if (!replace && !cursor) queue.focus();
   } catch (e) { view.value = shownMode; message(friendly(e)); }
   finally { busy(false); }
 }
-refresh.addEventListener('click', () => load(true));
-more.addEventListener('click', () => load(false));
-view.addEventListener('change', () => load(true));
-load(true);
+function startLoad(replace) { return load(replace).catch((e) => message(friendly(e))); }
+refresh.addEventListener('click', () => startLoad(true));
+more.addEventListener('click', () => startLoad(false));
+view.addEventListener('change', () => startLoad(true));
+await startLoad(true);

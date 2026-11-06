@@ -16,7 +16,7 @@
       <select id="view"><option value="pending">Awaiting review</option><option value="published">Published</option></select>
       <p id="status" role="status" aria-live="polite"></p>
       <p id="error" role="alert" hidden></p>
-      <div id="queue" aria-busy="true"></div>
+      <div id="queue" role="region" aria-labelledby="queue-title" tabindex="-1" aria-busy="true"></div>
       <button id="more" type="button" hidden>Load more reviews</button>
     </section>
     <aside aria-labelledby="scope-title"><h2 id="scope-title">Other operations</h2><p>Staff replies and delivery reconciliation are not yet available in this test console.</p></aside>

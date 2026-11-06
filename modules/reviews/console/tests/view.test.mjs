@@ -46,11 +46,33 @@ test('review text is rendered as text, decisions use revisions, and a failed ref
     nodes.view.value = 'published'; await nodes.view.change();
     const published = nodes.queue.children[0]; assert.equal(published.children[1].textContent, 'Product: Example product');
     await published.children[6].children[1].children[0].click();
-    assert.equal(published.children[6].children[1].children[1].children[0].children[1].textContent, '<img>');
+    const revisionResults = published.children[6].children[1].children[1];
+    assert.equal(revisionResults.children[0].children[1].textContent, '<img>');
+    assert.equal(globalThis.lastFocused, revisionResults);
+    assert.equal(revisionResults.role, 'region'); assert.match(revisionResults['aria-label'], /Revision history/);
+    assert.match(nodes.status.textContent, /No more records/);
     await published.children[6].children[2].children[0].click();
-    assert.match(published.children[6].children[2].children[1].children[0].children[0].textContent, /staff:example/);
+    const auditResults = published.children[6].children[2].children[1];
+    assert.match(auditResults.children[0].children[0].textContent, /staff:example/);
+    assert.equal(globalThis.lastFocused, auditResults);
     await published.children[4].children[0].click(); await published.children[5].children[1].click();
     assert.match(sent[0], /\/withdraw$/); assert.deepEqual(JSON.parse(sent[1].body), { revision_id: revision });
     assert.match(nodes.status.textContent, /withdrawn/);
+  } finally { delete globalThis.document; delete globalThis.fetch; delete globalThis.lastFocused; }
+});
+test('finishing queue pagination preserves content and moves focus into the labeled queue', async () => {
+  const nodes = Object.fromEntries(['queue', 'status', 'error', 'refresh', 'more', 'view', 'queue-title', 'queue-description'].map((name) => [name, new Element(name)]));
+  nodes.view.value = 'pending';
+  globalThis.document = { querySelector: (s) => nodes[s.slice(1)], createElement: (name) => new Element(name) };
+  globalThis.fetch = async (url) => url.includes('?after=')
+    ? Response.json({ pending: [], next_after: null })
+    : Response.json({ pending: [{ review_id: id, revision_id: revision, subject_id: 'product', title: null, author: '', rating: null, body: 'Text' }], next_after: id });
+  try {
+    await import('../console.mjs?pagination-test');
+    assert.equal(nodes.more.hidden, false);
+    const card = nodes.queue.children[0];
+    await nodes.more.click();
+    assert.equal(nodes.queue.children[0], card); assert.equal(nodes.more.hidden, true);
+    assert.equal(globalThis.lastFocused, nodes.queue);
   } finally { delete globalThis.document; delete globalThis.fetch; delete globalThis.lastFocused; }
 });
