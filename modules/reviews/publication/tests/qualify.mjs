@@ -50,8 +50,15 @@ if (control) {
 const laterDigest = await sha256(canonical({ projection, media: [], canonical_origin: 'https://example.invalid', source_origin: new URL(sourceOrigin).origin, source_scope: 'example-store:test' }));
 const later = await post('/__test/publish', { projection: input, media: [], approved_sha256: laterDigest });
 assert.equal(later.status, 200, await later.clone().text());
+if (control) {
+  await fetch(new URL('/__test/off', control), { method: 'POST' });
+  assert.equal((await fetch(new URL('/publication/html', base))).status, 503);
+  await fetch(new URL('/__test/on', control), { method: 'POST' });
+}
+const beforeWithdraw = await (await post('/__test/state', {})).json();
+if (control) assert.equal(beforeWithdraw.state, 'safe');
 const start = performance.now();
-const withdrawn = await post('/__test/withdraw', { expected_digest: laterDigest, record_id: root.id });
+const withdrawn = await post('/__test/withdraw', { expected_digest: laterDigest, expected_epoch: beforeWithdraw.epoch, record_id: root.id });
 assert.equal(withdrawn.status, 200, await withdrawn.clone().text());
 const ack = performance.now();
 const checks = await Promise.all(Array.from({ length: 5 }, async (_, iteration) => Promise.all(paths.map(async (path) => {
@@ -62,5 +69,7 @@ const checks = await Promise.all(Array.from({ length: 5 }, async (_, iteration) 
 assert.equal(checks.length, 5);
 const replay = await post('/__test/publish', payload); assert.equal(replay.status, 409, 'withdrawn content must not be republished');
 const safeState = await (await post('/__test/state', {})).json();
-assert.equal((await post('/__test/recover', { approved_sha256: laterDigest, expected_epoch: safeState.epoch })).status, 409, 'withdrawn content must not be recovered');
+const deniedRecovery = await post('/__test/recover', { approved_sha256: laterDigest, expected_epoch: safeState.epoch });
+assert.equal(deniedRecovery.status, 409, 'withdrawn content must not be recovered');
+assert.match(await deniedRecovery.text(), /content withdrawn/, 'recovery must fail on tombstones, not source availability');
 console.log(JSON.stringify({ synthetic: true, approved_digest: approved, withdrawn_digest: laterDigest, media_digest: mediaSha, rated_count: 2, contribution_count: 3, withdraw_ack_ms: Math.round(ack - start), post_withdraw_15_reads_ms: Math.round(performance.now() - ack), old_publication_rejected: true, outage_recovery_tested: Boolean(control) }));

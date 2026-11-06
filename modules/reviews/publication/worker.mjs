@@ -85,21 +85,20 @@ async function publish(db, payload, origin, env) {
   }
   return Response.json({ digest, source_snapshot: projection.source_snapshot }, { headers: noStore });
 }
-async function withdraw(db, expectedDigest, recordId) {
-  if (!HEX.test(expectedDigest || '') || typeof recordId !== 'string') return fail(400);
-  const row = await db.withSession('first-primary').prepare("SELECT g.digest,g.state,a.projection,a.media FROM publication_gate g JOIN publication_artifacts a ON a.digest=g.digest WHERE g.singleton=1").first();
-  if (!row || row.digest !== expectedDigest) return fail(409, 'publication changed');
-  if (row.state !== 'active') return fail(409, 'publication already safe');
+async function withdraw(db, expectedDigest, recordId, expectedEpoch) {
+  if (!HEX.test(expectedDigest || '') || typeof recordId !== 'string' || !Number.isSafeInteger(expectedEpoch)) return fail(400);
+  const row = await db.withSession('first-primary').prepare("SELECT g.digest,g.state,g.epoch,a.projection,a.media FROM publication_gate g JOIN publication_artifacts a ON a.digest=g.digest WHERE g.singleton=1").first();
+  if (!row || row.digest !== expectedDigest || row.epoch !== expectedEpoch) return fail(409, 'publication changed');
   const projection = JSON.parse(row.projection);
   const root = projection.reviews.find((item) => item.id === recordId);
   if (!root) return fail(404);
   const lineage = flattenLineage([root]);
   const statements = [
-    db.prepare("INSERT OR IGNORE INTO publication_retired(digest) SELECT ? WHERE EXISTS (SELECT 1 FROM publication_gate WHERE singleton=1 AND digest=? AND state='active')").bind(expectedDigest, expectedDigest),
-    db.prepare("INSERT OR IGNORE INTO publication_tombstones(record_id) SELECT j.value FROM json_each(?) j WHERE EXISTS (SELECT 1 FROM publication_gate WHERE singleton=1 AND digest=? AND state='active')").bind(JSON.stringify(lineage), expectedDigest),
-    db.prepare("INSERT OR IGNORE INTO publication_media_tombstones(media_sha256) SELECT DISTINCT json_extract(m.value,'$.sha256') FROM publication_artifacts a, json_each(a.media) m, json_each(json_extract(m.value,'$.lineage')) l JOIN json_each(?) targets ON targets.value=l.value WHERE EXISTS (SELECT 1 FROM publication_gate WHERE singleton=1 AND digest=? AND state='active')").bind(JSON.stringify(lineage), expectedDigest)
+    db.prepare("INSERT OR IGNORE INTO publication_retired(digest) SELECT ? WHERE EXISTS (SELECT 1 FROM publication_gate WHERE singleton=1 AND digest=? AND epoch=?)").bind(expectedDigest, expectedDigest, expectedEpoch),
+    db.prepare("INSERT OR IGNORE INTO publication_tombstones(record_id) SELECT j.value FROM json_each(?) j WHERE EXISTS (SELECT 1 FROM publication_gate WHERE singleton=1 AND digest=? AND epoch=?)").bind(JSON.stringify(lineage), expectedDigest, expectedEpoch),
+    db.prepare("INSERT OR IGNORE INTO publication_media_tombstones(media_sha256) SELECT DISTINCT json_extract(m.value,'$.sha256') FROM publication_artifacts a, json_each(a.media) m, json_each(json_extract(m.value,'$.lineage')) l JOIN json_each(?) targets ON targets.value=l.value WHERE EXISTS (SELECT 1 FROM publication_gate WHERE singleton=1 AND digest=? AND epoch=?)").bind(JSON.stringify(lineage), expectedDigest, expectedEpoch)
   ];
-  statements.push(db.prepare("UPDATE publication_gate SET state='safe',epoch=epoch+1 WHERE singleton=1 AND digest=? AND state='active'").bind(expectedDigest));
+  statements.push(db.prepare("UPDATE publication_gate SET state='safe',epoch=epoch+1 WHERE singleton=1 AND digest=? AND epoch=?").bind(expectedDigest, expectedEpoch));
   const result = await db.batch(statements);
   return result.at(-1).meta.changes ? Response.json({ state: 'safe' }, { headers: noStore }) : fail(409, 'publication changed');
 }
@@ -182,7 +181,7 @@ export default {
           return Response.json(state || {}, { headers: noStore });
         }
         if (url.pathname === '/__test/publish') return await publish(db, payload, env.PUBLICATION_CANONICAL_ORIGIN, env);
-        if (url.pathname === '/__test/withdraw') return await withdraw(db, payload.expected_digest, payload.record_id);
+        if (url.pathname === '/__test/withdraw') return await withdraw(db, payload.expected_digest, payload.record_id, payload.expected_epoch);
         if (url.pathname === '/__test/recover') return await recover(db, payload, env);
         return fail(404);
       } catch { return fail(400, 'invalid request'); }

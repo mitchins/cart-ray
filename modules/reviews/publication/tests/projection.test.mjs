@@ -39,3 +39,21 @@ test('service subjects produce no product schema and unsafe canonical origins ar
   assert.equal(renderPublication(normalizeProjection(value), 'https://store.example').jsonld, '');
   assert.throws(() => renderPublication(normalizeProjection(value), 'https://user:secret@store.example'));
 });
+
+test('canonical lineage survives raw and unified identifiers and linked historical records', () => {
+  const a = input(); const nativeId = 'a'.repeat(64);
+  const mixed = normalizeProjection(a).reviews[1];
+  a.pages[0].contributions[1].id = nativeId;
+  delete a.pages[0].contributions[1].source_id;
+  const raw = normalizeProjection(a).reviews[1];
+  assert.deepEqual(raw.lineage, mixed.lineage);
+  const linked = input();
+  linked.pages[0].contributions[1].historical_provenance = { source_id: 'old-record', date: { original: '2020-01-01', precision: 'date', timezone_provenance: 'unknown', utc: null }, verification: 'legacy_woo_verified_assertion', votes: { up: null, down: null, net: 2 }, anchors: ['legacy-anchor'], source: { kind: 'historical', attribution: 'Previous provider' } };
+  const item = normalizeProjection(linked).reviews[1];
+  assert.deepEqual(item.lineage, [`native:${nativeId}`, 'historical:old-record']);
+  assert.equal(item.date.original, '2020-01-01');
+  assert.equal(item.votes.net, 2);
+  assert.match(renderPublication(normalizeProjection(linked), 'https://store.example').html, /Previous provider/);
+  linked.pages[0].contributions[0].id = 'old-record';
+  assert.throws(() => normalizeProjection(linked), /duplicate source identity/);
+});
