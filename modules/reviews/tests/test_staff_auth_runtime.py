@@ -63,6 +63,7 @@ def test_actor_authentication_policy_and_fallback(lifecycle):
     "overrides",
     [
         {"REVIEWS_STAFF_POLICY": "{"},
+        {"REVIEWS_STAFF_POLICY": '{"x":' + "[" * 1100 + "0" + "]" * 1100 + "}"},
         {"REVIEWS_STAFF_POLICY": '{"a":1,"a":2}'},
         {"REVIEWS_STAFF_POLICY": "x" * 16385},
         {"REVIEWS_STAFF_POLICY": "[]"},

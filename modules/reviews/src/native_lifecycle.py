@@ -192,7 +192,7 @@ async def staff_actor(request, env, permission):
             load_jwks=load_jwks,
         )
         return identity["actor_id"]
-    except (StaffAuthenticationError, ValueError, TypeError, AttributeError):
+    except (StaffAuthenticationError, ValueError, TypeError, AttributeError, RecursionError):
         return None
 
 

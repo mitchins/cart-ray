@@ -44,7 +44,7 @@ def _object(data):
 
     try:
         value = json.loads(data, object_pairs_hook=unique, parse_constant=lambda _: (_ for _ in ()).throw(ValueError()))
-    except (UnicodeError, ValueError, TypeError) as exc:
+    except (UnicodeError, ValueError, TypeError, RecursionError) as exc:
         raise StaffAuthenticationError("invalid assertion") from exc
     if not isinstance(value, dict):
         raise StaffAuthenticationError("invalid assertion")

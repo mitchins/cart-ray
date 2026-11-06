@@ -123,6 +123,13 @@ def test_malformed_or_ambiguous_assertions_are_rejected(assertion):
         authenticate(assertion, policy={"staff-1": ["reviews:moderate"]})
 
 
+def test_deeply_nested_claims_fail_closed():
+    header = encode(b'{"alg":"RS256","kid":"key-1"}')
+    claims = encode(b'{"nested":' + b"[" * 1100 + b"0" + b"]" * 1100 + b"}")
+    with pytest.raises(StaffAuthenticationError):
+        authenticate(header + "." + claims + ".eA", policy={"staff-1": ["reviews:moderate"]})
+
+
 @pytest.mark.parametrize(
     "issuer",
     [
