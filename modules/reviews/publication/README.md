@@ -15,7 +15,7 @@ versions, incomplete pages, duplicate identities, bad aggregates and oversized
 sets. It retains public dates and their provenance, review identity lineage,
 replies, verification claims, votes and anchors. The digest covers the canonical
 normalized projection, canonical storefront origin, source Worker origin,
-source scope, and media bytes and ownership. An independently supplied digest
+source scope, exact rendered HTML and JSON-LD bytes, and media bytes and ownership. An independently supplied digest
 must match before promotion. The Worker re-fetches the R4 lookup, summary and
 pages and compares the normalized projection before activation and on every
 serve. The publisher-supplied subject name and origin still require independent
@@ -40,12 +40,15 @@ covered. No media rights or production migration approval is implied.
    storefront. Record source revision, artifact digest and deployment identity.
 3. Verify HTML, JSON-LD and every gated media URL share the approved digest and
    are no-store; exercise the safe fallback before making any route reachable.
-4. For an emergency, submit the specific record ID and current digest to the
+4. For an emergency, submit the specific record ID, current digest and gate epoch to the
    test-only withdrawal endpoint. The D1 transaction switches the whole publication
    to the safe response and retains record and historically associated media
    tombstones. A version mismatch or unavailable R4 source also quarantines the
    current digest. Verify HTML, JSON-LD and media return the safe response, then
    rebuild and independently approve a new projection that excludes tombstones.
+   If quarantine was caused only by a transient source outage, a test-only reviewed
+   recovery can reactivate the same digest after a fresh full-source comparison,
+   an epoch check and verification that no record or media tombstones apply.
 5. To roll back a deployment, first put the gate in safe mode. Keep the D1 gate,
    retired digests and tombstones intact. Never restore an old artifact or route
    around the gate; verify fallback and cache behavior before explicitly approving
