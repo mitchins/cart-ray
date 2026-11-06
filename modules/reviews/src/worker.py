@@ -4,6 +4,7 @@ import json
 import re
 from urllib.parse import parse_qs, urlparse
 
+from cartray_reviews.unified import unified_read
 from native_lifecycle import discard_body, handle_write, native_read, pending_read
 from workers import Response, WorkerEntrypoint
 
@@ -20,6 +21,7 @@ def public_contribution(row):
         "kind": row["kind"],
         "author": row["author"],
         "body": row["body"],
+        "title": row["public_title"],
         "rating": row["rating"],
         "date": json.loads(row["source_date"]),
         "verification": row["verification"],
@@ -83,8 +85,11 @@ class Default(WorkerEntrypoint):
         )
         if not subject:
             return Response.json({"error": "not found"}, status=404)
-        if len(subject) != 1:
-            return Response.json({"error": "subject conflict"}, status=503)
+        if len(subject) == 2:
+            # Cross-source identity reconciliation is not yet qualified for live data.
+            if environment != "test":
+                return Response.json({"error": "publication unavailable"}, status=503)
+            return await unified_read(db, store, environment, subject_id, endpoint, params, Response)
         if subject[0]["source_kind"] == "native":
             return await native_read(db, store, environment, subject_id, endpoint, params, subject[0]["native_version"])
         snapshot_id = subject[0]["snapshot_id"]
@@ -133,7 +138,10 @@ class Default(WorkerEntrypoint):
         result = rows(
             await db.prepare(
                 "SELECT contribution_id,parent_id,kind,author,body,rating,source_date,verification,"
-                "anchors_json,votes_json "
+                "anchors_json,votes_json, (SELECT t.title FROM review_import_titles t "
+                "WHERE t.store_key=review_contributions.store_key AND t.environment=review_contributions.environment "
+                "AND t.snapshot_id=review_contributions.snapshot_id AND "
+                "t.contribution_id=review_contributions.contribution_id) public_title "
                 "FROM review_contributions WHERE store_key=? AND environment=? AND snapshot_id=? AND subject_id=? "
                 "AND status='published' AND parent_id IS NULL AND "
                 "(COALESCE(sort_day,'') < ? OR (COALESCE(sort_day,'') = ? AND contribution_id > ?)) "
@@ -145,7 +153,10 @@ class Default(WorkerEntrypoint):
         reply_rows = rows(
             await db.prepare(
                 "SELECT contribution_id,parent_id,kind,author,body,rating,source_date,verification,"
-                "anchors_json,votes_json "
+                "anchors_json,votes_json, (SELECT t.title FROM review_import_titles t "
+                "WHERE t.store_key=review_contributions.store_key AND t.environment=review_contributions.environment "
+                "AND t.snapshot_id=review_contributions.snapshot_id AND "
+                "t.contribution_id=review_contributions.contribution_id) public_title "
                 "FROM review_contributions WHERE store_key=? AND environment=? AND snapshot_id=? AND subject_id=? "
                 "AND status='published' AND parent_id IS NOT NULL ORDER BY sort_day,contribution_id LIMIT 201"
             )

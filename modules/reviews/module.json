@@ -22,7 +22,10 @@
     "migrations/0010_invitation_delivery_claim.sql",
     "migrations/0011_review_management.sql",
     "migrations/0012_review_recovery_requests.sql",
-    "migrations/0013_recovery_retry_deferrals.sql"
+    "migrations/0013_recovery_retry_deferrals.sql",
+    "migrations/0014_unified_feed_index.sql",
+    "migrations/0015_imported_titles.sql",
+    "migrations/0016_snapshot_provenance.sql"
   ],
   "routes": [
     "GET /reviews/v1/subjects/{subject_id}/summary",

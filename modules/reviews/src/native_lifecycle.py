@@ -806,9 +806,10 @@ async def handle_write(request, env, path):
                 [
                     db.prepare(
                         "INSERT INTO native_guard SELECT CASE WHEN NOT EXISTS(SELECT 1 FROM "
-                        "review_snapshot_subjects WHERE store_key=? AND environment=? AND subject_id=?) "
+                        "review_snapshot_subjects WHERE store_key=? AND environment=? AND subject_id=? "
+                        "AND (kind<>? OR canonical_path<>?)) "
                         "THEN 1 ELSE 0 END"
-                    ).bind(store, environment, sid),
+                    ).bind(store, environment, sid, data["kind"], data["path"]),
                     db.prepare("INSERT INTO review_subjects VALUES (?,?,?,?,?)").bind(
                         store, environment, sid, data["kind"], data["path"]
                     ),

@@ -169,3 +169,18 @@ def test_unroutable_subject_and_oversized_revision_are_rejected():
     data["publication_revision"] = 2**63
     with pytest.raises(SnapshotError):
         read(data)
+
+
+def test_v2_preserves_title_and_raw_timestamp_provenance():
+    data = snapshot()
+    data["schema"] = "cartray.reviews.snapshot.v2"
+    for item in data["contributions"]:
+        item["title"] = "A public title" if item["kind"] == "review" else None
+        item["date"]["source_local_raw"] = "2024-01-02 11:00:00"
+        item["date"]["source_utc_raw"] = None
+    value = read(data)
+    assert value["contributions"][0]["title"] == "A public title"
+    assert value["contributions"][0]["date"]["source_local_raw"] == "2024-01-02 11:00:00"
+    data["contributions"][0]["date"]["source_local_raw"] = "private canary"
+    with pytest.raises(SnapshotError):
+        read(data)

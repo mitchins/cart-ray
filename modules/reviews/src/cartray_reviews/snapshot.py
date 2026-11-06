@@ -53,9 +53,23 @@ def _utc_time(value):
         raise SnapshotError("invalid UTC timestamp") from exc
 
 
-def _source_date(value):
+def _source_date(value, schema):
     """Retain source strings and declared precision without guessing an offset."""
-    _object(value, ("original", "precision", "timezone_provenance", "utc"))
+    fields = ("original", "precision", "timezone_provenance", "utc")
+    if schema == "cartray.reviews.snapshot.v2":
+        fields += ("source_local_raw", "source_utc_raw")
+    _object(value, fields)
+    if schema == "cartray.reviews.snapshot.v2":
+        for name in ("source_local_raw", "source_utc_raw"):
+            if value[name] is not None:
+                if not isinstance(value[name], str) or not re.fullmatch(
+                    r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}", value[name]
+                ):
+                    _fail("invalid raw source timestamp")
+                try:
+                    datetime.strptime(value[name], "%Y-%m-%d %H:%M:%S")
+                except ValueError as exc:
+                    raise SnapshotError("invalid raw source timestamp") from exc
     _string(value["original"])
     if value["precision"] not in ("date", "second", "microsecond", "unknown"):
         _fail("invalid date precision")
@@ -81,6 +95,13 @@ def _source_date(value):
             raise SnapshotError("invalid original timestamp") from exc
         if original.tzinfo is None or original != utc:
             _fail("original timestamp does not match UTC")
+        if schema == "cartray.reviews.snapshot.v2" and value["source_utc_raw"] is not None:
+            try:
+                source_utc = datetime.strptime(value["source_utc_raw"], "%Y-%m-%d %H:%M:%S")
+            except ValueError as exc:
+                raise SnapshotError("invalid raw source UTC timestamp") from exc
+            if source_utc.strftime("%Y-%m-%dT%H:%M:%SZ") != value["utc"]:
+                _fail("raw source UTC timestamp does not match UTC")
 
 
 def load_snapshot(data: bytes, *, expected_sha256: str, store: str, environment: str):
@@ -114,7 +135,7 @@ def load_snapshot(data: bytes, *, expected_sha256: str, store: str, environment:
         ),
     )
     if (
-        payload["schema"] != "cartray.reviews.snapshot.v1"
+        payload["schema"] not in ("cartray.reviews.snapshot.v1", "cartray.reviews.snapshot.v2")
         or payload["store"] != store
         or payload["environment"] != environment
     ):
@@ -154,23 +175,25 @@ def load_snapshot(data: bytes, *, expected_sha256: str, store: str, environment:
     contributions = {}
     anchors = set()
     for item in payload["contributions"]:
-        _object(
-            item,
-            (
-                "id",
-                "revision_id",
-                "subject_id",
-                "parent_id",
-                "kind",
-                "author",
-                "body",
-                "rating",
-                "date",
-                "verification",
-                "anchors",
-                "votes",
-            ),
+        fields = (
+            "id",
+            "revision_id",
+            "subject_id",
+            "parent_id",
+            "kind",
+            "author",
+            "body",
+            "rating",
+            "date",
+            "verification",
+            "anchors",
+            "votes",
         )
+        if payload["schema"] == "cartray.reviews.snapshot.v2":
+            fields += ("title",)
+        _object(item, fields)
+        if payload["schema"] == "cartray.reviews.snapshot.v2" and item["title"] is not None:
+            _string(item["title"])
         for key in ("id", "revision_id", "subject_id", "kind", "author", "body", "verification"):
             _string(item[key])
         if not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", item["id"]):
@@ -192,7 +215,7 @@ def load_snapshot(data: bytes, *, expected_sha256: str, store: str, environment:
         rating = item["rating"]
         if rating is not None and (type(rating) is not int or not 1 <= rating <= 5 or item["kind"] != "review"):
             _fail("invalid rating")
-        _source_date(item["date"])
+        _source_date(item["date"], payload["schema"])
         _object(item["votes"], ("up", "down", "net"))
         votes = item["votes"]
         for key in ("up", "down", "net"):

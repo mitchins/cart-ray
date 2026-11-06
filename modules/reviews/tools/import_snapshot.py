@@ -54,10 +54,16 @@ def import_snapshot(data, *, digest, store, environment):
         "THEN 1 ELSE 0 END;",
         f"INSERT OR IGNORE INTO review_snapshots VALUES ({scoped},{rev},{fingerprint});",
     ]
+    source = snapshot["source"]
+    provenance = (store, environment, sid, source["identity"], source["extracted_at"], source["sha256"], 1)
+    lines.append(
+        "INSERT OR IGNORE INTO review_snapshot_provenance VALUES (" + ",".join(map(literal, provenance)) + ");"
+    )
     for subject in snapshot["subjects"]:
         lines.append(
             "INSERT INTO review_import_guard SELECT CASE WHEN NOT EXISTS(SELECT 1 FROM review_subjects "
-            f"WHERE store_key={st} AND environment={env} AND subject_id={literal(subject['id'])}) "
+            f"WHERE store_key={st} AND environment={env} AND subject_id={literal(subject['id'])} "
+            f"AND (kind<>{literal(subject['kind'])} OR canonical_path<>{literal(subject['path'])})) "
             "THEN 1 ELSE 0 END;"
         )
         values = (store, environment, sid, subject["id"], subject["kind"], subject["path"])
@@ -83,6 +89,10 @@ def import_snapshot(data, *, digest, store, environment):
             json.dumps(item["votes"], separators=(",", ":")),
         )
         lines.append("INSERT OR IGNORE INTO review_contributions VALUES (" + ",".join(map(literal, values)) + ");")
+        title = item.get("title")
+        if title is not None:
+            values = (store, environment, sid, item["id"], title)
+            lines.append("INSERT OR IGNORE INTO review_import_titles VALUES (" + ",".join(map(literal, values)) + ");")
     lines += [
         f"INSERT INTO review_publications VALUES ({scoped},{rev}) ON CONFLICT(store_key,environment) "
         "DO UPDATE SET snapshot_id=excluded.snapshot_id,revision=excluded.revision;",

@@ -263,6 +263,32 @@ def main():
                 text=True,
             )
             assert json.loads(verify.stdout)[0]["results"][0]["n"] == 0
+            # An imported and a native contribution can share one canonical subject.
+            # Seed the approved native revision into D1 directly; lifecycle transition
+            # and aggregate maintenance are independently tested by native_workerd.
+            subprocess.run(
+                [
+                    *command,
+                    "INSERT INTO review_subjects VALUES "
+                    "('example-store','test','example-policy','product','/product/');"
+                    "INSERT INTO native_publication_versions VALUES ('example-store','test','example-policy',1,1,1,2);"
+                    "INSERT INTO native_reviews VALUES ('example-store','test','native-one','example-policy',"
+                    "'private-reviewer','published','native-revision',1735776000);"
+                    "INSERT INTO native_revisions VALUES ('example-store','test','native-revision','native-one',"
+                    "'Native',NULL,'Native content',2);",
+                ],
+                cwd=ROOT,
+                check=True,
+                stdout=subprocess.DEVNULL,
+            )
+            combined = json.loads(request("summary")[1])
+            assert combined["contribution_count"] == 4
+            assert combined["rating"] == {"average": 11 / 3, "rated_count": 3}
+            combined_list = json.loads(request("contributions")[1])
+            assert len(combined_list["contributions"]) == 4
+            assert any(x["id"] == "h-r" and len(x["replies"]) == 1 for x in combined_list["contributions"])
+            assert "private-reviewer" not in json.dumps(combined_list)
+            print("Workerd combined summary:", json.dumps(combined))
             print("Workerd summary:", json.dumps(summary))
             print("Workerd list: three reviews, one unrated, one attached reply")
         finally:
