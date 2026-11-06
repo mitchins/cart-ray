@@ -87,3 +87,8 @@ Access mode never falls back to a test-administrator credential. A synthetic
 test-only JWKS fixture is supported for local Workerd qualification. Trusted
 policy provisioning, live provider qualification, operations endpoints and a
 staff interface remain required. Live collection and moderation stay disabled.
+The current Workerd test exercises `collect` mode only. The existing
+`verified_acquisition_only` test guard still requires a configured test-admin
+secret even when Access authentication is selected; Access-only moderation in
+that mode has not been qualified. The Access boundary does not accept that
+secret as a fallback identity.
