@@ -33,6 +33,7 @@ ISSUER = "synthetic-settlement-issuer-token-0123456789"
 CONSENT_SECRET = "e" * 40
 DELIVERY_TOKEN = "f" * 40
 AUTOMATION_TOKEN = "automation-synthetic-issuer-token-0123456789"
+RECIPIENT_SECRET = "recipient-synthetic-secret-0123456789"
 
 
 def synthetic_settlement(sql_path):
@@ -133,6 +134,27 @@ def signed_consent(event_id, recipient_hash):
         return response.status
 
 
+def signed_recipient(data, secret=RECIPIENT_SECRET):
+    signed = json.dumps(
+        ["reviews-automation-recipient-v1", "example-store", "test", data],
+        ensure_ascii=True,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode()
+    signature = hmac.new(secret.encode(), signed, hashlib.sha256).hexdigest()
+    request = urllib.request.Request(
+        BASE + "/reviews-internal/v1/automation-recipient-evidence",
+        data=json.dumps(data).encode(),
+        headers={"Content-Type": "application/json", "X-Reviews-Recipient-Signature": signature},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=10) as response:
+            return response.status, json.loads(response.read())
+    except urllib.error.HTTPError as exc:
+        return exc.code, json.loads(exc.read())
+
+
 def main():
     with tempfile.TemporaryDirectory(prefix="reviews-acquisition-d1-") as directory:
         env = os.environ | {"REVIEWS_LOCAL_PERSIST_DIR": directory}
@@ -159,7 +181,7 @@ def main():
                 *common,
                 "--json",
                 "--command",
-                "SELECT id FROM outbox WHERE event_type='OrderConfirmed' ORDER BY id LIMIT 1",
+                "SELECT id,order_id FROM outbox WHERE event_type='OrderConfirmed' ORDER BY id LIMIT 1",
             ],
             cwd=ROOT,
             check=True,
@@ -167,6 +189,7 @@ def main():
             text=True,
         )
         outbox_id = json.loads(outbox_result.stdout)[0]["results"][0]["id"]
+        assert json.loads(outbox_result.stdout)[0]["results"][0]["order_id"] == order_ids[0]
         subprocess.run(
             [
                 wrangler,
@@ -196,6 +219,7 @@ def main():
                 "REVIEWS_DELIVERY_TOKEN": DELIVERY_TOKEN,
                 "REVIEWS_AUTOMATION_INTAKE": "test",
                 "REVIEWS_AUTOMATION_INGRESS_TOKEN": AUTOMATION_TOKEN,
+                "REVIEWS_RECIPIENT_EVIDENCE_SECRET": RECIPIENT_SECRET,
                 "REVIEWS_PUBLIC_STORE_NAME": "Example Store",
                 "REVIEWS_RECOVERY_MODE": "manual_test",
                 "REVIEWS_SUBJECT_MAPS": json.dumps(
@@ -253,6 +277,24 @@ def main():
                 text=True,
             )
             assert json.loads(checkout_ack.stdout)[0]["results"][0]["delivered_at"] is None
+            recipient_data = {
+                "outbox_id": outbox_id,
+                "recipient_context_hash": recipient_hashes[0],
+                "binding_version": "synthetic-v1",
+                "evidence_reference": "synthetic-binding",
+                "verified_at": 1,
+            }
+            assert signed_recipient(recipient_data, "wrong-synthetic-recipient-secret-012345")[0] == 409
+            assert signed_recipient(recipient_data) == (200, {"status": "recorded"})
+            assert signed_recipient(recipient_data) == (200, {"status": "recorded"})
+            status_path = "/reviews-internal/v1/automation-evidence-status"
+            assert internal(status_path, {"outbox_id": outbox_id}, ISSUER)[0] == 401
+            status, evidence = internal(status_path, {"outbox_id": outbox_id}, AUTOMATION_TOKEN)
+            assert status == 200 and evidence == {
+                "state": "held_eligibility_recipient_consent",
+                "recipient_binding_recorded": True,
+                "consent_granted": False,
+            }
             subject = {"subject_id": "example-policy", "kind": "product", "path": "/example-policy/"}
             assert call("/reviews-admin/v1/subjects", subject, admin=True)[0] == 201
             assert (
@@ -306,6 +348,12 @@ def main():
             assert json.loads(counts.stdout)[0]["results"][0]["count"] == 0
             assert signed_consent(event_ids[0], recipient_hashes[0]) == 201
             assert signed_consent(event_ids[1], recipient_hashes[1]) == 201
+            status, evidence = internal(status_path, {"outbox_id": outbox_id}, AUTOMATION_TOKEN)
+            assert status == 200 and evidence == {
+                "state": "held_eligibility_recipient_consent",
+                "recipient_binding_recorded": True,
+                "consent_granted": True,
+            }
             status, invitation = internal(endpoint, event, ISSUER)
             assert status == 201, (status, invitation)
             assert internal(endpoint, event, ISSUER) == (status, invitation)

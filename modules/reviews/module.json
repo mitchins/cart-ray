@@ -30,7 +30,8 @@
     "migrations/0018_public_source_attribution.sql",
     "migrations/0019_subject_aliases.sql",
     "migrations/0020_automation_intake.sql",
-    "migrations/0021_staff_history_indexes.sql"
+    "migrations/0021_staff_history_indexes.sql",
+    "migrations/0022_automation_recipient_evidence.sql"
   ],
   "routes": [
     "GET /reviews/v1/subject-lookup?alias={alias}",
@@ -56,7 +57,9 @@
     "POST /reviews/v1/invitation-recovery (verified_acquisition_only, test only)",
     "POST /reviews/v1/manage/{review_id}/{read|edit|withdraw} (verified_acquisition_only, test only)",
     "POST /reviews/v1/contributions (verified_acquisition_only, test only)",
-    "POST /reviews-internal/v1/automation-intake (verified_acquisition_only, test only, disabled by default)"
+    "POST /reviews-internal/v1/automation-intake (verified_acquisition_only, test only, disabled by default)",
+    "POST /reviews-internal/v1/automation-recipient-evidence (verified_acquisition_only, test only, disabled by default)",
+    "POST /reviews-internal/v1/automation-evidence-status (verified_acquisition_only, test only, disabled by default)"
   ],
   "subscriptions": [],
   "scheduled_tasks": []
