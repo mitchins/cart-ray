@@ -43,6 +43,8 @@ jobs:
         run: REVIEWS_TEST_VERBOSE=1 uv run python modules/reviews/tests/native_workerd.py
       - name: Exercise verified acquisition invitations on Workerd and D1
         run: REVIEWS_TEST_VERBOSE=1 uv run python modules/reviews/tests/native_acquisition_workerd.py
+      - run: npm run test:reviews-publication
+      - run: PYTHONPATH=modules/reviews/src uv run --locked python modules/reviews/publication/tests/local_qualification.py
       - run: npm run test:m11a-projection
       - run: npm run build:storefront
       - run: CARTRAY_STOREFRONT_EXPECTED_MODE=preview npm run test:storefront
