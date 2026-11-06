@@ -11,6 +11,7 @@ import time
 import urllib.error
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
 
 from workerd_integration import FIXTURE, MODULE, PORT, ROOT, start, stop
 
@@ -246,6 +247,46 @@ def main():
             )
             assert conflict_import.returncode != 0
             assert call(summary_path)[1]["contribution_count"] == 1
+
+            # Import compatible history after real native moderation, then
+            # withdraw the native record through the actual lifecycle API.
+            historical = json.loads(FIXTURE.read_bytes())
+            historical["subjects"][0]["path"] = "/example-policy/"
+            historical_file = Path(directory) / "compatible-history.json"
+            historical_file.write_text(json.dumps(historical))
+            subprocess.run(
+                [
+                    sys.executable,
+                    str(MODULE / "tools/import_snapshot.py"),
+                    str(historical_file),
+                    "--sha256",
+                    hashlib.sha256(historical_file.read_bytes()).hexdigest(),
+                    "--store",
+                    "example-store",
+                    "--environment",
+                    "test",
+                ],
+                cwd=ROOT,
+                env=env | {"PYTHONPATH": str(MODULE / "src")},
+                check=True,
+                capture_output=True,
+            )
+            mixed = call(summary_path)[1]
+            assert mixed["contribution_count"] == 4 and mixed["rating"] == {"average": 4.5, "rated_count": 2}
+            mixed_list = json.dumps(call(list_path)[1])
+            assert "Unrated" in mixed_list and "Private canary" not in mixed_list
+            assert (
+                call(
+                    "/reviews-admin/v1/contributions/" + record2["review_id"] + "/withdraw",
+                    {"revision_id": record2["revision_id"]},
+                    admin=True,
+                )[0]
+                == 200
+            )
+            after_withdrawal = call(summary_path)[1]
+            assert after_withdrawal["contribution_count"] == 3
+            assert after_withdrawal["rating"] == {"average": 4.5, "rated_count": 2}
+            assert "Unrated" not in json.dumps(call(list_path)[1])
 
             race_subject = {"subject_id": "race-policy", "kind": "product", "path": "/race/"}
             assert call("/reviews-admin/v1/subjects", race_subject, admin=True)[0] == 201
