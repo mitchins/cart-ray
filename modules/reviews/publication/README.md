@@ -35,6 +35,11 @@ covered. No media rights or production migration approval is implied.
    only synthetic test data and an independent R4 test Worker. Configure the
    source origin, explicit `example-store:test` scope, canonical test origin,
    test mode and a fresh secret token. Do not use production bindings.
+   When source and gate use the same `workers.dev` zone, the disposable gate
+   must set `global_fetch_strictly_public`; otherwise Cloudflare may route the
+   subrequest past the source Worker. This flag sends requests through the public
+   front door and can loop if configured to call the gate itself. Pin and review
+   the source origin before deployment.
 2. Capture the full R4 projection, independently calculate and approve its digest,
    then use the test-only publication endpoint. Never expose the test token in a
    storefront. Record source revision, artifact digest and deployment identity.
@@ -71,3 +76,11 @@ require hosted qualification and owner-approved operations before production.
 A production-capable source needs a trustworthy store/environment identity and a
 monotonic publication/revocation protocol; the current public R4 shape does not
 attest those values. Source outage quarantine is intentionally conservative.
+
+The synthetic hosted receipt records the tested commit and bundle hashes. Its
+source is a hosted replay of a local R4 projection, not a hosted R4 Worker. The
+hosted withdrawal and outage/recovery checks passed, but both partial-upload
+probes reached the nine-second client timeout. Healthy requests continued and
+the empty publication state remained unchanged. The stream cancellation fix
+bounds handler completion in controlled tests; it does not prove the edge will
+return a response or close an incomplete upload within that period.

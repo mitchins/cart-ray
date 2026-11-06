@@ -139,7 +139,7 @@ async function sourceJson(env, path, signal) {
       chunks.push(part.value);
     }
   } catch (error) {
-    try { void reader.cancel('invalid source body').catch(() => {}); } catch { /* already aborted */ }
+    void reader.cancel('invalid source body').catch(() => {});
     throw error;
   } finally { reader.releaseLock(); }
   const bytes = new Uint8Array(size); let offset = 0;
