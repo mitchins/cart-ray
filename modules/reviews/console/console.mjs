@@ -7,7 +7,12 @@ let cursor = null, loading = false, shownMode = 'pending';
 const seen = new Set();
 function message(text = '') { error.textContent = text; error.hidden = !text; }
 function friendly(e) { return e instanceof ConsoleError ? e.message : 'The review service is temporarily unavailable. Please try again.'; }
-function element(tag, text, cls) { const result = document.createElement(tag); if (text) result.textContent = text; if (cls) result.className = cls; return result; }
+function element(tag, text, cls) {
+  const result = document.createElement(tag);
+  if (text) result.textContent = text;
+  if (cls) result.className = cls;
+  return result;
+}
 function busy(active) { loading = active; refresh.disabled = more.disabled = view.disabled = active; queue.setAttribute('aria-busy', String(active)); }
 function history(item) {
   const section = element('section', '', 'history');
