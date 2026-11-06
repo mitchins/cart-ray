@@ -223,3 +223,32 @@ def test_snapshot_promotion_during_read_fails_closed(monkeypatch):
     monkeypatch.setattr(projection, "_versions", promote)
     result = asyncio.run(unified_read(db, "s", "test", "p", "summary", {}, TestResponse))
     assert result.status == 409
+
+
+def test_response_size_trimming_preserves_cursor_continuity():
+    db = Database()
+    db.db.execute("INSERT INTO review_subjects VALUES ('s','test','p','product','/p/')")
+    db.db.execute("INSERT INTO native_publication_versions VALUES ('s','test','p',1,20,20,60)")
+    db.db.execute("INSERT INTO review_snapshots VALUES ('s','test','one',1,?)", ("a" * 64,))
+    db.db.execute("INSERT INTO review_snapshot_subjects VALUES ('s','test','one','p','product','/p/')")
+    db.db.execute("INSERT INTO review_publications VALUES ('s','test','one',1)")
+    for i in range(20):
+        rid = f"{i:064x}"
+        db.db.execute(
+            "INSERT INTO native_reviews VALUES ('s','test',?,'p',?,'published',?,1704153600)",
+            (rid, "private-" + rid, "revision-" + rid),
+        )
+        db.db.execute(
+            "INSERT INTO native_revisions VALUES ('s','test',?,?, 'author',NULL,?,3)",
+            ("revision-" + rid, rid, "x" * 12000),
+        )
+    params, found = {"limit": ["50"]}, []
+    while True:
+        page = asyncio.run(unified_read(db, "s", "test", "p", "contributions", params, TestResponse)).body
+        assert len(json.dumps(page, ensure_ascii=True).encode("ascii")) <= 128000
+        found.extend(row["source_id"] for row in page["contributions"])
+        if not page["has_more"]:
+            break
+        assert page["next_after"] == page["contributions"][-1]["id"]
+        params = {"limit": ["50"], "after": [page["next_after"]], "snapshot": [page["snapshot_id"]]}
+    assert found == [f"{i:064x}" for i in range(20)]
