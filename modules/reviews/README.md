@@ -72,3 +72,23 @@ Run `PYTHONPATH=modules/reviews/src uv run pytest modules/reviews/tests`, `uv ru
 The snapshot contract and installer are not qualified for production or historical data. Hashing proves byte identity, not authorship, approval, privacy, completeness or freshness. Public prose needs human privacy review and escaped rendering. Source-specific evidence, raw records and media must remain restricted. Snapshot v2 retains original local/GMT timestamp strings and public titles. Snapshot v3 adds an explicit public source attribution without exposing the private source-instance identity. Snapshot v4 carries explicitly mapped legacy subject IDs and paths; `/reviews/v1/subject-lookup?alias=...` resolves them without a WordPress runtime. The validator requires declared seconds and microseconds to match their original precision; other fractional precision requires a future explicit schema rather than padding digits. Source completeness, identity reconciliation, canonical mapping, stale publication and withdrawal policy require source-backed qualification before a real import or Astro coupling. Legacy WordPress migration is an optional adapter, not a prerequisite for a fresh store. This slice does not deploy a Worker, publish production content or change legacy writers.
 
 PR #33's earlier public commits and automated review comment exposed non-secret deployment fingerprinting details; the merged tree redacts them, but that does not remove public history or comments. GitGuardian passed on that PR and a targeted scan for common private-key and token patterns found no matches in its commits. This is not proof that every possible credential format is absent; no credential rotation was performed based on those checks.
+
+### Staff identity work in progress
+
+`cartray_reviews.staff_identity` contains an independent Cloudflare Access RS256
+assertion and explicit permission verifier. It accepts a trusted, pinned issuer,
+audience and subject-to-permission policy; it derives the audit actor identifier
+from the verified issuer and subject. The test fixture key is synthetic.
+
+In the explicit test environment, `REVIEWS_STAFF_MODE=cloudflare_access` selects
+this boundary for the pending queue and moderation routes, including the audit
+actor. It also requires distinct subject-administration permissions. Configured
+Access mode never falls back to a test-administrator credential. A synthetic
+test-only JWKS fixture is supported for local Workerd qualification. Trusted
+policy provisioning, live provider qualification, operations endpoints and a
+staff interface remain required. Live collection and moderation stay disabled.
+The current Workerd test exercises `collect` mode only. The existing
+`verified_acquisition_only` test guard still requires a configured test-admin
+secret even when Access authentication is selected; Access-only moderation in
+that mode has not been qualified. The Access boundary does not accept that
+secret as a fallback identity.
