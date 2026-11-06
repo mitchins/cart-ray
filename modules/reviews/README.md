@@ -80,7 +80,10 @@ assertion and explicit permission verifier. It accepts a trusted, pinned issuer,
 audience and subject-to-permission policy; it derives the audit actor identifier
 from the verified issuer and subject. The test fixture key is synthetic.
 
-This verifier is **not yet connected to the Worker or moderation routes**. A
-bounded HTTPS JWKS loader, staff policy provisioning, runtime integration,
-Workerd/D1 authorization tests and audit integration remain required. Existing
-moderation remains test-only and live collection stays disabled.
+In the explicit test environment, `REVIEWS_STAFF_MODE=cloudflare_access` selects
+this boundary for the pending queue and moderation routes, including the audit
+actor. It also requires distinct subject-administration permissions. Configured
+Access mode never falls back to a test-administrator credential. A synthetic
+test-only JWKS fixture is supported for local Workerd qualification. Trusted
+policy provisioning, live provider qualification, operations endpoints and a
+staff interface remain required. Live collection and moderation stay disabled.

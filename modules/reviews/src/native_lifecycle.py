@@ -19,6 +19,7 @@ from cartray_reviews.invitations import (
 )
 from cartray_reviews.management import manage_review, management_token
 from cartray_reviews.recovery import accept_recovery_command
+from cartray_reviews.staff_identity import StaffAuthenticationError, authenticate_staff
 from js import Object, Promise, Uint8Array, clearTimeout, crypto, setTimeout
 from pyodide.ffi import create_proxy, to_js
 from workers import Response
@@ -126,11 +127,80 @@ def admin_ok(request, env):
     return len(token) >= 32 and hmac.compare_digest(supplied.encode(), ("Bearer " + token).encode())
 
 
+async def staff_actor(request, env, permission):
+    """Use one configured test-only authentication boundary without fallback."""
+    if str(getattr(env, "REVIEWS_ENVIRONMENT", "")) != "test":
+        return None
+    mode = str(getattr(env, "REVIEWS_STAFF_MODE", "test_admin"))
+    if mode == "test_admin":
+        return "test_admin" if admin_ok(request, env) else None
+    if mode != "cloudflare_access":
+        return None
+    policy_text = str(getattr(env, "REVIEWS_STAFF_POLICY", ""))
+    if len(policy_text) > 16384:
+        return None
+
+    async def load_jwks(url):
+        # A test-only pinned key fixture permits Workerd integration without a live provider.
+        fixture = str(getattr(env, "REVIEWS_STAFF_TEST_JWKS", ""))
+        if fixture:
+            if len(fixture) > 65536:
+                raise ValueError("invalid JWKS")
+            return json.loads(fixture, object_pairs_hook=unique_pairs, parse_constant=invalid_constant)
+        from js import AbortController, fetch
+
+        controller = AbortController.new()
+        reader = None
+        try:
+            options = to_js({"redirect": "error", "signal": controller.signal}, dict_converter=Object.fromEntries)
+            response = await await_promise(fetch(url, options), 3)
+            if int(response.status) != 200 or response.body is None:
+                raise ValueError("JWKS unavailable")
+            reader = response.body.getReader()
+            parts, length, deadline = [], 0, time.monotonic() + 3
+            while True:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise TimeoutError("JWKS deadline")
+                part = await await_promise(reader.read(), remaining)
+                if part.done:
+                    break
+                data = bytes(part.value.to_py())
+                length += len(data)
+                if length > 65536:
+                    raise ValueError("JWKS too large")
+                parts.append(data)
+            return json.loads(b"".join(parts), object_pairs_hook=unique_pairs, parse_constant=invalid_constant)
+        finally:
+            controller.abort()
+            if reader is not None:
+                try:
+                    reader.releaseLock()
+                except Exception:
+                    pass
+
+    try:
+        policy = json.loads(policy_text, object_pairs_hook=unique_pairs, parse_constant=invalid_constant)
+        assertion = str(request.headers.get("Cf-Access-Jwt-Assertion") or "")
+        identity = await authenticate_staff(
+            assertion,
+            issuer=str(getattr(env, "REVIEWS_STAFF_ISSUER", "")),
+            audience=str(getattr(env, "REVIEWS_STAFF_AUDIENCE", "")),
+            permissions=policy,
+            required_permission=permission,
+            now=int(time.time()),
+            load_jwks=load_jwks,
+        )
+        return identity["actor_id"]
+    except (StaffAuthenticationError, ValueError, TypeError, AttributeError):
+        return None
+
+
 async def pending_read(request, env, query):
     """Allow the test administrator to inspect bounded pending work."""
     if str(env.REVIEWS_ENVIRONMENT) != "test":
         return fail(503, "moderation unavailable")
-    if not admin_ok(request, env):
+    if not await staff_actor(request, env, "reviews:moderate"):
         return fail(401, "unauthorized")
     if len(query) > 512:
         return fail(400, "invalid query")
@@ -239,7 +309,10 @@ async def cleanup_rates(db, store, environment, operations, now):
 async def handle_write(request, env, path):
     """Handle test-only writes; no production credentials or identity are implied."""
     store, environment = str(env.REVIEWS_STORE_KEY), str(env.REVIEWS_ENVIRONMENT)
-    if environment != "test" or len(str(getattr(env, "REVIEWS_TEST_ADMIN_TOKEN", ""))) < 32:
+    if environment != "test" or (
+        str(getattr(env, "REVIEWS_STAFF_MODE", "test_admin")) != "cloudflare_access"
+        and len(str(getattr(env, "REVIEWS_TEST_ADMIN_TOKEN", ""))) < 32
+    ):
         await discard_body(request)
         return fail(503, "collection unavailable")
     if str(request.method) != "POST":
@@ -561,9 +634,17 @@ async def handle_write(request, env, path):
         except (ValueError, TypeError, AttributeError, KeyError):
             return fail(409, "settlement unavailable")
     admin = path.startswith("/reviews-admin/")
-    if admin and not admin_ok(request, env):
-        await discard_body(request)
-        return fail(401, "unauthorized")
+    actor = None
+    if admin:
+        permission = (
+            "reviews:subjects"
+            if path in ("/reviews-admin/v1/subjects", "/reviews-admin/v1/subject-display-names")
+            else "reviews:moderate"
+        )
+        actor = await staff_actor(request, env, permission)
+        if not actor or (path == "/reviews-admin/v1/test-capabilities" and actor != "test_admin"):
+            await discard_body(request)
+            return fail(401, "unauthorized")
     db, now = env.REVIEWS_DB, int(time.time())
     rate_action = {"/reviews-admin/v1/test-capabilities": "issue", "/reviews/v1/contributions": "submit"}.get(path)
     if rate_action and not (acquisition_mode and rate_action == "submit"):
@@ -1111,7 +1192,7 @@ async def handle_write(request, env, path):
                         subject,
                     ),
                     db.prepare("INSERT INTO native_audit VALUES (?,?,?,?,?,?,?,?)").bind(
-                        event_id, store, environment, rid, revision, action, "test_admin", now
+                        event_id, store, environment, rid, revision, action, actor, now
                     ),
                     db.prepare("INSERT INTO native_effect_outbox VALUES (?,?,?,?,?,?)").bind(
                         event_id, store, environment, subject, "invalidate", now
