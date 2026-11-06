@@ -184,3 +184,43 @@ def test_v2_preserves_title_and_raw_timestamp_provenance():
     data["contributions"][0]["date"]["source_local_raw"] = "private canary"
     with pytest.raises(SnapshotError):
         read(data)
+
+
+def test_snapshot_rejects_email_like_public_text():
+    data = snapshot()
+    data["contributions"][0]["body"] = "Contact 'recipient@example.invalid' for details."
+    with pytest.raises(SnapshotError, match="email-like public text"):
+        read(data)
+
+
+def test_email_like_check_accepts_bounded_non_address_text():
+    data = snapshot()
+    data["contributions"][0]["body"] = "a" * 9999 + "@"
+    assert read(data)["contributions"][0]["body"].endswith("@")
+
+
+def test_source_timestamp_precision_is_not_invented():
+    data = snapshot()
+    data["contributions"][0]["date"] = {
+        "original": "2024-01-02T00:00:00.123Z",
+        "precision": "microsecond",
+        "timezone_provenance": "source_utc",
+        "utc": "2024-01-02T00:00:00.123000Z",
+    }
+    with pytest.raises(SnapshotError, match="declared precision"):
+        read(data)
+    data["contributions"][0]["date"] = {
+        "original": "2024-01-02T00:00:00Z",
+        "precision": "second",
+        "timezone_provenance": "source_utc",
+        "utc": "2024-01-02T00:00:00.000000Z",
+    }
+    with pytest.raises(SnapshotError, match="declared precision"):
+        read(data)
+    data["contributions"][0]["date"] = {
+        "original": "2024-01-02T00:00:00.123456Z",
+        "precision": "microsecond",
+        "timezone_provenance": "source_utc",
+        "utc": "2024-01-02T00:00:00.123456Z",
+    }
+    assert read(data)["contributions"][0]["date"]["original"].endswith(".123456Z")

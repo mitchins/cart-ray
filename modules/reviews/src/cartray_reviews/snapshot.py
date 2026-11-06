@@ -71,6 +71,8 @@ def _source_date(value, schema):
                 except ValueError as exc:
                     raise SnapshotError("invalid raw source timestamp") from exc
     _string(value["original"])
+    if re.search(r"(?<=\S)@(?=\S)", value["original"]):
+        _fail("email-like source date requires explicit disposition")
     if value["precision"] not in ("date", "second", "microsecond", "unknown"):
         _fail("invalid date precision")
     if value["timezone_provenance"] not in ("source_utc", "source_offset", "source_local", "unknown"):
@@ -84,6 +86,19 @@ def _source_date(value, schema):
             raise SnapshotError("invalid original date") from exc
         if value["utc"] is not None:
             _fail("date-only source cannot establish an instant")
+    if value["precision"] in ("second", "microsecond"):
+        fraction = r"\.\d{6}" if value["precision"] == "microsecond" else ""
+        pattern = r"\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}" + fraction + r"(?:Z|[+-]\d{2}:\d{2})?"
+        if not re.fullmatch(pattern, value["original"]):
+            _fail("original timestamp does not match declared precision")
+        try:
+            datetime.fromisoformat(value["original"].replace("Z", "+00:00"))
+        except ValueError as exc:
+            raise SnapshotError("invalid original timestamp") from exc
+        if value["utc"] is not None:
+            utc_pattern = r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}" + fraction + "Z"
+            if not isinstance(value["utc"], str) or not re.fullmatch(utc_pattern, value["utc"]):
+                _fail("UTC timestamp does not match declared precision")
     if value["utc"] is not None:
         if value["timezone_provenance"] not in ("source_utc", "source_offset"):
             _fail("UTC value without authoritative timezone")
@@ -196,6 +211,9 @@ def load_snapshot(data: bytes, *, expected_sha256: str, store: str, environment:
             _string(item["title"])
         for key in ("id", "revision_id", "subject_id", "kind", "author", "body", "verification"):
             _string(item[key])
+        for text in (item["author"], item["body"], item.get("title")):
+            if isinstance(text, str) and re.search(r"(?<=\S)@(?=\S)", text):
+                _fail("email-like public text requires explicit disposition")
         if not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", item["id"]):
             _fail("invalid contribution identity")
         if item["id"] in contributions or item["subject_id"] not in subjects:

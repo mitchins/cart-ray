@@ -27,7 +27,8 @@ access-control and catalogue settings still require review. The optional
 `--redact-source-emails` flag conservatively replaces literal author-email occurrences in candidate
 text with `[email removed]` and records each affected source ID and field in the
 restricted report. The original text remains in the restricted export. Remaining
-source-email matches fail closed; this is not a substitute for prose review.
+source-email matches fail closed, and snapshot validation rejects email-like public
+text until it has an explicit disposition. This is not a substitute for prose review.
 
 ```
 PYTHONPATH=modules/reviews/src uv run python modules/reviews/migration/wordpress/reconcile.py \
@@ -60,6 +61,6 @@ Run `PYTHONPATH=modules/reviews/src uv run pytest modules/reviews/tests`, `uv ru
 
 ## Boundaries still open
 
-The snapshot contract and installer are not qualified for production or historical data. Hashing proves byte identity, not authorship, approval, privacy, completeness or freshness. Public prose needs human privacy review and escaped rendering. Source-specific evidence, raw records and media must remain restricted. Snapshot v2 retains original local/GMT timestamp strings and public titles. Source completeness, identity reconciliation, canonical mapping, stale publication and withdrawal policy require source-backed qualification before a real import or Astro coupling. Legacy WordPress migration is an optional adapter, not a prerequisite for a fresh store. This slice does not deploy a Worker, publish production content or change legacy writers.
+The snapshot contract and installer are not qualified for production or historical data. Hashing proves byte identity, not authorship, approval, privacy, completeness or freshness. Public prose needs human privacy review and escaped rendering. Source-specific evidence, raw records and media must remain restricted. Snapshot v2 retains original local/GMT timestamp strings and public titles. The validator requires declared seconds and microseconds to match their original precision; other fractional precision requires a future explicit schema rather than padding digits. Source completeness, identity reconciliation, canonical mapping, stale publication and withdrawal policy require source-backed qualification before a real import or Astro coupling. Legacy WordPress migration is an optional adapter, not a prerequisite for a fresh store. This slice does not deploy a Worker, publish production content or change legacy writers.
 
 PR #33's earlier public commits and automated review comment exposed non-secret deployment fingerprinting details; the merged tree redacts them, but that does not remove public history or comments. GitGuardian passed on that PR and a targeted scan for common private-key and token patterns found no matches in its commits. This is not proof that every possible credential format is absent; no credential rotation was performed based on those checks.

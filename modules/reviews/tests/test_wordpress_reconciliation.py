@@ -143,9 +143,8 @@ def test_reconciliation_rejects_source_email_in_candidate_text():
     for index, row in enumerate(value["commentmeta"]):
         row["meta_id"] = str(index + 1)
     raw = json.dumps(value).encode()
-    draft = build_draft(raw, MAPPING, store="test-store", environment="test", expected_source="https://example.invalid")
-    with pytest.raises(ValueError, match="source email"):
-        MODULE.reconcile(raw, draft, MAPPING, expected_source="https://example.invalid")
+    with pytest.raises(ValueError, match="email-like public text"):
+        build_draft(raw, MAPPING, store="test-store", environment="test", expected_source="https://example.invalid")
 
 
 def test_explicit_email_redaction_is_recorded_without_exposing_source_email():
