@@ -60,6 +60,20 @@ def test_import_and_native_publication_share_subject(lifecycle, monkeypatch):
     ).body
     path = "/reviews-admin/v1/contributions/" + submitted["review_id"] + "/"
     assert invoke(lifecycle, env, path + "approve", {"revision_id": submitted["revision_id"]}, admin=True).status == 200
+    staff_reply = invoke(
+        lifecycle,
+        env,
+        path + "reply",
+        {
+            "parent_revision_id": submitted["revision_id"],
+            "expected_reply_revision_id": None,
+            "author": "Store",
+            "body": "Thanks for your review",
+        },
+        admin=True,
+        key="staff-reply",
+    )
+    assert staff_reply.status == 200
 
     def read(endpoint, params=None):
         return asyncio.run(
@@ -82,6 +96,9 @@ def test_import_and_native_publication_share_subject(lifecycle, monkeypatch):
     historic = next(item for item in seen if item["id"] == "h-r")
     assert historic["replies"][0]["source_id"] == "a"
     assert historic["verification"] == "email_only"
+    native = next(item for item in seen if item["id"] == "n-" + submitted["review_id"])
+    assert native["replies"][0]["id"] == "n-" + staff_reply.body["reply_id"]
+    assert native["replies"][0]["body"] == "Thanks for your review"
     assert "test_capability" not in json.dumps(seen)
     assert (
         invoke(lifecycle, env, path + "withdraw", {"revision_id": submitted["revision_id"]}, admin=True).status == 200

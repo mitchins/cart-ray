@@ -22,6 +22,7 @@ from cartray_reviews.invitations import (
 from cartray_reviews.management import manage_review, management_token
 from cartray_reviews.recovery import accept_recovery_command
 from cartray_reviews.staff_identity import StaffAuthenticationError, authenticate_staff
+from cartray_reviews.staff_replies import mutate_reply, public_replies
 from js import Object, Promise, Uint8Array, clearTimeout, crypto, setTimeout
 from pyodide.ffi import create_proxy, to_js
 from workers import Response
@@ -305,20 +306,46 @@ async def staff_history_read(request, env, query, review_id, kind):
     )
     if not found:
         return fail(404, "not found")
-    if kind == "revisions":
+    metadata = found[0]
+    if kind.startswith("reply-"):
+        heads = rows(
+            await db.prepare(
+                "SELECT reply_id,reply_revision_id,parent_revision_id,state FROM native_staff_replies "
+                "WHERE store_key=? AND environment=? AND review_id=?"
+            )
+            .bind(store, environment, review_id)
+            .all()
+        )
+        metadata["reply"] = heads[0] if heads else None
+    if kind == "reply-revisions":
+        if not heads:
+            return bounded_staff_page("reply_revisions", [], "reply_revision_id", metadata)
+        sql = (
+            "SELECT reply_revision_id,author,body,created_at FROM native_staff_reply_revisions "
+            "WHERE store_key=? AND environment=? AND reply_id=? AND reply_revision_id>? "
+            "ORDER BY reply_revision_id LIMIT 51"
+        )
+        id_key, identifier, output_key = "reply_revision_id", heads[0]["reply_id"], "reply_revisions"
+    elif kind == "reply-audit":
+        sql = (
+            "SELECT event_id,reply_id,reply_revision_id,actor,action,occurred_at FROM native_staff_reply_audit "
+            "WHERE store_key=? AND environment=? AND review_id=? AND event_id>? ORDER BY event_id LIMIT 51"
+        )
+        id_key, identifier, output_key = "event_id", review_id, "reply_audit"
+    elif kind == "revisions":
         sql = (
             "SELECT revision_id,author,title,body,rating FROM native_revisions "
             "WHERE store_key=? AND environment=? AND review_id=? AND revision_id>? ORDER BY revision_id LIMIT 51"
         )
-        id_key = "revision_id"
+        id_key, identifier, output_key = "revision_id", review_id, kind
     else:
         sql = (
             "SELECT event_id,revision_id,action,actor,occurred_at FROM native_audit "
             "WHERE store_key=? AND environment=? AND review_id=? AND event_id>? ORDER BY event_id LIMIT 51"
         )
-        id_key = "event_id"
-    result = rows(await db.prepare(sql).bind(store, environment, review_id, after).all())
-    return bounded_staff_page(kind, result, id_key, found[0])
+        id_key, identifier, output_key = "event_id", review_id, kind
+    result = rows(await db.prepare(sql).bind(store, environment, identifier, after).all())
+    return bounded_staff_page(output_key, result, id_key, metadata)
 
 
 async def read_json(request):
@@ -1313,6 +1340,24 @@ async def handle_write(request, env, path):
                 )
             return fail(409, "submission unavailable")
         return Response.json({"review_id": review_id, "revision_id": revision_id, "status": "pending"}, status=202)
+    reply_match = re.fullmatch(r"/reviews-admin/v1/contributions/([0-9a-f]{64})/(reply|reply-withdraw)", path)
+    if reply_match:
+        try:
+            result = await mutate_reply(
+                db,
+                store=store,
+                environment=environment,
+                review_id=reply_match.group(1),
+                data=data,
+                action="upsert" if reply_match.group(2) == "reply" else "withdraw",
+                key=str(request.headers.get("Idempotency-Key") or ""),
+                actor=actor,
+                now=now,
+                random_token=random_token,
+            )
+        except (ValueError, TypeError):
+            return fail(409, "reply unavailable")
+        return Response.json(result, headers={"Cache-Control": "no-store"})
     match = re.fullmatch(r"/reviews-admin/v1/contributions/([0-9a-f]{64})/(approve|reject|withdraw)", path)
     if match:
         if (
@@ -1481,6 +1526,19 @@ async def native_read(db, store, environment, subject_id, endpoint, params, nati
         }
         for x in found[:limit]
     ]
+    replies = await public_replies(db, store, environment, [item["id"] for item in items])
+    for item in items:
+        if item["id"] in replies:
+            item["replies"].append(replies[item["id"]])
+    final_version = rows(
+        await db.prepare(
+            "SELECT version FROM native_publication_versions WHERE store_key=? AND environment=? AND subject_id=?"
+        )
+        .bind(store, environment, subject_id)
+        .all()
+    )
+    if not final_version or "native-" + str(final_version[0]["version"]) != version:
+        return fail(409, "publication changed; restart pagination")
     has_more = len(found) > limit
     output = {
         "subject_id": subject_id,

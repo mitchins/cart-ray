@@ -8,6 +8,8 @@ import hashlib
 import json
 import re
 
+from cartray_reviews.staff_replies import public_replies
+
 
 def _rows(result):
     return [r.to_py() if hasattr(r, "to_py") else dict(r) for r in result.results]
@@ -207,6 +209,12 @@ async def unified_read(db, store, environment, subject, endpoint, params, respon
         roots.sort(key=lambda pair: pair[1]["id"])
         roots.sort(key=lambda pair: pair[0], reverse=True)
         items = [item for _, item in roots[:limit]]
+        replies = await public_replies(
+            db, store, environment, [item["source_id"] for item in items if item["id"].startswith("n-")], unified=True
+        )
+        for item in items:
+            if item["id"].startswith("n-") and item["source_id"] in replies:
+                item["replies"].append(replies[item["source_id"]])
         by_id = {item["source_id"]: item for item in items if item["id"].startswith("h-")}
         historical_by_id = {row["contribution_id"]: row for row in historic if not row["parent_id"]}
         for item in items:
