@@ -3,6 +3,7 @@
 import hashlib
 import json
 import re
+import unicodedata
 from datetime import datetime
 from decimal import Decimal
 
@@ -53,10 +54,26 @@ def _utc_time(value):
         raise SnapshotError("invalid UTC timestamp") from exc
 
 
-def _source_date(value):
+def _source_date(value, schema):
     """Retain source strings and declared precision without guessing an offset."""
-    _object(value, ("original", "precision", "timezone_provenance", "utc"))
+    fields = ("original", "precision", "timezone_provenance", "utc")
+    if schema in ("cartray.reviews.snapshot.v2", "cartray.reviews.snapshot.v3", "cartray.reviews.snapshot.v4"):
+        fields += ("source_local_raw", "source_utc_raw")
+    _object(value, fields)
+    if schema in ("cartray.reviews.snapshot.v2", "cartray.reviews.snapshot.v3", "cartray.reviews.snapshot.v4"):
+        for name in ("source_local_raw", "source_utc_raw"):
+            if value[name] is not None:
+                if not isinstance(value[name], str) or not re.fullmatch(
+                    r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}", value[name]
+                ):
+                    _fail("invalid raw source timestamp")
+                try:
+                    datetime.strptime(value[name], "%Y-%m-%d %H:%M:%S")
+                except ValueError as exc:
+                    raise SnapshotError("invalid raw source timestamp") from exc
     _string(value["original"])
+    if re.search(r"(?<=\S)@(?=\S)", value["original"]):
+        _fail("email-like source date requires explicit disposition")
     if value["precision"] not in ("date", "second", "microsecond", "unknown"):
         _fail("invalid date precision")
     if value["timezone_provenance"] not in ("source_utc", "source_offset", "source_local", "unknown"):
@@ -70,6 +87,19 @@ def _source_date(value):
             raise SnapshotError("invalid original date") from exc
         if value["utc"] is not None:
             _fail("date-only source cannot establish an instant")
+    if value["precision"] in ("second", "microsecond"):
+        fraction = r"\.\d{6}" if value["precision"] == "microsecond" else ""
+        pattern = r"\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}" + fraction + r"(?:Z|[+-]\d{2}:\d{2})?"
+        if not re.fullmatch(pattern, value["original"]):
+            _fail("original timestamp does not match declared precision")
+        try:
+            datetime.fromisoformat(value["original"].replace("Z", "+00:00"))
+        except ValueError as exc:
+            raise SnapshotError("invalid original timestamp") from exc
+        if value["utc"] is not None:
+            utc_pattern = r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}" + fraction + "Z"
+            if not isinstance(value["utc"], str) or not re.fullmatch(utc_pattern, value["utc"]):
+                _fail("UTC timestamp does not match declared precision")
     if value["utc"] is not None:
         if value["timezone_provenance"] not in ("source_utc", "source_offset"):
             _fail("UTC value without authoritative timezone")
@@ -81,6 +111,16 @@ def _source_date(value):
             raise SnapshotError("invalid original timestamp") from exc
         if original.tzinfo is None or original != utc:
             _fail("original timestamp does not match UTC")
+        if (
+            schema in ("cartray.reviews.snapshot.v2", "cartray.reviews.snapshot.v3", "cartray.reviews.snapshot.v4")
+            and value["source_utc_raw"] is not None
+        ):
+            try:
+                source_utc = datetime.strptime(value["source_utc_raw"], "%Y-%m-%d %H:%M:%S")
+            except ValueError as exc:
+                raise SnapshotError("invalid raw source UTC timestamp") from exc
+            if source_utc.strftime("%Y-%m-%dT%H:%M:%SZ") != value["utc"]:
+                _fail("raw source UTC timestamp does not match UTC")
 
 
 def load_snapshot(data: bytes, *, expected_sha256: str, store: str, environment: str):
@@ -114,7 +154,13 @@ def load_snapshot(data: bytes, *, expected_sha256: str, store: str, environment:
         ),
     )
     if (
-        payload["schema"] != "cartray.reviews.snapshot.v1"
+        payload["schema"]
+        not in (
+            "cartray.reviews.snapshot.v1",
+            "cartray.reviews.snapshot.v2",
+            "cartray.reviews.snapshot.v3",
+            "cartray.reviews.snapshot.v4",
+        )
         or payload["store"] != store
         or payload["environment"] != environment
     ):
@@ -123,8 +169,16 @@ def load_snapshot(data: bytes, *, expected_sha256: str, store: str, environment:
         _string(payload[key])
     if not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", payload["snapshot_id"]):
         _fail("invalid snapshot identity")
-    _object(payload["source"], ("identity", "extracted_at", "sha256", "complete"))
+    source_fields = ("identity", "extracted_at", "sha256", "complete")
+    if payload["schema"] in ("cartray.reviews.snapshot.v3", "cartray.reviews.snapshot.v4"):
+        source_fields += ("public_attribution",)
+    _object(payload["source"], source_fields)
     source = payload["source"]
+    if payload["schema"] in ("cartray.reviews.snapshot.v3", "cartray.reviews.snapshot.v4"):
+        label = source["public_attribution"]
+        _string(label)
+        if len(label) > 120 or any(unicodedata.category(char).startswith("C") or char in "<>@" for char in label):
+            _fail("invalid public source attribution")
     _string(source["identity"])
     if not isinstance(source["sha256"], str) or not re.fullmatch(r"[a-f0-9]{64}", source["sha256"]):
         _fail("invalid source digest")
@@ -139,40 +193,85 @@ def load_snapshot(data: bytes, *, expected_sha256: str, store: str, environment:
         if not isinstance(payload[key], list):
             _fail("expected list")
     subjects = {}
+    subject_aliases = set()
     for item in payload["subjects"]:
-        _object(item, ("id", "kind", "path"))
-        for value in item.values():
-            _string(value)
+        fields = (
+            ("id", "kind", "path", "aliases")
+            if payload["schema"] == "cartray.reviews.snapshot.v4"
+            else ("id", "kind", "path")
+        )
+        _object(item, fields)
+        for key in ("id", "kind", "path"):
+            _string(item[key])
+        if payload["schema"] == "cartray.reviews.snapshot.v4":
+            if not isinstance(item["aliases"], list) or len(item["aliases"]) > 20:
+                _fail("invalid subject aliases")
+            for alias in item["aliases"]:
+                if (
+                    not isinstance(alias, str)
+                    or len(alias) > 2048
+                    or alias in subject_aliases
+                    or not (
+                        re.fullmatch(r"[A-Za-z0-9_-]{1,128}", alias) or re.fullmatch(r"/(?:[A-Za-z0-9_-]+/)*", alias)
+                    )
+                ):
+                    _fail("invalid or duplicate subject alias")
+                subject_aliases.add(alias)
         if not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", item["id"]):
             _fail("invalid routable subject identity")
         if item["kind"] not in ("product", "service", "store") or item["id"] in subjects:
             _fail("invalid subject")
         path = item["path"]
-        if not re.fullmatch(r"/(?:[A-Za-z0-9_-]+/)*", path) or "//" in path:
+        if len(path) > 2048 or not re.fullmatch(r"/(?:[A-Za-z0-9_-]+/)*", path) or "//" in path:
             _fail("invalid subject path")
         subjects[item["id"]] = item
+    paths = {}
+    for item in subjects.values():
+        if payload["schema"] == "cartray.reviews.snapshot.v4":
+            if item["path"] in paths and paths[item["path"]] != item["id"]:
+                _fail("duplicate canonical subject path")
+            paths[item["path"]] = item["id"]
+    for item in subjects.values():
+        for alias in item.get("aliases", []):
+            if alias in subjects and alias != item["id"]:
+                _fail("subject alias conflicts with another subject")
+            if alias in paths and paths[alias] != item["id"]:
+                _fail("subject alias conflicts with another canonical path")
     contributions = {}
     anchors = set()
     for item in payload["contributions"]:
-        _object(
-            item,
-            (
-                "id",
-                "revision_id",
-                "subject_id",
-                "parent_id",
-                "kind",
-                "author",
-                "body",
-                "rating",
-                "date",
-                "verification",
-                "anchors",
-                "votes",
-            ),
+        fields = (
+            "id",
+            "revision_id",
+            "subject_id",
+            "parent_id",
+            "kind",
+            "author",
+            "body",
+            "rating",
+            "date",
+            "verification",
+            "anchors",
+            "votes",
         )
+        if payload["schema"] in (
+            "cartray.reviews.snapshot.v2",
+            "cartray.reviews.snapshot.v3",
+            "cartray.reviews.snapshot.v4",
+        ):
+            fields += ("title",)
+        _object(item, fields)
+        if (
+            payload["schema"]
+            in ("cartray.reviews.snapshot.v2", "cartray.reviews.snapshot.v3", "cartray.reviews.snapshot.v4")
+            and item["title"] is not None
+        ):
+            _string(item["title"])
         for key in ("id", "revision_id", "subject_id", "kind", "author", "body", "verification"):
             _string(item[key])
+        for text in (item["author"], item["body"], item.get("title")):
+            if isinstance(text, str) and re.search(r"(?<=\S)@(?=\S)", text):
+                _fail("email-like public text requires explicit disposition")
         if not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", item["id"]):
             _fail("invalid contribution identity")
         if item["id"] in contributions or item["subject_id"] not in subjects:
@@ -192,7 +291,7 @@ def load_snapshot(data: bytes, *, expected_sha256: str, store: str, environment:
         rating = item["rating"]
         if rating is not None and (type(rating) is not int or not 1 <= rating <= 5 or item["kind"] != "review"):
             _fail("invalid rating")
-        _source_date(item["date"])
+        _source_date(item["date"], payload["schema"])
         _object(item["votes"], ("up", "down", "net"))
         votes = item["votes"]
         for key in ("up", "down", "net"):

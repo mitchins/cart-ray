@@ -169,3 +169,82 @@ def test_unroutable_subject_and_oversized_revision_are_rejected():
     data["publication_revision"] = 2**63
     with pytest.raises(SnapshotError):
         read(data)
+
+
+def test_v2_preserves_title_and_raw_timestamp_provenance():
+    data = snapshot()
+    data["schema"] = "cartray.reviews.snapshot.v2"
+    for item in data["contributions"]:
+        item["title"] = "A public title" if item["kind"] == "review" else None
+        item["date"]["source_local_raw"] = "2024-01-02 11:00:00"
+        item["date"]["source_utc_raw"] = None
+    value = read(data)
+    assert value["contributions"][0]["title"] == "A public title"
+    assert value["contributions"][0]["date"]["source_local_raw"] == "2024-01-02 11:00:00"
+    data["contributions"][0]["date"]["source_local_raw"] = "private canary"
+    with pytest.raises(SnapshotError):
+        read(data)
+
+
+def test_snapshot_rejects_email_like_public_text():
+    data = snapshot()
+    data["contributions"][0]["body"] = "Contact 'recipient@example.invalid' for details."
+    with pytest.raises(SnapshotError, match="email-like public text"):
+        read(data)
+
+
+def test_email_like_check_accepts_bounded_non_address_text():
+    data = snapshot()
+    data["contributions"][0]["body"] = "a" * 9999 + "@"
+    assert read(data)["contributions"][0]["body"].endswith("@")
+
+
+def test_source_timestamp_precision_is_not_invented():
+    data = snapshot()
+    data["contributions"][0]["date"] = {
+        "original": "2024-01-02T00:00:00.123Z",
+        "precision": "microsecond",
+        "timezone_provenance": "source_utc",
+        "utc": "2024-01-02T00:00:00.123000Z",
+    }
+    with pytest.raises(SnapshotError, match="declared precision"):
+        read(data)
+    data["contributions"][0]["date"] = {
+        "original": "2024-01-02T00:00:00Z",
+        "precision": "second",
+        "timezone_provenance": "source_utc",
+        "utc": "2024-01-02T00:00:00.000000Z",
+    }
+    with pytest.raises(SnapshotError, match="declared precision"):
+        read(data)
+    data["contributions"][0]["date"] = {
+        "original": "2024-01-02T00:00:00.123456Z",
+        "precision": "microsecond",
+        "timezone_provenance": "source_utc",
+        "utc": "2024-01-02T00:00:00.123456Z",
+    }
+    assert read(data)["contributions"][0]["date"]["original"].endswith(".123456Z")
+
+
+def test_snapshot_v3_requires_safe_public_attribution():
+    data = snapshot()
+    data["schema"] = "cartray.reviews.snapshot.v3"
+    data["source"]["public_attribution"] = "Example historical reviews"
+    for item in data["contributions"]:
+        item["title"] = None
+        item["date"]["source_local_raw"] = None
+        item["date"]["source_utc_raw"] = None
+    assert read(data)["source"]["public_attribution"] == "Example historical reviews"
+    for bad in ("private@example.invalid", "hello\nworld", "evil\u202elabel", "<script>"):
+        data["source"]["public_attribution"] = bad
+        with pytest.raises(SnapshotError, match="public source attribution"):
+            read(data)
+
+
+def test_canonical_paths_are_bounded_to_lookup_contract():
+    data = snapshot()
+    data["subjects"][0]["path"] = "/" + "a" * 2046 + "/"
+    assert len(read(data)["subjects"][0]["path"]) == 2048
+    data["subjects"][0]["path"] = "/" + "a" * 2047 + "/"
+    with pytest.raises(SnapshotError, match="subject path"):
+        read(data)

@@ -22,9 +22,16 @@
     "migrations/0010_invitation_delivery_claim.sql",
     "migrations/0011_review_management.sql",
     "migrations/0012_review_recovery_requests.sql",
-    "migrations/0013_recovery_retry_deferrals.sql"
+    "migrations/0013_recovery_retry_deferrals.sql",
+    "migrations/0014_unified_feed_index.sql",
+    "migrations/0015_imported_titles.sql",
+    "migrations/0016_snapshot_provenance.sql",
+    "migrations/0017_review_identity_links.sql",
+    "migrations/0018_public_source_attribution.sql",
+    "migrations/0019_subject_aliases.sql"
   ],
   "routes": [
+    "GET /reviews/v1/subject-lookup?alias={alias}",
     "GET /reviews/v1/subjects/{subject_id}/summary",
     "GET /reviews/v1/subjects/{subject_id}/contributions",
     "POST /reviews/v1/contributions (collect, test only)",

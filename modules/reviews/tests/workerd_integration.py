@@ -202,6 +202,10 @@ def main():
                 "rating": {"average": 4.5, "rated_count": 2},
                 "contribution_count": 3,
             }
+            with urllib.request.urlopen(URL + "summary", timeout=3) as response:
+                assert response.headers.get("Cache-Control") == "no-store"
+            with urllib.request.urlopen(URL + "contributions", timeout=3) as response:
+                assert response.headers.get("Cache-Control") == "no-store"
             status, body = request("contributions")
             result = json.loads(body)
             assert status == 200 and len(result["contributions"]) == 3
@@ -263,6 +267,180 @@ def main():
                 text=True,
             )
             assert json.loads(verify.stdout)[0]["results"][0]["n"] == 0
+            # An imported and a native contribution can share one canonical subject.
+            # Seed the approved native revision into D1 directly; lifecycle transition
+            # and aggregate maintenance are independently tested by native_workerd.
+            subprocess.run(
+                [
+                    *command,
+                    "INSERT INTO review_subjects VALUES "
+                    "('example-store','test','example-policy','product','/product/');"
+                    "INSERT INTO native_publication_versions VALUES ('example-store','test','example-policy',1,1,1,2);"
+                    "INSERT INTO native_reviews VALUES ('example-store','test','native-one','example-policy',"
+                    "'private-reviewer','published','native-revision',1735776000);"
+                    "INSERT INTO native_revisions VALUES ('example-store','test','native-revision','native-one',"
+                    "'Native',NULL,'Native content',2);",
+                ],
+                cwd=ROOT,
+                check=True,
+                stdout=subprocess.DEVNULL,
+            )
+            combined = json.loads(request("summary")[1])
+            assert combined["contribution_count"] == 4
+            assert combined["rating"] == {"average": 11 / 3, "rated_count": 3}
+            combined_list = json.loads(request("contributions")[1])
+            assert len(combined_list["contributions"]) == 4
+            assert any(x["id"] == "h-r" and len(x["replies"]) == 1 for x in combined_list["contributions"])
+            assert "private-reviewer" not in json.dumps(combined_list)
+            manifest = {
+                "schema": "cartray.reviews.identity-links.v1",
+                "store": "example-store",
+                "environment": "test",
+                "links": [
+                    {
+                        "subject_id": "example-policy",
+                        "source_identity": "synthetic-native",
+                        "source_contribution_id": "r",
+                        "source_revision_id": "r1",
+                        "source_snapshot_sha256": digest,
+                        "native_review_id": "native-one",
+                        "native_revision_id": "native-revision",
+                        "evidence_sha256": "a" * 64,
+                    }
+                ],
+            }
+            manifest_file = Path(directory) / "identity-manifest.json"
+            manifest_file.write_text(json.dumps(manifest))
+            link_cmd = [
+                sys.executable,
+                str(MODULE / "tools/reconcile_identities.py"),
+                str(manifest_file),
+                "--sha256",
+                hashlib.sha256(manifest_file.read_bytes()).hexdigest(),
+                "--store",
+                "example-store",
+                "--environment",
+                "test",
+            ]
+            for _ in range(2):
+                subprocess.run(link_cmd, env=env, cwd=ROOT, check=True, stdout=subprocess.DEVNULL)
+            linked_summary = json.loads(request("summary")[1])
+            assert linked_summary["contribution_count"] == 3
+            assert linked_summary["rating"] == {"average": 3, "rated_count": 2}
+            linked_list = json.loads(request("contributions")[1])["contributions"]
+            linked = next(item for item in linked_list if item["id"] == "n-native-one")
+            assert linked["historical_provenance"]["anchors"] == ["review-r"]
+            assert linked["replies"][0]["id"] == "h-a"
+            conflicting = json.loads(FIXTURE.read_bytes())
+            conflicting["snapshot_id"], conflicting["publication_revision"] = "linked-conflict", 2
+            conflicting["contributions"][0]["anchors"] = ["changed-anchor"]
+            conflict_file = Path(directory) / "linked-conflict.json"
+            conflict_file.write_text(json.dumps(conflicting))
+            failed = subprocess.run(
+                [
+                    sys.executable,
+                    str(MODULE / "tools/import_snapshot.py"),
+                    str(conflict_file),
+                    "--sha256",
+                    hashlib.sha256(conflict_file.read_bytes()).hexdigest(),
+                    "--store",
+                    "example-store",
+                    "--environment",
+                    "test",
+                ],
+                env=env,
+                cwd=ROOT,
+                capture_output=True,
+            )
+            assert failed.returncode != 0
+            assert json.loads(request("summary")[1])["snapshot_id"] == linked_summary["snapshot_id"]
+            rollback = subprocess.run(
+                [
+                    *command[:-1],
+                    "--json",
+                    "--command",
+                    "SELECT (SELECT COUNT(*) FROM review_snapshots WHERE snapshot_id='linked-conflict') snapshots, "
+                    "(SELECT COUNT(*) FROM review_snapshot_provenance WHERE snapshot_id='linked-conflict') sources, "
+                    "(SELECT COUNT(*) FROM review_snapshot_subjects WHERE snapshot_id='linked-conflict') subjects, "
+                    "(SELECT COUNT(*) FROM review_contributions WHERE snapshot_id='linked-conflict') contributions, "
+                    "(SELECT COUNT(*) FROM review_import_titles WHERE snapshot_id='linked-conflict') titles, "
+                    "(SELECT COUNT(*) FROM review_import_guard) guard_count",
+                ],
+                cwd=ROOT,
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            assert all(value == 0 for value in json.loads(rollback.stdout)[0]["results"][0].values())
+            subprocess.run(
+                [
+                    *command,
+                    "UPDATE native_reviews SET state='withdrawn' WHERE review_id='native-one';"
+                    "UPDATE native_publication_versions SET version=version+1, contribution_count=0, "
+                    "rated_count=0, rating_sum=0 WHERE subject_id='example-policy';",
+                ],
+                cwd=ROOT,
+                check=True,
+                stdout=subprocess.DEVNULL,
+            )
+            withdrawn = json.loads(request("contributions")[1])["contributions"]
+            assert all(item["id"] not in ("n-native-one", "h-r") for item in withdrawn)
+            removed = json.loads(FIXTURE.read_bytes())
+            removed["snapshot_id"], removed["publication_revision"] = "removed", 2
+            removed["contributions"] = [item for item in removed["contributions"] if item["id"] not in ("r", "a")]
+            removed["summaries"][0].update({"count": 1, "sum": 4, "histogram": [0, 0, 0, 1, 0]})
+            removed_file = Path(directory) / "removed.json"
+            removed_file.write_text(json.dumps(removed))
+            subprocess.run(
+                [
+                    sys.executable,
+                    str(MODULE / "tools/import_snapshot.py"),
+                    str(removed_file),
+                    "--sha256",
+                    hashlib.sha256(removed_file.read_bytes()).hexdigest(),
+                    "--store",
+                    "example-store",
+                    "--environment",
+                    "test",
+                ],
+                env=env,
+                cwd=ROOT,
+                check=True,
+                capture_output=True,
+            )
+            final_summary = json.loads(request("summary")[1])
+            assert final_summary["contribution_count"] == 2
+            assert final_summary["rating"] == {"average": 4, "rated_count": 1}
+            assert all(
+                item["id"] not in ("n-native-one", "h-r")
+                for item in json.loads(request("contributions")[1])["contributions"]
+            )
+            reappearing = json.loads(json.dumps(removed))
+            reappearing["snapshot_id"], reappearing["publication_revision"] = "reappearing", 3
+            old_reply = next(item for item in json.loads(FIXTURE.read_bytes())["contributions"] if item["id"] == "a")
+            old_reply["parent_id"] = "u"
+            reappearing["contributions"].append(old_reply)
+            reappearing_file = Path(directory) / "reappearing.json"
+            reappearing_file.write_text(json.dumps(reappearing))
+            denied = subprocess.run(
+                [
+                    sys.executable,
+                    str(MODULE / "tools/import_snapshot.py"),
+                    str(reappearing_file),
+                    "--sha256",
+                    hashlib.sha256(reappearing_file.read_bytes()).hexdigest(),
+                    "--store",
+                    "example-store",
+                    "--environment",
+                    "test",
+                ],
+                env=env,
+                cwd=ROOT,
+                capture_output=True,
+            )
+            assert denied.returncode != 0
+            assert json.loads(request("summary")[1])["snapshot_id"] == final_summary["snapshot_id"]
+            print("Workerd combined summary:", json.dumps(combined))
             print("Workerd summary:", json.dumps(summary))
             print("Workerd list: three reviews, one unrated, one attached reply")
         finally:

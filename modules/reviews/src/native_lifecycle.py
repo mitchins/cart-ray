@@ -797,6 +797,7 @@ async def handle_write(request, env, path):
         if (
             data["kind"] not in ("product", "service", "store")
             or not isinstance(data["path"], str)
+            or len(data["path"]) > 2048
             or not re.fullmatch(r"/(?:[A-Za-z0-9_-]+/)*", data["path"])
         ):
             return fail(400, "invalid subject")
@@ -806,9 +807,10 @@ async def handle_write(request, env, path):
                 [
                     db.prepare(
                         "INSERT INTO native_guard SELECT CASE WHEN NOT EXISTS(SELECT 1 FROM "
-                        "review_snapshot_subjects WHERE store_key=? AND environment=? AND subject_id=?) "
+                        "review_snapshot_subjects WHERE store_key=? AND environment=? AND subject_id=? "
+                        "AND (kind<>? OR canonical_path<>?)) "
                         "THEN 1 ELSE 0 END"
-                    ).bind(store, environment, sid),
+                    ).bind(store, environment, sid, data["kind"], data["path"]),
                     db.prepare("INSERT INTO review_subjects VALUES (?,?,?,?,?)").bind(
                         store, environment, sid, data["kind"], data["path"]
                     ),
@@ -1201,6 +1203,7 @@ async def native_read(db, store, environment, subject_id, endpoint, params, nati
         {
             "id": x["review_id"],
             "kind": "review",
+            "source": {"kind": "native", "attribution": None},
             "author": x["author"],
             "title": x["title"],
             "body": x["body"],
