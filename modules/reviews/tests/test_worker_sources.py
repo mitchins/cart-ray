@@ -35,3 +35,36 @@ def test_single_source_selection_invalidates_on_other_source_activation(lifecycl
     assert asyncio.run(module.publication_unchanged(*args, native))
     db.db.execute("INSERT INTO review_publications VALUES ('s','test','one',1)")
     assert not asyncio.run(module.publication_unchanged(*args, native))
+
+    request = types.SimpleNamespace(method="GET", url="https://example.invalid/reviews/v1/subjects/p/summary")
+    worker = module.Default()
+    worker.env = types.SimpleNamespace(
+        REVIEWS_MODE="read_only", REVIEWS_STORE_KEY="s", REVIEWS_ENVIRONMENT="test", REVIEWS_DB=db
+    )
+    original_sources = module.subject_sources
+    db.db.execute("DELETE FROM native_publication_versions")
+    db.db.execute("DELETE FROM review_subjects")
+    calls = 0
+
+    async def activate_native(*source_args):
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            db.db.execute("INSERT INTO review_subjects VALUES ('s','test','p','product','/p/')")
+            db.db.execute("INSERT INTO native_publication_versions VALUES ('s','test','p',0,0,0,0)")
+        return await original_sources(*source_args)
+
+    module.subject_sources = activate_native
+    assert asyncio.run(worker.fetch(request)).status == 409
+    db.db.execute("DELETE FROM review_publications")
+    calls = 0
+
+    async def activate_history(*source_args):
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            db.db.execute("INSERT INTO review_publications VALUES ('s','test','one',1)")
+        return await original_sources(*source_args)
+
+    module.subject_sources = activate_history
+    assert asyncio.run(worker.fetch(request)).status == 409
