@@ -16,9 +16,26 @@ test('moderation binds both review and revision, and validates confirmation', as
   let request; const client = createClient(async (url, options) => { request = [url, options]; return response({ review_id: id, status: 'published' }); });
   await client.decide(review, 'approve');
   assert.equal(request[0], `/reviews-admin/v1/contributions/${id}/approve`); assert.deepEqual(JSON.parse(request[1].body), { revision_id: revision });
-  await assert.rejects(client.decide(review, 'withdraw'), ConsoleError);
+  await assert.rejects(client.decide(review, 'unknown'), ConsoleError);
   await assert.rejects(createClient(async () => response({ review_id: id, status: 'rejected' })).decide(review, 'approve'), /could not confirm/);
   await assert.rejects(createClient(async () => response(null)).decide(review, 'approve'), /could not confirm.*Refresh/);
+});
+test('published listing, history pagination and withdrawal use bounded same-origin endpoints', async () => {
+  const event = 'c'.repeat(64), calls = [];
+  const client = createClient(async (url, options) => {
+    calls.push([url, options]);
+    if (url.endsWith('/published')) return response({ published: [{ ...review, subject_name: 'Example' }], next_after: null });
+    if (url.includes('/revisions')) return response({ review_id: id, revisions: [{ revision_id: revision, author: 'A', body: 'B', title: null, rating: 2 }], next_after: null });
+    if (url.includes('/audit')) return response({ review_id: id, audit: [{ event_id: event, revision_id: revision, action: 'approve', actor: 'staff:x', occurred_at: 1 }], next_after: event });
+    return response({ review_id: id, status: 'withdrawn' });
+  });
+  assert.equal((await client.published()).published[0].subject_name, 'Example');
+  assert.equal((await client.history(id, 'revisions')).records[0].revision_id, revision);
+  assert.equal((await client.history(id, 'audit')).next_after, event);
+  await client.history(id, 'audit', event); assert.match(calls[3][0], new RegExp(`after=${event}$`));
+  await client.decide(review, 'withdraw'); assert.match(calls[4][0], /\/withdraw$/);
+  await assert.rejects(client.history(id, 'untrusted'), /Invalid history/);
+  await assert.rejects(createClient(async () => response({ review_id: id, audit: [{ event_id: event, action: {}, actor: 'x', occurred_at: 1 }], next_after: null })).history(id, 'audit'), /invalid response/);
 });
 test('stalled fetches and response bodies abort within the deadline and explain uncertain decisions', async () => {
   let signal;

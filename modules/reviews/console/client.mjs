@@ -7,11 +7,11 @@ function entry(item) {
   if (!item || !ID.test(item.review_id || '') || !ID.test(item.revision_id || '') ||
       typeof item.subject_id !== 'string' || item.subject_id.length > 128 ||
       ![null, undefined].includes(item.rating) && (!Number.isInteger(item.rating) || item.rating < 1 || item.rating > 5) ||
-      ['author', 'title', 'body'].some((key) => item[key] != null && typeof item[key] !== 'string')) {
+      ['author', 'title', 'body', 'subject_name'].some((key) => item[key] != null && typeof item[key] !== 'string')) {
     throw new ConsoleError('The review service returned an invalid response.');
   }
   return { review_id: item.review_id, revision_id: item.revision_id, subject_id: item.subject_id,
-    author: item.author || '', title: item.title || '', body: item.body || '', rating: item.rating ?? null };
+    subject_name: item.subject_name || '', author: item.author || '', title: item.title || '', body: item.body || '', rating: item.rating ?? null };
 }
 const UNCERTAIN = 'We could not confirm whether the decision completed. Refresh the queue before trying again.';
 async function responseJson(response, mutation = false) {
@@ -37,19 +37,34 @@ export function createClient(fetcher = fetch, timeoutMs = 8000) {
       throw new ConsoleError(mutation ? UNCERTAIN : 'The review service is temporarily unavailable. Please try again.');
     } finally { clearTimeout(timer); }
   }
+  async function list(kind, after = null) {
+    if (after !== null && !ID.test(after)) throw new ConsoleError('Invalid queue cursor. Refresh the queue.');
+    const data = await request(`/reviews-admin/v1/${kind}` + (after ? `?after=${after}` : ''), { credentials: 'same-origin', cache: 'no-store', headers: { Accept: 'application/json' } });
+    if (!data || !Array.isArray(data[kind]) || data[kind].length > 50 || !(data.next_after === null || ID.test(data.next_after))) throw new ConsoleError('The review service returned an invalid response.');
+    const records = data[kind].map(entry);
+    if (new Set(records.map((item) => item.review_id)).size !== records.length || (data.next_after && !records.some((item) => item.review_id === data.next_after))) throw new ConsoleError('The review service returned an invalid response.');
+    return { records, next_after: data.next_after };
+  }
   return {
     async pending(after = null) {
-      if (after !== null && !ID.test(after)) throw new ConsoleError('Invalid queue cursor. Refresh the queue.');
-      const data = await request('/reviews-admin/v1/pending' + (after ? `?after=${after}` : ''), { credentials: 'same-origin', cache: 'no-store', headers: { Accept: 'application/json' } });
-      if (!data || !Array.isArray(data.pending) || data.pending.length > 50 || !(data.next_after === null || ID.test(data.next_after))) throw new ConsoleError('The review service returned an invalid response.');
-      const pending = data.pending.map(entry);
-      if (new Set(pending.map((item) => item.review_id)).size !== pending.length || (data.next_after && !pending.some((item) => item.review_id === data.next_after))) throw new ConsoleError('The review service returned an invalid response.');
-      return { pending, next_after: data.next_after };
+      const page = await list('pending', after); return { pending: page.records, next_after: page.next_after };
+    },
+    async published(after = null) { const page = await list('published', after); return { published: page.records, next_after: page.next_after }; },
+    async history(reviewId, kind, after = null) {
+      if (!ID.test(reviewId || '') || !['revisions', 'audit'].includes(kind) || (after !== null && !ID.test(after))) throw new ConsoleError('Invalid history request. Refresh the queue.');
+      const data = await request(`/reviews-admin/v1/contributions/${reviewId}/${kind}` + (after ? `?after=${after}` : ''), { credentials: 'same-origin', cache: 'no-store', headers: { Accept: 'application/json' } });
+      const key = kind === 'audit' ? 'event_id' : 'revision_id';
+      if (!data || data.review_id !== reviewId || !Array.isArray(data[kind]) || data[kind].length > 50 || !(data.next_after === null || ID.test(data.next_after)) || data[kind].some((item) => !item || !ID.test(item[key] || '')) || (data.next_after && !data[kind].some((item) => item[key] === data.next_after))) throw new ConsoleError('The review service returned an invalid response.');
+      if (new Set(data[kind].map((item) => item[key])).size !== data[kind].length || data[kind].some((item) => kind === 'audit'
+        ? typeof item.action !== 'string' || typeof item.actor !== 'string' || !Number.isSafeInteger(item.occurred_at) || !ID.test(item.revision_id || '')
+        : ['author', 'title', 'body'].some((field) => item[field] != null && typeof item[field] !== 'string') || !(item.rating == null || Number.isInteger(item.rating) && item.rating >= 1 && item.rating <= 5))) throw new ConsoleError('The review service returned an invalid response.');
+      return { records: data[kind], next_after: data.next_after };
     },
     async decide(item, action) {
-      if (!item || !ID.test(item.review_id || '') || !ID.test(item.revision_id || '') || !['approve', 'reject'].includes(action)) throw new ConsoleError('Invalid moderation request. Refresh the queue.');
+      if (!item || !ID.test(item.review_id || '') || !ID.test(item.revision_id || '') || !['approve', 'reject', 'withdraw'].includes(action)) throw new ConsoleError('Invalid moderation request. Refresh the queue.');
       const data = await request(`/reviews-admin/v1/contributions/${item.review_id}/${action}`, { method: 'POST', credentials: 'same-origin', cache: 'no-store', headers: { 'Content-Type': 'application/json', Accept: 'application/json' }, body: JSON.stringify({ revision_id: item.revision_id }) }, true);
-      if (!data || typeof data !== 'object' || data.review_id !== item.review_id || data.status !== (action === 'approve' ? 'published' : 'rejected')) throw new ConsoleError(UNCERTAIN);
+      const expected = { approve: 'published', reject: 'rejected', withdraw: 'withdrawn' }[action];
+      if (!data || typeof data !== 'object' || data.review_id !== item.review_id || data.status !== expected) throw new ConsoleError(UNCERTAIN);
       return data;
     },
   };

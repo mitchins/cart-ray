@@ -9,6 +9,7 @@ h2 { font-size: 1.3rem; }
 .eyebrow { color: #315a76; font-size: .8rem; font-weight: 700; letter-spacing: .07em; text-transform: uppercase; }
 .heading { display: flex; align-items: start; justify-content: space-between; gap: 1rem; }
 button { border: 1px solid #274b68; background: #fff; color: #173a56; border-radius: .4rem; font: inherit; font-weight: 600; padding: .55rem .9rem; cursor: pointer; }
+select { font: inherit; margin-left: .5rem; padding: .4rem; }
 button.primary { color: white; background: #173a56; }
 button:disabled { opacity: .5; cursor: wait; }
 button:focus-visible { outline: 3px solid #bc7417; outline-offset: 3px; }
@@ -21,3 +22,7 @@ button:focus-visible { outline: 3px solid #bc7417; outline-offset: 3px; }
 #error { border-left: 4px solid #a12929; padding: .7rem; color: #802020; background: #fff1ef; }
 aside { margin-top: 2rem; }
 @media (max-width: 560px) { .heading { display: block; } .heading button { margin-top: .5rem; } }
+.history { border-top: 1px solid #d5dfe8; margin-top: 1.2rem; padding-top: 1rem; }
+.history h4 { margin: 0 0 .6rem; }
+.history-group { margin-bottom: .7rem; }
+.history-entry { border-left: 3px solid #d5dfe8; margin-top: .6rem; padding-left: .7rem; }
