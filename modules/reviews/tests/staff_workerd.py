@@ -76,7 +76,7 @@ def main():
             "REVIEWS_STAFF_MODE": "cloudflare_access",
             "REVIEWS_STAFF_ISSUER": ISSUER,
             "REVIEWS_STAFF_AUDIENCE": AUDIENCE,
-            "REVIEWS_STAFF_POLICY": json.dumps({"staff-1": ["reviews:moderate"]}),
+            "REVIEWS_STAFF_POLICY": json.dumps({"staff-1": ["reviews:moderate"], "operator": ["reviews:operations"]}),
             "REVIEWS_STAFF_TEST_JWKS": json.dumps(jwks),
         }
         process = start("wrangler.test.toml", directory, "collect", None, options)
@@ -84,11 +84,18 @@ def main():
             now = int(time.time())
             claims = {"iss": ISSUER, "aud": [AUDIENCE], "sub": "staff-1", "iat": now - 1, "exp": now + 120}
             assertion = token(claims)
+            operations_assertion = token(claims | {"sub": "operator"})
             assert signed_call("/reviews-admin/v1/pending", bearer=ADMIN)[0] == 401
             assert signed_call("/reviews-admin/v1/pending", assertion=token(claims | {"exp": now - 1}))[0] == 401
             assert signed_call("/reviews-admin/v1/pending", assertion=token(claims | {"aud": ["wrong"]}))[0] == 401
             assert signed_call("/reviews-admin/v1/pending", assertion=token(claims | {"sub": "other"}))[0] == 401
             assert signed_call("/reviews-admin/v1/pending", assertion=assertion)[0] == 200
+            assert signed_call("/reviews-admin/v1/deliveries?state=uncertain", assertion=assertion)[0] == 401
+            status, deliveries = signed_call(
+                "/reviews-admin/v1/deliveries?state=uncertain", assertion=operations_assertion
+            )
+            assert status == 200 and deliveries["deliveries"] == []
+            assert signed_call("/reviews-admin/v1/pending", assertion=operations_assertion)[0] == 401
             assert (
                 signed_call(
                     "/reviews-admin/v1/subjects",

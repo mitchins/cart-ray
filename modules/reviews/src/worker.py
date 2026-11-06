@@ -7,6 +7,7 @@ from urllib.parse import parse_qs, urlparse
 from cartray_reviews.lookup import resolve_subject
 from cartray_reviews.unified import unified_read
 from native_lifecycle import (
+    delivery_queue_read,
     discard_body,
     handle_write,
     native_read,
@@ -84,6 +85,10 @@ class Default(WorkerEntrypoint):
             if mode not in ("collect", "verified_acquisition_only"):
                 return Response.json({"error": "not found"}, status=404)
             return await published_staff_read(request, self.env, url.query)
+        if str(request.method) == "GET" and url.path == "/reviews-admin/v1/deliveries":
+            if mode not in ("collect", "verified_acquisition_only"):
+                return Response.json({"error": "not found"}, status=404)
+            return await delivery_queue_read(request, self.env, url.query)
         staff_history = re.fullmatch(
             r"/reviews-admin/v1/contributions/([0-9a-f]{64})/(revisions|audit|reply-revisions|reply-audit)", url.path
         )
