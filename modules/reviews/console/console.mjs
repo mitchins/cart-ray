@@ -21,13 +21,14 @@ function card(item) {
   const confirmButton = element('button', 'Confirm'); confirmButton.type = 'button';
   const cancelButton = element('button', 'Cancel'); cancelButton.type = 'button';
   confirmation.append(prompt, confirmButton, cancelButton);
-  let selected = null;
-  cancelButton.addEventListener('click', () => { confirmation.hidden = true; selected = null; });
+  let selected = null, trigger = null;
+  cancelButton.addEventListener('click', () => { confirmation.hidden = true; selected = null; trigger?.focus(); });
   for (const [button, action] of [[approve, 'approve'], [reject, 'reject']]) {
     button.setAttribute('aria-label', `${button.textContent}: ${item.title || 'customer feedback'} for ${item.subject_id}`);
     button.addEventListener('click', () => {
       if (loading) return;
       selected = action;
+      trigger = button;
       prompt.textContent = action === 'approve' ? 'Publish this review?' : 'Reject this review?';
       confirmation.hidden = false;
       confirmButton.focus();
@@ -42,6 +43,8 @@ function card(item) {
         article.remove(); seen.delete(item.review_id);
         status.textContent = action === 'approve' ? 'Review approved and published.' : 'Review rejected and kept private.';
         if (!queue.children.length && !cursor) queue.append(element('p', 'No reviews are waiting for moderation.'));
+        refresh.disabled = false;
+        refresh.focus();
       } catch (e) { message(friendly(e)); }
       finally { loading = false; approve.disabled = reject.disabled = confirmButton.disabled = cancelButton.disabled = refresh.disabled = more.disabled = false; }
   });

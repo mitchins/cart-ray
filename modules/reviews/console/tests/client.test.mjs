@@ -17,7 +17,21 @@ test('moderation binds both review and revision, and validates confirmation', as
   await client.decide(review, 'approve');
   assert.equal(request[0], `/reviews-admin/v1/contributions/${id}/approve`); assert.deepEqual(JSON.parse(request[1].body), { revision_id: revision });
   await assert.rejects(client.decide(review, 'withdraw'), ConsoleError);
-  await assert.rejects(createClient(async () => response({ review_id: id, status: 'rejected' })).decide(review, 'approve'), /invalid response/);
+  await assert.rejects(createClient(async () => response({ review_id: id, status: 'rejected' })).decide(review, 'approve'), /could not confirm/);
+});
+test('stalled fetches and response bodies abort within the deadline and explain uncertain decisions', async () => {
+  let signal;
+  const hanging = async (_url, options) => { signal = options.signal; return new Promise(() => {}); };
+  await assert.rejects(createClient(hanging, 15).pending(), /timed out/);
+  assert.equal(signal.aborted, true);
+  await assert.rejects(createClient(hanging, 15).decide(review, 'approve'), /could not confirm.*Refresh/);
+  assert.equal(signal.aborted, true);
+  const stalledBody = async (_url, options) => { signal = options.signal; return { ok: true, json: () => new Promise(() => {}) }; };
+  await assert.rejects(createClient(stalledBody, 15).pending(), /timed out/);
+  assert.equal(signal.aborted, true);
+  await assert.rejects(createClient(stalledBody, 15).decide(review, 'approve'), /could not confirm.*Refresh/);
+  assert.equal(signal.aborted, true);
+  await assert.rejects(createClient(async () => response({}, 503), 15).decide(review, 'approve'), /could not confirm.*Refresh/);
 });
 test('invalid queue records, cursors and unexpected service responses fail closed', async () => {
   await assert.rejects(createClient().pending('bad'), /cursor/);

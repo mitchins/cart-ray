@@ -6,7 +6,7 @@ class Element {
   replaceChildren(...items) { this.children = []; this.append(...items); }
   remove() { this.parent.children = this.parent.children.filter((child) => child !== this); }
   setAttribute(key, value) { this[key] = value; }
-  focus() {}
+  focus() { globalThis.lastFocused = this; }
   addEventListener(name, handler) { this.listeners[name] = handler; }
   async click() { return this.listeners.click(); }
 }
@@ -28,9 +28,13 @@ test('review text is rendered as text, decisions use revisions, and a failed ref
     phase = 'failure'; await nodes.refresh.click(); assert.equal(nodes.queue.children[0], card); assert.match(nodes.error.textContent, /temporarily/);
     phase = 'queue'; await card.children[4].children[0].click();
     assert.equal(card.children[5].hidden, false);
+    await card.children[5].children[2].click();
+    assert.equal(globalThis.lastFocused, card.children[4].children[0]);
+    await card.children[4].children[0].click();
     await card.children[5].children[1].click();
     assert.equal(sent[0], `/reviews-admin/v1/contributions/${id}/approve`);
     assert.deepEqual(JSON.parse(sent[1].body), { revision_id: revision });
     assert.match(nodes.status.textContent, /approved/); assert.match(nodes.queue.children[0].textContent, /No reviews/);
-  } finally { delete globalThis.document; delete globalThis.fetch; }
+    assert.equal(globalThis.lastFocused, nodes.refresh);
+  } finally { delete globalThis.document; delete globalThis.fetch; delete globalThis.lastFocused; }
 });
