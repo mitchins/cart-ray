@@ -1,0 +1,14 @@
+name = "cartray-reviews-publication-local-test"
+main = "worker.mjs"
+compatibility_date = "2026-08-31"
+workers_dev = false
+
+[vars]
+PUBLICATION_MODE = "disabled"
+PUBLICATION_ENVIRONMENT = "test"
+PUBLICATION_CANONICAL_ORIGIN = "https://example.invalid"
+
+[[d1_databases]]
+binding = "PUBLICATION_DB"
+database_name = "cartray-reviews-publication-local-test"
+database_id = "00000000-0000-0000-0000-000000000004"

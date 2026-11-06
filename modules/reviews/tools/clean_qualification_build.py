@@ -25,10 +25,12 @@ SOURCES = (
     "cartray_reviews/__init__.py",
     "cartray_reviews/acquisition.py",
     "cartray_reviews/invitations.py",
+    "cartray_reviews/lookup.py",
     "cartray_reviews/management.py",
     "cartray_reviews/recovery.py",
     "cartray_reviews/snapshot.py",
     "cartray_reviews/storage.py",
+    "cartray_reviews/unified.py",
 )
 
 
@@ -210,7 +212,11 @@ def main():
                 raise RuntimeError(f"vendored file changed in bundle: {relative}")
         exercise_worker(project)
         hashes = {}
-        for relative in SOURCES:
+        source_root = project / "modules/reviews/src"
+        source_files = {str(path.relative_to(source_root)) for path in source_root.rglob("*.py")}
+        if not set(SOURCES).issubset(source_files):
+            raise RuntimeError("required runtime source is missing")
+        for relative in sorted(source_files):
             source = (project / "modules/reviews/src" / relative).read_bytes()
             bundled = (project / "bundle" / relative).read_bytes()
             if source != bundled:

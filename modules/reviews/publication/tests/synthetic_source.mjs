@@ -1,0 +1,32 @@
+// Test-only HTTP source, generated from an actual local synthetic R4 response.
+// This is a fixture adapter, not an independently qualified Reviews Worker.
+import fixture from './synthetic_source_data.mjs';
+const headers = { 'Cache-Control': 'no-store', 'Content-Type': 'application/json', 'X-Synthetic-Source': 'r5-fixture' };
+export default {
+  async fetch(request, env) {
+    const url = new URL(request.url);
+    if (['/__test/off', '/__test/on'].includes(url.pathname) && request.method === 'POST' && env.SOURCE_CONTROL_DB) {
+      if (!env.SOURCE_CONTROL_TOKEN || request.headers.get('Authorization') !== `Bearer ${env.SOURCE_CONTROL_TOKEN}`) return new Response(null, { status: 401, headers });
+      await env.SOURCE_CONTROL_DB.prepare('UPDATE synthetic_source_state SET available=? WHERE singleton=1').bind(url.pathname.endsWith('/on') ? 1 : 0).run();
+      return Response.json({ ok: true }, { headers });
+    }
+    if (request.method !== 'GET') return new Response(null, { status: 405 });
+    if (url.pathname === '/__test/health') {
+      console.log('synthetic source health', env.R5_BUILD_ID);
+      return Response.json({ service: 'r5-synthetic-source', build: env.R5_BUILD_ID }, { headers });
+    }
+    if (env.SOURCE_CONTROL_DB) {
+      const state = await env.SOURCE_CONTROL_DB.prepare('SELECT available FROM synthetic_source_state WHERE singleton=1').first();
+      if (!state?.available) return new Response(null, { status: 503, headers });
+    }
+    if (url.pathname === '/reviews/v1/subject-lookup' && url.searchParams.get('alias') === fixture.subject.id) {
+      return Response.json({ subject_id: fixture.subject.id, kind: fixture.subject.kind, canonical_path: fixture.subject.canonical_path }, { headers });
+    }
+    if (url.pathname === `/reviews/v1/subjects/${fixture.subject.id}/summary`) return Response.json(fixture.summary, { headers });
+    if (url.pathname === `/reviews/v1/subjects/${fixture.subject.id}/contributions` && !url.searchParams.has('after')) {
+      const page = { ...fixture.pages[0] }; delete page.request_after;
+      return Response.json(page, { headers });
+    }
+    return new Response(null, { status: 404, headers });
+  }
+};
