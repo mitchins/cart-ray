@@ -127,7 +127,7 @@ function sourceOrigin(env) {
 async function sourceJson(env, path, signal) {
   const origin = sourceOrigin(env); if (!origin) throw new Error('invalid source');
   const response = await fetch(new URL(path, origin), { headers: { Accept: 'application/json' }, redirect: 'manual', cache: 'no-store', signal });
-  if (!response.ok || !/\bno-store\b/i.test(response.headers.get('Cache-Control') || '')) throw new Error(`source unavailable (status ${response.status}, no-store ${/\bno-store\b/i.test(response.headers.get('Cache-Control') || '')})`);
+  if (!response.ok || !/\bno-store\b/i.test(response.headers.get('Cache-Control') || '')) throw new Error(`source unavailable (status ${response.status}, fixture ${response.headers.get('X-Synthetic-Source') === 'r5-fixture'})`);
   const reader = response.body?.getReader(); if (!reader) throw new Error('missing source body');
   const chunks = []; let size = 0;
   try {
