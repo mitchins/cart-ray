@@ -458,3 +458,116 @@ def test_scoped_public_attribution_never_exposes_private_source_identity(monkeyp
         "attribution": "Example historical reviews",
     }
     assert "PRIVATE_SOURCE_IDENTITY" not in json.dumps(linked)
+
+
+def test_linked_native_edit_never_republishes_historical_copy(lifecycle, monkeypatch):
+    from unittest.mock import patch
+
+    from test_acquisition_invitations import issue, stores
+
+    db, commerce = stores()
+    db.db.execute(
+        "INSERT INTO native_publication_versions(store_key,environment,subject_id) VALUES ('store','test','policy')"
+    )
+    db.db.commit()
+    invitation = issue(db, commerce)
+    env = SimpleNamespace(
+        REVIEWS_DB=db,
+        CARTRAY_DB=commerce,
+        REVIEWS_STORE_KEY="store",
+        REVIEWS_ENVIRONMENT="test",
+        REVIEWS_MODE="verified_acquisition_only",
+        REVIEWS_TEST_ADMIN_TOKEN="a" * 40,
+        REVIEWS_SETTLEMENT_TOKEN="b" * 40,
+        REVIEWS_INVITATION_KEY="c" * 40,
+        REVIEWS_REVIEWER_KEY="d" * 40,
+    )
+    with patch.object(lifecycle.time, "time", return_value=101):
+        created = invoke(
+            lifecycle,
+            env,
+            "/reviews/v1/contributions",
+            {"subject_id": "policy", "body": "Original", "rating": 5, "invitation_token": invitation["token"]},
+            key="linked-submission",
+        )
+        assert created.status == 202
+        review, revision = created.body["review_id"], created.body["revision_id"]
+        approve = "/reviews-admin/v1/contributions/" + review + "/approve"
+        assert invoke(lifecycle, env, approve, {"revision_id": revision}, admin=True).status == 200
+        original = json.loads((MODULE / "tests/fixtures/approved-synthetic.json").read_bytes())
+        original["store"] = "store"
+        original["schema"] = "cartray.reviews.snapshot.v3"
+        original["source"]["public_attribution"] = "Example historical reviews"
+        original["subjects"][0].update({"id": "policy", "path": "/policy/"})
+        for item in original["contributions"]:
+            item["subject_id"] = "policy"
+            item["title"] = None
+            item["date"]["source_local_raw"] = None
+            item["date"]["source_utc_raw"] = None
+        original["summaries"][0]["subject_id"] = "policy"
+        raw = json.dumps(original).encode()
+
+        def execute(_flag, filename):
+            db.db.executescript("BEGIN;\n" + Path(filename).read_text() + "\nCOMMIT;")
+
+        monkeypatch.setattr(importer, "execute", execute)
+        source_digest = hashlib.sha256(raw).hexdigest()
+        importer.import_snapshot(raw, digest=source_digest, store="store", environment="test")
+        db.db.execute(
+            "INSERT INTO review_identity_links VALUES ('store','test','policy','synthetic-native','r','r1',?,?,?,?)",
+            (source_digest, review, revision, "a" * 64),
+        )
+        db.db.commit()
+
+        def public(endpoint):
+            return asyncio.run(unified_read(db, "store", "test", "policy", endpoint, {}, TestResponse)).body
+
+        initial = public("summary")
+        assert initial["rating"] == {"rated_count": 2, "average": 4.5}
+        management = "/reviews/v1/manage/" + review + "/"
+        edit = invoke(
+            lifecycle,
+            env,
+            management + "edit",
+            {
+                "management_token": created.body["management_token"],
+                "revision_id": revision,
+                "update": {"body": "Corrected", "rating": 2},
+            },
+            key="linked-edit",
+        )
+        assert edit.status == 200 and edit.body["status"] == "pending"
+        pending = public("summary")
+        assert pending["contribution_count"] == 2 and pending["rating"] == {"rated_count": 1, "average": 4}
+        assert pending["snapshot_id"] != initial["snapshot_id"]
+        pending_text = json.dumps(public("contributions"))
+        assert "Original" not in pending_text and review not in pending_text
+        assert '"id": "h-r"' not in pending_text and '"id": "h-a"' not in pending_text
+        assert invoke(lifecycle, env, approve, {"revision_id": edit.body["revision_id"]}, admin=True).status == 200
+        approved = public("summary")
+        assert approved["contribution_count"] == 3 and approved["rating"] == {"rated_count": 2, "average": 3}
+        assert approved["snapshot_id"] != pending["snapshot_id"]
+        listing = public("contributions")
+        linked = next(item for item in listing["contributions"] if item["id"] == "n-" + review)
+        assert linked["body"] == "Corrected" and linked["verification"] == "cartray_verified_acquisition"
+        assert linked["source"] == {"kind": "native", "attribution": None}
+        assert linked["historical_provenance"]["source"] == {
+            "kind": "historical",
+            "attribution": "Example historical reviews",
+        }
+        assert linked["historical_provenance"]["anchors"] == ["review-r"]
+        assert linked["replies"][0]["id"] == "h-a"
+        withdrawal = invoke(
+            lifecycle,
+            env,
+            management + "withdraw",
+            {"management_token": created.body["management_token"], "revision_id": edit.body["revision_id"]},
+            key="linked-withdraw",
+        )
+        assert withdrawal.status == 200
+        withdrawn = public("summary")
+        assert withdrawn["contribution_count"] == 2 and withdrawn["rating"] == {"rated_count": 1, "average": 4}
+        assert withdrawn["snapshot_id"] != approved["snapshot_id"]
+        withdrawn_text = json.dumps(public("contributions"))
+        assert "Corrected" not in withdrawn_text and review not in withdrawn_text
+        assert '"id": "h-r"' not in withdrawn_text and '"id": "h-a"' not in withdrawn_text
