@@ -65,6 +65,16 @@ uv run pywrangler dev --config modules/reviews/wrangler.test.toml --local --port
 
 The installer verifies a checksum ledger, applies missing migrations and rejects unknown, changed or out-of-order migrations. Running it again is a no-op. Start without the mode override to disable all routes. Import is an explicit operator action; the caller must independently approve and pin the exact bytes. Repeating an import is idempotent, while reused identities with changed bytes, revision conflicts and stale revisions are rejected. A failed D1 batch retains the previous publication. The local tools never target a remote D1.
 
+In test collection modes, authenticated staff with `reviews:moderate` can use
+`GET /reviews-admin/v1/published` to select a published native review for a
+revision-bound withdrawal. Each item includes an approved `subject_name` when
+one exists; otherwise it is null. The per-review `/revisions` and `/audit`
+reads expose only that scoped native review's history. These lists use opaque
+`after` cursors and at most 50 rows and 128,000 serialized bytes per response.
+History is ordered by identifier, not chronology; revision timestamps are not
+invented. Cursor reads are not snapshot-consistent: concurrent moderation or
+new revisions can change later pages, so refresh to obtain a current view. None of these staff endpoints is a production authorization boundary.
+
 `GET /reviews/v1/subjects/example-policy/summary` and `/reviews/v1/subjects/example-policy/contributions` are scoped to the Worker's configured store and environment. Lists use a limit of 1–50 (default 20); use the returned `next_after` together with `snapshot_id` as `?after=...&snapshot=...` for the next page. A changed publication invalidates an old cursor. Imported reviews order by original source calendar day with unknown days last; native reviews order by submission time. IDs break ties. Replies accompany their selected parent. Only published, allowlisted content is returned. A fresh native subject produces an empty summary without importing anything. When a historical and native subject share the same canonical kind and path, the experimental test-only unified feed orders both by calendar day and source-qualified ID, and binds pagination to both publication versions. Cross-source identity reconciliation is not yet qualified; overlapping subjects fail closed in live.
 
 This bounded local slice accepts at most 200 subjects, 200 contributions and 90,000 bytes of ASCII-escaped snapshot JSON in one import. The importer rejects larger inputs instead of publishing a partial snapshot. These limits are implementation bounds, not claims about the historical source inventory.

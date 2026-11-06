@@ -6,7 +6,14 @@ from urllib.parse import parse_qs, urlparse
 
 from cartray_reviews.lookup import resolve_subject
 from cartray_reviews.unified import unified_read
-from native_lifecycle import discard_body, handle_write, native_read, pending_read
+from native_lifecycle import (
+    discard_body,
+    handle_write,
+    native_read,
+    pending_read,
+    published_staff_read,
+    staff_history_read,
+)
 from workers import Response, WorkerEntrypoint
 
 
@@ -73,6 +80,15 @@ class Default(WorkerEntrypoint):
             if mode not in ("collect", "verified_acquisition_only"):
                 return Response.json({"error": "not found"}, status=404)
             return await pending_read(request, self.env, url.query)
+        if str(request.method) == "GET" and url.path == "/reviews-admin/v1/published":
+            if mode not in ("collect", "verified_acquisition_only"):
+                return Response.json({"error": "not found"}, status=404)
+            return await published_staff_read(request, self.env, url.query)
+        staff_history = re.fullmatch(r"/reviews-admin/v1/contributions/([0-9a-f]{64})/(revisions|audit)", url.path)
+        if str(request.method) == "GET" and staff_history:
+            if mode not in ("collect", "verified_acquisition_only"):
+                return Response.json({"error": "not found"}, status=404)
+            return await staff_history_read(request, self.env, url.query, *staff_history.groups())
         if str(request.method) != "GET":
             if mode not in ("collect", "verified_acquisition_only") or url.query:
                 await discard_body(request)
