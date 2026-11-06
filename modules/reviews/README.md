@@ -130,3 +130,20 @@ The current Workerd test exercises `collect` mode only. The existing
 secret even when Access authentication is selected; Access-only moderation in
 that mode has not been qualified. The Access boundary does not accept that
 secret as a fallback identity.
+
+### Synthetic due-intent evaluation (development only)
+
+`automation_due` is an unwired, test-only keyed claim primitive, not a scheduler
+or delivery authorization. A trusted future queue consumer must supply an exact
+acquisition identity, an authenticated scope, an authoritative clock and a fresh
+unpredictable 256-bit claim token. A due held intent can be claimed once; a retry
+with the same token observes the lease, and expiry permits a fenced takeover.
+Completion records only that this evaluation finished. It does not change the held
+intent, create an invitation, check current consent or allow any provider send.
+
+A real integration still requires a qualified event/due-time queue, authenticated
+consumer, authoritative source scope and activation watermark, current eligibility
+and consent decisions, and an explicit re-evaluation policy. In particular, lease
+fencing cannot prevent a paused process from making an external call; provider
+idempotency and uncertain-outcome reconciliation remain mandatory before sending.
+There is no scheduled task, polling loop, or production path in this increment.

@@ -33,7 +33,8 @@
     "migrations/0021_staff_history_indexes.sql",
     "migrations/0022_automation_recipient_evidence.sql",
     "migrations/0023_staff_reply_lifecycle.sql",
-    "migrations/0024_staff_delivery_queue.sql"
+    "migrations/0024_staff_delivery_queue.sql",
+    "migrations/0025_automation_due_claims.sql"
   ],
   "routes": [
     "GET /reviews/v1/subject-lookup?alias={alias}",
