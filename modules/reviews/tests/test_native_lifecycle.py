@@ -439,3 +439,51 @@ def test_public_pagination_and_rollback(lifecycle):
         db.db.execute("SELECT state FROM native_reviews WHERE review_id=?", (reviews[0]["review_id"],)).fetchone()[0]
         == "published"
     )
+
+
+def test_automation_intake_authentication_and_fail_closed_configuration(lifecycle):
+    from test_automation_intake import setup
+
+    checkout, reviews = setup()
+    token = "automation-synthetic-token-0123456789"
+    env = types.SimpleNamespace(
+        REVIEWS_DB=reviews,
+        CARTRAY_DB=checkout,
+        REVIEWS_STORE_KEY="store",
+        REVIEWS_ENVIRONMENT="test",
+        REVIEWS_MODE="verified_acquisition_only",
+        REVIEWS_TEST_ADMIN_TOKEN="a" * 40,
+        REVIEWS_SETTLEMENT_TOKEN="s" * 40,
+        REVIEWS_INVITATION_KEY="i" * 40,
+        REVIEWS_REVIEWER_KEY="r" * 40,
+        REVIEWS_CONSENT_SECRET="c" * 40,
+        REVIEWS_DELIVERY_TOKEN="d" * 40,
+        REVIEWS_SUBJECT_MAPS='{"v1":{"product_1":"policy"}}',
+    )
+    path = "/reviews-internal/v1/automation-intake"
+
+    def post(data, bearer=token):
+        request = types.SimpleNamespace(
+            method="POST", headers={"Authorization": "Bearer " + bearer}, data=data, body=None
+        )
+        return asyncio.run(lifecycle.handle_write(request, env, path))
+
+    assert post({"outbox_id": 10}).status == 503
+    env.REVIEWS_AUTOMATION_INTAKE = "test"
+    env.REVIEWS_AUTOMATION_INGRESS_TOKEN = env.REVIEWS_SETTLEMENT_TOKEN
+    assert post({"outbox_id": 10}).status == 503
+    env.REVIEWS_AUTOMATION_INGRESS_TOKEN = token
+    assert post({"outbox_id": 10}, bearer="wrong").status == 401
+    assert post({"outbox_id": 10, "extra": True}).status == 400
+    assert post({"outbox_id": 999}).status == 409
+    with patch.object(lifecycle.time, "time", return_value=120):
+        result = post({"outbox_id": 10})
+        assert result.status == 200
+        assert result.body == {"status": "accepted", "due_at": 110}
+        assert post({"outbox_id": 10}).body == result.body
+    assert reviews.db.execute("SELECT state FROM review_automation_intents").fetchone()[0] == (
+        "held_eligibility_recipient_consent"
+    )
+    env.REVIEWS_ENVIRONMENT = "live"
+    assert post({"outbox_id": 10}).status == 503
+    assert checkout.db.execute("SELECT delivered_at FROM outbox WHERE id=10").fetchone()[0] is None
