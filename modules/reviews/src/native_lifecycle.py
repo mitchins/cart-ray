@@ -8,6 +8,7 @@ import time
 from urllib.parse import parse_qs
 
 from cartray_reviews.acquisition import confirmed_purchase
+from cartray_reviews.automation_intake import intake_order
 from cartray_reviews.invitations import (
     claim_delivery,
     prepare_initial_delivery,
@@ -352,6 +353,38 @@ async def handle_write(request, env, path):
             except Exception:
                 await discard_body(request)
                 return fail(503, "collection unavailable")
+    if path == "/reviews-internal/v1/automation-intake":
+        token = str(getattr(env, "REVIEWS_AUTOMATION_INGRESS_TOKEN", ""))
+        supplied = str(request.headers.get("Authorization") or "")
+        if (
+            not acquisition_mode
+            or str(getattr(env, "REVIEWS_AUTOMATION_INTAKE", "disabled")) != "test"
+            or len(token) < 32
+            or token in secrets
+            or token
+            in (str(getattr(env, "REVIEWS_CONSENT_SECRET", "")), str(getattr(env, "REVIEWS_DELIVERY_TOKEN", "")))
+        ):
+            await discard_body(request)
+            return fail(503, "intake unavailable")
+        if not hmac.compare_digest(supplied.encode(), ("Bearer " + token).encode()):
+            await discard_body(request)
+            return fail(401, "unauthorized")
+        try:
+            data = await read_json(request)
+            if set(data) != {"outbox_id"}:
+                return fail(400, "invalid intake")
+            result = await intake_order(
+                env.REVIEWS_DB,
+                env.CARTRAY_DB,
+                store=store,
+                environment=environment,
+                outbox_id=data["outbox_id"],
+                subject_maps=json.loads(str(getattr(env, "REVIEWS_SUBJECT_MAPS", ""))),
+                now=int(time.time()),
+            )
+            return Response.json(result, status=200, headers={"Cache-Control": "no-store"})
+        except (ValueError, TypeError, AttributeError, KeyError, json.JSONDecodeError):
+            return fail(409, "intake unavailable")
     if path == "/reviews-internal/v1/consents":
         consent_secret = str(getattr(env, "REVIEWS_CONSENT_SECRET", ""))
         if not acquisition_mode or len(consent_secret) < 32 or consent_secret in secrets:
