@@ -103,6 +103,12 @@ def main():
             destination.write_bytes(committed)
             frozen[relative] = hashlib.sha256(committed).hexdigest()
         (temp / "fixture.json").write_bytes(fixture_bytes)
+        manifest = temp / "disposable-resources.json"
+        manifest.write_text(
+            json.dumps({"source_worker": source_name, "gate_worker": gate_name, "database": database_name})
+        )
+        manifest.chmod(0o600)
+        print(f"Disposable resource recovery manifest: {manifest}", flush=True)
         env = os.environ.copy()
         identity = command(["whoami"], env=env, cwd=ROOT)
         login = re.search(r"associated with the email ([^\s.]+(?:\.[^\s.]+)+)", identity, re.I)
@@ -189,9 +195,11 @@ def main():
                 capture_output=True,
                 text=True,
                 timeout=35,
-                check=True,
+                check=False,
             )
             transport = [json.loads(line) for line in stalled.stdout.splitlines() if line.strip()]
+            if stalled.returncode:
+                raise RuntimeError("hosted stalled-upload qualification failed: " + json.dumps(transport))
             result = subprocess.run(
                 ["node", str(temp / "tests/qualify.mjs"), gate_url, str(temp / "fixture.json")],
                 cwd=ROOT,

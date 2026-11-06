@@ -28,10 +28,11 @@ for (const authorized of [false, true]) {
   const healthy = await fetch(new URL('/publication/html', base), { signal: AbortSignal.timeout(8000), cache: 'no-store' });
   assert.equal(healthy.status, 503, 'empty gate must remain available during incomplete upload');
   const outcome = await pending.outcome;
+  console.log(JSON.stringify({ authorized, on_wire: outcome, healthy_status: healthy.status }));
   if (outcome.startsWith('HTTP/')) assert.match(outcome, authorized ? /^HTTP\/\S+ 400$/ : /^HTTP\/\S+ 401$/);
   else assert.ok(['connection_closed', 'connection_reset'].includes(outcome), `unexpected transport outcome: ${outcome}`);
   for (let i = 0; i < 3; i++) assert.equal((await fetch(new URL('/publication/html', base), { signal: AbortSignal.timeout(8000), cache: 'no-store' })).status, 503);
-  console.log(JSON.stringify({ authorized, on_wire: outcome, healthy_status: healthy.status, healthy_after_disconnect: 3 }));
+  console.log(JSON.stringify({ authorized, healthy_after_disconnect: 3 }));
 }
 const state = await fetch(new URL('/__test/state', base), { method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, body: '{}' });
 assert.deepEqual(await state.json(), {}, 'incomplete upload must not mutate the empty gate');
