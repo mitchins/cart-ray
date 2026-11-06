@@ -30,6 +30,14 @@ restricted report. The original text remains in the restricted export. Remaining
 source-email matches fail closed, and snapshot validation rejects email-like public
 text until it has an explicit disposition. This is not a substitute for prose review.
 
+For an isolated local test only, `qualify_test_snapshot.py` can create a separate,
+byte-pinned snapshot after the operator supplies an explicit graph-scope attestation
+and independent review evidence. It recomputes reconciliation, keeps the original
+candidate incomplete, and binds the artifact to a test environment and the
+WordPress review-comment graph. The evidence hash authenticates bytes, not the
+reviewer or their authority. It does not approve production publication or assert
+completeness of attachments, external providers or the entire migration.
+
 ```
 PYTHONPATH=modules/reviews/src uv run python modules/reviews/migration/wordpress/reconcile.py \
   --source /private/review-export.json --mapping /private/subject-map.json \

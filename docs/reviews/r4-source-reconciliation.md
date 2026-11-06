@@ -149,3 +149,12 @@ mode replaced those exact occurrences with `[email removed]` in the restricted d
 and recorded the affected IDs and fields without recording addresses in the
 report. Original text remains in the restricted source export. The resulting
 candidate remains incomplete and requires prose and publication review.
+
+An independent review found the captured WordPress review-comment graph suitable
+for a narrowly scoped isolated local test assertion, while excluding attachment
+files, external providers, other storage paths, final product mappings and
+publication approval. A separate operator-attested test artifact binds the exact
+source, provisional mapping, draft, reconciliation report and review evidence
+by hash, uses a graph-specific source identity, and declares its environment as
+`test`. The original candidate remains incomplete. The tool verifies evidence
+bytes, not the reviewer's identity or authority; this is not production approval.
