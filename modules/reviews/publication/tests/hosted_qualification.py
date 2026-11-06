@@ -101,6 +101,7 @@ def main():
             "tests/synthetic_source.mjs",
             "tests/qualify.mjs",
             "tests/stalled_upload.mjs",
+            "tests/source_health.mjs",
             "tests/hosted_qualification.py",
         ):
             repository_path = f"modules/reviews/publication/{relative}"
@@ -162,18 +163,13 @@ def main():
                 raise RuntimeError("source Worker URL unavailable")
             source_url = found.group(0)
             health = subprocess.run(
-                ["node", "-e", "fetch(process.argv[1]).then(async r => {"
-                 "console.log(JSON.stringify({status:r.status,marker:r.headers.get('x-synthetic-source'),"
-                 "body:await r.json()}));}).catch(e => {console.error(String(e));process.exitCode=1;})",
-                 source_url + "/__test/health"],
-                capture_output=True, text=True, timeout=15, check=True, env=env,
+                ["node", str(temp / "tests/source_health.mjs"), source_url + "/__test/health",
+                 frozen["tests/synthetic_source.mjs"]],
+                capture_output=True, text=True, timeout=40, check=False, env=env,
             )
-            (diagnostics / "source-health.json").write_text(health.stdout)
-            source_health = json.loads(health.stdout)
-            if source_health != {"status": 200, "marker": "r5-fixture", "body": {
-                "service": "r5-synthetic-source", "build": frozen["tests/synthetic_source.mjs"]
-            }}:
-                raise RuntimeError("synthetic source health did not match deployed build")
+            (diagnostics / "source-health.json").write_text(health.stdout + health.stderr)
+            if health.returncode:
+                raise RuntimeError("synthetic source health did not match deployed build; see diagnostic output")
             gate_config.write_text(
                 f'name = "{gate_name}"\n'
                 'main = "worker.mjs"\ncompatibility_date = "2026-08-31"\nworkers_dev = true\n'
