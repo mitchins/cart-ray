@@ -81,7 +81,11 @@ test('SQLite-backed publication and withdrawal preserve the public boundary', as
     response = await worker.fetch(new Request('https://publisher.example/publication/jsonld'), env);
     assert.equal((await response.json()).aggregateRating.ratingCount, 2);
     const state = await (await post('/__test/state', {})).json();
-    assert.equal((await post('/__test/withdraw', { expected_digest: approved, expected_epoch: state.epoch, record_id: 'r' })).status, 200);
+    assert.equal((await post('/__test/withdraw', { expected_digest: approved, expected_epoch: state.epoch, record_id: 'a' })).status, 200);
+    const parent = projection.reviews.find((item) => item.id === 'r');
+    const tombstones = sqlite.prepare('SELECT record_id FROM publication_tombstones').all().map((row) => row.record_id);
+    assert.deepEqual(tombstones, parent.replies[0].lineage);
+    assert.ok(parent.lineage.every((id) => !tombstones.includes(id)));
     response = await worker.fetch(new Request('https://publisher.example/publication/html'), env);
     assert.equal(response.status, 503); assert.doesNotMatch(await response.text(), /Good/);
     assert.equal((await post('/__test/publish', { projection: input, media: [], approved_sha256: approved })).status, 409);

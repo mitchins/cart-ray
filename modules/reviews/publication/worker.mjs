@@ -40,6 +40,14 @@ async function bodyJson(request) {
   return JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes));
 }
 function flattenLineage(items) { return items.flatMap((item) => [...item.lineage, ...flattenLineage(item.replies)]); }
+function findContribution(items, id) {
+  for (const item of items) {
+    if (item.id === id) return item;
+    const reply = findContribution(item.replies, id);
+    if (reply) return reply;
+  }
+  return null;
+}
 async function normalizeMedia(media, reviews) {
   if (!Array.isArray(media) || media.length > 10) throw new Error('invalid media');
   const output = [];
@@ -92,7 +100,7 @@ async function withdraw(db, expectedDigest, recordId, expectedEpoch) {
   const row = await db.withSession('first-primary').prepare("SELECT g.digest,g.state,g.epoch,a.projection,a.media FROM publication_gate g JOIN publication_artifacts a ON a.digest=g.digest WHERE g.singleton=1").first();
   if (!row || row.digest !== expectedDigest || row.epoch !== expectedEpoch) return fail(409, 'publication changed');
   const projection = JSON.parse(row.projection);
-  const root = projection.reviews.find((item) => item.id === recordId);
+  const root = findContribution(projection.reviews, recordId);
   if (!root) return fail(404);
   const lineage = flattenLineage([root]);
   const statements = [
