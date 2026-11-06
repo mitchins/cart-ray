@@ -14,8 +14,6 @@ import subprocess
 import sys
 import tempfile
 import time
-import urllib.error
-import urllib.request
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -88,6 +86,11 @@ def main():
     database_name = f"r5-db-{suffix}"
     token = secrets.token_hex(32)
     resources = {"source": False, "gate": False, "database": False}
+    retain_seconds = int(os.environ.get("R5_DIAGNOSTIC_RETAIN_SECONDS", "0"))
+    if not 0 <= retain_seconds <= 120:
+        raise RuntimeError("diagnostic retention must be between 0 and 120 seconds")
+    diagnostics = Path(tempfile.mkdtemp(prefix="r5-hosted-diagnostics-"))
+    print(f"Non-secret diagnostic output: {diagnostics}", flush=True)
     with tempfile.TemporaryDirectory(prefix="r5-hosted-qualification-") as temporary:
         temp = Path(temporary)
         frozen = {}
@@ -147,34 +150,30 @@ def main():
             source_config.write_text(
                 f'name = "{source_name}"\n'
                 'main = "synthetic_source.mjs"\ncompatibility_date = "2026-08-31"\nworkers_dev = true\n'
+                f'[vars]\nR5_BUILD_ID = "{frozen["tests/synthetic_source.mjs"]}"\n'
             )
             resources["source"] = True
             output = command(
                 ["deploy", "--config", str(source_config), "--outdir", str(temp / "source-bundle")], env=env, cwd=temp
             )
+            (diagnostics / "source-deploy.txt").write_text(output)
             found = re.search(r"https://r5-src-[a-z0-9-]+\.[a-z0-9-]+\.workers\.dev", output)
             if not found:
                 raise RuntimeError("source Worker URL unavailable")
             source_url = found.group(0)
-            # workers.dev route propagation is independent of deploy completion.
-            # Do not interpret an edge 404 as a projection failure.
-            source_ready = False
-            for attempt in range(10):
-                try:
-                    with urllib.request.urlopen(
-                        source_url + "/reviews/v1/subject-lookup?alias=example-policy", timeout=10
-                    ) as response:
-                        source_ready = (
-                            response.status == 200 and response.headers.get("X-Synthetic-Source") == "r5-fixture"
-                        )
-                except urllib.error.URLError:
-                    pass
-                if source_ready:
-                    break
-                if attempt < 9:
-                    time.sleep(3)
-            if not source_ready:
-                raise RuntimeError("synthetic source workers.dev route did not become ready")
+            health = subprocess.run(
+                ["node", "-e", "fetch(process.argv[1]).then(async r => {"
+                 "console.log(JSON.stringify({status:r.status,marker:r.headers.get('x-synthetic-source'),"
+                 "body:await r.json()}));}).catch(e => {console.error(String(e));process.exitCode=1;})",
+                 source_url + "/__test/health"],
+                capture_output=True, text=True, timeout=15, check=True, env=env,
+            )
+            (diagnostics / "source-health.json").write_text(health.stdout)
+            source_health = json.loads(health.stdout)
+            if source_health != {"status": 200, "marker": "r5-fixture", "body": {
+                "service": "r5-synthetic-source", "build": frozen["tests/synthetic_source.mjs"]
+            }}:
+                raise RuntimeError("synthetic source health did not match deployed build")
             gate_config.write_text(
                 f'name = "{gate_name}"\n'
                 'main = "worker.mjs"\ncompatibility_date = "2026-08-31"\nworkers_dev = true\n'
@@ -202,6 +201,7 @@ def main():
             output = command(
                 ["deploy", "--config", str(gate_config), "--outdir", str(temp / "gate-bundle")], env=env, cwd=temp
             )
+            (diagnostics / "gate-deploy.txt").write_text(output)
             found = re.search(r"https://r5-gate-[a-z0-9-]+\.[a-z0-9-]+\.workers\.dev", output)
             if not found:
                 raise RuntimeError("publication Worker URL unavailable")
@@ -273,6 +273,9 @@ def main():
                 "measurements": measurement,
             }
         finally:
+            if retain_seconds and sys.exc_info()[0] is not None:
+                print(f"Retaining disposable resources for {retain_seconds}s before cleanup", flush=True)
+                time.sleep(retain_seconds)
             for key, args in [
                 ("gate", ["delete", gate_name, "--force"]),
                 ("source", ["delete", source_name, "--force"]),

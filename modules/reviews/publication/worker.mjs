@@ -30,7 +30,9 @@ async function bodyJson(request) {
     }
   } catch (error) {
     // Cancel the sole reader, which also settles a pending read on timeout.
-    await reader.cancel(timedOut ? 'timeout' : 'invalid body');
+    // Cancellation can itself wait forever on a stalled transport. Initiate it
+    // and observe rejection, but do not let it block the bounded response.
+    void reader.cancel(timedOut ? 'timeout' : 'invalid body').catch(() => {});
     throw error;
   } finally { clearTimeout(timer); reader.releaseLock(); }
   const bytes = new Uint8Array(size); let offset = 0;
@@ -137,7 +139,7 @@ async function sourceJson(env, path, signal) {
       chunks.push(part.value);
     }
   } catch (error) {
-    try { await reader.cancel('invalid source body'); } catch { /* already aborted */ }
+    try { void reader.cancel('invalid source body').catch(() => {}); } catch { /* already aborted */ }
     throw error;
   } finally { reader.releaseLock(); }
   const bytes = new Uint8Array(size); let offset = 0;

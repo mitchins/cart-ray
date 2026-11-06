@@ -77,3 +77,18 @@ test('SQLite-backed publication and withdrawal preserve the public boundary', as
     assert.equal((await post('/__test/publish', { projection: input, media: [], approved_sha256: approved })).status, 409);
   } finally { globalThis.fetch = originalFetch; sqlite.close(); }
 });
+
+test('a stalled cancellation cannot hold an authorized invalid upload open', async () => {
+  let cancelled = false;
+  const body = new ReadableStream({
+    start(controller) { controller.enqueue(new TextEncoder().encode('{"partial":')); },
+    cancel() { cancelled = true; return new Promise(() => {}); },
+  });
+  const request = new Request('https://publisher.example/__test/publish', {
+    method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, body, duplex: 'half',
+  });
+  const timeout = new Promise((_, reject) => setTimeout(() => reject(new Error('handler did not terminate')), 7000).unref());
+  const response = await Promise.race([worker.fetch(request, environment(fakeDb(null))), timeout]);
+  assert.equal(response.status, 400);
+  assert.equal(cancelled, true);
+});
