@@ -9,6 +9,9 @@ import hashlib
 import json
 import os
 import re
+import secrets
+import shutil
+import signal
 import subprocess
 import sys
 import tempfile
@@ -24,7 +27,8 @@ sys.path.insert(0, str(TESTS))
 from native_workerd import ADMIN, BASE, call  # noqa: E402
 from staff_workerd import signed_call  # noqa: E402
 from test_staff_identity import AUDIENCE, ISSUER, KEY, token  # noqa: E402
-from workerd_integration import MODULE, ROOT, start, stop  # noqa: E402
+from workerd_integration import MODULE, ROOT  # noqa: E402
+from workerd_integration import PORT as WORKER_PORT  # noqa: E402
 
 CONSOLE = Path(__file__).resolve().parent.parent
 PORT = 48974
@@ -35,9 +39,122 @@ STAFF_PATH = re.compile(
 ASSETS = {"/", "/index.html", "/client.mjs", "/console.mjs", "/styles.css"}
 
 
+def stop_owned(process):
+    """Terminate only the process group created for this fixture."""
+    try:
+        os.killpg(process.pid, signal.SIGTERM)
+    except ProcessLookupError:
+        pass
+    try:
+        process.wait(timeout=10)
+    except subprocess.TimeoutExpired:
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        process.wait(timeout=10)
+
+
+def run_owned(command, *, env):
+    """Keep installer children in an owned group so cancellation can reap them."""
+    process = subprocess.Popen(command, cwd=ROOT, env=env, start_new_session=True)
+    try:
+        result = process.wait(timeout=300)
+        if result:
+            raise RuntimeError("local fixture setup failed")
+    except BaseException:
+        stop_owned(process)
+        raise
+
+
+def owns_listener(process):
+    """Refuse a listener unless every process holding the port belongs to our worker group."""
+    if process.poll() is not None:
+        return False
+    try:
+        result = subprocess.run(
+            ["lsof", "-nP", f"-tiTCP:{WORKER_PORT}", "-sTCP:LISTEN"], capture_output=True, text=True, timeout=5
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise RuntimeError("cannot identify local Worker listener") from exc
+    if result.returncode not in (0, 1):
+        raise RuntimeError("cannot identify local Worker listener")
+    try:
+        pids = [int(line) for line in result.stdout.splitlines() if line.strip()]
+        return bool(pids) and all(os.getpgid(pid) == process.pid for pid in pids)
+    except (ValueError, ProcessLookupError):
+        return False
+
+
+def owns_marker(process, subject, version):
+    """Require both our process group and an unpredictable marker in our disposable D1."""
+    if not owns_listener(process):
+        return False
+    try:
+        with urllib.request.urlopen(f"{BASE}/reviews/v1/subjects/{subject}/summary", timeout=2) as response:
+            data = json.load(response)
+        return data.get("subject_id") == subject and data.get("snapshot_id") == f"native-{version}"
+    except (OSError, TimeoutError, ValueError):
+        return False
+
+
+def require_owned(process, subject, version):
+    if not owns_marker(process, subject, version):
+        raise RuntimeError("local Worker ownership or disposable D1 identity lost")
+
+
+def start_owned(directory, subject, version, admin_token=None, extra_vars=None):
+    """Start the Worker and accept readiness only from our process and marked database."""
+    command = [
+        "uv",
+        "run",
+        "pywrangler",
+        "dev",
+        "--config",
+        str(MODULE / "wrangler.test.toml"),
+        "--local",
+        "--port",
+        str(WORKER_PORT),
+        "--persist-to",
+        directory,
+        "--log-level=error",
+        "--var",
+        "REVIEWS_MODE:collect",
+    ]
+    if admin_token:
+        command.extend(["--var", f"REVIEWS_TEST_ADMIN_TOKEN:{admin_token}"])
+    for name, value in (extra_vars or {}).items():
+        command.extend(["--var", f"{name}:{value}"])
+    output = None if os.environ.get("REVIEWS_TEST_VERBOSE") else subprocess.DEVNULL
+    process = subprocess.Popen(command, cwd=ROOT, stdout=output, stderr=output, start_new_session=True)
+    try:
+        deadline = time.monotonic() + 180
+        while time.monotonic() < deadline:
+            if process.poll() is not None:
+                raise RuntimeError("worker exited before readiness")
+            if owns_marker(process, subject, version):
+                return process
+            time.sleep(0.25)
+        raise RuntimeError("owned worker failed readiness")
+    except BaseException:
+        stop_owned(process)
+        raise
+
+
+class FixtureServer(ThreadingHTTPServer):
+    # A client stalled in HTTP headers must not prevent process teardown.
+    daemon_threads = True
+    block_on_close = False
+
+
 class Gateway(SimpleHTTPRequestHandler):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, directory=str(CONSOLE), **kwargs)
+
+    def setup(self):
+        super().setup()
+        # Prevent idle request headers from occupying a fixture connection forever.
+        self.connection.settimeout(3)
 
     def log_message(self, _format, *_args):
         pass  # Never log request headers or synthetic assertions.
@@ -49,11 +166,21 @@ class Gateway(SimpleHTTPRequestHandler):
 
     def send_test_verification(self):
         """Verify persisted synthetic state after the browser has withdrawn the review."""
+        try:
+            require_owned(self.server.worker_process, self.server.marker_subject, self.server.marker_version)
+        except RuntimeError:
+            self.send_error(503)
+            return
         now = int(time.time())
         claims = {"iss": ISSUER, "aud": [AUDIENCE], "sub": "staff-1", "iat": now - 1, "exp": now + 120}
         status, audit = signed_call(
             f"/reviews-admin/v1/contributions/{self.server.synthetic_review_id}/audit", assertion=token(claims)
         )
+        try:
+            require_owned(self.server.worker_process, self.server.marker_subject, self.server.marker_version)
+        except RuntimeError:
+            self.send_error(503)
+            return
         summary_status, summary = call("/reviews/v1/subjects/example-policy/summary")
         actor = "staff:" + hashlib.sha256((ISSUER + "\x00staff-1").encode()).hexdigest()
         events = audit.get("audit", [])
@@ -87,6 +214,32 @@ class Gateway(SimpleHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def read_bounded_body(self, length, timeout=2):
+        """Read one body with an absolute deadline, including slow byte-at-a-time uploads."""
+        deadline = time.monotonic() + timeout
+        parts = []
+        remaining = length
+        try:
+            while remaining:
+                time_left = deadline - time.monotonic()
+                if time_left <= 0:
+                    raise TimeoutError("request body deadline")
+                self.connection.settimeout(time_left)
+                chunk = self.rfile.read1(remaining)
+                if not chunk:
+                    raise EOFError("incomplete request body")
+                parts.append(chunk)
+                remaining -= len(chunk)
+            return b"".join(parts)
+        except (OSError, TimeoutError, EOFError):
+            self.close_connection = True
+            return None
+        finally:
+            try:
+                self.connection.settimeout(3)
+            except OSError:
+                pass
+
     def proxy(self):
         path = urllib.parse.urlsplit(self.path)
         summary = path.path == "/__test/summary" and self.command == "GET" and not path.query
@@ -99,17 +252,25 @@ class Gateway(SimpleHTTPRequestHandler):
             return
         data = None
         headers = {}
-        if not summary:
-            now = int(time.time())
-            claims = {"iss": ISSUER, "aud": [AUDIENCE], "sub": "staff-1", "iat": now - 1, "exp": now + 120}
-            headers["Cf-Access-Jwt-Assertion"] = token(claims)
         if self.command == "POST":
             raw_length = self.headers.get("Content-Length", "")
             if not raw_length.isdigit() or not 1 <= int(raw_length) <= 16384:
                 self.send_error(400)
                 return
-            data = self.rfile.read(int(raw_length))
+            data = self.read_bounded_body(int(raw_length))
+            if data is None:
+                self.send_error(408)
+                return
             headers["Content-Type"] = self.headers.get("Content-Type", "")
+        try:
+            require_owned(self.server.worker_process, self.server.marker_subject, self.server.marker_version)
+        except RuntimeError:
+            self.send_error(503)
+            return
+        if not summary:
+            now = int(time.time())
+            claims = {"iss": ISSUER, "aud": [AUDIENCE], "sub": "staff-1", "iat": now - 1, "exp": now + 120}
+            headers["Cf-Access-Jwt-Assertion"] = token(claims)
         worker_path = "/reviews/v1/subjects/example-policy/summary" if summary else self.path
         request = urllib.request.Request(BASE + worker_path, data=data, headers=headers, method=self.command)
         try:
@@ -144,11 +305,39 @@ class Gateway(SimpleHTTPRequestHandler):
 
 
 def main():
-    with tempfile.TemporaryDirectory(prefix="reviews-console-workerd-") as directory:
+    directory = tempfile.mkdtemp(prefix="reviews-console-workerd-")
+    process = None
+    gateway = None
+    try:
         env = os.environ | {"REVIEWS_LOCAL_PERSIST_DIR": directory}
-        subprocess.run([sys.executable, str(MODULE / "tools/install.py")], cwd=ROOT, env=env, check=True)
-        process = start("wrangler.test.toml", directory, "collect", ADMIN)
+        run_owned([sys.executable, str(MODULE / "tools/install.py")], env=env)
+        marker_subject = "fixture-" + secrets.token_hex(16)
+        marker_version = secrets.randbelow(1_000_000_000) + 1
+        marker_sql = (
+            "INSERT INTO review_subjects(store_key,environment,subject_id,kind,canonical_path) "
+            f"VALUES('example-store','test','{marker_subject}','product','/{marker_subject}/'); "
+            "INSERT INTO native_publication_versions(store_key,environment,subject_id,version) "
+            f"VALUES('example-store','test','{marker_subject}',{marker_version});"
+        )
+        run_owned(
+            [
+                str(ROOT / "node_modules/.bin/wrangler"),
+                "d1",
+                "execute",
+                "cartray-reviews-local-test",
+                "--config",
+                str(MODULE / "wrangler.test.toml"),
+                "--local",
+                "--persist-to",
+                directory,
+                "--command",
+                marker_sql,
+            ],
+            env=env,
+        )
+        process = start_owned(directory, marker_subject, marker_version, ADMIN)
         try:
+            require_owned(process, marker_subject, marker_version)
             status, _ = call(
                 "/reviews-admin/v1/subjects",
                 {"subject_id": "example-policy", "kind": "product", "path": "/example-policy/"},
@@ -156,6 +345,7 @@ def main():
             )
             if status != 201:
                 raise RuntimeError("synthetic subject setup failed")
+            require_owned(process, marker_subject, marker_version)
             status, issued = call(
                 "/reviews-admin/v1/test-capabilities",
                 {"subject_id": "example-policy", "test_reviewer": "guest"},
@@ -163,6 +353,7 @@ def main():
             )
             if status != 201:
                 raise RuntimeError("synthetic reviewer setup failed")
+            require_owned(process, marker_subject, marker_version)
             status, review = call(
                 "/reviews/v1/contributions",
                 {
@@ -178,7 +369,8 @@ def main():
             if status != 202:
                 raise RuntimeError("synthetic review setup failed")
         finally:
-            stop(process)
+            stop_owned(process)
+            process = None
         jwks = {"keys": [{"kty": "RSA", "kid": "key-1", "n": KEY["n"], "e": KEY["e"]}]}
         options = {
             "REVIEWS_STAFF_MODE": "cloudflare_access",
@@ -187,21 +379,44 @@ def main():
             "REVIEWS_STAFF_POLICY": json.dumps({"staff-1": ["reviews:moderate"]}),
             "REVIEWS_STAFF_TEST_JWKS": json.dumps(jwks),
         }
-        process = start("wrangler.test.toml", directory, "collect", None, options)
+        process = start_owned(directory, marker_subject, marker_version, extra_vars=options)
+        gateway = FixtureServer(("127.0.0.1", PORT), functools.partial(Gateway))
+        gateway.synthetic_review_id = review["review_id"]
+        gateway.worker_process = process
+        gateway.marker_subject = marker_subject
+        gateway.marker_version = marker_version
+        print(f"Synthetic signed-staff Workerd/D1 gateway ready at {ORIGIN}/", flush=True)
         try:
-            gateway = ThreadingHTTPServer(("127.0.0.1", PORT), functools.partial(Gateway))
-            gateway.synthetic_review_id = review["review_id"]
-            print(f"Synthetic signed-staff Workerd/D1 gateway ready at {ORIGIN}/", flush=True)
+            gateway.serve_forever()
+        except KeyboardInterrupt:
+            pass
+    finally:
+        # Defer further catchable termination until every owned resource is cleaned up.
+        previous_term = signal.signal(signal.SIGTERM, signal.SIG_IGN)
+        previous_int = signal.signal(signal.SIGINT, signal.SIG_IGN)
+        try:
             try:
-                try:
-                    gateway.serve_forever()
-                except KeyboardInterrupt:
-                    pass
+                if gateway is not None:
+                    gateway.server_close()
             finally:
-                gateway.server_close()
+                try:
+                    if process is not None:
+                        stop_owned(process)
+                finally:
+                    shutil.rmtree(directory)
         finally:
-            stop(process)
+            signal.signal(signal.SIGTERM, previous_term)
+            signal.signal(signal.SIGINT, previous_int)
+
+
+def terminate(_signum, _frame):
+    """Convert SIGTERM into an interrupt so fixture cleanup runs."""
+    raise KeyboardInterrupt()
 
 
 if __name__ == "__main__":
-    main()
+    signal.signal(signal.SIGTERM, terminate)
+    try:
+        main()
+    except KeyboardInterrupt:
+        pass

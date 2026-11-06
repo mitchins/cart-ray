@@ -33,6 +33,8 @@ jobs:
         run: node --test modules/reviews/tests/dispatch.test.mjs
       - name: Test Reviews moderation console
         run: node --test modules/reviews/console/tests/*.test.mjs
+      - name: Test Reviews console fixture safety
+        run: PYTHONPATH=modules/reviews/src uv run --locked pytest -q modules/reviews/console/tests/test_workerd_gateway.py
       - name: Build and inspect optional Reviews package
         run: |
           uv build modules/reviews --wheel --out-dir /tmp/cartray-reviews-wheel
