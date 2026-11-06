@@ -20,7 +20,11 @@ const approved = await sha256(canonical(artifact));
 const payload = { projection: input, media, approved_sha256: approved };
 const post = (path, body, authorized = true) => fetch(new URL(path, base), { method: 'POST', headers: { 'Content-Type': 'application/json', ...(authorized ? { Authorization: `Bearer ${token}` } : {}) }, body: JSON.stringify(body), cache: 'no-store' });
 assert.equal((await post('/__test/publish', payload, false)).status, 401);
-const published = await post('/__test/publish', payload); assert.equal(published.status, 200, await published.clone().text());
+const published = await post('/__test/publish', payload);
+if (published.status !== 200) {
+  const diagnostic = await post('/__test/source-diagnostic', {});
+  throw new Error(`publication ${published.status}: ${await published.text()}; source diagnostic ${diagnostic.status}: ${await diagnostic.text()}`);
+}
 assert.equal((await published.json()).digest, approved);
 assert.equal((await post('/__test/publish', payload)).status, 200, 'repeat publication should be idempotent');
 const changedRendererDigest = await sha256(canonical({ ...artifact, html: artifact.html + '<!-- renderer changed -->' }));

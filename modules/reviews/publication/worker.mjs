@@ -176,6 +176,14 @@ export default {
       if (!authorized(request, env)) return fail(401);
       try {
         const payload = await bodyJson(request);
+        if (url.pathname === '/__test/source-diagnostic') {
+          try {
+            const lookup = await sourceJson(env, '/reviews/v1/subject-lookup?alias=example-policy', AbortSignal.timeout(10000));
+            return Response.json({ lookup }, { headers: noStore });
+          } catch (error) {
+            return Response.json({ error: String(error).slice(0, 300) }, { status: 502, headers: noStore });
+          }
+        }
         if (url.pathname === '/__test/state') {
           const state = await db.withSession('first-primary').prepare('SELECT digest,state,epoch FROM publication_gate WHERE singleton=1').first();
           return Response.json(state || {}, { headers: noStore });
