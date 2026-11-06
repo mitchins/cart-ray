@@ -34,17 +34,25 @@ function review(item, ids, anchorsSeen, lineageSeen, depth = 0) {
     lineage.push(`historical:${historicalId}`);
   }
   const historical = item.historical_provenance || null;
-  for (const key of lineage) { if (lineageSeen.has(key)) throw new Error('duplicate source identity'); lineageSeen.add(key); }
+  for (const key of lineage) {
+    if (lineageSeen.has(key)) throw new Error('duplicate source identity');
+    lineageSeen.add(key);
+  }
   const rawDate = item.date ?? historical?.date ?? null;
   if (rawDate !== null && (typeof rawDate !== 'object' || Array.isArray(rawDate) || !text(rawDate.original, 100) || !text(rawDate.precision, 32) || !text(rawDate.timezone_provenance, 80))) throw new Error('invalid historical date');
   const date = rawDate === null ? null : Object.fromEntries(['original', 'precision', 'timezone_provenance', 'utc', 'source_local_raw', 'source_utc_raw'].filter((key) => key in rawDate).map((key) => {
-    const value = rawDate[key]; if (value !== null && !text(value, 100)) throw new Error('invalid historical date field'); return [key, value];
+    const value = rawDate[key];
+    if (value !== null && !text(value, 100)) throw new Error('invalid historical date field');
+    return [key, value];
   }));
   const createdAt = item.created_at == null ? null : item.created_at;
   if (createdAt !== null && (!Number.isSafeInteger(createdAt) || createdAt < 0 || createdAt > 253402300799)) throw new Error('invalid creation time');
   const anchors = item.anchors || item.historical_provenance?.anchors || [];
   if (!Array.isArray(anchors) || anchors.length > 20 || anchors.some((anchor) => typeof anchor !== 'string' || !/^[A-Za-z][A-Za-z0-9_.:-]{0,127}$/.test(anchor))) throw new Error('invalid anchors');
-  for (const anchor of anchors) { if (anchorsSeen.has(anchor)) throw new Error('duplicate anchor'); anchorsSeen.add(anchor); }
+  for (const anchor of anchors) {
+    if (anchorsSeen.has(anchor)) throw new Error('duplicate anchor');
+    anchorsSeen.add(anchor);
+  }
   const source = item.source?.attribution || historical?.source?.attribution || null;
   const votesRaw = item.votes ?? historical?.votes ?? null;
   if (votesRaw !== null && (!votesRaw || typeof votesRaw !== 'object' || ['up', 'down', 'net'].some((key) => !(votesRaw[key] === null || Number.isSafeInteger(votesRaw[key]))) || (votesRaw.up !== null && votesRaw.up < 0) || (votesRaw.down !== null && votesRaw.down < 0))) throw new Error('invalid votes');

@@ -26,7 +26,10 @@ def command(args, *, env, cwd, stdin=None, timeout=180):
         [WRANGLER, *args], cwd=cwd, env=env, input=stdin, text=True, capture_output=True, timeout=timeout
     )
     if result.returncode:
-        raise RuntimeError(f"wrangler {args[0]} failed; sanitized diagnostics retained in temporary directory")
+        diagnostic = "\n".join(
+            line[:300] for line in (result.stdout + result.stderr).splitlines() if "ERROR" in line.upper()
+        )
+        raise RuntimeError(f"wrangler {args[0]} failed: {diagnostic or 'no error detail'}")
     return result.stdout if "--json" in args else result.stdout + result.stderr
 
 
