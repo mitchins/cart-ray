@@ -102,3 +102,68 @@ def test_signature_rotation_outage_and_duplicate_keys_fail_closed():
         authenticate(value, policy=policy, jwks=RuntimeError("offline"))
     with pytest.raises(StaffAuthenticationError):
         authenticate(token(header={"alg": "none", "kid": "key-1"}), policy=policy)
+
+
+@pytest.mark.parametrize(
+    "assertion",
+    [
+        "",
+        "a.b",
+        "!invalid.e30.sig",
+        "e30.e30.a",
+        "e30.e30.%%%",
+        "e30.e30." + "x" * 8200,
+        encode(b'{"alg":"RS256","alg":"none","kid":"key-1"}') + ".e30.eA",
+        encode(b"[]") + ".e30.eA",
+        encode(b'{"alg":NaN}') + ".e30.eA",
+    ],
+)
+def test_malformed_or_ambiguous_assertions_are_rejected(assertion):
+    with pytest.raises(StaffAuthenticationError):
+        authenticate(assertion, policy={"staff-1": ["reviews:moderate"]})
+
+
+@pytest.mark.parametrize(
+    "issuer",
+    [
+        "http://example.cloudflareaccess.com",
+        "https://example.cloudflareaccess.com:443",
+        "https://example.cloudflareaccess.com/path",
+        "https://evil.example",
+        "https://user@example.cloudflareaccess.com",
+        "https://example.cloudflareaccess.com?query=x",
+        "https://example.cloudflareaccess.com/#fragment",
+        "https://example.cloudflareaccess.com:bad",
+        "x" * 256,
+    ],
+)
+def test_issuer_policy_rejects_untrusted_endpoints(issuer):
+    with pytest.raises(StaffAuthenticationError):
+        authenticate(token(), issuer=issuer, policy={"staff-1": ["reviews:moderate"]})
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        {"kty": "EC"},
+        {"alg": "HS256"},
+        {"use": "enc"},
+        {"key_ops": ["sign"]},
+        {"n": "AQ"},
+        {"e": "Aw"},
+        {"n": "A"},
+        {"e": "AA"},
+    ],
+)
+def test_wrong_or_malformed_signing_keys_are_rejected(change):
+    key = {"kty": "RSA", "kid": "key-1", "n": KEY["n"], "e": KEY["e"]} | change
+    with pytest.raises(StaffAuthenticationError):
+        authenticate(token(), policy={"staff-1": ["reviews:moderate"]}, jwks={"keys": [key]})
+
+
+def test_untrusted_policy_and_jwks_structures_fail_closed():
+    for jwks in ({"keys": [None] * 21}, {"keys": "not-a-list"}, [], {"keys": [None]}):
+        with pytest.raises(StaffAuthenticationError):
+            authenticate(token(), policy={"staff-1": ["reviews:moderate"]}, jwks=jwks)
+    with pytest.raises(StaffAuthenticationError):
+        authenticate(token(), policy={"staff-1": [["reviews:moderate"]]})
