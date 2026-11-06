@@ -12,6 +12,30 @@ Direct Workerd and a disposable hosted test have exercised incomplete uploads; t
 
 Native moderation updates the published rating totals, publication version, audit record and invalidation outbox atomically. Summary reads use those totals; they do not scan all reviews. The local Worker returns native responses with `Cache-Control: no-store` so withdrawal is not delegated to a browser or CDN cache.
 
+## Optional WordPress migration rehearsal
+
+The optional read-only exporter and reconciliation tool live under
+`migration/wordpress/`; the Reviews Worker does not import them. Run the exporter
+against an explicitly identified site and keep its output private. The
+reconciliation command takes that restricted export and an explicit subject map,
+then writes a new restricted directory containing an incomplete draft and a
+per-record report. It accepts only the test environment and does not approve,
+import or publish source content. Password-protected or unknown source subjects,
+unrecognized approved metadata and approved media requiring disposition fail
+closed. A published post without a password is not proof of public visibility:
+access-control and catalogue settings still require review. The optional
+`--redact-source-emails` flag conservatively replaces literal author-email occurrences in candidate
+text with `[email removed]` and records each affected source ID and field in the
+restricted report. The original text remains in the restricted export. Remaining
+source-email matches fail closed; this is not a substitute for prose review.
+
+```
+PYTHONPATH=modules/reviews/src uv run python modules/reviews/migration/wordpress/reconcile.py \
+  --source /private/review-export.json --mapping /private/subject-map.json \
+  --expected-source https://example.invalid --store example-store \
+  --output-directory /private/new-reconciliation
+```
+
 ## Local install and run
 
 Use the repository's pinned Node and Python tooling. From the repository root:

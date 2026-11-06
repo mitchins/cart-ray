@@ -5,14 +5,29 @@ This adapter never connects to WordPress, approves a source, or writes to D1.
 
 import hashlib
 import json
+import re
 from collections import Counter, defaultdict
 from datetime import datetime
 
 from cartray_reviews.snapshot import _reject_constant, _unique_pairs, load_snapshot
 
 
-def build_draft(raw: bytes, mapping: dict, *, store: str, environment: str, expected_source: str):
+def _redact_email(value, email):
+    """Conservatively replace every literal source-author email occurrence."""
+    if not isinstance(value, str) or not isinstance(email, str) or "@" not in email:
+        return value
+    email = email.strip()
+    if not re.fullmatch(r"[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Za-z0-9.-]+", email):
+        return value
+    return re.sub(re.escape(email), "[email removed]", value, flags=re.IGNORECASE)
+
+
+def build_draft(
+    raw: bytes, mapping: dict, *, store: str, environment: str, expected_source: str, redact_source_emails: bool = False
+):
     """Map a candidate export using explicit subject mappings; reject ambiguity."""
+    if type(redact_source_emails) is not bool:
+        raise ValueError("invalid redaction policy")
     if not isinstance(raw, bytes) or len(raw) > 10_000_000:
         raise ValueError("candidate export exceeds size limit")
     source = json.loads(raw, object_pairs_hook=_unique_pairs, parse_constant=_reject_constant)
@@ -45,6 +60,7 @@ def build_draft(raw: bytes, mapping: dict, *, store: str, environment: str, expe
     if any(row["comment_approved"] == "1" and str(row["comment_ID"]) not in selected_ids for row in comments):
         raise ValueError("unmapped approved source record")
     archive_counts = defaultdict(int)
+    privacy_redactions = []
     contributions = []
     used_subjects = {}
     for row in roots + replies:
@@ -122,6 +138,13 @@ def build_draft(raw: bytes, mapping: dict, *, store: str, environment: str, expe
             "anchors": ["review-wp-" + source_id, "comment-" + source_id],
             "votes": {"up": None, "down": None, "net": net},
         }
+        if redact_source_emails:
+            for field in ("author", "body", "title"):
+                original = contribution[field]
+                redacted = _redact_email(original, row.get("comment_author_email"))
+                if redacted != original:
+                    contribution[field] = redacted
+                    privacy_redactions.append({"source_id": source_id, "field": field, "reason": "source_email"})
         public_revision = json.dumps(contribution, ensure_ascii=True, sort_keys=True, separators=(",", ":")).encode()
         contribution["revision_id"] = "wp-revision-" + hashlib.sha256(public_revision).hexdigest()
         contributions.append(contribution)
@@ -172,6 +195,7 @@ def build_draft(raw: bytes, mapping: dict, *, store: str, environment: str, expe
     return {
         "snapshot": snapshot,
         "report": {
+            "privacy_redactions": privacy_redactions,
             "restricted_archive_only_field_counts": dict(archive_counts),
             "source_status_counts": dict(Counter(str(row["comment_approved"]) for row in comments)),
             "metadata_without_source_comment": sum(

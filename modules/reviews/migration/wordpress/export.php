@@ -104,7 +104,7 @@ if ((int)$meta_size[0]['n'] > 100000 || (int)$size[0]['n'] + (int)$meta_size[0][
 }
 $comments = reviews_query_or_fail("SELECT c.comment_ID,c.comment_post_ID,c.comment_author,c.comment_author_email,c.comment_author_url,c.comment_author_IP,c.comment_date,c.comment_date_gmt,c.comment_content,c.comment_karma,c.comment_approved,c.comment_agent,c.comment_type,c.comment_parent,c.user_id FROM {$wpdb->comments} c WHERE $selection ORDER BY c.comment_ID");
 $meta = reviews_query_or_fail("SELECT m.meta_id,m.comment_id,m.meta_key,m.meta_value FROM {$wpdb->commentmeta} m JOIN {$wpdb->comments} c ON c.comment_ID=m.comment_id WHERE $selection ORDER BY m.meta_id LIMIT 100001");
-$subjects = reviews_query_or_fail("SELECT DISTINCT p.ID,p.post_type,p.post_status,p.post_name,p.post_title,p.post_parent FROM {$wpdb->posts} p JOIN {$wpdb->comments} c ON c.comment_post_ID=p.ID WHERE $selection ORDER BY p.ID");
+$subjects = reviews_query_or_fail("SELECT DISTINCT p.ID,p.post_type,p.post_status,p.post_name,p.post_title,p.post_parent,CASE WHEN p.post_password IS NULL OR p.post_password='' THEN 0 ELSE 1 END password_protected FROM {$wpdb->posts} p JOIN {$wpdb->comments} c ON c.comment_post_ID=p.ID WHERE $selection ORDER BY p.ID");
 $payload = wp_json_encode([
     'schema' => 'restricted.review-candidate.v1',
     'captured_utc' => gmdate('Y-m-d\TH:i:s\Z'),

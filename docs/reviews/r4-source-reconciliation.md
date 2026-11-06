@@ -128,3 +128,24 @@ selected rows; the restricted SHA-256 is
 `cd4260ab06f2fbeaf689c36298467e76ccd3934b394de7d4f01d3c623a57e167`.
 This metadata check is not proof about unrecognized plugin metadata or external
 review providers.
+
+An eighth restricted capture at 04:11:10 UTC recorded only whether each source
+post has a password, without exporting passwords. None of the 26 referenced
+subjects was password-protected, and comment and metadata rows again matched the
+prior capture. Its SHA-256 is
+`81c8677661e42b1c8e1e22a711d4e9cb4ed1b11dda3789088a87d5e71d8c747c`.
+Published status and lack of a password do not establish visibility under
+catalogue or access-control plugins.
+
+The optional reconciliation command was exercised against this capture with the
+provisional crosswalk. It generated restricted dispositions for all 125 records,
+338 metadata rows and 26 subjects, independently compared candidate text, dates,
+ratings, vote totals and verification claims, and left the snapshot explicitly
+incomplete. The source export, candidate and per-row report remain outside Git.
+
+The independent privacy check found source-author email addresses embedded in
+the bodies of review records 4384 and 4450. The optional test-only redaction
+mode replaced those exact occurrences with `[email removed]` in the restricted draft
+and recorded the affected IDs and fields without recording addresses in the
+report. Original text remains in the restricted source export. The resulting
+candidate remains incomplete and requires prose and publication review.
