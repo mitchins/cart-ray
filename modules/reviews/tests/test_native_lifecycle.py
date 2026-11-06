@@ -229,9 +229,13 @@ def test_worker_enforces_modes_and_scope(lifecycle):
     path = "/reviews/v1/subjects/policy/summary"
     assert fetch(path).status == 404
     assert fetch("/reviews-internal/v1/automation-intake", "POST").status == 404
+    assert fetch("/reviews-internal/v1/automation-recipient-evidence", "POST").status == 404
+    assert fetch("/reviews-internal/v1/automation-evidence-status", "POST").status == 404
     instance.env.REVIEWS_MODE = "read_only"
     assert fetch("/reviews-admin/v1/subjects", "POST").status == 405
     assert fetch("/reviews-internal/v1/automation-intake", "POST").status == 405
+    assert fetch("/reviews-internal/v1/automation-recipient-evidence", "POST").status == 405
+    assert fetch("/reviews-internal/v1/automation-evidence-status", "POST").status == 405
     assert fetch("/reviews-admin/v1/pending").status == 404
     assert fetch(path + "?limit=abc").status == 400
     assert fetch(path + "?unknown=x").status == 400
@@ -487,3 +491,67 @@ def test_automation_intake_authentication_and_fail_closed_configuration(lifecycl
     env.REVIEWS_ENVIRONMENT = "live"
     assert post({"outbox_id": 10}).status == 503
     assert checkout.db.execute("SELECT delivered_at FROM outbox WHERE id=10").fetchone()[0] is None
+
+
+def test_automation_evidence_routes_require_independent_authorities(lifecycle):
+    from test_automation_intake import run, setup
+    from test_automation_recipient import RECIPIENT, RECIPIENT_SECRET, consent, signed
+
+    checkout, reviews = setup()
+    run(checkout, reviews)
+    token = "automation-synthetic-token-0123456789"
+    env = types.SimpleNamespace(
+        REVIEWS_DB=reviews,
+        CARTRAY_DB=checkout,
+        REVIEWS_STORE_KEY="store",
+        REVIEWS_ENVIRONMENT="test",
+        REVIEWS_MODE="verified_acquisition_only",
+        REVIEWS_TEST_ADMIN_TOKEN="a" * 40,
+        REVIEWS_SETTLEMENT_TOKEN="s" * 40,
+        REVIEWS_INVITATION_KEY="i" * 40,
+        REVIEWS_REVIEWER_KEY="r" * 40,
+        REVIEWS_CONSENT_SECRET="c" * 40,
+        REVIEWS_DELIVERY_TOKEN="d" * 40,
+        REVIEWS_AUTOMATION_INTAKE="test",
+        REVIEWS_AUTOMATION_INGRESS_TOKEN=token,
+    )
+    recipient_path = "/reviews-internal/v1/automation-recipient-evidence"
+    status_path = "/reviews-internal/v1/automation-evidence-status"
+    data = {
+        "outbox_id": 10,
+        "recipient_context_hash": RECIPIENT,
+        "binding_version": "v1",
+        "evidence_reference": "synthetic-recipient",
+        "verified_at": 100,
+    }
+    signature = signed("reviews-automation-recipient-v1", "store", "test", data, RECIPIENT_SECRET)
+
+    def post(path, body, headers):
+        request = types.SimpleNamespace(method="POST", headers=headers, data=body, body=None)
+        return asyncio.run(lifecycle.handle_write(request, env, path))
+
+    assert post(recipient_path, data, {"X-Reviews-Recipient-Signature": signature}).status == 503
+    env.REVIEWS_RECIPIENT_EVIDENCE_SECRET = token
+    assert post(recipient_path, data, {"X-Reviews-Recipient-Signature": signature}).status == 503
+    env.REVIEWS_RECIPIENT_EVIDENCE_SECRET = RECIPIENT_SECRET.decode()
+    assert post(recipient_path, data, {"X-Reviews-Recipient-Signature": "0" * 64}).status == 409
+    with patch.object(lifecycle.time, "time", return_value=120):
+        assert post(recipient_path, data, {"X-Reviews-Recipient-Signature": signature}).status == 200
+        assert post(recipient_path, data, {"X-Reviews-Recipient-Signature": signature}).status == 200
+        assert post(status_path, {"outbox_id": 10}, {"Authorization": "Bearer wrong"}).status == 401
+        assert post(status_path, {"outbox_id": 10, "extra": True}, {"Authorization": "Bearer " + token}).status == 400
+        assert post(status_path, {"outbox_id": 999}, {"Authorization": "Bearer " + token}).status == 409
+        assert (
+            post(status_path, {"outbox_id": 10}, {"Authorization": "Bearer " + token}).body["consent_granted"] is False
+        )
+        consent(checkout, reviews)
+        result = post(status_path, {"outbox_id": 10}, {"Authorization": "Bearer " + token})
+        assert result.status == 200 and result.body == {
+            "state": "held_eligibility_recipient_consent",
+            "recipient_binding_recorded": True,
+            "consent_granted": True,
+        }
+        assert RECIPIENT not in str(result.body)
+    env.REVIEWS_ENVIRONMENT = "live"
+    assert post(recipient_path, data, {"X-Reviews-Recipient-Signature": signature}).status == 503
+    assert reviews.db.execute("SELECT count(*) FROM invitation_generations").fetchone()[0] == 0
