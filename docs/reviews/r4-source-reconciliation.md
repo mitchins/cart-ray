@@ -46,6 +46,16 @@ types; the 24 comments outside review parentage were attached to blog posts (thr
 approved and 21 spam). This corroborates the captured selection but is not part of
 the same consistent snapshot and cannot by itself establish extraction completeness.
 
+Read-only inspection of the installed Customer Reviews handler establishes an
+actual unauthenticated `cr_submit_review` AJAX writer registration. Its handler
+resolves permissions through the default form settings and writes a WordPress `review` comment with `wp_new_comment`. The installed settings
+resolver uses the first form's `rev_perm`, falling back to the older AJAX option
+only when that value is absent. The captured first-form value is `anybody`, so
+that handler's configured permission permits guest submission; runtime filters,
+frontend availability and other writers still need verification. No submission
+was made. The separate authenticated CusRev review REST writer and other active
+plugins also remain relevant to any eventual cutover.
+
 Remaining source qualification includes complete attachment and comment-graph
 coverage, current effective settings and writer paths, a decision for each of
 the ten page-associated experiences, product keys and canonical URLs, source
