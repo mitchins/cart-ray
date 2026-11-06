@@ -48,6 +48,29 @@ def fail(status, message):
     return Response.json({"error": message}, status=status)
 
 
+async def automation_authorize(request, env, acquisition_mode, secrets, unavailable):
+    """Authenticate test automation requests with an independent bearer."""
+    token = str(getattr(env, "REVIEWS_AUTOMATION_INGRESS_TOKEN", ""))
+    if (
+        not acquisition_mode
+        or str(getattr(env, "REVIEWS_AUTOMATION_INTAKE", "disabled")) != "test"
+        or len(token) < 32
+        or token in secrets
+        or token
+        in (
+            str(getattr(env, "REVIEWS_CONSENT_SECRET", "")),
+            str(getattr(env, "REVIEWS_DELIVERY_TOKEN", "")),
+            str(getattr(env, "REVIEWS_RECIPIENT_EVIDENCE_SECRET", "")),
+        )
+    ):
+        await discard_body(request)
+        return fail(503, unavailable)
+    if not hmac.compare_digest(str(request.headers.get("Authorization") or "").encode(), ("Bearer " + token).encode()):
+        await discard_body(request)
+        return fail(401, "unauthorized")
+    return None
+
+
 def unique_pairs(pairs):
     """Reject ambiguous duplicate JSON keys."""
     result = {}
@@ -498,25 +521,9 @@ async def handle_write(request, env, path):
                 await discard_body(request)
                 return fail(503, "collection unavailable")
     if path == "/reviews-internal/v1/automation-due-evaluate":
-        token = str(getattr(env, "REVIEWS_AUTOMATION_INGRESS_TOKEN", ""))
-        supplied = str(request.headers.get("Authorization") or "")
-        if (
-            not acquisition_mode
-            or str(getattr(env, "REVIEWS_AUTOMATION_INTAKE", "disabled")) != "test"
-            or len(token) < 32
-            or token in secrets
-            or token
-            in (
-                str(getattr(env, "REVIEWS_CONSENT_SECRET", "")),
-                str(getattr(env, "REVIEWS_DELIVERY_TOKEN", "")),
-                str(getattr(env, "REVIEWS_RECIPIENT_EVIDENCE_SECRET", "")),
-            )
-        ):
-            await discard_body(request)
-            return fail(503, "evaluation unavailable")
-        if not hmac.compare_digest(supplied.encode(), ("Bearer " + token).encode()):
-            await discard_body(request)
-            return fail(401, "unauthorized")
+        failure = await automation_authorize(request, env, acquisition_mode, secrets, "evaluation unavailable")
+        if failure is not None:
+            return failure
         try:
             data = await read_json(request)
             if set(data) != {"acquisition_id", "claim_token"}:
@@ -621,25 +628,9 @@ async def handle_write(request, env, path):
         except (ValueError, TypeError, AttributeError, KeyError, json.JSONDecodeError):
             return fail(409, "recipient evidence unavailable")
     if path == "/reviews-internal/v1/automation-evidence-status":
-        token = str(getattr(env, "REVIEWS_AUTOMATION_INGRESS_TOKEN", ""))
-        supplied = str(request.headers.get("Authorization") or "")
-        if (
-            not acquisition_mode
-            or str(getattr(env, "REVIEWS_AUTOMATION_INTAKE", "disabled")) != "test"
-            or len(token) < 32
-            or token in secrets
-            or token
-            in (
-                str(getattr(env, "REVIEWS_CONSENT_SECRET", "")),
-                str(getattr(env, "REVIEWS_DELIVERY_TOKEN", "")),
-                str(getattr(env, "REVIEWS_RECIPIENT_EVIDENCE_SECRET", "")),
-            )
-        ):
-            await discard_body(request)
-            return fail(503, "evidence unavailable")
-        if not hmac.compare_digest(supplied.encode(), ("Bearer " + token).encode()):
-            await discard_body(request)
-            return fail(401, "unauthorized")
+        failure = await automation_authorize(request, env, acquisition_mode, secrets, "evidence unavailable")
+        if failure is not None:
+            return failure
         try:
             data = await read_json(request)
             if set(data) != {"outbox_id"}:

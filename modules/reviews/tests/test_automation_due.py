@@ -61,3 +61,17 @@ def test_scope_and_untrusted_parameters():
     for kwargs in ({"environment": "live"}, {"lease_seconds": 301}, {"token": "bad"}, {"now": True}):
         with pytest.raises(ValueError):
             claim(db, **kwargs)
+
+
+def test_expiry_and_generation_validation():
+    checkout, db = setup()
+    run(checkout, db)
+    claim(db)
+    assert not finish(db, now=120)
+    with pytest.raises(ValueError):
+        finish(db, generation=0)
+    with pytest.raises(ValueError):
+        claim(db, lease_seconds=0)
+    assert claim(db, B, now=120)["generation"] == 2
+    assert not finish(db, B, generation=1, now=121)
+    assert finish(db, B, generation=2, now=121)
