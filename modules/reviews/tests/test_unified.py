@@ -197,3 +197,29 @@ def test_source_id_collision_and_same_day_pagination(monkeypatch):
         params = {"limit": ["1"], "after": [page["next_after"]], "snapshot": [page["snapshot_id"]]}
     assert [item["id"] for item in found] == ["h-u", "h-r", "h-r2", "n-r"]
     assert found[1]["replies"][0]["id"] == "h-a"
+
+
+def test_snapshot_promotion_during_read_fails_closed(monkeypatch):
+    import cartray_reviews.unified as projection
+
+    db = Database()
+    db.db.execute("INSERT INTO review_subjects VALUES ('s','test','p','product','/p/')")
+    db.db.execute("INSERT INTO native_publication_versions VALUES ('s','test','p',0,0,0,0)")
+    db.db.execute("INSERT INTO review_snapshots VALUES ('s','test','one',1,?)", ("a" * 64,))
+    db.db.execute("INSERT INTO review_snapshots VALUES ('s','test','two',2,?)", ("b" * 64,))
+    db.db.execute("INSERT INTO review_snapshot_subjects VALUES ('s','test','one','p','product','/p/')")
+    db.db.execute("INSERT INTO review_snapshot_subjects VALUES ('s','test','two','p','product','/p/')")
+    db.db.execute("INSERT INTO review_publications VALUES ('s','test','one',1)")
+    original = projection._versions
+    calls = 0
+
+    async def promote(*args):
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            db.db.execute("UPDATE review_publications SET snapshot_id='two',revision=2")
+        return await original(*args)
+
+    monkeypatch.setattr(projection, "_versions", promote)
+    result = asyncio.run(unified_read(db, "s", "test", "p", "summary", {}, TestResponse))
+    assert result.status == 409
