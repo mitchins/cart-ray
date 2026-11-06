@@ -41,6 +41,14 @@ if (count($identity) !== 2 || $identity['home'] !== $expected || $identity['site
     $wpdb->query('ROLLBACK');
     exit(1);
 }
+// Review plugins can create other contribution types. Do not silently omit
+// unfamiliar source types: require an explicit disposition before capture.
+$unsupported = reviews_query_or_fail("SELECT COUNT(*) n FROM {$wpdb->comments} WHERE COALESCE(comment_type,'') NOT IN ('review','comment','order_note')");
+if ((int)$unsupported[0]['n'] !== 0) {
+    fwrite(STDERR, "Additional review contribution types require reconciliation\n");
+    $wpdb->query('ROLLBACK');
+    exit(1);
+}
 // Traverse the complete descendant graph in the same repeatable-read snapshot.
 // IDs are converted to integers before they are used in the SQL IN lists.
 $root_rows = reviews_query_or_fail("SELECT comment_ID FROM {$wpdb->comments} WHERE comment_type='review' ORDER BY comment_ID LIMIT 10001");
@@ -74,6 +82,18 @@ while ($frontier) {
     }
 }
 $selection = 'c.comment_ID IN (' . (count($seen) ? implode(',', array_keys($seen)) : '0') . ')';
+$unclassified = reviews_query_or_fail("SELECT COUNT(*) n FROM {$wpdb->comments} c LEFT JOIN {$wpdb->posts} p ON p.ID=c.comment_post_ID WHERE (c.comment_type='comment' AND NOT ($selection) AND COALESCE(p.post_type,'')<>'post') OR (c.comment_type='order_note' AND COALESCE(p.post_type,'') NOT IN ('shop_order','shop_subscription'))");
+if ((int)$unclassified[0]['n'] !== 0) {
+    fwrite(STDERR, "Unclassified non-review comments require reconciliation\n");
+    $wpdb->query('ROLLBACK');
+    exit(1);
+}
+$review_meta_outside_graph = reviews_query_or_fail("SELECT COUNT(*) n FROM {$wpdb->commentmeta} m JOIN {$wpdb->comments} c ON c.comment_ID=m.comment_id WHERE c.comment_type='comment' AND NOT ($selection) AND (m.meta_key IN ('rating','verified','flag_count') OR LEFT(m.meta_key,6)='ivole_' OR LEFT(m.meta_key,3)='cr_' OR LOWER(m.meta_key) LIKE '%review%')");
+if ((int)$review_meta_outside_graph[0]['n'] !== 0) {
+    fwrite(STDERR, "Review metadata outside the selected graph requires reconciliation\n");
+    $wpdb->query('ROLLBACK');
+    exit(1);
+}
 $size = reviews_query_or_fail("SELECT COALESCE(SUM(OCTET_LENGTH(CONCAT_WS('',c.comment_author,c.comment_author_email,c.comment_author_url,c.comment_author_IP,c.comment_date,c.comment_date_gmt,c.comment_content,c.comment_agent,c.comment_type,c.comment_approved))),0) n FROM {$wpdb->comments} c WHERE $selection");
 $meta_size = reviews_query_or_fail("SELECT COUNT(*) n,COALESCE(SUM(COALESCE(OCTET_LENGTH(m.meta_key),0)+COALESCE(OCTET_LENGTH(m.meta_value),0)),0) bytes FROM {$wpdb->commentmeta} m JOIN {$wpdb->comments} c ON c.comment_ID=m.comment_id WHERE $selection");
 $subject_size = reviews_query_or_fail("SELECT COALESCE(SUM(OCTET_LENGTH(post_title)+OCTET_LENGTH(post_name)),0) bytes FROM (SELECT DISTINCT p.ID,p.post_title,p.post_name FROM {$wpdb->posts} p JOIN {$wpdb->comments} c ON c.comment_post_ID=p.ID WHERE $selection) subjects");

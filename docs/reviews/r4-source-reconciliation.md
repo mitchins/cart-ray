@@ -103,3 +103,28 @@ plugin-specific behavior and the other publication checks.
 A fourth capture at 03:50:46 UTC used explicit standard WordPress columns and
 again matched the preceding comment, metadata and subject rows. Its restricted
 SHA-256 is `9d4c8c427aa9469fd4f7e918b6f9b7e51a970abe7f065ef045a88ff18d1ed66c`.
+
+The installed WooCommerce Product Reviews Pro code recognizes separate comment
+types for review contributions, replies, photos, videos and questions. The
+source-wide comment-type inventory found none of those non-review contribution
+types at the later check. The exporter now fails closed if those known types or
+CusRev's Q&A type appear, rather than silently leaving new records out. A fifth
+capture at 03:55:47 UTC passed that check and matched the preceding rows; its
+restricted SHA-256 is `2c617455fcc785c1dbfa87bce7885e4af82c50995f41b456283778bb40e5760d`.
+External testimonial videos remain editorial content and are not inferred from
+this check.
+
+A sixth capture at 03:57:08 UTC checked all stored comment types within the
+transaction. Only `review`, `comment` and `order_note` were present; comments
+outside the review graph were blog comments, and order notes belonged to order
+or subscription posts. Unknown types and unclassified comments now fail closed
+instead of being silently omitted. The restricted SHA-256 is
+`01dfa3ab08d21018bbf8badf393699499e392458039a73ed36eb3b878e94f8ec`;
+its selected rows again match the prior captures. This does not assert anything
+about third-party content or remote provider-held records.
+A seventh capture at 03:58:11 UTC also rejected known review-related metadata on
+comments outside the selected review graph. It passed and returned the same
+selected rows; the restricted SHA-256 is
+`cd4260ab06f2fbeaf689c36298467e76ccd3934b394de7d4f01d3c623a57e167`.
+This metadata check is not proof about unrecognized plugin metadata or external
+review providers.
