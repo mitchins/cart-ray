@@ -57,6 +57,13 @@ def import_snapshot(data, *, digest, store, environment):
     source = snapshot["source"]
     provenance = (store, environment, sid, source["identity"], source["extracted_at"], source["sha256"], 1)
     lines.append(
+        "INSERT INTO review_import_guard SELECT CASE WHEN NOT EXISTS("
+        "SELECT 1 FROM review_publications p JOIN review_snapshot_provenance s "
+        "ON s.store_key=p.store_key AND s.environment=p.environment AND s.snapshot_id=p.snapshot_id "
+        f"WHERE p.store_key={st} AND p.environment={env} AND s.source_identity<>{literal(source['identity'])}) "
+        "THEN 1 ELSE 0 END;"
+    )
+    lines.append(
         "INSERT OR IGNORE INTO review_snapshot_provenance VALUES (" + ",".join(map(literal, provenance)) + ");"
     )
     for subject in snapshot["subjects"]:
@@ -69,6 +76,14 @@ def import_snapshot(data, *, digest, store, environment):
         values = (store, environment, sid, subject["id"], subject["kind"], subject["path"])
         lines.append("INSERT OR IGNORE INTO review_snapshot_subjects VALUES (" + ",".join(map(literal, values)) + ");")
     for item in snapshot["contributions"]:
+        lines.append(
+            "INSERT INTO review_import_guard SELECT CASE WHEN NOT EXISTS(SELECT 1 FROM review_identity_links "
+            f"WHERE store_key={st} AND environment={env} AND source_identity={literal(source['identity'])} "
+            f"AND source_contribution_id={literal(item['id'])} AND "
+            f"(subject_id<>{literal(item['subject_id'])} OR source_revision_id<>{literal(item['revision_id'])} "
+            f"OR {literal(item['parent_id'])} IS NOT NULL)) "
+            "THEN 1 ELSE 0 END;"
+        )
         values = (
             store,
             environment,
@@ -93,6 +108,32 @@ def import_snapshot(data, *, digest, store, environment):
         if title is not None:
             values = (store, environment, sid, item["id"], title)
             lines.append("INSERT OR IGNORE INTO review_import_titles VALUES (" + ",".join(map(literal, values)) + ");")
+    # Until linked historical provenance is stored independently, never promote
+    # a snapshot that removes or changes a linked root or one of its replies.
+    lines.append(
+        "INSERT INTO review_import_guard WITH RECURSIVE keep(id) AS ("
+        "SELECT l.source_contribution_id FROM review_identity_links l "
+        f"WHERE l.store_key={st} AND l.environment={env} AND l.source_identity={literal(source['identity'])} "
+        "UNION SELECT c.contribution_id FROM review_contributions c JOIN keep k ON c.parent_id=k.id "
+        "JOIN review_publications p ON p.store_key=c.store_key AND p.environment=c.environment "
+        "AND p.snapshot_id=c.snapshot_id "
+        f"WHERE c.store_key={st} AND c.environment={env}) "
+        "SELECT CASE WHEN NOT EXISTS(SELECT 1 FROM keep k "
+        "JOIN review_publications p ON p.store_key=" + st + " AND p.environment=" + env + " "
+        "JOIN review_contributions old ON old.store_key=p.store_key AND old.environment=p.environment "
+        "AND old.snapshot_id=p.snapshot_id AND old.contribution_id=k.id "
+        "LEFT JOIN review_contributions new ON new.store_key=old.store_key AND new.environment=old.environment "
+        f"AND new.snapshot_id={snapshot_key} AND new.contribution_id=old.contribution_id "
+        "WHERE new.contribution_id IS NULL OR new.subject_id IS NOT old.subject_id "
+        "OR new.parent_id IS NOT old.parent_id OR new.revision_id IS NOT old.revision_id "
+        "OR new.author IS NOT old.author OR new.body IS NOT old.body OR new.rating IS NOT old.rating "
+        "OR new.source_date IS NOT old.source_date OR new.verification IS NOT old.verification "
+        "OR new.anchors_json IS NOT old.anchors_json OR new.votes_json IS NOT old.votes_json "
+        "OR (SELECT title FROM review_import_titles WHERE store_key=old.store_key AND environment=old.environment "
+        "AND snapshot_id=old.snapshot_id AND contribution_id=old.contribution_id) IS NOT "
+        "(SELECT title FROM review_import_titles WHERE store_key=new.store_key AND environment=new.environment "
+        "AND snapshot_id=new.snapshot_id AND contribution_id=new.contribution_id)) THEN 1 ELSE 0 END;"
+    )
     lines += [
         f"INSERT INTO review_publications VALUES ({scoped},{rev}) ON CONFLICT(store_key,environment) "
         "DO UPDATE SET snapshot_id=excluded.snapshot_id,revision=excluded.revision;",

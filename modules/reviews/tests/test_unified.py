@@ -17,6 +17,7 @@ lifecycle = nl.lifecycle
 MODULE = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(MODULE / "tools"))
 import import_snapshot as importer  # noqa: E402
+import reconcile_identities as reconciliation  # noqa: E402
 
 
 def test_import_and_native_publication_share_subject(lifecycle, monkeypatch):
@@ -252,3 +253,127 @@ def test_response_size_trimming_preserves_cursor_continuity():
         assert page["next_after"] == page["contributions"][-1]["id"]
         params = {"limit": ["50"], "after": [page["next_after"]], "snapshot": [page["snapshot_id"]]}
     assert found == [f"{i:064x}" for i in range(20)]
+
+
+def test_adjudicated_identity_link_preserves_reply_and_withdrawal(lifecycle, monkeypatch):
+    db = Database()
+    env = SimpleNamespace(
+        REVIEWS_DB=db, REVIEWS_STORE_KEY="example-store", REVIEWS_ENVIRONMENT="test", REVIEWS_TEST_ADMIN_TOKEN="s" * 40
+    )
+    assert (
+        invoke(
+            lifecycle,
+            env,
+            "/reviews-admin/v1/subjects",
+            {"subject_id": "example-policy", "kind": "product", "path": "/product/"},
+            admin=True,
+        ).status
+        == 201
+    )
+
+    def execute(_flag, filename):
+        try:
+            db.db.executescript("BEGIN;\n" + Path(filename).read_text() + "\nCOMMIT;")
+        except Exception:
+            db.db.rollback()
+            raise
+
+    monkeypatch.setattr(importer, "execute", execute)
+    fixture = (MODULE / "tests/fixtures/approved-synthetic.json").read_bytes()
+    importer.import_snapshot(
+        fixture, digest=hashlib.sha256(fixture).hexdigest(), store="example-store", environment="test"
+    )
+    token = invoke(
+        lifecycle,
+        env,
+        "/reviews-admin/v1/test-capabilities",
+        {"subject_id": "example-policy", "test_reviewer": "guest"},
+        admin=True,
+    ).body["test_capability"]
+    review = invoke(
+        lifecycle,
+        env,
+        "/reviews/v1/contributions",
+        {"subject_id": "example-policy", "author": "Guest", "body": "Updated", "rating": 2, "test_capability": token},
+        key="identity-request",
+    ).body
+    path = "/reviews-admin/v1/contributions/" + review["review_id"] + "/"
+    assert invoke(lifecycle, env, path + "approve", {"revision_id": review["revision_id"]}, admin=True).status == 200
+
+    def read(endpoint, params=None):
+        return asyncio.run(
+            unified_read(db, "example-store", "test", "example-policy", endpoint, params or {}, TestResponse)
+        )
+
+    before = read("summary").body["snapshot_id"]
+    monkeypatch.setattr(reconciliation, "execute", execute)
+    manifest = json.dumps(
+        {
+            "schema": "cartray.reviews.identity-links.v1",
+            "store": "example-store",
+            "environment": "test",
+            "links": [
+                {
+                    "subject_id": "example-policy",
+                    "source_identity": "synthetic-native",
+                    "source_contribution_id": "r",
+                    "source_revision_id": "r1",
+                    "source_snapshot_sha256": hashlib.sha256(fixture).hexdigest(),
+                    "native_review_id": review["review_id"],
+                    "native_revision_id": review["revision_id"],
+                    "evidence_sha256": "a" * 64,
+                }
+            ],
+        }
+    ).encode()
+    manifest_args = {"sha256": hashlib.sha256(manifest).hexdigest(), "store": "example-store", "environment": "test"}
+    unreviewed = json.loads(manifest)
+    unreviewed["links"][0]["source_snapshot_sha256"] = "b" * 64
+    unreviewed_bytes = json.dumps(unreviewed).encode()
+    with pytest.raises(Exception):
+        reconciliation.apply_manifest(
+            unreviewed_bytes, **(manifest_args | {"sha256": hashlib.sha256(unreviewed_bytes).hexdigest()})
+        )
+    assert db.db.execute("SELECT COUNT(*) FROM review_identity_links").fetchone()[0] == 0
+    reconciliation.apply_manifest(manifest, **manifest_args)
+    reconciliation.apply_manifest(manifest, **manifest_args)
+    with pytest.raises(ValueError, match="digest"):
+        reconciliation.apply_manifest(manifest, **(manifest_args | {"sha256": "b" * 64}))
+    conflict = manifest.replace(b'"aaaaaaaa', b'"baaaaaaa', 1)
+    with pytest.raises(Exception):
+        reconciliation.apply_manifest(conflict, **(manifest_args | {"sha256": hashlib.sha256(conflict).hexdigest()}))
+    assert db.db.execute("SELECT COUNT(*) FROM review_identity_links").fetchone()[0] == 1
+    after = read("summary").body
+    assert before != after["snapshot_id"]
+    assert after["contribution_count"] == 3
+    assert after["rating"] == {"rated_count": 2, "average": 3}
+    listing = read("contributions").body["contributions"]
+    assert all(item["id"] != "h-r" for item in listing)
+    linked = next(item for item in listing if item["id"] == "n-" + review["review_id"])
+    assert linked["historical_provenance"]["anchors"] == ["review-r"]
+    assert linked["historical_provenance"]["verification"] == "email_only"
+    assert linked["replies"][0]["id"] == "h-a"
+    changed = json.loads(fixture)
+    changed["snapshot_id"], changed["publication_revision"] = "two", 2
+    changed["contributions"][0]["anchors"] = ["changed-anchor"]
+    changed_bytes = json.dumps(changed).encode()
+    with pytest.raises(Exception):
+        importer.import_snapshot(
+            changed_bytes, digest=hashlib.sha256(changed_bytes).hexdigest(), store="example-store", environment="test"
+        )
+    assert db.db.execute("SELECT snapshot_id FROM review_publications").fetchone()[0] == "one"
+    changed = json.loads(fixture)
+    changed["snapshot_id"], changed["publication_revision"] = "two", 2
+    changed["contributions"] = [item for item in changed["contributions"] if item["id"] != "a"]
+    changed_bytes = json.dumps(changed).encode()
+    with pytest.raises(Exception):
+        importer.import_snapshot(
+            changed_bytes, digest=hashlib.sha256(changed_bytes).hexdigest(), store="example-store", environment="test"
+        )
+    assert db.db.execute("SELECT snapshot_id FROM review_publications").fetchone()[0] == "one"
+    assert invoke(lifecycle, env, path + "withdraw", {"revision_id": review["revision_id"]}, admin=True).status == 200
+    assert read("summary").body["contribution_count"] == 2
+    public = json.dumps(read("contributions").body)
+    assert "Updated" not in public and '"id": "h-r"' not in public and "reply-a" not in public
+    with pytest.raises(Exception):
+        db.db.execute("DELETE FROM review_identity_links")

@@ -67,13 +67,28 @@ async def unified_read(db, store, environment, subject, endpoint, params, respon
     snapshot = versions[0]["snapshot_id"]
     version = _version(versions[0])
     scope = (store, environment, snapshot, subject)
+    links = await _query(
+        db,
+        "SELECT l.source_contribution_id,l.native_review_id FROM review_identity_links l "
+        "JOIN review_snapshot_provenance p ON p.store_key=l.store_key AND p.environment=l.environment "
+        "AND p.source_identity=l.source_identity WHERE l.store_key=? AND l.environment=? "
+        "AND p.snapshot_id=? AND l.subject_id=?",
+        *scope,
+    )
+    linked_ids = {link["source_contribution_id"] for link in links}
+    native_links = {link["native_review_id"]: link["source_contribution_id"] for link in links}
     if endpoint == "summary":
         historical = (
             await _query(
                 db,
                 "SELECT COUNT(*) contribution_count,COUNT(rating) rated_count,COALESCE(SUM(rating),0) rating_sum "
                 "FROM review_contributions WHERE store_key=? AND environment=? AND snapshot_id=? AND subject_id=? "
-                "AND status='published' AND parent_id IS NULL",
+                "AND status='published' AND parent_id IS NULL AND NOT EXISTS ("
+                "SELECT 1 FROM review_identity_links l JOIN review_snapshot_provenance p "
+                "ON p.store_key=l.store_key AND p.environment=l.environment AND p.source_identity=l.source_identity "
+                "WHERE p.store_key=review_contributions.store_key AND p.environment=review_contributions.environment "
+                "AND p.snapshot_id=review_contributions.snapshot_id AND l.subject_id=review_contributions.subject_id "
+                "AND l.source_contribution_id=review_contributions.contribution_id)",
                 *scope,
             )
         )[0]
@@ -161,7 +176,7 @@ async def unified_read(db, store, environment, subject, endpoint, params, respon
         )
         roots = []
         for row in historic:
-            if not row["parent_id"]:
+            if not row["parent_id"] and row["contribution_id"] not in linked_ids:
                 item = _historic(row)
                 if cursor_day is None or row["day"] < cursor_day or (row["day"] == cursor_day and item["id"] > after):
                     roots.append((row["day"], item))
@@ -187,6 +202,22 @@ async def unified_read(db, store, environment, subject, endpoint, params, respon
         roots.sort(key=lambda pair: pair[0], reverse=True)
         items = [item for _, item in roots[:limit]]
         by_id = {item["source_id"]: item for item in items if item["id"].startswith("h-")}
+        historical_by_id = {row["contribution_id"]: row for row in historic if not row["parent_id"]}
+        for item in items:
+            if not item["id"].startswith("n-"):
+                continue
+            source_id = native_links.get(item["source_id"])
+            source = historical_by_id.get(source_id)
+            if source is not None:
+                legacy = _historic(source)
+                item["historical_provenance"] = {
+                    "source_id": source_id,
+                    "date": legacy["date"],
+                    "verification": legacy["verification"],
+                    "anchors": legacy["anchors"],
+                    "votes": legacy["votes"],
+                }
+                by_id[source_id] = item
         pending = [row for row in historic if row["parent_id"]]
         while pending:
             remaining = []

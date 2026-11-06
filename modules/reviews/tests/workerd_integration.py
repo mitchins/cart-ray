@@ -288,6 +288,58 @@ def main():
             assert len(combined_list["contributions"]) == 4
             assert any(x["id"] == "h-r" and len(x["replies"]) == 1 for x in combined_list["contributions"])
             assert "private-reviewer" not in json.dumps(combined_list)
+            manifest = {
+                "schema": "cartray.reviews.identity-links.v1",
+                "store": "example-store",
+                "environment": "test",
+                "links": [
+                    {
+                        "subject_id": "example-policy",
+                        "source_identity": "synthetic-native",
+                        "source_contribution_id": "r",
+                        "source_revision_id": "r1",
+                        "source_snapshot_sha256": digest,
+                        "native_review_id": "native-one",
+                        "native_revision_id": "native-revision",
+                        "evidence_sha256": "a" * 64,
+                    }
+                ],
+            }
+            manifest_file = Path(directory) / "identity-manifest.json"
+            manifest_file.write_text(json.dumps(manifest))
+            link_cmd = [
+                sys.executable,
+                str(MODULE / "tools/reconcile_identities.py"),
+                str(manifest_file),
+                "--sha256",
+                hashlib.sha256(manifest_file.read_bytes()).hexdigest(),
+                "--store",
+                "example-store",
+                "--environment",
+                "test",
+            ]
+            for _ in range(2):
+                subprocess.run(link_cmd, env=env, cwd=ROOT, check=True, stdout=subprocess.DEVNULL)
+            linked_summary = json.loads(request("summary")[1])
+            assert linked_summary["contribution_count"] == 3
+            assert linked_summary["rating"] == {"average": 3, "rated_count": 2}
+            linked_list = json.loads(request("contributions")[1])["contributions"]
+            linked = next(item for item in linked_list if item["id"] == "n-native-one")
+            assert linked["historical_provenance"]["anchors"] == ["review-r"]
+            assert linked["replies"][0]["id"] == "h-a"
+            subprocess.run(
+                [
+                    *command,
+                    "UPDATE native_reviews SET state='withdrawn' WHERE review_id='native-one';"
+                    "UPDATE native_publication_versions SET version=version+1, contribution_count=0, "
+                    "rated_count=0, rating_sum=0 WHERE subject_id='example-policy';",
+                ],
+                cwd=ROOT,
+                check=True,
+                stdout=subprocess.DEVNULL,
+            )
+            withdrawn = json.loads(request("contributions")[1])["contributions"]
+            assert all(item["id"] not in ("n-native-one", "h-r") for item in withdrawn)
             print("Workerd combined summary:", json.dumps(combined))
             print("Workerd summary:", json.dumps(summary))
             print("Workerd list: three reviews, one unrated, one attached reply")

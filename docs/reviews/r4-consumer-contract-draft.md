@@ -29,8 +29,8 @@ Ordering compares the source calendar day for imported records and UTC calendar
 day for native records, newest first, followed by source-prefixed ID. It does not
 claim historical timestamps without authoritative timezone or precision. Request
 a later page using both `after` and the returned `snapshot` value. The composite
-version covers the imported publication and native publication version; a change
-invalidates the cursor. A renderer must restart on a stale or changed publication
+version covers the imported publication and native publication version. Explicit
+identity links atomically increment the native version; a change invalidates the cursor. A renderer must restart on a stale or changed publication
 and must escape all text. The test Worker uses `Cache-Control: no-store`.
 
 A future Astro build must pin and independently approve one complete publication
@@ -43,9 +43,17 @@ and withdrawals invalidate API/CDN caches and remove content from generated HTML
 JSON-LD and associated media, including rebuild failure and rollback. No stale
 period has been approved; automatic production refresh is not authorized.
 
-Before this contract is qualified, implement and validate evidence-backed
-cross-source identity reconciliation, persist and expose appropriately scoped source identity and extraction provenance,
-resolve source mappings and historical fields, prove publication atomicity and rollback in D1, and specify the static
-withdrawal mechanism. In particular, the test projection currently counts
-source records independently and cannot distinguish a historical review from a
-native representation of the same review. Live overlapping reads are disabled.
+A test-only pinned identity manifest can link a reviewed historical root to an
+approved native revision without heuristics. The immutable link suppresses the
+old root, preserves its anchors, source-date and verification attribution plus
+historical replies, and prevents withdrawal from resurrecting it. The linked
+native review controls visibility. Snapshot promotion fails closed if it would
+remove or change linked historical content or its descendants. This conservative
+rule needs an explicit withdrawal and correction workflow before production.
+
+Before this contract is qualified, validate reconciliation completeness and
+approval, expose appropriately scoped source attribution, resolve source
+mappings and historical fields, prove publication atomicity and rollback in D1, and specify the static
+withdrawal mechanism. Unlinked source records count independently: the system cannot infer whether
+they are the same review. Live overlapping reads remain disabled until an
+explicit per-subject reconciliation and approval gate is implemented.
