@@ -73,8 +73,8 @@ async function publish(db, payload, origin, env) {
   const ids = JSON.stringify(lineage);
   const mediaIds = JSON.stringify(media.map((item) => item.sha256));
   const statements = [
-    db.prepare('INSERT OR IGNORE INTO publication_artifacts(digest,subject_id,source_origin,source_scope,projection,html,jsonld,media) VALUES(?,?,?,?,?,?,?,?)')
-      .bind(digest, projection.subject.id, source.origin, env.REVIEWS_SOURCE_SCOPE, canonical(projection), html, jsonld, canonical(media)),
+    db.prepare('INSERT OR IGNORE INTO publication_artifacts(digest,subject_id,source_origin,source_scope,canonical_origin,projection,html,jsonld,media) VALUES(?,?,?,?,?,?,?,?,?)')
+      .bind(digest, projection.subject.id, source.origin, env.REVIEWS_SOURCE_SCOPE, origin, canonical(projection), html, jsonld, canonical(media)),
     db.prepare("INSERT INTO publication_gate(singleton,digest,state,epoch) SELECT 1,?,'active',1 WHERE NOT EXISTS (SELECT 1 FROM publication_retired WHERE digest=?) AND NOT EXISTS (SELECT 1 FROM json_each(?) i JOIN publication_tombstones t ON t.record_id=i.value) AND NOT EXISTS (SELECT 1 FROM json_each(?) i JOIN publication_media_tombstones t ON t.media_sha256=i.value) ON CONFLICT(singleton) DO UPDATE SET digest=excluded.digest,state='active',epoch=publication_gate.epoch+1 WHERE NOT EXISTS (SELECT 1 FROM publication_retired WHERE digest=excluded.digest) AND NOT EXISTS (SELECT 1 FROM json_each(?) i JOIN publication_tombstones t ON t.record_id=i.value) AND NOT EXISTS (SELECT 1 FROM json_each(?) i JOIN publication_media_tombstones t ON t.media_sha256=i.value) AND (publication_gate.state != 'active' OR publication_gate.digest != excluded.digest)")
       .bind(digest, digest, ids, mediaIds, ids, mediaIds)
   ];
@@ -104,10 +104,10 @@ async function withdraw(db, expectedDigest, recordId, expectedEpoch) {
 }
 async function recover(db, payload, env) {
   if (!HEX.test(payload.approved_sha256 || '') || !Number.isSafeInteger(payload.expected_epoch)) return fail(400);
-  const row = await db.withSession('first-primary').prepare("SELECT g.digest,g.state,g.epoch,a.projection,a.media,a.source_origin,a.source_scope FROM publication_gate g JOIN publication_artifacts a ON a.digest=g.digest WHERE g.singleton=1").first();
+  const row = await db.withSession('first-primary').prepare("SELECT g.digest,g.state,g.epoch,a.projection,a.media,a.source_origin,a.source_scope,a.canonical_origin FROM publication_gate g JOIN publication_artifacts a ON a.digest=g.digest WHERE g.singleton=1").first();
   if (!row || row.state !== 'safe' || row.digest !== payload.approved_sha256 || row.epoch !== payload.expected_epoch) return fail(409, 'safe state changed');
   const projection = JSON.parse(row.projection), media = JSON.parse(row.media);
-  if (!await sourceCurrent(env, projection, row.source_origin, row.source_scope)) return fail(409, 'source projection mismatch');
+  if (env.PUBLICATION_CANONICAL_ORIGIN !== row.canonical_origin || !await sourceCurrent(env, projection, row.source_origin, row.source_scope)) return fail(409, 'source projection mismatch');
   const result = await db.prepare("UPDATE publication_gate SET state='active',epoch=epoch+1 WHERE singleton=1 AND digest=? AND epoch=? AND state='safe' AND NOT EXISTS (SELECT 1 FROM json_each(?) i JOIN publication_tombstones t ON t.record_id=i.value) AND NOT EXISTS (SELECT 1 FROM json_each(?) i JOIN publication_media_tombstones t ON t.media_sha256=i.value)").bind(row.digest, row.epoch, JSON.stringify(flattenLineage(projection.reviews)), JSON.stringify(media.map((item) => item.sha256))).run();
   return result.meta.changes ? Response.json({ state: 'active', digest: row.digest }, { headers: noStore }) : fail(409, 'safe state changed or content withdrawn');
 }
@@ -190,9 +190,9 @@ export default {
     if (!['/publication/html', '/publication/jsonld'].includes(url.pathname) && !/^\/publication\/media\/[a-f0-9]{64}$/.test(url.pathname)) return fail(404);
     try {
       // A single primary read binds gate state and immutable artifact together.
-      const row = await db.withSession('first-primary').prepare('SELECT g.state,g.digest,g.epoch,a.source_origin,a.source_scope,a.projection,a.html,a.jsonld,a.media FROM publication_gate g JOIN publication_artifacts a ON a.digest=g.digest WHERE g.singleton=1').first();
+      const row = await db.withSession('first-primary').prepare('SELECT g.state,g.digest,g.epoch,a.source_origin,a.source_scope,a.canonical_origin,a.projection,a.html,a.jsonld,a.media FROM publication_gate g JOIN publication_artifacts a ON a.digest=g.digest WHERE g.singleton=1').first();
       if (!row || row.state !== 'active') return new Response(request.method === 'HEAD' ? null : fallback, { status: 503, headers: { ...noStore, 'Content-Type': 'text/html; charset=utf-8' } });
-      if (!await sourceCurrent(env, JSON.parse(row.projection), row.source_origin, row.source_scope)) {
+      if (env.PUBLICATION_CANONICAL_ORIGIN !== row.canonical_origin || !await sourceCurrent(env, JSON.parse(row.projection), row.source_origin, row.source_scope)) {
         await quarantine(db, row);
         return new Response(request.method === 'HEAD' ? null : fallback, { status: 503, headers: { ...noStore, 'Content-Type': 'text/html; charset=utf-8' } });
       }

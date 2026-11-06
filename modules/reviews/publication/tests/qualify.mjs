@@ -15,19 +15,23 @@ const data = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAw
 const mediaSha = await sha256(Uint8Array.from(Buffer.from(data, 'base64')));
 const root = projection.reviews.find((item) => item.id === 'r'); if (!root) throw new Error('fixture root absent');
 const media = [{ sha256: mediaSha, record_id: root.id, lineage: root.lineage, type: 'image/png', data }];
-const approved = await sha256(canonical(publicationArtifact(projection, media, 'https://example.invalid', new URL(sourceOrigin).origin, 'example-store:test')));
+const artifact = publicationArtifact(projection, media, 'https://example.invalid', new URL(sourceOrigin).origin, 'example-store:test');
+const approved = await sha256(canonical(artifact));
 const payload = { projection: input, media, approved_sha256: approved };
 const post = (path, body, authorized = true) => fetch(new URL(path, base), { method: 'POST', headers: { 'Content-Type': 'application/json', ...(authorized ? { Authorization: `Bearer ${token}` } : {}) }, body: JSON.stringify(body), cache: 'no-store' });
 assert.equal((await post('/__test/publish', payload, false)).status, 401);
 const published = await post('/__test/publish', payload); assert.equal(published.status, 200, await published.clone().text());
 assert.equal((await published.json()).digest, approved);
 assert.equal((await post('/__test/publish', payload)).status, 200, 'repeat publication should be idempotent');
+const changedRendererDigest = await sha256(canonical({ ...artifact, html: artifact.html + '<!-- renderer changed -->' }));
+assert.notEqual(changedRendererDigest, approved);
+assert.equal((await post('/__test/publish', { ...payload, approved_sha256: changedRendererDigest })).status, 409, 'changed rendered bytes cannot reuse approval');
 const paths = ['/publication/html', '/publication/jsonld', `/publication/media/${mediaSha}`];
 for (const path of paths) {
   const response = await fetch(new URL(path, base), { cache: 'no-store' });
   assert.equal(response.status, 200, path); assert.match(response.headers.get('cache-control'), /no-store/);
   assert.equal(response.headers.get('x-publication-digest'), approved);
-  if (path.endsWith('/html')) { const html = await response.text(); assert.match(html, /Good/); assert.match(html, /application\/ld\+json/); }
+  if (path.endsWith('/html')) { const html = await response.text(); assert.equal(html, artifact.html); assert.match(html, /Good/); assert.match(html, /application\/ld\+json/); }
   if (path.endsWith('/jsonld')) { const json = await response.json(); assert.equal(json.aggregateRating.ratingCount, 2); assert.equal(json.aggregateRating.ratingValue, 4.5); }
 }
 // The optional control is a local-only proxy around the real R4 test Worker.

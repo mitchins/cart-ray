@@ -3,6 +3,7 @@ CREATE TABLE publication_artifacts (
   subject_id TEXT NOT NULL,
   source_origin TEXT NOT NULL,
   source_scope TEXT NOT NULL,
+  canonical_origin TEXT NOT NULL,
   projection TEXT NOT NULL,
   html TEXT NOT NULL,
   jsonld TEXT NOT NULL,
