@@ -4,7 +4,10 @@ import asyncio
 import sqlite3
 import types
 
-from test_native_lifecycle import Database, invoke
+import pytest
+from cartray_reviews.management import management_token
+from cartray_reviews.unified import unified_read
+from test_native_lifecycle import Database, TestResponse, invoke
 from test_native_lifecycle import lifecycle as lifecycle
 
 
@@ -242,12 +245,101 @@ def test_reply_is_not_reused_after_parent_revision_changes(lifecycle):
         "body": "For the original review",
     }
     assert invoke(lifecycle, env, base + "reply", payload, admin=True, key="create").status == 200
-    next_parent = "a" * 64
     db.db.execute(
-        "INSERT INTO native_revisions VALUES (?,?,?,?,?,?,?,?)",
-        ("store", "test", next_parent, review["review_id"], "Guest", None, "Changed review", 2),
+        "INSERT INTO native_review_acquisitions VALUES (?,?,?,?,?)",
+        ("store", "test", review["review_id"], "synthetic-purchase", "policy"),
     )
-    db.db.execute("UPDATE native_reviews SET revision_id=? WHERE review_id=?", (next_parent, review["review_id"]))
-    db.db.execute("UPDATE native_publication_versions SET version=version+1 WHERE store_key='store'")
     db.db.commit()
+    env.REVIEWS_MODE = "verified_acquisition_only"
+    env.REVIEWS_REVIEWER_KEY = "r" * 40
+    env.REVIEWS_INVITATION_KEY = "i" * 40
+    env.REVIEWS_SETTLEMENT_TOKEN = "u" * 40
+    env.CARTRAY_DB = db
+    capability = management_token(
+        env.REVIEWS_REVIEWER_KEY.encode(), store="store", environment="test", review_id=review["review_id"]
+    )
+    edited = invoke(
+        lifecycle,
+        env,
+        "/reviews/v1/manage/" + review["review_id"] + "/edit",
+        {
+            "management_token": capability,
+            "revision_id": review["revision_id"],
+            "update": {"author": "Guest", "body": "Changed review", "rating": 2},
+        },
+        key="customer-edit",
+    )
+    assert edited.status == 200 and edited.body["status"] == "pending"
+    assert read(lifecycle, db).body["contributions"] == []
+    assert (
+        invoke(lifecycle, env, base + "approve", {"revision_id": edited.body["revision_id"]}, admin=True).status == 200
+    )
     assert read(lifecycle, db).body["contributions"][0]["replies"] == []
+
+
+@pytest.mark.parametrize("read_kind", ["native", "unified"])
+@pytest.mark.parametrize("change", ["reply-edit", "parent-withdraw"])
+def test_public_read_fails_closed_when_content_changes_mid_read(lifecycle, read_kind, change):
+    db, env, review, base = setup_review(lifecycle)
+    payload = {
+        "parent_revision_id": review["revision_id"],
+        "expected_reply_revision_id": None,
+        "author": "Store",
+        "body": "Original reply",
+    }
+    created = invoke(lifecycle, env, base + "reply", payload, admin=True, key="create").body
+    if read_kind == "unified":
+        db.db.execute("INSERT INTO review_snapshots VALUES ('store','test','one',1,?)", ("a" * 64,))
+        db.db.execute(
+            "INSERT INTO review_snapshot_subjects VALUES ('store','test','one','policy','product','/policy/')"
+        )
+        db.db.execute("INSERT INTO review_publications VALUES ('store','test','one',1)")
+        db.db.commit()
+    version = db.db.execute("SELECT version FROM native_publication_versions WHERE subject_id='policy'").fetchone()[0]
+    original_prepare = db.prepare
+
+    async def exercise():
+        reached, release = asyncio.Event(), asyncio.Event()
+
+        def prepare(sql):
+            statement = original_prepare(sql)
+            if sql.startswith("SELECT h.review_id,h.reply_id,v.author,v.body,v.created_at"):
+                original_all = statement.all
+
+                async def paused_all():
+                    reached.set()
+                    await release.wait()
+                    return await original_all()
+
+                statement.all = paused_all
+            return statement
+
+        db.prepare = prepare
+        if read_kind == "native":
+            reading = asyncio.create_task(
+                lifecycle.native_read(db, "store", "test", "policy", "contributions", {}, version)
+            )
+        else:
+            reading = asyncio.create_task(
+                unified_read(db, "store", "test", "policy", "contributions", {}, TestResponse)
+            )
+        await asyncio.wait_for(reached.wait(), timeout=2)
+        if change == "reply-edit":
+            path = base + "reply"
+            data = payload | {"expected_reply_revision_id": created["reply_revision_id"], "body": "New reply"}
+        else:
+            path = base + "withdraw"
+            data = {"revision_id": review["revision_id"]}
+        request = types.SimpleNamespace(
+            method="POST",
+            headers={"Authorization": "Bearer " + env.REVIEWS_TEST_ADMIN_TOKEN, "Idempotency-Key": "race"},
+            data=data,
+            body=None,
+        )
+        changed = await lifecycle.handle_write(request, env, path)
+        release.set()
+        return changed, await reading
+
+    changed, response = asyncio.run(exercise())
+    assert changed.status == 200
+    assert response.status == 409
