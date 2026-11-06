@@ -64,6 +64,16 @@ test('SQLite-backed publication and withdrawal preserve the public boundary', as
     const approved = await sha256(canonical(publicationArtifact(projection, [], origin, source, 'example-store:test')));
     const post = (path, body, auth = true) => worker.fetch(new Request(`https://publisher.example${path}`, { method: 'POST', headers: { 'Content-Type': 'application/json', ...(auth ? { Authorization: `Bearer ${token}` } : {}) }, body: JSON.stringify(body) }), env);
     assert.equal((await post('/__test/publish', {}, false)).status, 401);
+    const healthyFetch = globalThis.fetch;
+    let sourceCancelled = false;
+    globalThis.fetch = async () => new Response(new ReadableStream({
+      start(controller) { controller.enqueue(new Uint8Array(140001)); },
+      cancel() { sourceCancelled = true; return new Promise(() => {}); },
+    }), { headers: { 'Cache-Control': 'no-store' } });
+    const sourceTimeout = new Promise((_, reject) => setTimeout(() => reject(new Error('source cleanup stalled')), 1000).unref());
+    assert.equal((await Promise.race([post('/__test/publish', { projection: input, media: [], approved_sha256: approved }), sourceTimeout])).status, 409);
+    assert.equal(sourceCancelled, true);
+    globalThis.fetch = healthyFetch;
     assert.equal((await post('/__test/publish', { projection: input, media: [], approved_sha256: approved })).status, 200);
     assert.equal((await post('/__test/publish', { projection: input, media: [], approved_sha256: approved })).status, 200);
     let response = await worker.fetch(new Request('https://publisher.example/publication/html'), env);

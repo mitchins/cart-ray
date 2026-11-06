@@ -102,6 +102,7 @@ def main():
             "tests/qualify.mjs",
             "tests/stalled_upload.mjs",
             "tests/source_health.mjs",
+            "tests/gate_source_health.mjs",
             "tests/hosted_qualification.py",
         ):
             repository_path = f"modules/reviews/publication/{relative}"
@@ -152,6 +153,23 @@ def main():
                 f'name = "{source_name}"\n'
                 'main = "synthetic_source.mjs"\ncompatibility_date = "2026-08-31"\nworkers_dev = true\n'
                 f'[vars]\nR5_BUILD_ID = "{frozen["tests/synthetic_source.mjs"]}"\n'
+                '[[d1_databases]]\nbinding = "SOURCE_CONTROL_DB"\n'
+                f'database_name = "{database_name}"\ndatabase_id = "{database_id}"\n'
+            )
+            command(
+                [
+                    "d1",
+                    "execute",
+                    database_name,
+                    "--remote",
+                    "--config",
+                    str(source_config),
+                    "--command",
+                    "CREATE TABLE synthetic_source_state(singleton INTEGER PRIMARY KEY, available INTEGER NOT NULL); "
+                    "INSERT INTO synthetic_source_state VALUES(1,1)",
+                ],
+                env=env,
+                cwd=temp,
             )
             resources["source"] = True
             output = command(
@@ -162,10 +180,24 @@ def main():
             if not found:
                 raise RuntimeError("source Worker URL unavailable")
             source_url = found.group(0)
+            command(
+                ["secret", "put", "SOURCE_CONTROL_TOKEN", "--config", str(source_config)],
+                env=env,
+                cwd=temp,
+                stdin=token,
+            )
             health = subprocess.run(
-                ["node", str(temp / "tests/source_health.mjs"), source_url + "/__test/health",
-                 frozen["tests/synthetic_source.mjs"]],
-                capture_output=True, text=True, timeout=40, check=False, env=env,
+                [
+                    "node",
+                    str(temp / "tests/source_health.mjs"),
+                    source_url + "/__test/health",
+                    frozen["tests/synthetic_source.mjs"],
+                ],
+                capture_output=True,
+                text=True,
+                timeout=40,
+                check=False,
+                env=env,
             )
             (diagnostics / "source-health.json").write_text(health.stdout + health.stderr)
             if health.returncode:
@@ -208,6 +240,17 @@ def main():
                 cwd=temp,
                 stdin=token,
             )
+            gate_health = subprocess.run(
+                ["node", str(temp / "tests/gate_source_health.mjs"), gate_url],
+                env=env | {"PUBLICATION_TEST_TOKEN": token},
+                capture_output=True,
+                text=True,
+                timeout=40,
+                check=False,
+            )
+            (diagnostics / "gate-source-health.json").write_text(gate_health.stdout + gate_health.stderr)
+            if gate_health.returncode:
+                raise RuntimeError("gate cannot reach synthetic source; see diagnostic output")
             started = datetime.now(UTC).isoformat()
             stalled = subprocess.run(
                 ["node", str(temp / "tests/stalled_upload.mjs"), gate_url],
@@ -220,16 +263,22 @@ def main():
             )
             transport = [json.loads(line) for line in stalled.stdout.splitlines() if line.strip()]
             transport_passed = stalled.returncode == 0
+            (diagnostics / "transport.jsonl").write_text(stalled.stdout + stalled.stderr)
             result = subprocess.run(
                 ["node", str(temp / "tests/qualify.mjs"), gate_url, str(temp / "fixture.json")],
                 cwd=ROOT,
                 env=env
-                | {"PUBLICATION_TEST_TOKEN": token, "REVIEWS_PUBLIC_ORIGIN": source_url, "REVIEWS_SOURCE_CONTROL": ""},
+                | {
+                    "PUBLICATION_TEST_TOKEN": token,
+                    "REVIEWS_PUBLIC_ORIGIN": source_url,
+                    "REVIEWS_SOURCE_CONTROL": source_url,
+                },
                 capture_output=True,
                 text=True,
                 timeout=120,
                 check=False,
             )
+            (diagnostics / "qualification.txt").write_text(result.stdout + result.stderr)
             if result.returncode:
                 raise RuntimeError(f"hosted publication qualification failed:\n{result.stdout}\n{result.stderr}")
             measurement = json.loads(result.stdout.strip().splitlines()[-1])

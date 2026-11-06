@@ -38,14 +38,17 @@ for (const path of paths) {
   if (path.endsWith('/html')) { const html = await response.text(); assert.equal(html, artifact.html); assert.match(html, /Good/); assert.match(html, /application\/ld\+json/); }
   if (path.endsWith('/jsonld')) { const json = await response.json(); assert.equal(json.aggregateRating.ratingCount, 2); assert.equal(json.aggregateRating.ratingValue, 4.5); }
 }
-// The optional control is a local-only proxy around the real R4 test Worker.
+// Control is either the local R4 proxy or the independently deployed synthetic source.
 const control = process.env.REVIEWS_SOURCE_CONTROL;
 if (control) {
   const controlUrl = new URL(control);
-  if (controlUrl.protocol !== 'http:' || controlUrl.hostname !== '127.0.0.1') throw new Error('local source control only');
-  await fetch(new URL('/__test/off', controlUrl), { method: 'POST' });
+  const local = controlUrl.protocol === 'http:' && controlUrl.hostname === '127.0.0.1';
+  const hosted = controlUrl.protocol === 'https:' && /^r5-src-[a-f0-9]+\.[a-z0-9-]+\.workers\.dev$/.test(controlUrl.hostname);
+  if (!local && !hosted) throw new Error('disposable source control only');
+  const controlPost = (path) => fetch(new URL(path, controlUrl), { method: 'POST', headers: hosted ? { Authorization: `Bearer ${token}` } : {} });
+  assert.equal((await controlPost('/__test/off')).status, 200);
   assert.equal((await fetch(new URL('/publication/html', base))).status, 503);
-  await fetch(new URL('/__test/on', controlUrl), { method: 'POST' });
+  assert.equal((await controlPost('/__test/on')).status, 200);
   assert.equal((await fetch(new URL('/publication/html', base))).status, 503, 'outage quarantine must be sticky');
   assert.equal((await post('/__test/publish', payload)).status, 409, 'retired artifact must not silently reactivate');
   const state = await (await post('/__test/state', {})).json();
@@ -59,9 +62,10 @@ const laterDigest = await sha256(canonical(publicationArtifact(projection, [], '
 const later = await post('/__test/publish', { projection: input, media: [], approved_sha256: laterDigest });
 assert.equal(later.status, 200, await later.clone().text());
 if (control) {
-  await fetch(new URL('/__test/off', control), { method: 'POST' });
+  const headers = new URL(control).protocol === 'https:' ? { Authorization: `Bearer ${token}` } : {};
+  assert.equal((await fetch(new URL('/__test/off', control), { method: 'POST', headers })).status, 200);
   assert.equal((await fetch(new URL('/publication/html', base))).status, 503);
-  await fetch(new URL('/__test/on', control), { method: 'POST' });
+  assert.equal((await fetch(new URL('/__test/on', control), { method: 'POST', headers })).status, 200);
 }
 const beforeWithdraw = await (await post('/__test/state', {})).json();
 if (control) assert.equal(beforeWithdraw.state, 'safe');
