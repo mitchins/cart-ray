@@ -355,22 +355,19 @@ def main():
                     *command[:-1],
                     "--json",
                     "--command",
-                    "SELECT 'snapshots' name,COUNT(*) n FROM review_snapshots WHERE snapshot_id='linked-conflict' "
-                    "UNION ALL SELECT 'sources',COUNT(*) FROM review_snapshot_provenance "
-                    "WHERE snapshot_id='linked-conflict' "
-                    "UNION ALL SELECT 'subjects',COUNT(*) FROM review_snapshot_subjects "
-                    "WHERE snapshot_id='linked-conflict' "
-                    "UNION ALL SELECT 'contributions',COUNT(*) FROM review_contributions "
-                    "WHERE snapshot_id='linked-conflict' "
-                    "UNION ALL SELECT 'titles',COUNT(*) FROM review_import_titles WHERE snapshot_id='linked-conflict' "
-                    "UNION ALL SELECT 'guard',COUNT(*) FROM review_import_guard",
+                    "SELECT (SELECT COUNT(*) FROM review_snapshots WHERE snapshot_id='linked-conflict') snapshots, "
+                    "(SELECT COUNT(*) FROM review_snapshot_provenance WHERE snapshot_id='linked-conflict') sources, "
+                    "(SELECT COUNT(*) FROM review_snapshot_subjects WHERE snapshot_id='linked-conflict') subjects, "
+                    "(SELECT COUNT(*) FROM review_contributions WHERE snapshot_id='linked-conflict') contributions, "
+                    "(SELECT COUNT(*) FROM review_import_titles WHERE snapshot_id='linked-conflict') titles, "
+                    "(SELECT COUNT(*) FROM review_import_guard) guard_count",
                 ],
                 cwd=ROOT,
                 check=True,
                 capture_output=True,
                 text=True,
             )
-            assert all(row["n"] == 0 for row in json.loads(rollback.stdout)[0]["results"])
+            assert all(value == 0 for value in json.loads(rollback.stdout)[0]["results"][0].values())
             subprocess.run(
                 [
                     *command,
