@@ -1,6 +1,7 @@
 """Staff read endpoints exercise real scoped SQLite queries and authorization."""
 
 import asyncio
+import json
 import types
 
 from test_native_lifecycle import Database
@@ -90,3 +91,21 @@ def test_scoped_revision_and_audit_history(lifecycle):
     assert "private-actor" not in str(first.body)
     second = read_history(lifecycle, env, rid, "audit", "after=" + first.body["next_after"])
     assert len(second.body["audit"]) == 2 and second.body["next_after"] is None
+
+
+def test_staff_page_byte_limit_trims_without_losing_cursor(lifecycle):
+    db = Database()
+    for number in range(1, 21):
+        _, revision = add_review(db, number)
+        db.db.execute("UPDATE native_revisions SET body=? WHERE revision_id=?", ("x" * 10000, revision))
+    db.db.commit()
+    env = environment(db)
+    first = read_published(lifecycle, env)
+    first_ids = [item["review_id"] for item in first.body["published"]]
+    assert 0 < len(first_ids) < 20
+    assert first.body["next_after"] == first_ids[-1]
+    assert len(json.dumps(first.body, ensure_ascii=True).encode("ascii")) <= 128000
+    second = read_published(lifecycle, env, "after=" + first.body["next_after"])
+    second_ids = [item["review_id"] for item in second.body["published"]]
+    assert first_ids + second_ids == [f"{number:064x}" for number in range(1, 21)]
+    assert second.body["next_after"] is None
