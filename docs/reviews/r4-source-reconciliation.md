@@ -170,3 +170,11 @@ the responses. A synthetic native contribution on a provisional subject remained
 hidden while pending, changed the combined aggregate after approval, and was
 removed with the original aggregate restored on withdrawal. This is test-only
 evidence for the scoped graph, not production publication approval.
+
+A v4 graph-scoped test artifact uses only observed source post IDs as `wp-*`
+subject aliases; unobserved mapping entries do not become aliases. Its provisional
+canonical paths remain test inputs rather than confirmed production URLs. The
+artifact SHA-256 is
+`fb84cea3af0378d22fc69f062e52c547c22e74c172cf7eec89553cc2065d17b7`.
+An isolated D1/Workerd rehearsal resolved these aliases and retained the same
+17-review, six-reply, 15-rated/two-unrated results without source-email exposure.

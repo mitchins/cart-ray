@@ -4,6 +4,7 @@ import json
 import re
 from urllib.parse import parse_qs, urlparse
 
+from cartray_reviews.lookup import resolve_subject
 from cartray_reviews.unified import unified_read
 from native_lifecycle import discard_body, handle_write, native_read, pending_read
 from workers import Response, WorkerEntrypoint
@@ -79,8 +80,14 @@ class Default(WorkerEntrypoint):
             return await handle_write(request, self.env, url.path)
         if mode in ("collect", "verified_acquisition_only") and str(self.env.REVIEWS_ENVIRONMENT) != "test":
             return Response.json({"error": "collection unavailable"}, status=503)
-        if len(url.query) > 512:
+        query_limit = 6500 if url.path == "/reviews/v1/subject-lookup" else 512
+        if len(url.query) > query_limit:
             return Response.json({"error": "invalid query"}, status=400)
+        store, environment = str(self.env.REVIEWS_STORE_KEY), str(self.env.REVIEWS_ENVIRONMENT)
+        if not store or environment not in ("test", "live"):
+            return Response.json({"error": "invalid configuration"}, status=503)
+        if url.path == "/reviews/v1/subject-lookup":
+            return await resolve_subject(self.env.REVIEWS_DB, store, environment, url.query, Response)
         match = re.fullmatch(r"/reviews/v1/subjects/([A-Za-z0-9_-]{1,128})/(summary|contributions)", url.path)
         if not match:
             return Response.json({"error": "not found"}, status=404)
@@ -93,9 +100,6 @@ class Default(WorkerEntrypoint):
             return Response.json({"error": "invalid limit"}, status=400)
         if not 1 <= limit <= 50:
             return Response.json({"error": "invalid limit"}, status=400)
-        store, environment = str(self.env.REVIEWS_STORE_KEY), str(self.env.REVIEWS_ENVIRONMENT)
-        if not store or environment not in ("test", "live"):
-            return Response.json({"error": "invalid configuration"}, status=503)
         subject_id, endpoint = match.groups()
         db = self.env.REVIEWS_DB
         subject = await subject_sources(db, store, environment, subject_id)

@@ -239,3 +239,12 @@ def test_snapshot_v3_requires_safe_public_attribution():
         data["source"]["public_attribution"] = bad
         with pytest.raises(SnapshotError, match="public source attribution"):
             read(data)
+
+
+def test_canonical_paths_are_bounded_to_lookup_contract():
+    data = snapshot()
+    data["subjects"][0]["path"] = "/" + "a" * 2046 + "/"
+    assert len(read(data)["subjects"][0]["path"]) == 2048
+    data["subjects"][0]["path"] = "/" + "a" * 2047 + "/"
+    with pytest.raises(SnapshotError, match="subject path"):
+        read(data)

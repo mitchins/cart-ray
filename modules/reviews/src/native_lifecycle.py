@@ -797,6 +797,7 @@ async def handle_write(request, env, path):
         if (
             data["kind"] not in ("product", "service", "store")
             or not isinstance(data["path"], str)
+            or len(data["path"]) > 2048
             or not re.fullmatch(r"/(?:[A-Za-z0-9_-]+/)*", data["path"])
         ):
             return fail(400, "invalid subject")

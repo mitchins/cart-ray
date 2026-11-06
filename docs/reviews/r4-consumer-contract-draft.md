@@ -9,9 +9,16 @@ and `GET /reviews/v1/subjects/{subject}/contributions?limit=...`. A subject key
 must resolve through a separately reviewed registry of canonical product, service
 or store identities and canonical site paths; the Reviews Worker does not infer a
 subject from a WordPress numeric ID. Keep explicit historical aliases and account
-for retired and ambiguous products. The registry, host origin and the mechanism
-for cross-account fetch or deployment-time transfer must be explicitly configured
-and access controlled; a shared Worker or D1 binding is not assumed.
+for retired and ambiguous products. Snapshot v4 carries explicit, bounded legacy IDs and paths. Resolve a canonical ID,
+canonical path, or explicit alias with `GET /reviews/v1/subject-lookup?alias=...`; a successful response has
+`subject_id`, `kind` and `canonical_path`, and is `no-store`. Unknown aliases
+return 404; ambiguous aliases or a changing publication return 409. URL-encode
+path aliases. Previously published aliases and canonical paths cannot silently disappear or
+change owners during import; a moved path must remain an alias of its original
+subject. A retired or ambiguous subject needs an explicit reviewed
+disposition rather than a guessed redirect. The registry, host origin and the
+mechanism for cross-account fetch or deployment-time transfer must be explicitly
+configured and access controlled; a shared Worker or D1 binding is not assumed.
 
 For an overlapping test subject, the summary contains `subject_id`, an opaque
 `snapshot_id`, `rating.average`, `rating.rated_count` and `contribution_count`.

@@ -15,6 +15,7 @@ import tempfile
 import urllib.error
 import urllib.request
 from pathlib import Path
+from urllib.parse import urlencode
 
 from cartray_reviews.snapshot import load_snapshot
 from workerd_integration import MODULE, PORT, ROOT, start, stop
@@ -138,6 +139,18 @@ def main():
                     walk(reply)
 
             for subject in subjects:
+                for alias in subjects[subject].get("aliases", []) + [subject, subjects[subject]["path"]]:
+                    status, resolved = call("/reviews/v1/subject-lookup?" + urlencode({"alias": alias}))
+                    require(
+                        status == 200
+                        and resolved
+                        == {
+                            "subject_id": subject,
+                            "kind": subjects[subject]["kind"],
+                            "canonical_path": subjects[subject]["path"],
+                        },
+                        "subject alias lookup mismatch",
+                    )
                 status, summary = call(f"/reviews/v1/subjects/{subject}/summary")
                 require(status == 200, "summary unavailable")
                 status, page = call(f"/reviews/v1/subjects/{subject}/contributions?limit=50")

@@ -5,6 +5,7 @@ import importlib.util
 import sys
 import types
 from unittest.mock import patch
+from urllib.parse import urlencode
 
 import test_native_lifecycle as nl
 from test_native_lifecycle import MODULE, Database, TestResponse
@@ -68,3 +69,10 @@ def test_single_source_selection_invalidates_on_other_source_activation(lifecycl
 
     module.subject_sources = activate_history
     assert asyncio.run(worker.fetch(request)).status == 409
+    long_path = "/a" * 1023 + "/"
+    query = urlencode({"alias": long_path})
+    assert len(query) > 512
+    request.url = "https://example.invalid/reviews/v1/subject-lookup?" + query
+    assert asyncio.run(worker.fetch(request)).status == 404
+    request.url = "https://example.invalid/reviews/v1/subject-lookup?" + "x" * 6501
+    assert asyncio.run(worker.fetch(request)).status == 400

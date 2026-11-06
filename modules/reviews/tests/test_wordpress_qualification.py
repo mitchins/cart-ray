@@ -70,6 +70,8 @@ def test_pinned_scoped_qualification_keeps_original_incomplete():
     )
     value = json.loads(snapshot)
     assert value["environment"] == "test" and value["source"]["complete"] is True
+    assert value["schema"] == "cartray.reviews.snapshot.v4"
+    assert value["subjects"][0]["aliases"] == ["wp-99"]
     assert value["source"]["identity"] == "wordpress-review-comment-graph:https://example.invalid"
     assert value["source"]["public_attribution"] == "Example legacy reviews"
     assert json.loads(draft)["snapshot"]["source"]["complete"] is False
@@ -90,6 +92,26 @@ def test_rejects_unpinned_evidence_or_live_scope():
             store="s",
             public_attribution="Example legacy reviews",
         )
+
+
+def test_unused_mapping_does_not_create_unobserved_alias():
+    raw, mapping, draft, report, evidence, attestation = make_inputs()
+    expanded = json.loads(mapping)
+    expanded["999"] = dict(expanded["99"])
+    mapping = json.dumps(expanded).encode()
+    attestation["mapping_sha256"] = hashlib.sha256(mapping).hexdigest()
+    snapshot, _receipt = MODULE.qualify(
+        raw,
+        mapping,
+        draft,
+        report,
+        evidence,
+        attestation,
+        expected_source="https://example.invalid",
+        store="s",
+        public_attribution="Example legacy reviews",
+    )
+    assert json.loads(snapshot)["subjects"][0]["aliases"] == ["wp-99"]
     with pytest.raises(ValueError, match="attestation mismatch"):
         MODULE.qualify(
             raw,
@@ -116,3 +138,31 @@ def test_rejects_unpinned_evidence_or_live_scope():
             store="s",
             public_attribution="Example legacy reviews",
         )
+
+
+def test_qualified_snapshot_identity_changes_with_reviewed_attribution():
+    raw, mapping, draft, report, evidence, attestation = make_inputs()
+    first, _ = MODULE.qualify(
+        raw,
+        mapping,
+        draft,
+        report,
+        evidence,
+        attestation,
+        expected_source="https://example.invalid",
+        store="s",
+        public_attribution="Example legacy reviews",
+    )
+    attestation["public_attribution"] = "Another reviewed label"
+    second, _ = MODULE.qualify(
+        raw,
+        mapping,
+        draft,
+        report,
+        evidence,
+        attestation,
+        expected_source="https://example.invalid",
+        store="s",
+        public_attribution="Another reviewed label",
+    )
+    assert json.loads(first)["snapshot_id"] != json.loads(second)["snapshot_id"]

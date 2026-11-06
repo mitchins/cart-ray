@@ -56,10 +56,22 @@ def qualify(
     if reconcile(raw, draft, mapping, expected_source=expected_source, redact_source_emails=True) != report:
         raise ValueError("independent reconciliation mismatch")
     snapshot = draft["snapshot"]
-    snapshot["schema"] = "cartray.reviews.snapshot.v3"
+    snapshot["schema"] = "cartray.reviews.snapshot.v4"
     snapshot["source"]["identity"] = "wordpress-review-comment-graph:" + expected_source
     snapshot["source"]["public_attribution"] = public_attribution
     snapshot["source"]["complete"] = True
+    observed = {
+        str(row["comment_post_ID"])
+        for row in json.loads(raw, object_pairs_hook=_unique_pairs, parse_constant=_reject_constant)["comments"]
+        if str(row["comment_approved"]) == "1"
+    }
+    for subject in snapshot["subjects"]:
+        source_ids = [key for key, value in mapping.items() if key in observed and value["id"] == subject["id"]]
+        if any(not isinstance(key, str) or not key.isascii() or not key.isdecimal() for key in source_ids):
+            raise ValueError("invalid WordPress subject identity")
+        subject["aliases"] = sorted({"wp-" + key for key in source_ids})
+    identity_bytes = json.dumps(snapshot, ensure_ascii=True, sort_keys=True, separators=(",", ":")).encode()
+    snapshot["snapshot_id"] = "test-" + digest(identity_bytes)[:32]
     result = json.dumps(snapshot, ensure_ascii=True, sort_keys=True, separators=(",", ":")).encode()
     load_snapshot(result, expected_sha256=digest(result), store=store, environment="test")
     return result, expected | {"snapshot_sha256": digest(result), "production_approval": False}

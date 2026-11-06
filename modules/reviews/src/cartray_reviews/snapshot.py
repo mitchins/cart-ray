@@ -57,10 +57,10 @@ def _utc_time(value):
 def _source_date(value, schema):
     """Retain source strings and declared precision without guessing an offset."""
     fields = ("original", "precision", "timezone_provenance", "utc")
-    if schema in ("cartray.reviews.snapshot.v2", "cartray.reviews.snapshot.v3"):
+    if schema in ("cartray.reviews.snapshot.v2", "cartray.reviews.snapshot.v3", "cartray.reviews.snapshot.v4"):
         fields += ("source_local_raw", "source_utc_raw")
     _object(value, fields)
-    if schema in ("cartray.reviews.snapshot.v2", "cartray.reviews.snapshot.v3"):
+    if schema in ("cartray.reviews.snapshot.v2", "cartray.reviews.snapshot.v3", "cartray.reviews.snapshot.v4"):
         for name in ("source_local_raw", "source_utc_raw"):
             if value[name] is not None:
                 if not isinstance(value[name], str) or not re.fullmatch(
@@ -112,7 +112,7 @@ def _source_date(value, schema):
         if original.tzinfo is None or original != utc:
             _fail("original timestamp does not match UTC")
         if (
-            schema in ("cartray.reviews.snapshot.v2", "cartray.reviews.snapshot.v3")
+            schema in ("cartray.reviews.snapshot.v2", "cartray.reviews.snapshot.v3", "cartray.reviews.snapshot.v4")
             and value["source_utc_raw"] is not None
         ):
             try:
@@ -155,7 +155,12 @@ def load_snapshot(data: bytes, *, expected_sha256: str, store: str, environment:
     )
     if (
         payload["schema"]
-        not in ("cartray.reviews.snapshot.v1", "cartray.reviews.snapshot.v2", "cartray.reviews.snapshot.v3")
+        not in (
+            "cartray.reviews.snapshot.v1",
+            "cartray.reviews.snapshot.v2",
+            "cartray.reviews.snapshot.v3",
+            "cartray.reviews.snapshot.v4",
+        )
         or payload["store"] != store
         or payload["environment"] != environment
     ):
@@ -165,11 +170,11 @@ def load_snapshot(data: bytes, *, expected_sha256: str, store: str, environment:
     if not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", payload["snapshot_id"]):
         _fail("invalid snapshot identity")
     source_fields = ("identity", "extracted_at", "sha256", "complete")
-    if payload["schema"] == "cartray.reviews.snapshot.v3":
+    if payload["schema"] in ("cartray.reviews.snapshot.v3", "cartray.reviews.snapshot.v4"):
         source_fields += ("public_attribution",)
     _object(payload["source"], source_fields)
     source = payload["source"]
-    if payload["schema"] == "cartray.reviews.snapshot.v3":
+    if payload["schema"] in ("cartray.reviews.snapshot.v3", "cartray.reviews.snapshot.v4"):
         label = source["public_attribution"]
         _string(label)
         if len(label) > 120 or any(unicodedata.category(char).startswith("C") or char in "<>@" for char in label):
@@ -188,18 +193,50 @@ def load_snapshot(data: bytes, *, expected_sha256: str, store: str, environment:
         if not isinstance(payload[key], list):
             _fail("expected list")
     subjects = {}
+    subject_aliases = set()
     for item in payload["subjects"]:
-        _object(item, ("id", "kind", "path"))
-        for value in item.values():
-            _string(value)
+        fields = (
+            ("id", "kind", "path", "aliases")
+            if payload["schema"] == "cartray.reviews.snapshot.v4"
+            else ("id", "kind", "path")
+        )
+        _object(item, fields)
+        for key in ("id", "kind", "path"):
+            _string(item[key])
+        if payload["schema"] == "cartray.reviews.snapshot.v4":
+            if not isinstance(item["aliases"], list) or len(item["aliases"]) > 20:
+                _fail("invalid subject aliases")
+            for alias in item["aliases"]:
+                if (
+                    not isinstance(alias, str)
+                    or len(alias) > 2048
+                    or alias in subject_aliases
+                    or not (
+                        re.fullmatch(r"[A-Za-z0-9_-]{1,128}", alias) or re.fullmatch(r"/(?:[A-Za-z0-9_-]+/)*", alias)
+                    )
+                ):
+                    _fail("invalid or duplicate subject alias")
+                subject_aliases.add(alias)
         if not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", item["id"]):
             _fail("invalid routable subject identity")
         if item["kind"] not in ("product", "service", "store") or item["id"] in subjects:
             _fail("invalid subject")
         path = item["path"]
-        if not re.fullmatch(r"/(?:[A-Za-z0-9_-]+/)*", path) or "//" in path:
+        if len(path) > 2048 or not re.fullmatch(r"/(?:[A-Za-z0-9_-]+/)*", path) or "//" in path:
             _fail("invalid subject path")
         subjects[item["id"]] = item
+    paths = {}
+    for item in subjects.values():
+        if payload["schema"] == "cartray.reviews.snapshot.v4":
+            if item["path"] in paths and paths[item["path"]] != item["id"]:
+                _fail("duplicate canonical subject path")
+            paths[item["path"]] = item["id"]
+    for item in subjects.values():
+        for alias in item.get("aliases", []):
+            if alias in subjects and alias != item["id"]:
+                _fail("subject alias conflicts with another subject")
+            if alias in paths and paths[alias] != item["id"]:
+                _fail("subject alias conflicts with another canonical path")
     contributions = {}
     anchors = set()
     for item in payload["contributions"]:
@@ -217,11 +254,16 @@ def load_snapshot(data: bytes, *, expected_sha256: str, store: str, environment:
             "anchors",
             "votes",
         )
-        if payload["schema"] in ("cartray.reviews.snapshot.v2", "cartray.reviews.snapshot.v3"):
+        if payload["schema"] in (
+            "cartray.reviews.snapshot.v2",
+            "cartray.reviews.snapshot.v3",
+            "cartray.reviews.snapshot.v4",
+        ):
             fields += ("title",)
         _object(item, fields)
         if (
-            payload["schema"] in ("cartray.reviews.snapshot.v2", "cartray.reviews.snapshot.v3")
+            payload["schema"]
+            in ("cartray.reviews.snapshot.v2", "cartray.reviews.snapshot.v3", "cartray.reviews.snapshot.v4")
             and item["title"] is not None
         ):
             _string(item["title"])

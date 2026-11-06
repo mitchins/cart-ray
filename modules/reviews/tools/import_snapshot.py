@@ -84,6 +84,11 @@ def import_snapshot(data, *, digest, store, environment):
         )
         values = (store, environment, sid, subject["id"], subject["kind"], subject["path"])
         lines.append("INSERT OR IGNORE INTO review_snapshot_subjects VALUES (" + ",".join(map(literal, values)) + ");")
+        for alias in subject.get("aliases", []):
+            alias_values = (store, environment, sid, alias, subject["id"])
+            lines.append(
+                "INSERT OR IGNORE INTO review_subject_aliases VALUES (" + ",".join(map(literal, alias_values)) + ");"
+            )
     for item in snapshot["contributions"]:
         lines.append(
             "INSERT INTO review_import_guard SELECT CASE WHEN NOT EXISTS(SELECT 1 FROM review_identity_links "
@@ -117,6 +122,29 @@ def import_snapshot(data, *, digest, store, environment):
         if title is not None:
             values = (store, environment, sid, item["id"], title)
             lines.append("INSERT OR IGNORE INTO review_import_titles VALUES (" + ",".join(map(literal, values)) + ");")
+    # Previously published aliases cannot silently disappear or change owners.
+    lines.append(
+        "INSERT INTO review_import_guard SELECT CASE WHEN NOT EXISTS("
+        "SELECT 1 FROM review_publications p JOIN review_subject_aliases old "
+        "ON old.store_key=p.store_key AND old.environment=p.environment AND old.snapshot_id=p.snapshot_id "
+        "LEFT JOIN review_subject_aliases new ON new.store_key=old.store_key AND new.environment=old.environment "
+        f"AND new.snapshot_id={snapshot_key} AND new.alias=old.alias AND new.subject_id=old.subject_id "
+        f"WHERE p.store_key={st} AND p.environment={env} AND new.alias IS NULL) THEN 1 ELSE 0 END;"
+    )
+    # Canonical paths are also lookup keys. They must retain their owner via
+    # either the new canonical path or an explicit alias of the same subject.
+    lines.append(
+        "INSERT INTO review_import_guard SELECT CASE WHEN NOT EXISTS("
+        "SELECT 1 FROM review_publications p JOIN review_snapshot_subjects old "
+        "ON old.store_key=p.store_key AND old.environment=p.environment AND old.snapshot_id=p.snapshot_id "
+        "LEFT JOIN review_snapshot_subjects current ON current.store_key=old.store_key "
+        "AND current.environment=old.environment AND current.snapshot_id=" + snapshot_key + " "
+        "AND current.subject_id=old.subject_id AND current.canonical_path=old.canonical_path "
+        "LEFT JOIN review_subject_aliases a ON a.store_key=old.store_key AND a.environment=old.environment "
+        "AND a.snapshot_id=" + snapshot_key + " AND a.subject_id=old.subject_id AND a.alias=old.canonical_path "
+        f"WHERE p.store_key={st} AND p.environment={env} AND current.subject_id IS NULL AND a.alias IS NULL) "
+        "THEN 1 ELSE 0 END;"
+    )
     # Preserve linked history while its native review can still be published.
     # A withdrawn native review is a permanent tombstone, so its old source
     # root and descendants may then be removed from a newer snapshot.
