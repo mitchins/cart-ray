@@ -37,7 +37,14 @@ Approved reply-to-parent mappings are 4417→4215, 4418→4174, 4419→4171,
 all candidate rows individually. Pending and spam rows are not publication
 candidates. The source option `ivole_review_forms[0].rev_perm` was `anybody`
 at capture; this alone is not proof of effective frontend, plugin-filter or
-writer behavior.
+writer behavior. A later read-only plugin inventory reported Customer Reviews
+for WooCommerce, Trustpilot Reviews and WooCommerce Product Reviews Pro as
+active. Their effective writer paths and stored contribution types still need
+reconciliation; active plugins are not evidence that every feature is used. A
+later read-only aggregate found only `review`, `comment`, and `order_note` comment
+types; the 24 comments outside review parentage were attached to blog posts (three
+approved and 21 spam). This corroborates the captured selection but is not part of
+the same consistent snapshot and cannot by itself establish extraction completeness.
 
 Remaining source qualification includes complete attachment and comment-graph
 coverage, current effective settings and writer paths, a decision for each of
@@ -65,3 +72,13 @@ replies and two unrated roots from the pinned candidate export. This exploratory
 label for page 22 is not a final classification. The adapter explicitly marked
 the resulting draft incomplete, and the importer rejected it as required. No
 real source content was imported into D1 or published.
+
+A second read-only export on 2026-11-06 at 03:47:09 UTC used a recursive
+traversal of all review descendants within one repeatable-read transaction.
+It returned 125 comment rows and 338 metadata rows. The comment, metadata and
+subject rows matched the earlier capture exactly; the source still contained
+17 approved roots, six approved replies, six pending roots and 96 spam roots.
+The second restricted export SHA-256 is
+`a1f268855d4531f7f9c5756cfa582d092400f91a9ae3553b9eac0f30de69b60a`.
+This corroborates the captured graph, but does not determine the effective
+settings or establish permission to publish the source content.
