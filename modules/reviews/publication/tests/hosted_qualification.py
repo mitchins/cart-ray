@@ -207,8 +207,10 @@ def main():
                 capture_output=True,
                 text=True,
                 timeout=120,
-                check=True,
+                check=False,
             )
+            if result.returncode:
+                raise RuntimeError(f"hosted publication qualification failed:\n{result.stdout}\n{result.stderr}")
             measurement = json.loads(result.stdout.strip().splitlines()[-1])
             state = command(
                 [
