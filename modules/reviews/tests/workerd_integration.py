@@ -350,6 +350,27 @@ def main():
             )
             assert failed.returncode != 0
             assert json.loads(request("summary")[1])["snapshot_id"] == linked_summary["snapshot_id"]
+            rollback = subprocess.run(
+                [
+                    *command[:-1],
+                    "--json",
+                    "--command",
+                    "SELECT 'snapshots' name,COUNT(*) n FROM review_snapshots WHERE snapshot_id='linked-conflict' "
+                    "UNION ALL SELECT 'sources',COUNT(*) FROM review_snapshot_provenance "
+                    "WHERE snapshot_id='linked-conflict' "
+                    "UNION ALL SELECT 'subjects',COUNT(*) FROM review_snapshot_subjects "
+                    "WHERE snapshot_id='linked-conflict' "
+                    "UNION ALL SELECT 'contributions',COUNT(*) FROM review_contributions "
+                    "WHERE snapshot_id='linked-conflict' "
+                    "UNION ALL SELECT 'titles',COUNT(*) FROM review_import_titles WHERE snapshot_id='linked-conflict' "
+                    "UNION ALL SELECT 'guard',COUNT(*) FROM review_import_guard",
+                ],
+                cwd=ROOT,
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            assert all(row["n"] == 0 for row in json.loads(rollback.stdout)[0]["results"])
             subprocess.run(
                 [
                     *command,
