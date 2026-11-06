@@ -77,6 +77,19 @@ History is ordered by identifier, not chronology; revision timestamps are not
 invented. Cursor reads are not snapshot-consistent: concurrent moderation or
 new revisions can change later pages, so refresh to obtain a current view. None of these staff endpoints is a production authorization boundary.
 
+The test-only `reviews:moderate` permission can create or edit one staff reply
+per published native review through `POST /reviews-admin/v1/contributions/{id}/reply`.
+Supply an idempotency key, the current `parent_revision_id`, an
+`expected_reply_revision_id` (null for creation), and the intended public
+`author` and `body`. Withdrawal uses the same parent/reply revision guards and
+idempotency key on `/reply-withdraw`; withdrawn replies cannot be recreated in
+this slice. `/reply-revisions` and `/reply-audit` expose staff-only history.
+The independently authenticated actor is retained in audit, not in public
+content. Each accepted change increments the subject publication version and
+invalidation outbox without modifying review or rating totals. A reply is only
+public while its parent remains published at the revision it was attached to.
+Historical imported reviews and reply reactivation are not supported here.
+
 `GET /reviews/v1/subjects/example-policy/summary` and `/reviews/v1/subjects/example-policy/contributions` are scoped to the Worker's configured store and environment. Lists use a limit of 1–50 (default 20); use the returned `next_after` together with `snapshot_id` as `?after=...&snapshot=...` for the next page. A changed publication invalidates an old cursor. Imported reviews order by original source calendar day with unknown days last; native reviews order by submission time. IDs break ties. Replies accompany their selected parent. Only published, allowlisted content is returned. A fresh native subject produces an empty summary without importing anything. When a historical and native subject share the same canonical kind and path, the experimental test-only unified feed orders both by calendar day and source-qualified ID, and binds pagination to both publication versions. Cross-source identity reconciliation is not yet qualified; overlapping subjects fail closed in live.
 
 This bounded local slice accepts at most 200 subjects, 200 contributions and 90,000 bytes of ASCII-escaped snapshot JSON in one import. The importer rejects larger inputs instead of publishing a partial snapshot. These limits are implementation bounds, not claims about the historical source inventory.

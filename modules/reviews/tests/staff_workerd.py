@@ -15,12 +15,14 @@ from test_staff_identity import AUDIENCE, ISSUER, KEY, token
 from workerd_integration import MODULE, ROOT, start, stop
 
 
-def signed_call(path, payload=None, *, assertion=None, bearer=None):
+def signed_call(path, payload=None, *, assertion=None, bearer=None, key=None):
     headers = {"Content-Type": "application/json"}
     if assertion:
         headers["Cf-Access-Jwt-Assertion"] = assertion
     if bearer:
         headers["Authorization"] = "Bearer " + bearer
+    if key:
+        headers["Idempotency-Key"] = key
     request = urllib.request.Request(
         BASE + path,
         data=json.dumps(payload).encode() if payload is not None else None,
@@ -118,6 +120,34 @@ def main():
             assert status == 200 and revisions["revisions"][0]["revision_id"] == review["revision_id"]
             status, audit = signed_call(review_base + "/audit", assertion=assertion)
             assert status == 200 and {event["action"] for event in audit["audit"]} == {"submitted", "approve"}
+            reply_payload = {
+                "parent_revision_id": review["revision_id"],
+                "expected_reply_revision_id": None,
+                "author": "Store",
+                "body": "Thank you",
+            }
+            status, reply = signed_call(review_base + "/reply", reply_payload, assertion=assertion, key="staff-reply")
+            assert status == 200
+            public = call("/reviews/v1/subjects/example-policy/contributions")
+            assert public[1]["contributions"][0]["replies"][0]["body"] == "Thank you"
+            reply_payload["expected_reply_revision_id"] = reply["reply_revision_id"]
+            reply_payload["body"] = "Updated thanks"
+            status, edited = signed_call(review_base + "/reply", reply_payload, assertion=assertion, key="edit-reply")
+            assert status == 200
+            status, history = signed_call(review_base + "/reply-revisions", assertion=assertion)
+            assert status == 200 and len(history["reply_revisions"]) == 2
+            status, reply_audit = signed_call(review_base + "/reply-audit", assertion=assertion)
+            assert status == 200 and {event["action"] for event in reply_audit["reply_audit"]} == {"created", "edited"}
+            withdrawal = {
+                "parent_revision_id": review["revision_id"],
+                "expected_reply_revision_id": edited["reply_revision_id"],
+            }
+            assert (
+                signed_call(review_base + "/reply-withdraw", withdrawal, assertion=assertion, key="withdraw-reply")[0]
+                == 200
+            )
+            assert call("/reviews/v1/subjects/example-policy/contributions")[1]["contributions"][0]["replies"] == []
+            assert call("/reviews/v1/subjects/example-policy/summary")[1]["rating"]["rated_count"] == 1
             assert (
                 signed_call(review_base + "/withdraw", {"revision_id": review["revision_id"]}, assertion=assertion)[0]
                 == 200

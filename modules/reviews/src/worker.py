@@ -84,7 +84,9 @@ class Default(WorkerEntrypoint):
             if mode not in ("collect", "verified_acquisition_only"):
                 return Response.json({"error": "not found"}, status=404)
             return await published_staff_read(request, self.env, url.query)
-        staff_history = re.fullmatch(r"/reviews-admin/v1/contributions/([0-9a-f]{64})/(revisions|audit)", url.path)
+        staff_history = re.fullmatch(
+            r"/reviews-admin/v1/contributions/([0-9a-f]{64})/(revisions|audit|reply-revisions|reply-audit)", url.path
+        )
         if str(request.method) == "GET" and staff_history:
             if mode not in ("collect", "verified_acquisition_only"):
                 return Response.json({"error": "not found"}, status=404)

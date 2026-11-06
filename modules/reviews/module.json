@@ -31,7 +31,8 @@
     "migrations/0019_subject_aliases.sql",
     "migrations/0020_automation_intake.sql",
     "migrations/0021_staff_history_indexes.sql",
-    "migrations/0022_automation_recipient_evidence.sql"
+    "migrations/0022_automation_recipient_evidence.sql",
+    "migrations/0023_staff_reply_lifecycle.sql"
   ],
   "routes": [
     "GET /reviews/v1/subject-lookup?alias={alias}",
@@ -40,7 +41,7 @@
     "POST /reviews/v1/contributions (collect, test only)",
     "GET /reviews-admin/v1/pending (collect, test only)",
     "GET /reviews-admin/v1/published (collect, test only)",
-    "GET /reviews-admin/v1/contributions/{review_id}/{revisions|audit} (collect, test only)",
+    "GET /reviews-admin/v1/contributions/{review_id}/{revisions|audit|reply-revisions|reply-audit} (collect, test only)",
     "POST /reviews-admin/v1/* (collect, test only)",
     "POST /reviews-internal/v1/settlements (verified_acquisition_only, test only)",
     "POST /reviews-internal/v1/consents (verified_acquisition_only, test only)",
