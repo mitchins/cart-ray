@@ -123,7 +123,7 @@ instead of being silently omitted. The restricted SHA-256 is
 its selected rows again match the prior captures. This does not assert anything
 about third-party content or remote provider-held records.
 A seventh capture at 03:58:11 UTC also rejected known review-related metadata on
-comments outside the selected review graph. It passed and returned the same
+off-graph records whose stored comment type is `comment`. It passed and returned the same
 selected rows; the restricted SHA-256 is
 `cd4260ab06f2fbeaf689c36298467e76ccd3934b394de7d4f01d3c623a57e167`.
 This metadata check is not proof about unrecognized plugin metadata or external
