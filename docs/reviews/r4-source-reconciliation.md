@@ -82,3 +82,14 @@ The second restricted export SHA-256 is
 `a1f268855d4531f7f9c5756cfa582d092400f91a9ae3553b9eac0f30de69b60a`.
 This corroborates the captured graph, but does not determine the effective
 settings or establish permission to publish the source content.
+
+A third recursive export at 03:49:41 UTC additionally checked the source's home
+and site URLs inside the transaction, verified the four queried WordPress tables
+use InnoDB, and enforced capture limits. Its 125 comment rows, 338 metadata rows
+and subject rows again matched the preceding recursive export. Its restricted
+SHA-256 is `eb5e5786075ae13e9312879cc1a40c7b2a1c1b8489bbc88892c46481457386a8`.
+The exporter still marks the candidate incomplete pending reconciliation of
+plugin-specific behavior and the other publication checks.
+A fourth capture at 03:50:46 UTC used explicit standard WordPress columns and
+again matched the preceding comment, metadata and subject rows. Its restricted
+SHA-256 is `9d4c8c427aa9469fd4f7e918b6f9b7e51a970abe7f065ef045a88ff18d1ed66c`.
