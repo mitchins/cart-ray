@@ -38,10 +38,17 @@ revision, generate HTML and JSON-LD from the same approved data, and preserve th
 legacy fragments supplied by the projection. Product-only structured data must
 represent reviews of that actual product; general service or store experiences
 cannot be reclassified as product reviews. Do not add schema aggregates to empty
-or unrelated products. The release process must specify how approvals, corrections
-and withdrawals invalidate API/CDN caches and remove content from generated HTML,
-JSON-LD and associated media, including rebuild failure and rollback. No stale
-period has been approved; automatic production refresh is not authorized.
+or unrelated products. The release process must pin a manifest identifying the source and publication
+revision used for both HTML and JSON-LD. On a withdrawal, invalidate the API
+projection, switch affected routes to a previously prepared safe fallback that omits
+the review content and structured data, and purge affected cached pages and media.
+Produce a reviewed replacement build that removes the content from HTML, JSON-LD
+and copied media. Keep the fallback active until the replacement is confirmed; a previous build containing withdrawn content
+is not an acceptable rollback target. If rebuilding or purging fails, retain the
+safe fallback and alert the operator for manual recovery. The actual fallback
+switch, cache inventory and cross-account operator access require an operational
+implementation and rehearsal. No maximum stale period has been approved; automatic
+production refresh is not authorized.
 
 A test-only pinned identity manifest can link a reviewed historical root to an
 approved native revision without heuristics. The immutable link suppresses the
