@@ -232,6 +232,94 @@ async def pending_read(request, env, query):
     return Response.json(output, headers={"Cache-Control": "no-store"})
 
 
+def staff_cursor(query):
+    """Parse one bounded opaque cursor without accepting duplicate parameters."""
+    if len(query) > 512:
+        raise ValueError("invalid query")
+    params = parse_qs(query, keep_blank_values=True)
+    if set(params) - {"after"} or any(len(values) != 1 for values in params.values()):
+        raise ValueError("invalid query")
+    after = params.get("after", [""])[0]
+    if after and not re.fullmatch(r"[0-9a-f]{64}", after):
+        raise ValueError("invalid cursor")
+    return after
+
+
+def bounded_staff_page(key, result, id_key, metadata=None):
+    """Bound both row count and serialized size for authenticated staff reads."""
+    page = result[:50]
+    output = {**(metadata or {}), key: page, "next_after": page[-1][id_key] if len(result) > 50 else None}
+    while len(json.dumps(output, ensure_ascii=True).encode("ascii")) > 128_000:
+        page.pop()
+        if not page:
+            return fail(503, "response exceeds limit")
+        output["next_after"] = page[-1][id_key]
+    return Response.json(output, headers={"Cache-Control": "no-store"})
+
+
+async def published_staff_read(request, env, query):
+    """List published native reviews for revision-bound staff withdrawals."""
+    if str(env.REVIEWS_ENVIRONMENT) != "test":
+        return fail(503, "moderation unavailable")
+    if not await staff_actor(request, env, "reviews:moderate"):
+        return fail(401, "unauthorized")
+    try:
+        after = staff_cursor(query)
+    except ValueError:
+        return fail(400, "invalid query")
+    result = rows(
+        await env.REVIEWS_DB.prepare(
+            "SELECT r.review_id,r.subject_id,r.revision_id,r.created_at,v.author,v.title,v.body,v.rating,"
+            "n.public_name AS subject_name FROM native_reviews r JOIN native_revisions v "
+            "ON v.store_key=r.store_key AND v.environment=r.environment AND v.revision_id=r.revision_id "
+            "AND v.review_id=r.review_id LEFT JOIN review_subject_display_names n "
+            "ON n.store_key=r.store_key AND n.environment=r.environment AND n.subject_id=r.subject_id "
+            "WHERE r.store_key=? AND r.environment=? AND r.state='published' AND r.review_id>? "
+            "ORDER BY r.review_id LIMIT 51"
+        )
+        .bind(str(env.REVIEWS_STORE_KEY), str(env.REVIEWS_ENVIRONMENT), after)
+        .all()
+    )
+    return bounded_staff_page("published", result, "review_id")
+
+
+async def staff_history_read(request, env, query, review_id, kind):
+    """Read only the selected review's revision or audit history."""
+    if str(env.REVIEWS_ENVIRONMENT) != "test":
+        return fail(503, "moderation unavailable")
+    if not await staff_actor(request, env, "reviews:moderate"):
+        return fail(401, "unauthorized")
+    try:
+        after = staff_cursor(query)
+    except ValueError:
+        return fail(400, "invalid query")
+    db, store, environment = env.REVIEWS_DB, str(env.REVIEWS_STORE_KEY), str(env.REVIEWS_ENVIRONMENT)
+    found = rows(
+        await db.prepare(
+            "SELECT review_id,subject_id,state,revision_id AS current_revision_id FROM native_reviews "
+            "WHERE store_key=? AND environment=? AND review_id=?"
+        )
+        .bind(store, environment, review_id)
+        .all()
+    )
+    if not found:
+        return fail(404, "not found")
+    if kind == "revisions":
+        sql = (
+            "SELECT revision_id,author,title,body,rating FROM native_revisions "
+            "WHERE store_key=? AND environment=? AND review_id=? AND revision_id>? ORDER BY revision_id LIMIT 51"
+        )
+        id_key = "revision_id"
+    else:
+        sql = (
+            "SELECT event_id,revision_id,action,actor,occurred_at FROM native_audit "
+            "WHERE store_key=? AND environment=? AND review_id=? AND event_id>? ORDER BY event_id LIMIT 51"
+        )
+        id_key = "event_id"
+    result = rows(await db.prepare(sql).bind(store, environment, review_id, after).all())
+    return bounded_staff_page(kind, result, id_key, found[0])
+
+
 async def read_json(request):
     """Read a small JSON object; caller handles invalid data uniformly."""
     length = request.headers.get("Content-Length")

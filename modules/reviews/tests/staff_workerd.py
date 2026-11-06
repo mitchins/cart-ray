@@ -108,6 +108,22 @@ def main():
             assert signed_call(action, {"revision_id": review["revision_id"]}, assertion=assertion)[0] == 200
             summary = call("/reviews/v1/subjects/example-policy/summary")
             assert summary[1]["rating"] == {"average": 2.0, "rated_count": 1}
+            assert signed_call("/reviews-admin/v1/published", bearer=ADMIN)[0] == 401
+            status, published = signed_call("/reviews-admin/v1/published", assertion=assertion)
+            assert status == 200 and len(published["published"]) == 1
+            assert published["published"][0]["review_id"] == review["review_id"]
+            assert published["published"][0]["subject_name"] is None
+            review_base = "/reviews-admin/v1/contributions/" + review["review_id"]
+            status, revisions = signed_call(review_base + "/revisions", assertion=assertion)
+            assert status == 200 and revisions["revisions"][0]["revision_id"] == review["revision_id"]
+            status, audit = signed_call(review_base + "/audit", assertion=assertion)
+            assert status == 200 and {event["action"] for event in audit["audit"]} == {"submitted", "approve"}
+            assert (
+                signed_call(review_base + "/withdraw", {"revision_id": review["revision_id"]}, assertion=assertion)[0]
+                == 200
+            )
+            assert signed_call("/reviews-admin/v1/published", assertion=assertion)[1]["published"] == []
+            assert call("/reviews/v1/subjects/example-policy/summary")[1]["rating"]["rated_count"] == 0
         finally:
             stop(process)
         result = subprocess.run(

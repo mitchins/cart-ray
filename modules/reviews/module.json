@@ -29,7 +29,8 @@
     "migrations/0017_review_identity_links.sql",
     "migrations/0018_public_source_attribution.sql",
     "migrations/0019_subject_aliases.sql",
-    "migrations/0020_automation_intake.sql"
+    "migrations/0020_automation_intake.sql",
+    "migrations/0021_staff_history_indexes.sql"
   ],
   "routes": [
     "GET /reviews/v1/subject-lookup?alias={alias}",
@@ -37,6 +38,8 @@
     "GET /reviews/v1/subjects/{subject_id}/contributions",
     "POST /reviews/v1/contributions (collect, test only)",
     "GET /reviews-admin/v1/pending (collect, test only)",
+    "GET /reviews-admin/v1/published (collect, test only)",
+    "GET /reviews-admin/v1/contributions/{review_id}/{revisions|audit} (collect, test only)",
     "POST /reviews-admin/v1/* (collect, test only)",
     "POST /reviews-internal/v1/settlements (verified_acquisition_only, test only)",
     "POST /reviews-internal/v1/consents (verified_acquisition_only, test only)",
