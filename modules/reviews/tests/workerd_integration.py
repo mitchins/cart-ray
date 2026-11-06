@@ -202,6 +202,10 @@ def main():
                 "rating": {"average": 4.5, "rated_count": 2},
                 "contribution_count": 3,
             }
+            with urllib.request.urlopen(URL + "summary", timeout=3) as response:
+                assert response.headers.get("Cache-Control") == "no-store"
+            with urllib.request.urlopen(URL + "contributions", timeout=3) as response:
+                assert response.headers.get("Cache-Control") == "no-store"
             status, body = request("contributions")
             result = json.loads(body)
             assert status == 200 and len(result["contributions"]) == 3

@@ -14,6 +14,16 @@ def rows(result):
     return [row.to_py() if hasattr(row, "to_py") else dict(row) for row in result.results]
 
 
+async def publication_unchanged(db, store, environment, snapshot_id):
+    """Avoid returning an old historical publication after a concurrent promotion."""
+    current = rows(
+        await db.prepare("SELECT snapshot_id FROM review_publications WHERE store_key=? AND environment=?")
+        .bind(store, environment)
+        .all()
+    )
+    return len(current) == 1 and current[0]["snapshot_id"] == snapshot_id
+
+
 def public_contribution(row):
     """Construct an explicit public allowlist from a persisted contribution."""
     return {
@@ -112,13 +122,18 @@ class Default(WorkerEntrypoint):
                 .all()
             )[0]
             count, total = result["rated_count"], result["rating_sum"]
+            if not await publication_unchanged(db, store, environment, snapshot_id):
+                return Response.json(
+                    {"error": "publication changed; restart"}, status=409, headers={"Cache-Control": "no-store"}
+                )
             return Response.json(
                 {
                     "subject_id": subject_id,
                     "snapshot_id": snapshot_id,
                     "rating": {"average": total / count if count else None, "rated_count": count},
                     "contribution_count": result["contribution_count"],
-                }
+                },
+                headers={"Cache-Control": "no-store"},
             )
         cursor_day = "\uffff"
         cursor_id = ""
@@ -181,6 +196,10 @@ class Default(WorkerEntrypoint):
             if len(remaining) == len(pending):
                 break
             pending = remaining
+        if not await publication_unchanged(db, store, environment, snapshot_id):
+            return Response.json(
+                {"error": "publication changed; restart"}, status=409, headers={"Cache-Control": "no-store"}
+            )
         return Response.json(
             {
                 "subject_id": subject_id,
@@ -188,5 +207,6 @@ class Default(WorkerEntrypoint):
                 "contributions": roots,
                 "next_after": roots[-1]["id"] if len(result) > limit and roots else None,
                 "has_more": len(result) > limit,
-            }
+            },
+            headers={"Cache-Control": "no-store"},
         )
