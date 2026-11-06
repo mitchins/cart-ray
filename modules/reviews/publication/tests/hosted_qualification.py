@@ -13,6 +13,9 @@ import signal
 import subprocess
 import sys
 import tempfile
+import time
+import urllib.error
+import urllib.request
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -153,6 +156,25 @@ def main():
             if not found:
                 raise RuntimeError("source Worker URL unavailable")
             source_url = found.group(0)
+            # workers.dev route propagation is independent of deploy completion.
+            # Do not interpret an edge 404 as a projection failure.
+            source_ready = False
+            for attempt in range(10):
+                try:
+                    with urllib.request.urlopen(
+                        source_url + "/reviews/v1/subject-lookup?alias=example-policy", timeout=10
+                    ) as response:
+                        source_ready = (
+                            response.status == 200 and response.headers.get("X-Synthetic-Source") == "r5-fixture"
+                        )
+                except urllib.error.URLError:
+                    pass
+                if source_ready:
+                    break
+                if attempt < 9:
+                    time.sleep(3)
+            if not source_ready:
+                raise RuntimeError("synthetic source workers.dev route did not become ready")
             gate_config.write_text(
                 f'name = "{gate_name}"\n'
                 'main = "worker.mjs"\ncompatibility_date = "2026-08-31"\nworkers_dev = true\n'
