@@ -3,6 +3,7 @@
 import asyncio
 import hashlib
 import json
+import sqlite3
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -103,7 +104,7 @@ def test_mismatched_subject_import_rolls_back(monkeypatch):
 
     monkeypatch.setattr(importer, "execute", execute)
     fixture = (MODULE / "tests/fixtures/approved-synthetic.json").read_bytes()
-    with pytest.raises(Exception):
+    with pytest.raises(sqlite3.IntegrityError, match="CHECK constraint failed"):
         importer.import_snapshot(
             fixture, digest=hashlib.sha256(fixture).hexdigest(), store="example-store", environment="test"
         )
@@ -330,7 +331,7 @@ def test_adjudicated_identity_link_preserves_reply_and_withdrawal(lifecycle, mon
     unreviewed = json.loads(manifest)
     unreviewed["links"][0]["source_snapshot_sha256"] = "b" * 64
     unreviewed_bytes = json.dumps(unreviewed).encode()
-    with pytest.raises(Exception):
+    with pytest.raises(sqlite3.IntegrityError, match="invalid identity link"):
         reconciliation.apply_manifest(
             unreviewed_bytes, **(manifest_args | {"sha256": hashlib.sha256(unreviewed_bytes).hexdigest()})
         )
@@ -340,7 +341,7 @@ def test_adjudicated_identity_link_preserves_reply_and_withdrawal(lifecycle, mon
     with pytest.raises(ValueError, match="digest"):
         reconciliation.apply_manifest(manifest, **(manifest_args | {"sha256": "b" * 64}))
     conflict = manifest.replace(b'"aaaaaaaa', b'"baaaaaaa', 1)
-    with pytest.raises(Exception):
+    with pytest.raises(sqlite3.IntegrityError, match="CHECK constraint failed"):
         reconciliation.apply_manifest(conflict, **(manifest_args | {"sha256": hashlib.sha256(conflict).hexdigest()}))
     assert db.db.execute("SELECT COUNT(*) FROM review_identity_links").fetchone()[0] == 1
     after = read("summary").body
@@ -357,7 +358,7 @@ def test_adjudicated_identity_link_preserves_reply_and_withdrawal(lifecycle, mon
     changed["snapshot_id"], changed["publication_revision"] = "two", 2
     changed["contributions"][0]["anchors"] = ["changed-anchor"]
     changed_bytes = json.dumps(changed).encode()
-    with pytest.raises(Exception):
+    with pytest.raises(sqlite3.IntegrityError, match="CHECK constraint failed"):
         importer.import_snapshot(
             changed_bytes, digest=hashlib.sha256(changed_bytes).hexdigest(), store="example-store", environment="test"
         )
@@ -366,7 +367,7 @@ def test_adjudicated_identity_link_preserves_reply_and_withdrawal(lifecycle, mon
     changed["snapshot_id"], changed["publication_revision"] = "two", 2
     changed["contributions"] = [item for item in changed["contributions"] if item["id"] != "a"]
     changed_bytes = json.dumps(changed).encode()
-    with pytest.raises(Exception):
+    with pytest.raises(sqlite3.IntegrityError, match="CHECK constraint failed"):
         importer.import_snapshot(
             changed_bytes, digest=hashlib.sha256(changed_bytes).hexdigest(), store="example-store", environment="test"
         )
@@ -392,7 +393,7 @@ def test_adjudicated_identity_link_preserves_reply_and_withdrawal(lifecycle, mon
         old_reply["parent_id"], old_reply["kind"] = parent, kind
         reappearing["contributions"].append(old_reply)
         reappearing_bytes = json.dumps(reappearing).encode()
-        with pytest.raises(Exception):
+        with pytest.raises(sqlite3.IntegrityError, match="CHECK constraint failed"):
             importer.import_snapshot(
                 reappearing_bytes,
                 digest=hashlib.sha256(reappearing_bytes).hexdigest(),
@@ -400,7 +401,7 @@ def test_adjudicated_identity_link_preserves_reply_and_withdrawal(lifecycle, mon
                 environment="test",
             )
         assert db.db.execute("SELECT snapshot_id FROM review_publications").fetchone()[0] == "removed"
-    with pytest.raises(Exception):
+    with pytest.raises(sqlite3.IntegrityError, match="identity links are immutable"):
         db.db.execute("DELETE FROM review_identity_links")
 
 
