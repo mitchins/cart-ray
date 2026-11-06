@@ -18,6 +18,7 @@ test('moderation binds both review and revision, and validates confirmation', as
   assert.equal(request[0], `/reviews-admin/v1/contributions/${id}/approve`); assert.deepEqual(JSON.parse(request[1].body), { revision_id: revision });
   await assert.rejects(client.decide(review, 'withdraw'), ConsoleError);
   await assert.rejects(createClient(async () => response({ review_id: id, status: 'rejected' })).decide(review, 'approve'), /could not confirm/);
+  await assert.rejects(createClient(async () => response(null)).decide(review, 'approve'), /could not confirm.*Refresh/);
 });
 test('stalled fetches and response bodies abort within the deadline and explain uncertain decisions', async () => {
   let signal;

@@ -49,7 +49,7 @@ export function createClient(fetcher = fetch, timeoutMs = 8000) {
     async decide(item, action) {
       if (!item || !ID.test(item.review_id || '') || !ID.test(item.revision_id || '') || !['approve', 'reject'].includes(action)) throw new ConsoleError('Invalid moderation request. Refresh the queue.');
       const data = await request(`/reviews-admin/v1/contributions/${item.review_id}/${action}`, { method: 'POST', credentials: 'same-origin', cache: 'no-store', headers: { 'Content-Type': 'application/json', Accept: 'application/json' }, body: JSON.stringify({ revision_id: item.revision_id }) }, true);
-      if (data.review_id !== item.review_id || data.status !== (action === 'approve' ? 'published' : 'rejected')) throw new ConsoleError(UNCERTAIN);
+      if (!data || typeof data !== 'object' || data.review_id !== item.review_id || data.status !== (action === 'approve' ? 'published' : 'rejected')) throw new ConsoleError(UNCERTAIN);
       return data;
     },
   };
