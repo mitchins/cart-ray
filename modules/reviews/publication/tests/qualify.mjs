@@ -46,9 +46,9 @@ if (control) {
   const hosted = controlUrl.protocol === 'https:' && /^r5-src-[a-f0-9]+\.[a-z0-9-]+\.workers\.dev$/.test(controlUrl.hostname);
   if (!local && !hosted) throw new Error('disposable source control only');
   const controlPost = (path) => fetch(new URL(path, controlUrl), { method: 'POST', headers: hosted ? { Authorization: `Bearer ${token}` } : {} });
-  assert.equal((await controlPost('/__test/off')).status, 200);
+  assert.equal((await controlPost('/__test/off')).ok, true);
   assert.equal((await fetch(new URL('/publication/html', base))).status, 503);
-  assert.equal((await controlPost('/__test/on')).status, 200);
+  assert.equal((await controlPost('/__test/on')).ok, true);
   assert.equal((await fetch(new URL('/publication/html', base))).status, 503, 'outage quarantine must be sticky');
   assert.equal((await post('/__test/publish', payload)).status, 409, 'retired artifact must not silently reactivate');
   const state = await (await post('/__test/state', {})).json();
@@ -63,9 +63,9 @@ const later = await post('/__test/publish', { projection: input, media: [], appr
 assert.equal(later.status, 200, await later.clone().text());
 if (control) {
   const headers = new URL(control).protocol === 'https:' ? { Authorization: `Bearer ${token}` } : {};
-  assert.equal((await fetch(new URL('/__test/off', control), { method: 'POST', headers })).status, 200);
+  assert.equal((await fetch(new URL('/__test/off', control), { method: 'POST', headers })).ok, true);
   assert.equal((await fetch(new URL('/publication/html', base))).status, 503);
-  assert.equal((await fetch(new URL('/__test/on', control), { method: 'POST', headers })).status, 200);
+  assert.equal((await fetch(new URL('/__test/on', control), { method: 'POST', headers })).ok, true);
 }
 const beforeWithdraw = await (await post('/__test/state', {})).json();
 if (control) assert.equal(beforeWithdraw.state, 'safe');

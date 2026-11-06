@@ -205,6 +205,7 @@ def main():
             gate_config.write_text(
                 f'name = "{gate_name}"\n'
                 'main = "worker.mjs"\ncompatibility_date = "2026-08-31"\nworkers_dev = true\n'
+                'compatibility_flags = ["global_fetch_strictly_public"]\n'
                 '[vars]\nPUBLICATION_MODE = "test"\nPUBLICATION_ENVIRONMENT = "test"\n'
                 'PUBLICATION_CANONICAL_ORIGIN = "https://example.invalid"\n'
                 f'REVIEWS_PUBLIC_ORIGIN = "{source_url}"\nREVIEWS_SOURCE_SCOPE = "example-store:test"\n'
@@ -318,9 +319,16 @@ def main():
                 "measurements": measurement,
             }
         finally:
-            if retain_seconds and sys.exc_info()[0] is not None:
-                print(f"Retaining disposable resources for {retain_seconds}s before cleanup", flush=True)
-                time.sleep(retain_seconds)
+            interrupted = False
+            if retain_seconds and sys.exc_info()[0] not in (None, KeyboardInterrupt, SystemExit):
+                try:
+                    print(f"Retaining disposable resources for {retain_seconds}s before cleanup", flush=True)
+                    time.sleep(retain_seconds)
+                except KeyboardInterrupt:
+                    interrupted = True
+            # Once deletion starts, defer catchable termination until all owned resources are checked.
+            previous_term = signal.signal(signal.SIGTERM, signal.SIG_IGN)
+            previous_int = signal.signal(signal.SIGINT, signal.SIG_IGN)
             for key, args in [
                 ("gate", ["delete", gate_name, "--force"]),
                 ("source", ["delete", source_name, "--force"]),
@@ -365,6 +373,10 @@ def main():
                         )
             if cleanup_errors:
                 raise RuntimeError("disposable resource cleanup failed: " + ", ".join(cleanup_errors))
+            signal.signal(signal.SIGTERM, previous_term)
+            signal.signal(signal.SIGINT, previous_int)
+            if interrupted:
+                raise KeyboardInterrupt()
         if receipt:
             receipt["cleanup"] = "all disposable resources deleted"
             receipt["qualification"] = (
