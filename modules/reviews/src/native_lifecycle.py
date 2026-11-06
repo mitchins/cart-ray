@@ -8,6 +8,7 @@ import time
 from urllib.parse import parse_qs
 
 from cartray_reviews.acquisition import confirmed_purchase
+from cartray_reviews.automation_due import claim_due, complete_claim
 from cartray_reviews.automation_intake import intake_order
 from cartray_reviews.automation_recipient import evidence_status, record_recipient
 from cartray_reviews.invitations import (
@@ -496,6 +497,67 @@ async def handle_write(request, env, path):
             except Exception:
                 await discard_body(request)
                 return fail(503, "collection unavailable")
+    if path == "/reviews-internal/v1/automation-due-evaluate":
+        token = str(getattr(env, "REVIEWS_AUTOMATION_INGRESS_TOKEN", ""))
+        supplied = str(request.headers.get("Authorization") or "")
+        if (
+            not acquisition_mode
+            or str(getattr(env, "REVIEWS_AUTOMATION_INTAKE", "disabled")) != "test"
+            or len(token) < 32
+            or token in secrets
+            or token
+            in (
+                str(getattr(env, "REVIEWS_CONSENT_SECRET", "")),
+                str(getattr(env, "REVIEWS_DELIVERY_TOKEN", "")),
+                str(getattr(env, "REVIEWS_RECIPIENT_EVIDENCE_SECRET", "")),
+            )
+        ):
+            await discard_body(request)
+            return fail(503, "evaluation unavailable")
+        if not hmac.compare_digest(supplied.encode(), ("Bearer " + token).encode()):
+            await discard_body(request)
+            return fail(401, "unauthorized")
+        try:
+            data = await read_json(request)
+            if set(data) != {"acquisition_id", "claim_token"}:
+                return fail(400, "invalid evaluation")
+            now = int(time.time())
+            claim = await claim_due(
+                env.REVIEWS_DB,
+                store=store,
+                environment=environment,
+                acquisition=data["acquisition_id"],
+                token=data["claim_token"],
+                now=now,
+                lease_seconds=60,
+            )
+            if claim is None:
+                # A completed claim is a durable idempotent receipt for this token.
+                found = rows(
+                    await env.REVIEWS_DB.prepare(
+                        "SELECT generation FROM review_automation_due_claims WHERE store_key=? AND environment=? "
+                        "AND acquisition_id=? AND claim_token=? AND state='completed'"
+                    )
+                    .bind(store, environment, data["acquisition_id"], data["claim_token"])
+                    .all()
+                )
+                return Response.json(
+                    {"status": "held" if found else "unavailable"}, headers={"Cache-Control": "no-store"}
+                )
+            completed = await complete_claim(
+                env.REVIEWS_DB,
+                store=store,
+                environment=environment,
+                acquisition=data["acquisition_id"],
+                token=data["claim_token"],
+                generation=claim["generation"],
+                now=int(time.time()),
+            )
+            return Response.json(
+                {"status": "held" if completed else "unavailable"}, headers={"Cache-Control": "no-store"}
+            )
+        except (ValueError, TypeError, AttributeError, KeyError, json.JSONDecodeError):
+            return fail(409, "evaluation unavailable")
     if path == "/reviews-internal/v1/automation-intake":
         token = str(getattr(env, "REVIEWS_AUTOMATION_INGRESS_TOKEN", ""))
         supplied = str(request.headers.get("Authorization") or "")

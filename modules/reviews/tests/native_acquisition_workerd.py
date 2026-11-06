@@ -198,7 +198,7 @@ def main():
                 "cartray-reviews-local-test",
                 *common,
                 "--command",
-                "INSERT INTO review_automation_activation VALUES('example-store','test',1,0,3600,86400,'test-v1')",
+                "INSERT INTO review_automation_activation VALUES('example-store','test',1,0,0,86400,'test-v1')",
             ],
             cwd=ROOT,
             check=True,
@@ -277,6 +277,32 @@ def main():
                 text=True,
             )
             assert json.loads(checkout_ack.stdout)[0]["results"][0]["delivered_at"] is None
+            due_path = "/reviews-internal/v1/automation-due-evaluate"
+            due_data = {"acquisition_id": order_ids[0], "claim_token": "a" * 64}
+            assert internal(due_path, due_data, ISSUER)[0] == 401
+            assert internal(due_path, {"acquisition_id": "missing", "claim_token": "b" * 64}, AUTOMATION_TOKEN) == (
+                200,
+                {"status": "unavailable"},
+            )
+            assert internal(due_path, due_data, AUTOMATION_TOKEN) == (200, {"status": "held"})
+            assert internal(due_path, due_data, AUTOMATION_TOKEN) == (200, {"status": "held"})
+            held = subprocess.run(
+                [
+                    wrangler,
+                    "d1",
+                    "execute",
+                    "cartray-reviews-local-test",
+                    *common,
+                    "--json",
+                    "--command",
+                    "SELECT state FROM review_automation_intents",
+                ],
+                cwd=ROOT,
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            assert json.loads(held.stdout)[0]["results"][0]["state"] == "held_eligibility_recipient_consent"
             recipient_data = {
                 "outbox_id": outbox_id,
                 "recipient_context_hash": recipient_hashes[0],
