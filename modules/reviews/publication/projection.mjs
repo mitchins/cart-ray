@@ -101,3 +101,10 @@ export function renderPublication(publication, origin) {
   const html = `<!doctype html><html><head><meta charset="utf-8"><meta name="robots" content="noindex,nofollow">${jsonld ? `<script type="application/ld+json">${jsonld}</script>` : ''}</head><body><main><h1>${escapeHtml(subject.name)}</h1><p>${rating.rated_count ? `${rating.average.toFixed(1)} from ${rating.rated_count} ratings` : 'No ratings yet'} · ${publication.contribution_count} contributions</p>${reviews.map(render).join('')}</main><script>${lease}</script></body></html>`;
   return { html, jsonld };
 }
+
+// The approval identity binds the exact rendered bytes as well as input data.
+export function publicationArtifact(projection, media, canonicalOrigin, sourceOrigin, sourceScope) {
+  const { html, jsonld } = renderPublication(projection, canonicalOrigin);
+  return { schema: 'cartray.reviews.artifact.v1', projection, media, canonical_origin: canonicalOrigin,
+    source_origin: sourceOrigin, source_scope: sourceScope, html, jsonld };
+}

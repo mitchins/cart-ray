@@ -23,16 +23,19 @@ function stalled(authorized) {
   });
   return { ready, outcome };
 }
+const failures = [];
 for (const authorized of [false, true]) {
   const pending = stalled(authorized); await pending.ready;
   const healthy = await fetch(new URL('/publication/html', base), { signal: AbortSignal.timeout(8000), cache: 'no-store' });
   assert.equal(healthy.status, 503, 'empty gate must remain available during incomplete upload');
   const outcome = await pending.outcome;
   console.log(JSON.stringify({ authorized, on_wire: outcome, healthy_status: healthy.status }));
-  if (outcome.startsWith('HTTP/')) assert.match(outcome, authorized ? /^HTTP\/\S+ 400$/ : /^HTTP\/\S+ 401$/);
-  else assert.ok(['connection_closed', 'connection_reset'].includes(outcome), `unexpected transport outcome: ${outcome}`);
+  if (outcome.startsWith('HTTP/')) {
+    if (!(authorized ? /^HTTP\/\S+ 400$/ : /^HTTP\/\S+ 401$/).test(outcome)) failures.push('unexpected_http');
+  } else if (!['connection_closed', 'connection_reset'].includes(outcome)) failures.push(outcome);
   for (let i = 0; i < 3; i++) assert.equal((await fetch(new URL('/publication/html', base), { signal: AbortSignal.timeout(8000), cache: 'no-store' })).status, 503);
   console.log(JSON.stringify({ authorized, healthy_after_disconnect: 3 }));
 }
 const state = await fetch(new URL('/__test/state', base), { method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, body: '{}' });
 assert.deepEqual(await state.json(), {}, 'incomplete upload must not mutate the empty gate');
+if (failures.length) { console.error('incomplete upload qualification failed:', failures.join(',')); process.exitCode = 1; }

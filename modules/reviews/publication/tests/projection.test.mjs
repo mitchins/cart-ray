@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { normalizeProjection, canonical, sha256, renderPublication } from '../projection.mjs';
+import { normalizeProjection, canonical, sha256, renderPublication, publicationArtifact } from '../projection.mjs';
 
 function input() {
   const subject = { id: 'policy', kind: 'product', name: 'Example <policy>', canonical_path: '/product/policy/' };
@@ -56,4 +56,13 @@ test('canonical lineage survives raw and unified identifiers and linked historic
   assert.match(renderPublication(normalizeProjection(linked), 'https://store.example').html, /Previous provider/);
   linked.pages[0].contributions[0].id = 'old-record';
   assert.throws(() => normalizeProjection(linked), /duplicate source identity/);
+});
+
+
+test('approval digest changes if rendered HTML or JSON-LD changes', async () => {
+  const artifact = publicationArtifact(normalizeProjection(input()), [], 'https://store.example', 'https://reviews.example', 'example-store:test');
+  const digest = await sha256(canonical(artifact));
+  assert.notEqual(digest, await sha256(canonical({ ...artifact, html: artifact.html + '<!-- changed -->' })));
+  assert.notEqual(digest, await sha256(canonical({ ...artifact, jsonld: artifact.jsonld + ' ' })));
+  assert.equal(artifact.schema, 'cartray.reviews.artifact.v1');
 });

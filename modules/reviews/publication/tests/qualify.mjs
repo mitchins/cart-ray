@@ -1,7 +1,7 @@
 // Synthetic-only, destructive to its disposable publication DB. Never use a production URL.
 import fs from 'node:fs';
 import assert from 'node:assert/strict';
-import { canonical, normalizeProjection, sha256 } from '../projection.mjs';
+import { canonical, normalizeProjection, publicationArtifact, sha256 } from '../projection.mjs';
 
 const [baseArg, projectionPath] = process.argv.slice(2);
 const base = new URL(baseArg), token = process.env.PUBLICATION_TEST_TOKEN;
@@ -15,7 +15,7 @@ const data = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAw
 const mediaSha = await sha256(Uint8Array.from(Buffer.from(data, 'base64')));
 const root = projection.reviews.find((item) => item.id === 'r'); if (!root) throw new Error('fixture root absent');
 const media = [{ sha256: mediaSha, record_id: root.id, lineage: root.lineage, type: 'image/png', data }];
-const approved = await sha256(canonical({ projection, media, canonical_origin: 'https://example.invalid', source_origin: new URL(sourceOrigin).origin, source_scope: 'example-store:test' }));
+const approved = await sha256(canonical(publicationArtifact(projection, media, 'https://example.invalid', new URL(sourceOrigin).origin, 'example-store:test')));
 const payload = { projection: input, media, approved_sha256: approved };
 const post = (path, body, authorized = true) => fetch(new URL(path, base), { method: 'POST', headers: { 'Content-Type': 'application/json', ...(authorized ? { Authorization: `Bearer ${token}` } : {}) }, body: JSON.stringify(body), cache: 'no-store' });
 assert.equal((await post('/__test/publish', payload, false)).status, 401);
@@ -47,7 +47,7 @@ if (control) {
 }
 // Remove media in a later publication before withdrawal. Its historical ownership
 // must still be tombstoned even though it is absent from the active artifact.
-const laterDigest = await sha256(canonical({ projection, media: [], canonical_origin: 'https://example.invalid', source_origin: new URL(sourceOrigin).origin, source_scope: 'example-store:test' }));
+const laterDigest = await sha256(canonical(publicationArtifact(projection, [], 'https://example.invalid', new URL(sourceOrigin).origin, 'example-store:test')));
 const later = await post('/__test/publish', { projection: input, media: [], approved_sha256: laterDigest });
 assert.equal(later.status, 200, await later.clone().text());
 if (control) {

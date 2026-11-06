@@ -1,4 +1,4 @@
-import { canonical, normalizeProjection, renderPublication, sha256 } from './projection.mjs';
+import { canonical, normalizeProjection, publicationArtifact, sha256 } from './projection.mjs';
 
 const MAX_BODY = 1_000_000;
 const HEX = /^[a-f0-9]{64}$/;
@@ -64,12 +64,12 @@ async function publish(db, payload, origin, env) {
   const media = await normalizeMedia(payload.media || [], projection.reviews);
   const source = sourceOrigin(env);
   if (!source || env.REVIEWS_SOURCE_SCOPE !== 'example-store:test') return fail(400, 'invalid synthetic source');
-  const artifact = { projection, media, canonical_origin: origin, source_origin: source.origin, source_scope: env.REVIEWS_SOURCE_SCOPE };
+  const artifact = publicationArtifact(projection, media, origin, source.origin, env.REVIEWS_SOURCE_SCOPE);
   const digest = await sha256(canonical(artifact));
   if (!HEX.test(payload.approved_sha256 || '') || payload.approved_sha256 !== digest) return fail(409, 'approval digest mismatch');
   const sourceProjection = await captureSource(env, projection);
   if (!sourceProjection || canonical(sourceProjection) !== canonical(projection)) return fail(409, 'source projection mismatch');
-  const { html, jsonld } = renderPublication(projection, origin);
+  const { html, jsonld } = artifact;
   const ids = JSON.stringify(lineage);
   const mediaIds = JSON.stringify(media.map((item) => item.sha256));
   const statements = [

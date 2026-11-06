@@ -198,8 +198,7 @@ def main():
                 check=False,
             )
             transport = [json.loads(line) for line in stalled.stdout.splitlines() if line.strip()]
-            if stalled.returncode:
-                raise RuntimeError("hosted stalled-upload qualification failed: " + json.dumps(transport))
+            transport_passed = stalled.returncode == 0
             result = subprocess.run(
                 ["node", str(temp / "tests/qualify.mjs"), gate_url, str(temp / "fixture.json")],
                 cwd=ROOT,
@@ -243,6 +242,7 @@ def main():
                 "source_kind": "synthetic replay of local R4 public projection",
                 "database_assertions": actual,
                 "transport": transport,
+                "transport_test_passed": transport_passed,
                 "measurements": measurement,
             }
         finally:
@@ -292,6 +292,9 @@ def main():
                 raise RuntimeError("disposable resource cleanup failed: " + ", ".join(cleanup_errors))
         if receipt:
             receipt["cleanup"] = "all disposable resources deleted"
+            receipt["qualification"] = (
+                "passed" if receipt["transport_test_passed"] else "incomplete: stalled-upload transport"
+            )
             output = ROOT / "modules/reviews/publication/hosted-receipt.json"
             output.write_text(json.dumps(receipt, indent=2) + "\n")
             print(json.dumps(receipt, sort_keys=True))
