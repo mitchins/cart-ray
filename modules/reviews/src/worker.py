@@ -14,14 +14,30 @@ def rows(result):
     return [row.to_py() if hasattr(row, "to_py") else dict(row) for row in result.results]
 
 
-async def publication_unchanged(db, store, environment, snapshot_id):
-    """Avoid returning an old historical publication after a concurrent promotion."""
-    current = rows(
-        await db.prepare("SELECT snapshot_id FROM review_publications WHERE store_key=? AND environment=?")
-        .bind(store, environment)
+async def subject_sources(db, store, environment, subject_id):
+    """Read both source memberships and versions in a single D1 statement."""
+    return rows(
+        await db.prepare(
+            "SELECT s.subject_id, s.snapshot_id, 0 native_version, 'imported' source_kind "
+            "FROM review_snapshot_subjects s JOIN review_publications p "
+            "ON p.store_key=s.store_key AND p.environment=s.environment AND p.snapshot_id=s.snapshot_id "
+            "WHERE s.store_key=? AND s.environment=? AND s.subject_id=? UNION ALL "
+            "SELECT s.subject_id,'' snapshot_id,v.version native_version,'native' source_kind "
+            "FROM review_subjects s JOIN native_publication_versions v "
+            "ON v.store_key=s.store_key AND v.environment=s.environment AND v.subject_id=s.subject_id "
+            "WHERE s.store_key=? AND s.environment=? AND s.subject_id=? LIMIT 2"
+        )
+        .bind(store, environment, subject_id, store, environment, subject_id)
         .all()
     )
-    return len(current) == 1 and current[0]["snapshot_id"] == snapshot_id
+
+
+async def publication_unchanged(db, store, environment, subject_id, expected):
+    """Detect changed versions and either source appearing or disappearing."""
+    current = await subject_sources(db, store, environment, subject_id)
+    return sorted((r["source_kind"], r["snapshot_id"], r["native_version"]) for r in current) == sorted(
+        (r["source_kind"], r["snapshot_id"], r["native_version"]) for r in expected
+    )
 
 
 def public_contribution(row):
@@ -78,21 +94,7 @@ class Default(WorkerEntrypoint):
             return Response.json({"error": "invalid configuration"}, status=503)
         subject_id, endpoint = match.groups()
         db = self.env.REVIEWS_DB
-        subject = rows(
-            await db.prepare(
-                "SELECT s.subject_id, s.snapshot_id, 0 native_version, 'imported' source_kind "
-                "FROM review_snapshot_subjects s "
-                "JOIN review_publications p "
-                "ON p.store_key=s.store_key AND p.environment=s.environment AND p.snapshot_id=s.snapshot_id "
-                "WHERE s.store_key=? AND s.environment=? AND s.subject_id=? UNION ALL "
-                "SELECT s.subject_id,'' snapshot_id,v.version native_version,'native' source_kind "
-                "FROM review_subjects s "
-                "JOIN native_publication_versions v ON v.store_key=s.store_key AND v.environment=s.environment "
-                "AND v.subject_id=s.subject_id WHERE s.store_key=? AND s.environment=? AND s.subject_id=? LIMIT 2"
-            )
-            .bind(store, environment, subject_id, store, environment, subject_id)
-            .all()
-        )
+        subject = await subject_sources(db, store, environment, subject_id)
         if not subject:
             return Response.json({"error": "not found"}, status=404)
         if len(subject) == 2:
@@ -101,7 +103,14 @@ class Default(WorkerEntrypoint):
                 return Response.json({"error": "publication unavailable"}, status=503)
             return await unified_read(db, store, environment, subject_id, endpoint, params, Response)
         if subject[0]["source_kind"] == "native":
-            return await native_read(db, store, environment, subject_id, endpoint, params, subject[0]["native_version"])
+            response = await native_read(
+                db, store, environment, subject_id, endpoint, params, subject[0]["native_version"]
+            )
+            if not await publication_unchanged(db, store, environment, subject_id, subject):
+                return Response.json(
+                    {"error": "publication changed; restart"}, status=409, headers={"Cache-Control": "no-store"}
+                )
+            return response
         snapshot_id = subject[0]["snapshot_id"]
         after = params.get("after", [None])[0]
         cursor_snapshot = params.get("snapshot", [None])[0]
@@ -122,7 +131,7 @@ class Default(WorkerEntrypoint):
                 .all()
             )[0]
             count, total = result["rated_count"], result["rating_sum"]
-            if not await publication_unchanged(db, store, environment, snapshot_id):
+            if not await publication_unchanged(db, store, environment, subject_id, subject):
                 return Response.json(
                     {"error": "publication changed; restart"}, status=409, headers={"Cache-Control": "no-store"}
                 )
@@ -196,7 +205,7 @@ class Default(WorkerEntrypoint):
             if len(remaining) == len(pending):
                 break
             pending = remaining
-        if not await publication_unchanged(db, store, environment, snapshot_id):
+        if not await publication_unchanged(db, store, environment, subject_id, subject):
             return Response.json(
                 {"error": "publication changed; restart"}, status=409, headers={"Cache-Control": "no-store"}
             )
