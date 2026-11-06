@@ -228,8 +228,10 @@ def test_worker_enforces_modes_and_scope(lifecycle):
 
     path = "/reviews/v1/subjects/policy/summary"
     assert fetch(path).status == 404
+    assert fetch("/reviews-internal/v1/automation-intake", "POST").status == 404
     instance.env.REVIEWS_MODE = "read_only"
     assert fetch("/reviews-admin/v1/subjects", "POST").status == 405
+    assert fetch("/reviews-internal/v1/automation-intake", "POST").status == 405
     assert fetch("/reviews-admin/v1/pending").status == 404
     assert fetch(path + "?limit=abc").status == 400
     assert fetch(path + "?unknown=x").status == 400

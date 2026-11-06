@@ -95,7 +95,7 @@ def test_confirmed_purchase_creates_only_held_intent_and_deduplicates():
     assert run(checkout, reviews) == {"status": "accepted", "due_at": 110}
     assert run(checkout, reviews, now=1000) == {"status": "accepted", "due_at": 110}
     assert reviews.db.execute("SELECT state,due_at FROM review_automation_intents").fetchall()[0][:] == (
-        "held_recipient_consent",
+        "held_eligibility_recipient_consent",
         110,
     )
     assert reviews.db.execute("SELECT count(*) FROM review_automation_intake").fetchone()[0] == 1

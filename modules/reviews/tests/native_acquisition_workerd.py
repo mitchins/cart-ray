@@ -222,7 +222,8 @@ def main():
                     "--json",
                     "--command",
                     "SELECT (SELECT COUNT(*) FROM review_automation_intake) AS acknowledgements, "
-                    "(SELECT COUNT(*) FROM review_automation_intents WHERE state='held_recipient_consent') AS intents, "
+                    "(SELECT COUNT(*) FROM review_automation_intents "
+                    "WHERE state='held_eligibility_recipient_consent') AS intents, "
                     "(SELECT COUNT(*) FROM invitation_generations) AS generations",
                 ],
                 cwd=ROOT,

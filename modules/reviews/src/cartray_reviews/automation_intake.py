@@ -111,7 +111,8 @@ async def intake_order(reviews_db, checkout_db, *, store, environment, outbox_id
                 ),
                 reviews_db.prepare(
                     "INSERT OR IGNORE INTO review_automation_intents SELECT store_key,environment,acquisition_id,"
-                    "outbox_id,due_at,policy_version,'held_recipient_consent' FROM review_automation_intake "
+                    "outbox_id,due_at,policy_version,'held_eligibility_recipient_consent' "
+                    "FROM review_automation_intake "
                     "WHERE store_key=? AND environment=? AND outbox_id=? AND disposition='accepted'"
                 ).bind(store, environment, outbox_id),
             ]

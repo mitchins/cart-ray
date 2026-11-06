@@ -35,7 +35,7 @@ BEGIN SELECT RAISE(ABORT, 'intake identity conflict'); END;
 CREATE TABLE review_automation_intents (
   store_key TEXT NOT NULL, environment TEXT NOT NULL, acquisition_id TEXT NOT NULL,
   outbox_id INTEGER NOT NULL, due_at INTEGER NOT NULL, policy_version TEXT NOT NULL,
-  state TEXT NOT NULL CHECK(state='held_recipient_consent'),
+  state TEXT NOT NULL CHECK(state='held_eligibility_recipient_consent'),
   PRIMARY KEY(store_key, environment, acquisition_id),
   FOREIGN KEY(store_key,environment,outbox_id) REFERENCES review_automation_intake(store_key,environment,outbox_id)
 );
