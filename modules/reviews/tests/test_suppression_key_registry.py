@@ -135,3 +135,34 @@ def test_cli_writes_only_to_owned_private_directory(tmp_path, monkeypatch):
 
 def stat_mode(path):
     return path.stat().st_mode & 0o777
+
+
+def test_committed_wal_cannot_be_misread_as_empty_snapshot(tmp_path, monkeypatch):
+    tmp_path.chmod(0o700)
+    key, snapshot, output = (tmp_path / name for name in ("key", "reviews.db", "statement.sql"))
+    key.write_text("y" * 40)
+    key.chmod(0o600)
+    db = sqlite3.connect(snapshot)
+    try:
+        db.executescript("CREATE TABLE review_automation_recipient_bindings"
+                         "(store_key,environment,binding_version,recipient_context_hash);"
+                         "CREATE TABLE review_recipient_suppressions(store_key,environment,recipient_context_hash);")
+        assert db.execute("PRAGMA journal_mode=WAL").fetchone()[0] == "wal"
+        db.execute("INSERT INTO review_recipient_suppressions VALUES (?,?,?)", ("store", "test", "f" * 64))
+        db.commit()
+        snapshot.chmod(0o600)
+        monkeypatch.setattr(sys, "argv", ["pin", "--key-file", str(key), "--reviews-snapshot", str(snapshot),
+            "--output", str(output), "--store", "store", "--installation", "install", "--version", "key1"])
+        with pytest.raises(ValueError, match="sidecars"):
+            pin.main()
+        assert not output.exists()
+    finally:
+        db.close()
+
+
+@pytest.mark.parametrize("suffix", ["-wal", "-shm", "-journal"])
+def test_snapshot_refuses_even_symlink_sidecars(tmp_path, suffix):
+    tmp_path.chmod(0o700)
+    (tmp_path / ("reviews.db" + suffix)).symlink_to("absent")
+    with pytest.raises(ValueError, match="sidecars"):
+        pin.reject_snapshot_sidecars(tmp_path / "reviews.db")

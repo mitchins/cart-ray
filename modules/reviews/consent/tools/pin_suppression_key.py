@@ -49,6 +49,23 @@ def create_private(path: Path, value: str) -> None:
         os.close(directory)
 
 
+def reject_snapshot_sidecars(path: Path) -> None:
+    """Reject potentially incomplete SQLite files, including committed WALs."""
+    directory = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        info = os.fstat(directory)
+        if info.st_uid != os.geteuid() or stat.S_IMODE(info.st_mode) & 0o077:
+            raise ValueError("snapshot directory must be private and owned")
+        for suffix in ("-wal", "-shm", "-journal"):
+            try:
+                os.stat(path.name + suffix, dir_fd=directory, follow_symlinks=False)
+            except FileNotFoundError:
+                continue
+            raise ValueError("snapshot has SQLite sidecars; supply a standalone checkpointed export")
+    finally:
+        os.close(directory)
+
+
 def statement(*, key: str, store: str, installation: str, version: str) -> str:
     if len(key) < 32 or not all(IDENTIFIER.fullmatch(value) for value in (store, installation, version)):
         raise ValueError("invalid key or scope")
@@ -115,11 +132,13 @@ def main():
     args = parser.parse_args()
     key = private_text(args.key_file, 16384).strip()
     contacts = json.loads(private_text(args.contacts_file, 2_000_000)) if args.contacts_file else None
+    reject_snapshot_sidecars(args.reviews_snapshot)
     snapshot = open_private(args.reviews_snapshot)
     try:
         # The validated descriptor pins the snapshot despite path replacement.
         with sqlite3.connect(f"file:/dev/fd/{snapshot}?mode=ro&immutable=1", uri=True) as db:
             verify_history(db=db, key=key, store=args.store, contacts=contacts)
+        reject_snapshot_sidecars(args.reviews_snapshot)
     finally:
         os.close(snapshot)
     value = statement(
