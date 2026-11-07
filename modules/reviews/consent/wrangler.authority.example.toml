@@ -1,0 +1,63 @@
+# Example only: copy outside source control, replace every REPLACE value and
+# provision distinct secrets. Default mode is disabled; do not deploy as-is.
+name = "acorn-purchaser-authority-test"
+main = "worker.mjs"
+compatibility_date = "2026-08-31"
+workers_dev = false
+
+[vars]
+ACORN_PURCHASE_CONTEXT = "disabled"
+REVIEW_CONSENT_ENABLED = "disabled"
+PURCHASE_EVIDENCE_MODE = "disabled"
+TEST_EMAIL_MODE = "disabled"
+STORE_KEY = "acorn-store"
+REVIEWS_STORE_KEY = "acorn-store"
+ENVIRONMENT = "test"
+REVIEWS_ENVIRONMENT = "test"
+STOREFRONT_ORIGIN = "https://REPLACE.example"
+INSTALLATION_ID = "REPLACE"
+STRIPE_ACCOUNT_ID = "REPLACE"
+CATALOGUE_VERSION = "REPLACE"
+MAPPING_SHA256 = "REPLACE"
+COMMERCE_DB_ID = "REPLACE"
+CONTEXT_DB_ID = "REPLACE"
+SOURCE_WORKER_VERSION = "REPLACE"
+REVIEWS_WORKER_VERSION = "REPLACE"
+PRODUCER_WORKER_VERSION = "REPLACE"
+TEST_SENDER = "reviews@acorn-test.effectivepolicy.com.au"
+
+[version_metadata]
+binding = "CF_VERSION_METADATA"
+
+[[d1_databases]]
+binding = "COMMERCE_DB"
+database_name = "REPLACE"
+database_id = "REPLACE"
+
+[[d1_databases]]
+binding = "CONTEXT_DB"
+database_name = "REPLACE"
+database_id = "REPLACE"
+
+[[services]]
+binding = "CHECKOUT"
+service = "REPLACE-source-worker"
+
+[[services]]
+binding = "SOURCE_IDENTITY"
+service = "REPLACE-source-worker"
+
+[[services]]
+binding = "REVIEWS_API"
+service = "REPLACE-reviews-worker"
+
+[[services]]
+binding = "ATTESTOR"
+service = "REPLACE-producer-worker"
+
+[[ratelimits]]
+name = "REVIEW_CONSENT_LIMITER"
+namespace_id = "20261107"
+[ratelimits.simple]
+limit = 20
+period = 60

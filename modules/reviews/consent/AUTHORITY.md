@@ -100,3 +100,17 @@ browser routing. `--test-checkout-api` remains an explicit test-build gate and
 must identify the intended test deployment; when `--review-consent` is also
 selected, the generated browser client calls `window.location.origin` so the
 HttpOnly host cookie remains first-party.
+
+Non-deployable examples are provided at `wrangler.authority.example.toml` and
+`examples/acorn-store/wrangler.pages.example.toml`; their resource identifiers
+are deliberately invalid and all authority modes are disabled. Provision the
+actual test resources separately. The authority requires distinct secrets:
+`STRIPE_TEST_KEY`, `PURCHASE_ATTESTATION_TOKEN`, `PURCHASE_ATTESTATION_KEY`,
+`RECIPIENT_HASH_KEY`, `RECIPIENT_RESOLVE_TOKEN`, `PURCHASE_CODE_KEY`,
+`PURCHASE_TRANSPORT_TOKEN`, `REVIEWS_AUTOMATION_INGRESS_TOKEN`,
+`REVIEWS_CONSENT_SECRET`, `REVIEWS_CONSENT_RATE_KEY`,
+`REVIEWS_RECIPIENT_EVIDENCE_SECRET`, `SMTP2GO_API_KEY`, and the single
+`APPROVED_TEST_EMAIL`. Never put these values in the example files, repository,
+logs, or public build. In addition, the producer's installation attestation
+must use the same test account, Worker versions, D1 IDs, subject mapping and
+separate attestation secrets. Version changes require re-attestation.
