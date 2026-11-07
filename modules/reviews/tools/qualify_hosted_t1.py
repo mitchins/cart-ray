@@ -30,7 +30,16 @@ def require(condition, message):
 def rows(config, query):
     env = os.environ | {"CLOUDFLARE_ACCOUNT_ID": ACCOUNT}
     result = subprocess.run(
-        [str(WRANGLER), "d1", "execute", "DB", "--remote", "--config", str(config), "--json", "--command", query],
+        [
+            str(WRANGLER),
+            "d1",
+            "execute",
+            "DB",
+            "--remote",
+            "--config=" + str(config.resolve()),
+            "--json",
+            "--command=" + query,
+        ],
         capture_output=True,
         text=True,
         check=True,
@@ -48,7 +57,7 @@ def deployed_version(config, expected_bindings):
 
     def wrangler(*args):
         result = subprocess.run(
-            [str(WRANGLER), *args, "--config", str(config), "--json"],
+            [str(WRANGLER), *args, "--config=" + str(config.resolve()), "--json"],
             capture_output=True,
             text=True,
             check=True,
@@ -184,7 +193,6 @@ def validate(
         "activation_watermark": fence["outbox_watermark"],
         "new_outbox_id": order["outbox_id"],
         "order_id": order["order_id"],
-        "stripe_session_id": session["id"],
         "amount_minor": 4200,
         "currency": "aud",
         "reviews_receipt_count": 1,

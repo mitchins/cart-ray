@@ -148,3 +148,106 @@ def test_nondefault_service_target_rejected(field):
 def test_default_production_service_environment_accepted():
     binding = {"name": "SOURCE_API", "type": "service", "service": "source", "environment": "production"}
     module.check_bindings([binding], [("SOURCE_API", "service", "service", "source")])
+
+
+def test_main_checks_all_sources_and_emits_sanitized_receipt(tmp_path, monkeypatch, capsys):
+    import hashlib
+    import json
+    import sys
+
+    mapping = '{"catalogue":"synthetic"}'
+    variables = {
+        "SOURCE_DATABASE_ID": "source-db",
+        "STRIPE_ACCOUNT_ID": module.STRIPE_ACCOUNT,
+        "CATALOGUE_VERSION": module.CATALOGUE,
+        "SOURCE_STORE": "acorn-store",
+        "SOURCE_ISSUER": "issuer",
+        "SOURCE_INSTALLATION": "install",
+        "MAPPING_SHA256": hashlib.sha256(mapping.encode()).hexdigest(),
+    }
+    configs = [
+        {
+            "name": "source",
+            "account_id": module.ACCOUNT,
+            "d1_databases": [{"binding": "DB", "database_id": "source-db"}],
+        },
+        {
+            "name": "reviews",
+            "account_id": module.ACCOUNT,
+            "d1_databases": [
+                {"binding": "REVIEWS_DB", "database_id": "reviews-db"},
+                {"binding": "CARTRAY_DB", "database_id": "source-db"},
+            ],
+            "vars": {"REVIEWS_SUBJECT_MAPS": mapping},
+        },
+        {
+            "name": "producer",
+            "account_id": module.ACCOUNT,
+            "d1_databases": [{"binding": "COMMERCE_DB", "database_id": "source-db"}],
+            "vars": variables,
+        },
+    ]
+    paths = [tmp_path / name for name in ("source.toml", "reviews.toml", "producer.toml")]
+    for path in paths:
+        path.write_text('binding = "REVIEWS_DB"')
+    it = iter(configs)
+    monkeypatch.setattr(module.tomllib, "loads", lambda text: next(it))
+    key = tmp_path / "stripe-key"
+    key.write_text("sk_test_synthetic")
+    key.chmod(0o600)
+    data = evidence()
+    data["source"][0]["external_session_id"] = "cs_test_example"
+    data["expected_checkpoint"].update(source_database_id="source-db", mapping_sha256=variables["MAPPING_SHA256"])
+    data["checkpoint"][0].update(data["expected_checkpoint"])
+    results = iter(
+        [
+            data["old_source"],
+            data["source"],
+            [{"count": 1}],
+            data["items"],
+            data["activation"],
+            data["checkpoint"],
+            data["old_intake"],
+            data["old_intent"],
+            data["intake"],
+            data["intent"],
+        ]
+    )
+    monkeypatch.setattr(module, "rows", lambda config, query: next(results))
+    versions = []
+    monkeypatch.setattr(module, "deployed_version", lambda config, bindings: versions.append(config) or str(config))
+    monkeypatch.setattr(
+        module,
+        "stripe_get",
+        lambda key, path: (
+            {"id": module.STRIPE_ACCOUNT}
+            if path == "account"
+            else data["lines"]
+            if "line_items" in path
+            else data["session"]
+        ),
+    )
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "qualify",
+            "--source-config",
+            str(paths[0]),
+            "--reviews-config",
+            str(paths[1]),
+            "--producer-config",
+            str(paths[2]),
+            "--stripe-key-file",
+            str(key),
+            "--old-outbox-id",
+            "3",
+            "--new-outbox-id",
+            "8",
+        ],
+    )
+    module.main()
+    output = json.loads(capsys.readouterr().out)
+    assert output["reviews_receipt_count"] == 1
+    assert "stripe_session_id" not in output
+    assert len(versions) == 6
