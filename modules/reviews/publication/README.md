@@ -21,6 +21,17 @@ pages and compares the normalized projection before activation and on every
 serve. The publisher-supplied subject name and origin still require independent
 approval; the public R4 lookup does not attest the store/environment identity.
 
+An opt-in `PUBLICATION_TEST_NATIVE_REVISION_CHECK=enabled` experiment avoids
+fetching contribution pages on each read for nonempty native-only projections.
+Publication and recovery still compare the complete source. Reads check subject
+identity, the native publication version and summary, and fail closed on an
+unavailable or changed source. Imported, unified, empty and mixed-source
+projections retain the full read-time comparison. This is not a production
+freshness guarantee: native versions alone do not identify a restored or replaced
+database and can repeat after rollback. Production requires an independently
+attested source incarnation and monotonic revocation/rollback protocol, plus
+hosted cache, withdrawal and failure qualification.
+
 HTML and product-only JSON-LD are rendered from the same object, and responses
 carry the same publication digest. Consumers that request them separately must
 check the digests match and discard both on mismatch. All public responses and
