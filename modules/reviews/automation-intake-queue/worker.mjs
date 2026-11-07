@@ -9,7 +9,7 @@ function keyBytes(value) {
   return Uint8Array.from(value.match(/../g), x => parseInt(x, 16));
 }
 
-async function authenticate(message, env) {
+function validShape(message) {
   if (!message || typeof message !== 'object' || Array.isArray(message) ||
       Object.keys(message).sort().join() !== fields.join() || message.version !== 1 ||
       typeof message.store !== 'string' || !id.test(message.store) ||
@@ -17,6 +17,10 @@ async function authenticate(message, env) {
       typeof message.installation !== 'string' || !id.test(message.installation) ||
       message.environment !== 'test' || !Number.isSafeInteger(message.outbox_id) || message.outbox_id < 1 ||
       typeof message.signature !== 'string' || !hex.test(message.signature)) return false;
+  return true;
+}
+
+async function authenticate(message, env) {
   if (message.store !== env.SOURCE_STORE || message.environment !== env.REVIEWS_ENVIRONMENT ||
       message.installation !== env.SOURCE_INSTALLATION || message.issuer !== env.SOURCE_ISSUER) return false;
   const key = await crypto.subtle.importKey('raw', keyBytes(env.SOURCE_EVENT_KEY), {name:'HMAC', hash:'SHA-256'}, false, ['verify']);
@@ -32,7 +36,11 @@ export async function deliver(message, env) {
       !id.test(env.SOURCE_INSTALLATION || '')) throw new Error('subscriber unavailable');
   // Validate the configured key even for malformed traffic: absent security configuration must not acknowledge messages.
   keyBytes(env.SOURCE_EVENT_KEY);
-  if (!await authenticate(message, env)) return 'discard';
+  if (!validShape(message)) return 'discard';
+  // A well-formed message with a bad signature or scope can indicate a bad
+  // installation or key rotation. Retry to the bounded DLQ for reconciliation;
+  // acknowledging it here could permanently lose a committed order.
+  if (!await authenticate(message, env)) throw new Error('source authentication failed');
   const controller = new AbortController();
   let timer, reader;
   try {

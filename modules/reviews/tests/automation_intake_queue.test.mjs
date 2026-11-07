@@ -25,7 +25,8 @@ test('signed message invokes only the scoped private intake and acknowledges its
 });
 test('forged, cross-scope and malformed hints never reach intake',async()=>{
   let calls=0;const e=env(async()=>{calls++;return Response.json({status:'accepted',due_at:200});});
-  const m=await message(); for(const bad of [{...m,outbox_id:43},{...m,store:'other'},{...m,signature:'00'.repeat(32)}, {...m,extra:1},await message({environment:'live'})]) assert.equal(await deliver(bad,e),'discard');
+  const m=await message(); for(const bad of [{...m,outbox_id:43},{...m,store:'other'},{...m,signature:'00'.repeat(32)}]) await assert.rejects(deliver(bad,e),/source authentication failed/);
+  for(const bad of [{...m,extra:1},await message({environment:'live'})]) assert.equal(await deliver(bad,e),'discard');
   assert.equal(calls,0);
 });
 test('pre-activation and late dispositions are acknowledged without authorizing delivery',async()=>{
@@ -34,8 +35,8 @@ test('pre-activation and late dispositions are acknowledged without authorizing 
 test('configuration and intake failures retry, and invalid hints are discarded',async()=>{
   const m=await message();let ack=0,retry=0;
   const q=body=>({body,ack(){ack++},retry(opts){assert.equal(opts.delaySeconds,60);retry++}});
-  await subscriber.queue({messages:[q(m),q({...m,signature:'00'.repeat(32)})]},env(async()=>new Response('',{status:503})));
-  assert.equal(retry,1);assert.equal(ack,1);
+  await subscriber.queue({messages:[q(m),q({...m,signature:'00'.repeat(32)}),q({...m,extra:1})]},env(async()=>new Response('',{status:503})));
+  assert.equal(retry,2);assert.equal(ack,1);
   await assert.rejects(deliver(m,{...env(),SOURCE_EVENT_KEY:''}),/key unavailable/);
   await assert.rejects(deliver(m,env(async()=>Response.json({status:'accepted',due_at:'200'}))),/receipt/);
   await assert.rejects(deliver(m,env(async()=>new Response('x'.repeat(4097)))),/too large/);
