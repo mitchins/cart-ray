@@ -78,6 +78,7 @@ def main():
             "REVIEWS_STAFF_AUDIENCE": AUDIENCE,
             "REVIEWS_STAFF_POLICY": json.dumps({"staff-1": ["reviews:moderate"], "operator": ["reviews:operations"]}),
             "REVIEWS_STAFF_TEST_JWKS": json.dumps(jwks),
+            "REVIEWS_STAFF_CRYPTO": "webcrypto",
         }
         process = start("wrangler.test.toml", directory, "collect", None, options)
         try:
@@ -85,6 +86,8 @@ def main():
             claims = {"iss": ISSUER, "aud": [AUDIENCE], "sub": "staff-1", "iat": now - 1, "exp": now + 120}
             assertion = token(claims)
             operations_assertion = token(claims | {"sub": "operator"})
+            forged = ".".join(operations_assertion.split(".")[:2] + assertion.split(".")[2:])
+            assert signed_call("/reviews-admin/v1/deliveries?state=uncertain", assertion=forged)[0] == 401
             assert signed_call("/reviews-admin/v1/pending", bearer=ADMIN)[0] == 401
             assert signed_call("/reviews-admin/v1/pending", assertion=token(claims | {"exp": now - 1}))[0] == 401
             assert signed_call("/reviews-admin/v1/pending", assertion=token(claims | {"aud": ["wrong"]}))[0] == 401

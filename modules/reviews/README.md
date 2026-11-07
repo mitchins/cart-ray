@@ -2,6 +2,27 @@
 
 Reviews is an optional first-party module with a separate Worker and database. Installing CartRay core does not install, bind, schedule or enable Reviews. The checked-in Worker configuration and operator tools are **local test only**: they cannot provision or publish production resources. The Worker defaults to `disabled`; `read_only` exposes only scoped GET endpoints. Collection modes work **only in the test environment** and fail closed in live. There are no checkout subscriptions or scheduled invitation tasks.
 
+Staff authentication can explicitly exercise Workerd WebCrypto RS256 verification with
+`REVIEWS_STAFF_CRYPTO=webcrypto`; verification errors deny access and never fall back
+to the Python test verifier. Optional `REVIEWS_STAFF_ADMISSION=edge` requires a
+separate `REVIEWS_STAFF_INGRESS` rate-limit binding, a secret
+`REVIEWS_STAFF_RATE_KEY` of at least 32 characters and a valid Cloudflare-supplied
+`CF-Connecting-IP`. Missing or unavailable admission fails closed before JWKS
+loading. IPv4 addresses use individual buckets; IPv4-mapped addresses share the
+corresponding IPv4 bucket, and IPv6 addresses share a /64 bucket. Cloudflare's
+rate limits are approximate and per-location, not a global
+hard bound. A caller-supplied IP is trustworthy only behind a correctly configured
+Cloudflare ingress; the test mode is not itself an authentication proxy.
+
+Optional `REVIEWS_STAFF_JWKS_CACHE_SECONDS` accepts 1–60 seconds (0 disables
+caching). Keys are cached per issuer in a bounded per-isolate cache, never served
+stale after expiry or on provider failure. The lifetime starts when a fetch begins,
+and a fetch that consumes the entire lifetime fails closed. Key removal and new key recognition may
+take up to the configured TTL; unknown key IDs do not force unlimited refreshes.
+This is a test-qualified adapter, not permission to activate live staff access.
+Production policy, edge bindings, rotation/revocation limits, actual provider
+behavior and platform deployment still require separate qualification.
+
 The optional test-only automation intake is separately disabled unless `REVIEWS_AUTOMATION_INTAKE=test` and a distinct issuer token is configured. A separately authenticated test activation endpoint captures a primary-session CartRay outbox watermark and records an immutable policy and fence in Reviews D1. The committed source snapshot is the activation boundary: all earlier outbox IDs are fenced without backfill, and later IDs can be processed, including confirmations in the same second. The authenticated endpoint accepts a CartRay outbox ID, rechecks the bound CartRay database for the confirmed paid order and immutable product mapping, and atomically records an independent Reviews acknowledgement and a due-time intent held for eligibility, recipient and consent verification. Earlier events and excessively late events are recorded without an intent. Duplicate delivery is idempotent; conflicting identities fail closed. It never acknowledges or modifies the CartRay outbox, dispatches a queue, creates a capability or sends mail. This local intake is not a production event subscription or a qualified recipient/consent adapter.
 
 For this synthetic adapter, store and environment are operator assertions about the configured CartRay database and issuer token; the source database does not attest that scope. The outbox snapshot is a single primary read, and checkout records and their outbox events commit together. The snapshot and Reviews D1 write are still cross-database operations: a crash before the Reviews commit does not enable intake, and retries capture a new boundary. Source-binding identity remains an operator assertion rather than a source attestation. Trusted source-scope attestation, an activation-boundary handshake, refund/dispute eligibility, recipient and consent verification, and independent subscriber delivery/reconciliation are unresolved requirements before production integration. The test intake acknowledges receipt into Reviews; it does not implement a CartRay outbox dispatcher or advance a subscriber cursor.
