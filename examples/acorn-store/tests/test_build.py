@@ -134,3 +134,13 @@ def test_review_invitation_choice_is_optional_and_enabled_only_for_test_checkout
     disabled = tmp_path / "disabled"
     module.build(disabled, config, checkout_api="https://example.workers.dev", preflight_lock=lock)
     assert '"reviewInvitationsEnabled": false' in (disabled / "storefront-config.js").read_text()
+
+
+def test_review_gateway_requires_explicit_test_checkout(tmp_path):
+    config = module.configuration(HERE / "store.json")
+    with pytest.raises(ValueError, match="requires explicit test checkout"):
+        module.build(tmp_path / "disabled", config, test_review_gateway=True)
+    out = tmp_path / "enabled"
+    module.build(out, config, checkout_api="https://example.workers.dev", test_review_gateway=True,
+                 preflight_lock=fixture_preflight(tmp_path))
+    assert (out / "_worker.js").read_bytes() == (HERE / "reviews_gateway.mjs").read_bytes()
