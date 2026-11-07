@@ -1,0 +1,69 @@
+# Squirrel’s Acorn Store — greenfield reference (test only)
+
+This example builds an independent CartRay storefront from its own catalogue.
+The fixture catalogue contains two paid products and one free, non-reviewable
+guide. `store.json` is the explicit mapping from stable CartRay product keys to
+canonical paths and Reviews subject IDs. The three fixture prices and assets are
+synthetic and are not Stripe objects. There is no WordPress or Effective Policy
+dependency.
+
+## Build and preview
+
+From the repository root with the locked `uv` dependencies:
+
+```sh
+uv run --locked python examples/acorn-store/build.py --output /tmp/acorn-store-preview
+uv run --locked python -m http.server 8788 --directory /tmp/acorn-store-preview
+```
+
+Open `http://127.0.0.1:8788/`. This default build has checkout and Reviews
+reads **disabled**. Product pages use the existing CartRay cart and checkout
+client; nothing is charged or sent. The output directory must be new so a build
+cannot silently leave stale assets behind.
+
+To compile the *commerce Worker* against these reviewed synthetic catalogue
+inputs, select `CARTRAY_CATALOGUE_PROFILE=acorn-test` when running the existing
+locked vendoring/synchronization workflow. This is an opt-in build input, never
+a mutation of the default catalogue. The preview price IDs are placeholders:
+they cannot be used as proof of real Stripe test checkout. Before connecting a
+test Worker, a merchant must create and independently preflight Stripe **test**
+prices for the three lookup keys. Never add secret keys or real customer data to
+this example or build output.
+
+An explicit `--test-checkout-api https://TEST-WORKER.example` builds the site
+against a separately provisioned CartRay **test-only** checkout Worker. The URL
+is operator-supplied: the build cannot attest the remote Worker's Stripe mode.
+Verify its test-environment and test-key guards and the reviewed price preflight
+before enabling it. No remote Worker, Stripe object or D1 database is created by
+this build.
+
+## Optional Reviews
+
+`--reviews` enables public read-only rendering on the two mapped product pages.
+A same-origin test gateway must route only `/reviews/v1/` to a separately
+installed Reviews Worker scoped to `acorn-store` / `test`; a missing or stale
+projection displays an unavailable state. The free guide never requests reviews.
+Review text is rendered as text, not HTML. A version mismatch clears the list;
+rated and unrated contributions stay separate and replies remain attached.
+No structured data is emitted until versioned publication and withdrawal are
+qualified for the actual storefront. Existing R5 publication, CDN invalidation,
+and production freshness guarantees are not replaced by this development view.
+
+The output includes the existing test invitation and management forms at
+`/review/`; they require the same-origin Reviews proxy and a valid purchase-bound
+test invitation. Merely opening a page creates no invitation. The separate
+staff console in `modules/reviews/console` must be served from its **own**
+authenticated staff origin/gateway. The public build does not contain the
+console and must never route `/reviews-admin/` to the public storefront.
+
+## Remaining private-beta work
+
+This example is a runnable preview and an integration contract, not the Squirrel
+test acceptance or a production deployment. Actual subject installation,
+independently authenticated staff, real Stripe test checkout, trusted purchaser
+and consent evidence, scheduled delivery, provider receipts, a reviewed public
+projection and hosted withdrawal/performance qualification remain to be wired
+and demonstrated. Do not enable real collection, live billing or outbound
+campaigns. The production configuration and cache/withdrawal policy require
+separate qualification; do not publish historical or customer data through this
+preview.

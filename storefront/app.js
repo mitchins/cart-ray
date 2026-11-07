@@ -316,8 +316,10 @@ async function boot() {
   }
 
   for (const product of catalogue.products) {
+    if (configuration.productKey && configuration.productKey !== product.product_key) continue;
     const card = document.createElement("article");
     card.className = "product";
+    card.dataset.productKey = product.product_key;
     let image;
     if (typeof product.image_url === "string") {
       image = document.createElement("img");
@@ -342,6 +344,13 @@ async function boot() {
     addButtons.push(add);
     if (image) card.append(image);
     card.append(title);
+    const productPath = configuration.productPaths?.[product.product_key];
+    if (typeof productPath === "string" && /^\/products\/[a-z0-9-]+\/$/.test(productPath)) {
+      const link = document.createElement("a");
+      link.href = productPath;
+      link.textContent = `View ${product.title}`;
+      card.append(link);
+    }
     if (description) card.append(description);
     card.append(price, add);
     productsElement.append(card);

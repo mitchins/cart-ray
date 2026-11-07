@@ -56,6 +56,14 @@ _PROFILES = {
         product_assets=ROOT / "storefront" / "assets" / "products",
         price_resolutions=ROOT / "fixtures" / "price-resolutions.json",
     ),
+    "acorn-test": CatalogueProfile(
+        name="acorn-test",
+        catalogue=ROOT / "examples/acorn-store/catalogue.csv",
+        fulfilment_expansions=ROOT / "examples/acorn-store/fulfilment-expansions.json",
+        presentation=ROOT / "examples/acorn-store/catalogue-presentation.csv",
+        product_assets=ROOT / "examples/acorn-store/assets/products",
+        price_resolutions=ROOT / "examples/acorn-store/price-resolutions.json",
+    ),
     "real-test-subset": CatalogueProfile(
         name="real-test-subset",
         catalogue=ROOT / "catalogue" / "real-test-subset" / "catalogue.csv",
