@@ -52,6 +52,12 @@ async def record_signed_consent(
         await reviews_db.batch(
             [
                 reviews_db.prepare(
+                    "INSERT INTO native_guard SELECT CASE WHEN NOT EXISTS("
+                    "SELECT 1 FROM review_invitation_consent_withdrawals WHERE store_key=? AND environment=? "
+                    "AND acquisition_id=? AND recipient_context_hash=? AND purpose='review_invitation') "
+                    "THEN 1 ELSE 0 END"
+                ).bind(store, environment, acquisition.acquisition_id, recipient),
+                reviews_db.prepare(
                     "INSERT OR IGNORE INTO review_invitation_consents VALUES (?,?,?,?,'review_invitation',?,?,NULL)"
                 ).bind(store, environment, acquisition.acquisition_id, recipient, evidence, granted),
                 reviews_db.prepare(
@@ -60,6 +66,65 @@ async def record_signed_consent(
                     "AND purpose='review_invitation' AND evidence_reference=? AND granted_at=? "
                     "AND revoked_at IS NULL) THEN 1 ELSE 0 END"
                 ).bind(store, environment, acquisition.acquisition_id, recipient, evidence, granted),
+                reviews_db.prepare("DELETE FROM native_guard"),
+            ]
+        )
+    except Exception as exc:
+        raise ValueError("consent unavailable") from exc
+
+
+async def withdraw_signed_consent(
+    reviews_db, commerce_db, *, store, environment, data, signature, secret, subject_maps, now
+):
+    """Apply independently authenticated purpose-specific suppression, never grant consent."""
+    fields = {"event_id", "recipient_context_hash", "evidence_reference", "withdrawn_at"}
+    if not isinstance(data, dict) or set(data) != fields:
+        raise ValueError("consent unavailable")
+    recipient, evidence, withdrawn = data["recipient_context_hash"], data["evidence_reference"], data["withdrawn_at"]
+    if (
+        not isinstance(secret, bytes)
+        or len(secret) < 32
+        or not isinstance(signature, str)
+        or not re.fullmatch(r"[0-9a-f]{64}", signature)
+        or not isinstance(recipient, str)
+        or not re.fullmatch(r"[0-9a-f]{64}", recipient)
+        or not isinstance(evidence, str)
+        or not re.fullmatch(r"[A-Za-z0-9_-]{1,200}", evidence)
+        or type(withdrawn) is not int
+        or type(now) is not int
+        or not 0 < withdrawn <= now
+    ):
+        raise ValueError("consent unavailable")
+    signed = json.dumps(
+        ["reviews-consent-withdrawal-v1", store, environment, data],
+        ensure_ascii=True,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode()
+    if not hmac.compare_digest(hmac.new(secret, signed, hashlib.sha256).hexdigest(), signature):
+        raise ValueError("consent unavailable")
+    acquisition = await confirmed_purchase(
+        commerce_db, store=store, environment=environment, event_id=data["event_id"], subject_maps=subject_maps
+    )
+    try:
+        await reviews_db.batch(
+            [
+                reviews_db.prepare(
+                    "INSERT OR IGNORE INTO review_invitation_consent_withdrawals "
+                    "VALUES (?,?,?,?,'review_invitation',?,?)"
+                ).bind(store, environment, acquisition.acquisition_id, recipient, evidence, withdrawn),
+                reviews_db.prepare(
+                    "INSERT INTO native_guard SELECT CASE WHEN EXISTS(SELECT 1 FROM "
+                    "review_invitation_consent_withdrawals WHERE store_key=? AND environment=? "
+                    "AND acquisition_id=? AND recipient_context_hash=? AND purpose='review_invitation' "
+                    "AND evidence_reference=? AND withdrawn_at=?) THEN 1 ELSE 0 END"
+                ).bind(store, environment, acquisition.acquisition_id, recipient, evidence, withdrawn),
+                reviews_db.prepare(
+                    "UPDATE review_invitation_consents SET revoked_at=CASE "
+                    "WHEN revoked_at IS NULL OR revoked_at>? THEN ? ELSE revoked_at END "
+                    "WHERE store_key=? AND environment=? AND acquisition_id=? AND recipient_context_hash=? "
+                    "AND purpose='review_invitation'"
+                ).bind(withdrawn, withdrawn, store, environment, acquisition.acquisition_id, recipient),
                 reviews_db.prepare("DELETE FROM native_guard"),
             ]
         )

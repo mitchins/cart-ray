@@ -138,3 +138,76 @@ def test_pre_activation_and_missing_intents_cannot_gain_evidence():
     with pytest.raises(ValueError):
         status(reviews)
     assert reviews.db.execute("SELECT count(*) FROM review_automation_recipient_bindings").fetchone()[0] == 0
+
+
+def withdraw(checkout, reviews, *, recipient=RECIPIENT, overrides=None, signature=None):
+    from cartray_reviews.invitations import withdraw_signed_consent
+
+    data = {
+        "event_id": "event_1",
+        "recipient_context_hash": recipient,
+        "evidence_reference": "synthetic-withdrawal",
+        "withdrawn_at": 110,
+    } | (overrides or {})
+    signature = signature or signed("reviews-consent-withdrawal-v1", "store", "test", data, CONSENT_SECRET)
+    return asyncio.run(
+        withdraw_signed_consent(
+            reviews,
+            checkout,
+            store="store",
+            environment="test",
+            data=data,
+            signature=signature,
+            secret=CONSENT_SECRET,
+            subject_maps={"v1": {"product_1": "policy"}},
+            now=120,
+        )
+    )
+
+
+def test_withdrawal_suppresses_existing_consent_without_changing_checkout():
+    checkout, reviews = setup()
+    run(checkout, reviews)
+    bind(reviews)
+    consent(checkout, reviews)
+    assert status(reviews)["consent_granted"] is True
+    with pytest.raises(ValueError):
+        withdraw(checkout, reviews, signature="0" * 64)
+    assert status(reviews)["consent_granted"] is True
+    withdraw(checkout, reviews)
+    withdraw(checkout, reviews)
+    assert status(reviews)["consent_granted"] is False
+    assert reviews.db.execute("SELECT revoked_at FROM review_invitation_consents").fetchone()[0] == 110
+    assert reviews.db.execute("SELECT COUNT(*) FROM review_invitation_consent_withdrawals").fetchone()[0] == 1
+    assert checkout.db.execute("SELECT delivered_at FROM outbox WHERE id=10").fetchone()[0] is None
+    with pytest.raises(ValueError):
+        consent(checkout, reviews)
+    with pytest.raises(ValueError):
+        withdraw(checkout, reviews, overrides={"evidence_reference": "conflict"})
+
+
+def test_withdrawal_before_grant_prevents_out_of_order_resurrection():
+    checkout, reviews = setup()
+    run(checkout, reviews)
+    bind(reviews)
+    withdraw(checkout, reviews)
+    with pytest.raises(ValueError):
+        consent(checkout, reviews)
+    assert reviews.db.execute("SELECT count(*) FROM review_invitation_consents").fetchone()[0] == 0
+    assert status(reviews)["consent_granted"] is False
+    with pytest.raises(Exception):
+        reviews.db.execute("DELETE FROM review_invitation_consent_withdrawals")
+    reviews.db.rollback()
+
+
+def test_withdrawal_is_bound_to_acquisition_recipient_and_time():
+    checkout, reviews = setup()
+    run(checkout, reviews)
+    bind(reviews)
+    consent(checkout, reviews)
+    for overrides in ({"event_id": "event_unknown"}, {"withdrawn_at": 121}, {"withdrawn_at": True}):
+        with pytest.raises(ValueError):
+            withdraw(checkout, reviews, overrides=overrides)
+    withdraw(checkout, reviews, recipient="b" * 64)
+    assert status(reviews)["consent_granted"] is True
+    assert reviews.db.execute("SELECT revoked_at FROM review_invitation_consents").fetchone()[0] is None
