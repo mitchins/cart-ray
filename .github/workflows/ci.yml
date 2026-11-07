@@ -125,6 +125,7 @@ jobs:
           node --test --experimental-test-coverage --test-reporter=spec --test-reporter-destination=stdout --test-reporter=lcov --test-reporter-destination=coverage/m11a.lcov tests/m11a_projection.test.mjs
           node --test --experimental-test-coverage --test-reporter=spec --test-reporter-destination=stdout --test-reporter=lcov --test-reporter-destination=coverage/reviews-dispatch.lcov modules/reviews/tests/dispatch.test.mjs
           node --test --experimental-test-coverage --test-reporter=spec --test-reporter-destination=stdout --test-reporter=lcov --test-reporter-destination=coverage/reviews-automation-queue.lcov modules/reviews/tests/automation_queue.test.mjs
+          node --test --experimental-test-coverage --test-reporter=spec --test-reporter-destination=stdout --test-reporter=lcov --test-reporter-destination=coverage/reviews-intake-source.lcov modules/reviews/tests/automation_intake_producer.test.mjs modules/reviews/tests/automation_intake_queue.test.mjs
           node --test --experimental-test-coverage --test-reporter=spec --test-reporter-destination=stdout --test-reporter=lcov --test-reporter-destination=coverage/reviews-publication.lcov modules/reviews/publication/tests/*.test.mjs
           node --test --experimental-test-coverage --test-reporter=spec --test-reporter-destination=stdout --test-reporter=lcov --test-reporter-destination=coverage/reviews-console.lcov modules/reviews/console/tests/*.test.mjs
       - name: Scan and await quality gate

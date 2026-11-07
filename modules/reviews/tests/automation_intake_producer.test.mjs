@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {webcrypto} from 'node:crypto';
-import {attest, attestPurchase, relay} from '../automation-intake-producer/worker.mjs';
+import producer, {attest, attestPurchase, relay} from '../automation-intake-producer/worker.mjs';
 import {deliver} from '../automation-intake-queue/worker.mjs';
 if (!globalThis.crypto) globalThis.crypto=webcrypto;
 const v1='11111111-1111-4111-8111-111111111111',v2='22222222-2222-4222-8222-222222222222',v3='33333333-3333-4333-8333-333333333333',dbid='44444444-4444-4444-8444-444444444444';
@@ -88,4 +88,18 @@ test('missing or unsafe dead-letter routing fails before any checkpoint or enque
     };
     await assert.rejects(relay(f.env,control));assert.equal(f.sent.length,0);assert.equal(f.cursor,null);
   }
+});
+
+test('private attestation route rejects unauthenticated callers and returns scoped proof',async()=>{
+  const f=fixture(),original=globalThis.fetch;globalThis.fetch=stubControl(f);
+  try {
+    const request=(path,body,token)=>new Request(`https://producer.test${path}`,{method:'POST',headers:{authorization:`Bearer ${token}`,'content-type':'application/json'},body:JSON.stringify(body)});
+    const input={authority_version:f.versions.authority.id,nonce:'a'.repeat(64)};
+    assert.equal((await producer.fetch(request('/attest-purchase',input,'wrong'),f.env)).status,404);
+    const response=await producer.fetch(request('/attest-purchase',input,f.env.PURCHASE_ATTESTATION_TOKEN),f.env);
+    assert.equal(response.status,200);const value=await response.json();assert.equal(value.proof[13],input.nonce);
+    assert.equal((await producer.fetch(request('/attest-purchase',{...input,extra:1},f.env.PURCHASE_ATTESTATION_TOKEN),f.env)).status,503);
+    assert.equal((await producer.fetch(request('/',{},'wrong'),f.env)).status,404);
+    assert.equal((await producer.fetch(request('/',{},f.env.TRIGGER_TOKEN),f.env)).status,204);
+  } finally {globalThis.fetch=original;}
 });
