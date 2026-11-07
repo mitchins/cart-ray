@@ -8,6 +8,7 @@ import argparse
 import json
 import os
 import re
+import stat
 import subprocess
 import tomllib
 import urllib.request
@@ -17,6 +18,7 @@ ACCOUNT = "33623e6d0b4793842a1832c5512aeb49"
 STRIPE_ACCOUNT = "acct_1UYzlzPheThyzcxa"
 CATALOGUE = "sha256:4a37e90f0e4a792f5b2167b9a83a22abcc5f0bb4273bc5a9052c0ca2aa2d6c6f"
 EXPECTED_ITEMS = {"ACORN-KIT": (1, 2400), "ACORN-PLANTER": (1, 1800)}
+WRANGLER = Path(__file__).resolve().parents[3] / "node_modules/.bin/wrangler"
 
 
 def require(condition, message):
@@ -27,7 +29,7 @@ def require(condition, message):
 def rows(config, query):
     env = os.environ | {"CLOUDFLARE_ACCOUNT_ID": ACCOUNT}
     result = subprocess.run(
-        ["npx", "wrangler", "d1", "execute", "DB", "--remote", "--config", str(config), "--json", "--command", query],
+        [str(WRANGLER), "d1", "execute", "DB", "--remote", "--config", str(config), "--json", "--command", query],
         capture_output=True,
         text=True,
         check=True,
@@ -45,7 +47,7 @@ def deployed_version(config, database_id):
 
     def wrangler(*args):
         result = subprocess.run(
-            ["npx", "wrangler", *args, "--config", str(config), "--json"],
+            [str(WRANGLER), *args, "--config", str(config), "--json"],
             capture_output=True,
             text=True,
             check=True,
@@ -71,6 +73,13 @@ def deployed_version(config, database_id):
     return version_id
 
 
+class NoRedirect(urllib.request.HTTPRedirectHandler):
+    """Never forward the sandbox bearer credential across redirects."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        raise ValueError("Stripe redirect rejected")
+
+
 def stripe_get(key, path):
     req = urllib.request.Request(
         "https://api.stripe.com/v1/" + path,
@@ -79,8 +88,10 @@ def stripe_get(key, path):
             "Stripe-Version": "2025-09-30.clover",
         },
     )
-    with urllib.request.urlopen(req, timeout=15) as response:
-        return json.load(response)
+    with urllib.request.build_opener(NoRedirect()).open(req, timeout=15) as response:
+        body = response.read(1024 * 1024 + 1)
+    require(len(body) <= 1024 * 1024, "Stripe response too large")
+    return json.loads(body)
 
 
 def validate(
@@ -207,6 +218,11 @@ def main():
         require(len(source) == 1, "new confirmed order missing")
         order_id = source[0]["order_id"]
         require(bool(re.fullmatch(r"cr_[a-zA-Z0-9_-]+", order_id)), "invalid order identity")
+        confirmed_count = rows(
+            args.source_config,
+            f"SELECT count(*) count FROM outbox WHERE order_id='{order_id}' AND event_type='OrderConfirmed'",
+        )
+        require(len(confirmed_count) == 1 and confirmed_count[0]["count"] == 1, "duplicate confirmed events")
         items = rows(
             args.source_config,
             "SELECT product_key,quantity,unit_amount_minor,stripe_price_id "
@@ -225,6 +241,7 @@ def main():
         intent = query(
             f"SELECT outbox_id,acquisition_id,state FROM review_automation_intents WHERE {where} AND outbox_id={new}"
         )
+    require(stat.S_IMODE(args.stripe_key_file.stat().st_mode) == 0o600, "Stripe key file must have mode 600")
     key = args.stripe_key_file.read_text().strip()
     require(key.startswith(("sk_test_", "rk_test_")), "Stripe key must be test-only")
     require(stripe_get(key, "account").get("id") == STRIPE_ACCOUNT, "Stripe account mismatch")
