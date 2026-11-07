@@ -103,7 +103,7 @@ async function serviceRequest(binding, url, options, readJson) {
 /** The authority MUST authenticate the browser and persist an explicit decision before returning evidence. */
 export async function handleConsent(request, env) {
   const path = new URL(request.url).pathname;
-  if (path !== "/review-consent/v1/context" && path !== "/review-consent/v1/grant") return response(404, {error: "unavailable"});
+  if (!["/review-consent/v1/context", "/review-consent/v1/challenge", "/review-consent/v1/verify", "/review-consent/v1/grant"].includes(path)) return response(404, {error: "unavailable"});
   if (!validOrigin(env.STOREFRONT_ORIGIN) || !idPattern.test(env.REVIEWS_STORE_KEY || "") ||
       env.REVIEWS_ENVIRONMENT !== "test" || env.REVIEW_CONSENT_ENABLED !== "test" ||
       !env.REVIEW_CONSENT_AUTHORITY?.fetch || !env.REVIEWS?.fetch ||
@@ -113,7 +113,7 @@ export async function handleConsent(request, env) {
   if (request.headers.get("Origin") !== env.STOREFRONT_ORIGIN) return response(403, {error: "unavailable"});
   if (request.method !== "POST") return response(405, {error: "unavailable"});
   if ((request.headers.get("Content-Type") || "").toLowerCase() !== "application/json") return response(400, {error: "unavailable"});
-  const context = path.endsWith("context");
+  const action = path.split('/').pop();
   try {
     const address = admissionAddress(request.headers.get("CF-Connecting-IP"));
     const limiterKey = await signature(env.REVIEWS_CONSENT_RATE_KEY,
@@ -121,16 +121,18 @@ export async function handleConsent(request, env) {
     if (!(await env.REVIEW_CONSENT_LIMITER.limit({key: limiterKey})).success) return response(429, {error: "unavailable"});
     let input;
     try { input = JSON.parse(await readSmallBody(request)); } catch { return response(400, {error: "unavailable"}); }
-    if (!input || Array.isArray(input) || (context ? Object.keys(input).length !== 0 :
-        Object.keys(input).length !== 1 || input.accept !== true)) return response(400, {error: "unavailable"});
+    if (!input || Array.isArray(input) || (action === 'grant' ? Object.keys(input).length !== 1 || input.accept !== true :
+        action === 'verify' ? Object.keys(input).length !== 1 || !/^[0-9]{6}$/.test(input.code || '') : Object.keys(input).length !== 0)) return response(400, {error: "unavailable"});
     const headers = new Headers();
     const cookie = request.headers.get("Cookie");
     if (cookie && cookie.length <= 4096) headers.set("Cookie", cookie);
     headers.set("Content-Type", "application/json");
     const data = await serviceRequest(env.REVIEW_CONSENT_AUTHORITY, "https://consent-authority.internal" + path, {
-      method: "POST", headers, body: context ? "{}" : '{"accept":true}',
+      method: "POST", headers, body: JSON.stringify(input),
     }, true);
-    if (context) return data?.available === true ? response(200, {available: true}) : response(503, {error: "unavailable"});
+    if (action === 'context') return data?.available === true ? response(200, {available: true, verified:data.verified===true}) : response(503, {error: "unavailable"});
+    if (action === 'challenge') return data?.sent === true ? response(200, {sent:true}) : response(503, {error: "unavailable"});
+    if (action === 'verify') return data?.verified === true ? response(200, {verified:true}) : response(503, {error: "unavailable"});
     if (!data || data.store !== env.REVIEWS_STORE_KEY || data.environment !== "test" ||
         data.purpose !== "review_invitation" || data.decision !== "granted" ||
         !idPattern.test(data.event_id || "") || !hashPattern.test(data.recipient_context_hash || "") ||

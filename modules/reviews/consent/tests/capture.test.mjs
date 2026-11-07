@@ -30,7 +30,7 @@ function request(path, body, headers={}) {
 test("only an explicit decision crosses the trusted authority and Reviews receives signed scoped evidence", async () => {
   const {env,calls} = setup();
   const context = await handleConsent(request("/review-consent/v1/context", {}), env);
-  assert.deepEqual(await context.json(), {available:true});
+  assert.deepEqual(await context.json(), {available:true,verified:false});
   assert.equal(calls.length, 1);
   const result = await handleConsent(request("/review-consent/v1/grant", {accept:true}), env);
   assert.deepEqual(await result.json(), {recorded:true});
