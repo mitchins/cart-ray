@@ -131,7 +131,7 @@ def main():
             status, published = signed_call("/reviews-admin/v1/published", assertion=assertion)
             assert status == 200 and len(published["published"]) == 1
             assert published["published"][0]["review_id"] == review["review_id"]
-            assert published["published"][0]["subject_name"] is None
+            assert published["published"][0]["subject_name"] == "Synthetic Acorn Kit"
             review_base = "/reviews-admin/v1/contributions/" + review["review_id"]
             status, revisions = signed_call(review_base + "/revisions", assertion=assertion)
             assert status == 200 and revisions["revisions"][0]["revision_id"] == review["revision_id"]
