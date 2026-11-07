@@ -166,7 +166,9 @@ def main() -> None:
     parser.add_argument("--config", type=Path, default=HERE / "store.json")
     parser.add_argument("--test-checkout-api", help="explicit HTTPS CartRay TEST Worker origin")
     parser.add_argument("--reviews", action="store_true", help="enable same-origin test Reviews reads")
-    parser.add_argument("--test-review-gateway", action="store_true", help="enable test-only same-origin invitation routes")
+    parser.add_argument(
+        "--test-review-gateway", action="store_true", help="enable test-only same-origin invitation routes"
+    )
     args = parser.parse_args()
     build(
         args.output,
