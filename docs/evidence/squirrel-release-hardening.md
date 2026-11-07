@@ -1,6 +1,6 @@
 # Squirrel release-hardening evidence
 
-Verdict: **HOLD** pending the final exact-head security and CI gates and the outstanding hosted qualification below. This is a test-only deployment; production collection, sending, billing and reminders are not authorised.
+Verdict: **HOLD** pending final exact-head security and CI gates. Hosted key rotation is deferred and is not a prerequisite for this test-only PR or an initial pilot without a planned rotation. This is a test-only deployment; production collection, sending, billing and reminders are not authorised.
 
 | Work package | Evidence and limitations |
 | --- | --- |
