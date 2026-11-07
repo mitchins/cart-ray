@@ -61,10 +61,10 @@ function binding(version, name, type, value) {
 }
 function serviceBinding(version, name, service) {
   const found=version?.resources?.bindings?.filter(x=>x.name===name && x.type==='service');
-  // A named environment or entrypoint can route to a different target than
-  // the default deployment whose active version was checked below.
+  // Cloudflare reports the default deployment as `production` in version
+  // metadata. Other named environments and entrypoints may route elsewhere.
   return found?.length===1 && found[0].service===service &&
-    (found[0].environment === undefined || found[0].environment === '') &&
+    (found[0].environment === undefined || found[0].environment === '' || found[0].environment === 'production') &&
     (found[0].entrypoint === undefined || found[0].entrypoint === '');
 }
 // Cloudflare has returned both `script_name` (documented) and `script`
