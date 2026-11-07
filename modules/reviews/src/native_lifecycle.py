@@ -9,7 +9,7 @@ from urllib.parse import parse_qs
 
 from cartray_reviews.acquisition import confirmed_purchase
 from cartray_reviews.automation_due import claim_due, complete_claim
-from cartray_reviews.automation_intake import intake_order
+from cartray_reviews.automation_intake import activate_intake, intake_order
 from cartray_reviews.automation_recipient import evidence_status, record_recipient
 from cartray_reviews.invitations import (
     claim_delivery,
@@ -565,6 +565,52 @@ async def handle_write(request, env, path):
             )
         except (ValueError, TypeError, AttributeError, KeyError, json.JSONDecodeError):
             return fail(409, "evaluation unavailable")
+    if path == "/reviews-internal/v1/automation-activate":
+        token = str(getattr(env, "REVIEWS_AUTOMATION_ACTIVATION_TOKEN", ""))
+        excluded = (
+            secrets
+            + tuple(
+                str(getattr(env, key, ""))
+                for key in (
+                    "REVIEWS_AUTOMATION_INGRESS_TOKEN",
+                    "REVIEWS_CONSENT_SECRET",
+                    "REVIEWS_DELIVERY_TOKEN",
+                    "REVIEWS_RECIPIENT_EVIDENCE_SECRET",
+                )
+            )
+            if acquisition_mode
+            else ()
+        )
+        if (
+            not acquisition_mode
+            or str(getattr(env, "REVIEWS_AUTOMATION_INTAKE", "disabled")) != "test"
+            or len(token) < 32
+            or token in excluded
+        ):
+            await discard_body(request)
+            return fail(503, "activation unavailable")
+        if not hmac.compare_digest(
+            str(request.headers.get("Authorization") or "").encode(), ("Bearer " + token).encode()
+        ):
+            await discard_body(request)
+            return fail(401, "unauthorized")
+        try:
+            data = await read_json(request)
+            if set(data) != {"policy_version", "delay_seconds", "max_lateness"}:
+                return fail(400, "invalid activation")
+            result = await activate_intake(
+                env.REVIEWS_DB,
+                env.CARTRAY_DB,
+                store=store,
+                environment=environment,
+                policy_version=data["policy_version"],
+                delay_seconds=data["delay_seconds"],
+                max_lateness=data["max_lateness"],
+                now=int(time.time()),
+            )
+            return Response.json(result, headers={"Cache-Control": "no-store"})
+        except (ValueError, TypeError, AttributeError, KeyError, json.JSONDecodeError):
+            return fail(409, "activation unavailable")
     if path == "/reviews-internal/v1/automation-intake":
         token = str(getattr(env, "REVIEWS_AUTOMATION_INGRESS_TOKEN", ""))
         supplied = str(request.headers.get("Authorization") or "")

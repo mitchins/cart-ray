@@ -34,7 +34,8 @@
     "migrations/0022_automation_recipient_evidence.sql",
     "migrations/0023_staff_reply_lifecycle.sql",
     "migrations/0024_staff_delivery_queue.sql",
-    "migrations/0025_automation_due_claims.sql"
+    "migrations/0025_automation_due_claims.sql",
+    "migrations/0026_automation_activation_fence.sql"
   ],
   "routes": [
     "GET /reviews/v1/subject-lookup?alias={alias}",
@@ -61,6 +62,7 @@
     "POST /reviews/v1/invitation-recovery (verified_acquisition_only, test only)",
     "POST /reviews/v1/manage/{review_id}/{read|edit|withdraw} (verified_acquisition_only, test only)",
     "POST /reviews/v1/contributions (verified_acquisition_only, test only)",
+    "POST /reviews-internal/v1/automation-activate (verified_acquisition_only, test only, disabled by default)",
     "POST /reviews-internal/v1/automation-intake (verified_acquisition_only, test only, disabled by default)",
     "POST /reviews-internal/v1/automation-recipient-evidence (verified_acquisition_only, test only, disabled by default)",
     "POST /reviews-internal/v1/automation-evidence-status (verified_acquisition_only, test only, disabled by default)",
