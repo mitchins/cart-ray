@@ -279,5 +279,4 @@ def test_macos_listener_ownership_fails_closed_for_foreign_and_malformed_pids(mo
     output[0] = header + row.replace("worker:42", "worker:?")
     assert not gateway.owns_listener(process)
     output[0] = row
-    with pytest.raises(RuntimeError):
-        gateway.owns_listener(process)
+    assert not gateway.owns_listener(process)

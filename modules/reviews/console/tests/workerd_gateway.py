@@ -84,7 +84,7 @@ def owns_listener(process):
         if sys.platform == "darwin":
             result = subprocess.run(["netstat", "-anv", "-p", "tcp"], capture_output=True, text=True, timeout=5)
             if result.returncode != 0 or "process:pid" not in result.stdout:
-                raise RuntimeError("cannot identify local Worker listener")
+                return False
             pids = []
             for line in result.stdout.splitlines():
                 fields = line.split()
