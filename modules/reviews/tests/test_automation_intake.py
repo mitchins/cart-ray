@@ -35,6 +35,10 @@ class Database:
     def prepare(self, sql):
         return Statement(self.db, sql)
 
+    def withSession(self, consistency):
+        assert consistency == "first-primary"
+        return self
+
     async def batch(self, statements):
         try:
             self.db.execute("BEGIN")
@@ -165,3 +169,71 @@ def test_forged_outbox_payload_is_not_acknowledged():
     with pytest.raises(ValueError, match="confirmation conflict"):
         run(checkout, reviews)
     assert reviews.db.execute("SELECT count(*) FROM review_automation_intake").fetchone()[0] == 0
+
+
+def test_activation_snapshots_committed_outbox_and_never_reenrolls():
+    from cartray_reviews.automation_intake import activate_intake
+
+    checkout, _ = setup(confirmed=100)
+    reviews = Database(MODULE / "migrations")
+
+    def activate(**changes):
+        options = (
+            dict(
+                store="store",
+                environment="test",
+                policy_version="policy-v1",
+                delay_seconds=10,
+                max_lateness=100,
+                now=100,
+            )
+            | changes
+        )
+        return asyncio.run(activate_intake(reviews, checkout, **options))
+
+    first = activate()
+    assert first == {"status": "active", "activation_epoch": 100, "outbox_watermark": 10}
+    assert activate(now=500) == first
+    with pytest.raises(ValueError, match="activation conflict"):
+        activate(delay_seconds=11)
+    assert run(checkout, reviews, now=100)["status"] == "pre_activation"
+    assert reviews.db.execute("SELECT count(*) FROM review_automation_intents").fetchone()[0] == 0
+    assert checkout.db.execute("SELECT delivered_at FROM outbox WHERE id=10").fetchone()[0] is None
+
+    # A genuinely later outbox commit in the same second is not lost to a
+    # manufactured timestamp comparison; the monotonic source ID fences it.
+    c = checkout.db
+    c.execute("INSERT INTO orders VALUES ('order_2','request_2','fingerprint','v1','digest','aud',100,1)")
+    c.execute("INSERT INTO order_items VALUES ('order_2','product_1',1,'price_1',100,'[]')")
+    c.execute(
+        "INSERT INTO stripe_events (stripe_event_id,event_type,session_id,payload_json,received_at,"
+        "processed_at,payload_sha256,processing_state) VALUES ('event_2','checkout.session.completed',"
+        "'session_2','{}',1,1,'digest','confirmed')"
+    )
+    c.execute(
+        "INSERT INTO checkout_sessions (order_id,state,external_session_id,projection_nonce,updated_at,"
+        "settlement_state,settlement_session_id,settlement_event_id,settled_at,stripe_payment_status,"
+        "stripe_amount_total_minor) VALUES ('order_2','redirect_issued','session_2','nonce',1,'confirmed',"
+        "'session_2','event_2',100,'paid',100)"
+    )
+    payload = json.dumps({"order_id": "order_2", "session_id": "session_2", "items_digest": "digest"})
+    c.execute(
+        "INSERT INTO outbox(id,order_id,event_type,payload_json,created_at) "
+        "VALUES (11,'order_2','OrderConfirmed',?,100)",
+        (payload,),
+    )
+    c.commit()
+    assert run(checkout, reviews, now=100, outbox_id=11) == {"status": "accepted", "due_at": 110}
+    assert reviews.db.execute("SELECT count(*) FROM review_automation_intents").fetchone()[0] == 1
+
+
+def test_activation_rejects_invalid_configuration_and_cannot_replace_legacy_fence():
+    from cartray_reviews.automation_intake import activate_intake
+
+    checkout, reviews = setup()
+    options = dict(store="store", environment="test", policy_version="v1", delay_seconds=0, max_lateness=10, now=100)
+    with pytest.raises(ValueError, match="activation conflict"):
+        asyncio.run(activate_intake(reviews, checkout, **options))
+    for overrides in ({"environment": "live"}, {"delay_seconds": True}, {"max_lateness": -1}, {"store": "!"}):
+        with pytest.raises(ValueError, match="invalid activation"):
+            asyncio.run(activate_intake(reviews, checkout, **(options | overrides)))

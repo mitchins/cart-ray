@@ -1,0 +1,4 @@
+product_key,title,stripe_lookup_key,fulfilment_type,fulfilment_version,max_quantity,active
+ACORN-KIT,Acorn Growing Kit,cr_test_acorn_kit,download,acorn-kit-v1,1,true
+ACORN-PLANTER,Woodland Planter,cr_test_acorn_planter,download,acorn-planter-v1,1,true
+ACORN-GUIDE,Acorn Growing Guide,cr_test_acorn_guide,download,acorn-guide-v1,1,true
