@@ -112,15 +112,16 @@ export async function authority(request, env) {
     if (!context || !sessionId.test(context.checkout_session_id)) return unavailable();
     const purchase = await evidence(env,context.checkout_session_id,contextHash);
     if (!env.PURCHASE_EMAIL_TRANSPORT?.fetch || typeof env.PURCHASE_CODE_KEY !== 'string' || env.PURCHASE_CODE_KEY.length < 32) return unavailable();
-    const challenge=await env.CONTEXT_DB.prepare('SELECT event_id,recipient_context_hash,binding_version,delivery_state,verified_at,expires_at FROM purchaser_email_challenges WHERE token_hash=?').bind(contextHash).first();
-    const matches=challenge && challenge.event_id===purchase.event_id && challenge.recipient_context_hash===purchase.recipient_context_hash && challenge.binding_version===purchase.binding_version;
+    const challenge=await env.CONTEXT_DB.prepare('SELECT event_id,acquisition_id,source_provenance,recipient_context_hash,binding_version,delivery_state,verified_at,expires_at FROM purchaser_email_challenges WHERE token_hash=?').bind(contextHash).first();
+    const matches=challenge && challenge.event_id===purchase.event_id && challenge.acquisition_id===purchase.acquisition_id &&
+      challenge.source_provenance===purchase.source_provenance && challenge.recipient_context_hash===purchase.recipient_context_hash && challenge.binding_version===purchase.binding_version;
     if (action==='context') return Response.json({available:true,verified:!!(matches && challenge.verified_at && challenge.expires_at>now)},{headers:{'Cache-Control':'no-store'}});
     if (action==='challenge') {
       if (!safeId.test(purchase.recipient_reference || '')) return unavailable();
       if (challenge) return matches && challenge.delivery_state==='sent' && challenge.expires_at>now ? Response.json({sent:true}) : unavailable();
       const code=generateCode(), codeHash=await codeDigest(env.PURCHASE_CODE_KEY,contextHash,code);
-      const claimed=await env.CONTEXT_DB.prepare("INSERT INTO purchaser_email_challenges(token_hash,event_id,recipient_context_hash,binding_version,code_digest,expires_at,delivery_state) VALUES(?,?,?,?,?,?,'claimed') ON CONFLICT(token_hash) DO NOTHING RETURNING token_hash")
-        .bind(contextHash,purchase.event_id,purchase.recipient_context_hash,purchase.binding_version,codeHash,now+600).first();
+      const claimed=await env.CONTEXT_DB.prepare("INSERT INTO purchaser_email_challenges(token_hash,event_id,acquisition_id,source_provenance,recipient_context_hash,binding_version,code_digest,expires_at,delivery_state) VALUES(?,?,?,?,?,?,?,?,'claimed') ON CONFLICT(token_hash) DO NOTHING RETURNING token_hash")
+        .bind(contextHash,purchase.event_id,purchase.acquisition_id,purchase.source_provenance,purchase.recipient_context_hash,purchase.binding_version,codeHash,now+600).first();
       if (!claimed) return unavailable();
       try {
         const signal=AbortSignal.timeout(2000);

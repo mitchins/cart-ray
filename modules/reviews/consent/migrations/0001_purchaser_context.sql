@@ -9,6 +9,8 @@ CREATE INDEX purchaser_context_expiry ON purchaser_contexts(expires_at);
 CREATE TABLE purchaser_email_challenges (
   token_hash TEXT PRIMARY KEY REFERENCES purchaser_contexts(token_hash),
   event_id TEXT NOT NULL,
+  acquisition_id TEXT NOT NULL,
+  source_provenance TEXT NOT NULL,
   recipient_context_hash TEXT NOT NULL,
   binding_version INTEGER NOT NULL,
   code_digest TEXT NOT NULL,

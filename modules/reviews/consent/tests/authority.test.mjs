@@ -79,3 +79,14 @@ test('verification limits attempts, binds recipient, and never blindly resends a
  assert.equal((await consent(two.env,c,'verify',JSON.stringify({code:real}))).status,503);
  assert.equal((await consent(two.env,c,'grant','{"accept":true}')).status,503);
 });
+test('verified challenge cannot transfer across acquisition or issuer provenance',async()=>{
+ const {env,setPurchase,getCode}=setup(); const c=(await checkout(env)).headers.get('set-cookie');
+ assert.equal((await consent(env,c,'challenge','{}')).status,200);
+ const code=getCode();
+ const original={store:'acorn-store',environment:'test',session_id:SESSION,confirmed:true,source_attested:true,recipient_reference:'recipient_ref_1',event_id:'evt_test_1',acquisition_id:'acq_test_1',source_provenance:'issuer_v1',recipient_context_hash:'a'.repeat(64),binding_version:1};
+ setPurchase({...original,source_provenance:'issuer_v2'});
+ assert.equal((await consent(env,c,'verify',JSON.stringify({code}))).status,503);
+ setPurchase(original); assert.equal((await consent(env,c,'verify',JSON.stringify({code}))).status,200);
+ setPurchase({...original,acquisition_id:'acq_test_2'});
+ assert.equal((await consent(env,c,'grant','{"accept":true}')).status,503);
+});
