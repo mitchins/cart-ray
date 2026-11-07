@@ -177,11 +177,11 @@ export async function purchaseEvidence(request,env,fetcher=fetch) {
       return Response.json({status:'recorded'},{headers:{'Cache-Control':'no-store'}});
     }
     if(path==='/confirmed') {
-      if(Object.keys(input).sort().join(',')!=='context_hash,session_id') return unavailable();
+      if(Object.keys(input).length!==2 || !Object.hasOwn(input,'context_hash') || !Object.hasOwn(input,'session_id')) return unavailable();
       const {email,...safe}=await resolve(input.session_id,input.context_hash,env,fetcher);
       return Response.json(safe,{headers:{'Cache-Control':'no-store'}});
     }
-    if(Object.keys(input).sort().join(',')!=='context_hash,recipient_reference' || !hash.test(input.context_hash || '') ||
+    if(Object.keys(input).length!==2 || !Object.hasOwn(input,'context_hash') || !Object.hasOwn(input,'recipient_reference') || !hash.test(input.context_hash || '') ||
        !equal(request.headers.get('Authorization')||'', 'Bearer '+env.RECIPIENT_RESOLVE_TOKEN)) return unavailable();
     const context=await env.CONTEXT_DB.prepare('SELECT checkout_session_id FROM purchaser_contexts WHERE token_hash=? AND expires_at>?')
       .bind(input.context_hash,Math.floor(Date.now()/1000)).first();
