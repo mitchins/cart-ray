@@ -234,3 +234,82 @@ def test_clean_build_checks_source_and_no_bundle_output(tmp_path, monkeypatch):
     state["tamper_redeploy"] = True
     with pytest.raises(RuntimeError, match="changed during no-bundle"):
         invoke(tmp_path / "bad-redeploy")
+
+
+def test_locked_wheel_integrity_and_vendor_parity(tmp_path, monkeypatch):
+    import io
+    import zipfile
+
+    vendor = tmp_path / "python_modules"
+    bundle = tmp_path / "bundle/python_modules"
+    vendor.mkdir(parents=True)
+    bundle.mkdir(parents=True)
+    for base in (vendor, bundle):
+        (base / ".synced").write_text("")
+        (base / "pyvenv.cfg").write_text("")
+    wheels = {}
+    lock = {"package": []}
+    pylock = []
+    for name in build.PACKAGES:
+        package = name.replace("-", "_")
+        dist = package + "-1.0.dist-info"
+        contents = {
+            package + "/__init__.py": b"# package\n",
+            dist + "/METADATA": b"Metadata-Version: 2.1\nVersion: 1.0\n",
+            dist + "/RECORD": b"original wheel metadata\n",
+        }
+        blob = io.BytesIO()
+        with zipfile.ZipFile(blob, "w") as wheel:
+            for path, data in contents.items():
+                wheel.writestr(path, data)
+        raw = blob.getvalue()
+        digest = hashlib.sha256(raw).hexdigest()
+        url = "https://example.test/" + name
+        wheels[url] = raw
+        lock["package"].append({"name": name, "version": "1.0", "wheels": [{"url": url, "hash": "sha256:" + digest}]})
+        pylock.append(
+            f'[[packages]]\nname = "{name}"\nversion = "1.0"\nwheels = [{{hashes = {{sha256 = "{digest}"}}}}]\n'
+        )
+        for base in (vendor, bundle):
+            for path, data in contents.items():
+                file = base / path
+                file.parent.mkdir(parents=True, exist_ok=True)
+                file.write_bytes(data if not path.endswith("RECORD") else b"host-specific")
+            for filename in ("INSTALLER", "REQUESTED"):
+                (base / dist / filename).write_text("")
+    (tmp_path / "pylock.toml").write_text("\n".join(pylock))
+    monkeypatch.setattr(build.urllib.request, "urlopen", lambda url, timeout: io.BytesIO(wheels[url]))
+    assert build.verify_vendor(tmp_path, lock) == {name: "1.0" for name in build.PACKAGES}
+    assert (vendor / "kinglet-1.0.dist-info/RECORD").read_bytes() == b"original wheel metadata\n"
+    assert (bundle / "kinglet-1.0.dist-info/RECORD").read_bytes() == b"original wheel metadata\n"
+    source = vendor / "kinglet/__init__.py"
+    source.write_text("tampered")
+    with pytest.raises(RuntimeError, match="vendored wheel file mismatch"):
+        build.verify_vendor(tmp_path, lock)
+    source.write_bytes(b"# package\n")
+    (bundle / "kinglet/__init__.py").write_text("tampered")
+    with pytest.raises(RuntimeError, match="bundle/vendor bytes mismatch"):
+        build.verify_vendor(tmp_path, lock)
+    (bundle / "kinglet/__init__.py").write_bytes(b"# package\n")
+    wheels[next(iter(wheels))] = b"bad wheel"
+    with pytest.raises(RuntimeError, match="locked wheel hash mismatch"):
+        build.verify_vendor(tmp_path, lock)
+
+
+def test_lock_seed_requires_wheel_hash_and_pins_versions():
+    lock = {
+        "package": [
+            {
+                "name": name,
+                "version": "1.0",
+                "wheels": [{"url": "https://example.test/wheel", "hash": "sha256:" + "a" * 64}],
+            }
+            for name in build.PACKAGES
+        ]
+    }
+    seed, project = build.lock_seed(lock)
+    assert "kinglet==1.0" in project
+    assert "a" * 64 in seed
+    lock["package"][0]["wheels"][0]["hash"] = "bad"
+    with pytest.raises(ValueError, match="invalid locked wheel hash"):
+        build.lock_seed(lock)
