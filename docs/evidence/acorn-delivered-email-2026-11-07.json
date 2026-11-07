@@ -14,6 +14,7 @@
     "https_one_click_post_status": 200,
     "https_one_click_post_context": "Replay against a recipient already suppressed by the prior human-readable unsubscribe test",
     "prior_human_unsubscribe_database_result": "One merchant-wide suppression and one acquisition withdrawal recorded",
+    "database_counts_after_one_click_replay": {"merchant_suppressions": 1, "acquisition_withdrawals": 1},
     "local_workerd_first_time_cross_purchase_suppression": "passed"
   },
   "limitations": [
