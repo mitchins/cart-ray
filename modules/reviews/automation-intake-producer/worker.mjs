@@ -9,7 +9,10 @@ async function jsonResponse(response, signal) {
   if (!response.ok || !response.body) throw new Error('evidence unavailable');
   const reader=response.body.getReader(); let size=0, text=''; const decoder=new TextDecoder();
   const cancel=()=>{void reader.cancel().catch(()=>{});};
-  if (signal) signal.addEventListener('abort',cancel,{once:true});
+  if (signal) {
+    if (signal.aborted) cancel();
+    else signal.addEventListener('abort',cancel,{once:true});
+  }
   try { for (;;) { const x=await reader.read(); if (x.done) break; size+=x.value.byteLength;
     if (size>65536) throw new Error('evidence too large'); text+=decoder.decode(x.value,{stream:true}); }
     return JSON.parse(text+decoder.decode());
@@ -24,13 +27,13 @@ async function bounded(fn) {
 async function cf(env, path, signal, fetchApi) {
   const response=await fetchApi(`https://api.cloudflare.com/client/v4/accounts/${env.CF_ACCOUNT_ID}/workers/scripts/${path}`,
     {headers:{authorization:`Bearer ${env.CF_READ_TOKEN}`},signal});
-  const data=await jsonResponse(response); if (data.success !== true) throw new Error('control plane unavailable');
+  const data=await jsonResponse(response,signal); if (data.success !== true) throw new Error('control plane unavailable');
   return data.result;
 }
 async function queueInfo(env, signal, fetchApi) {
   const response=await fetchApi(`https://api.cloudflare.com/client/v4/accounts/${env.CF_ACCOUNT_ID}/queues/${env.EVENT_QUEUE_ID}`,
     {headers:{authorization:`Bearer ${env.CF_READ_TOKEN}`},signal});
-  const data=await jsonResponse(response); if (data.success!==true) throw new Error('queue unavailable');
+  const data=await jsonResponse(response,signal); if (data.success!==true) throw new Error('queue unavailable');
   return data.result;
 }
 function dbBinding(version, binding, expected) {
@@ -77,7 +80,7 @@ export async function attest(env, fetchApi=fetch) {
       activeVersion(env,env.REVIEWS_WORKER,signal,fetchApi),
       activeVersion(env,env.CONSUMER_WORKER,signal,fetchApi), queueInfo(env,signal,fetchApi),
       env.SOURCE_API.fetch('https://source.internal/internal/reviews-source-identity',{
-        headers:{authorization:`Bearer ${env.SOURCE_IDENTITY_TOKEN}`}, signal}).then(jsonResponse),
+        headers:{authorization:`Bearer ${env.SOURCE_IDENTITY_TOKEN}`}, signal}).then(response=>jsonResponse(response,signal)),
     ]);
     if (producer.id!==env.CF_VERSION_METADATA.id || identity.version_id!==source.id ||
         identity.stripe_account!==env.STRIPE_ACCOUNT_ID || identity.catalogue_version!==env.CATALOGUE_VERSION ||
@@ -116,7 +119,7 @@ async function activate(env) {
   const result=await bounded(signal=>env.REVIEWS_API.fetch('https://reviews.internal/reviews-internal/v1/automation-activate',{
     method:'POST',headers:{authorization:`Bearer ${env.REVIEWS_ACTIVATION_TOKEN}`,'content-type':'application/json'},
     body:JSON.stringify({policy_version:env.POLICY_VERSION,delay_seconds:env.DELAY_SECONDS,max_lateness:env.MAX_LATENESS}),signal,
-  }).then(jsonResponse));
+  }).then(response=>jsonResponse(response,signal)));
   if (result?.status!=='active' || !Number.isSafeInteger(result.outbox_watermark) || result.outbox_watermark<0) throw new Error('activation unavailable');
   return result.outbox_watermark;
 }
@@ -153,7 +156,8 @@ export async function relay(env, fetchApi=fetch) {
 export async function attestPurchase(env, input, fetchApi=fetch, now=Math.floor(Date.now()/1000)) {
   if (!id.test(env.AUTHORITY_WORKER||'') || !uuid.test(env.AUTHORITY_CONTEXT_DB_ID||'') ||
       env.AUTHORITY_CONTEXT_DB_ID===env.SOURCE_DATABASE_ID || !hex.test(env.PURCHASE_ATTESTATION_KEY||'') ||
-      env.PURCHASE_ATTESTATION_KEY===env.SOURCE_EVENT_KEY || !token(env.PURCHASE_ATTESTATION_TOKEN) ||
+      [env.SOURCE_EVENT_KEY,env.CF_READ_TOKEN,env.SOURCE_IDENTITY_TOKEN,env.REVIEWS_ACTIVATION_TOKEN,
+        env.TRIGGER_TOKEN].includes(env.PURCHASE_ATTESTATION_KEY) || !token(env.PURCHASE_ATTESTATION_TOKEN) ||
       [env.CF_READ_TOKEN,env.SOURCE_IDENTITY_TOKEN,env.REVIEWS_ACTIVATION_TOKEN,env.TRIGGER_TOKEN,
         env.SOURCE_EVENT_KEY,env.PURCHASE_ATTESTATION_KEY].includes(env.PURCHASE_ATTESTATION_TOKEN) ||
       !input || Object.keys(input).sort().join()!=='authority_version,nonce' ||
