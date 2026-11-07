@@ -616,3 +616,54 @@ def test_due_evaluation_authentication_and_durable_receipts(lifecycle):
     assert reviews.db.execute("SELECT count(*) FROM invitation_generations").fetchone()[0] == 0
     env.REVIEWS_ENVIRONMENT = "live"
     assert post().status == 503
+
+
+def test_automation_activation_requires_independent_authority_and_fences_existing(lifecycle):
+    from unittest.mock import patch
+
+    from test_automation_intake import Database as IntakeDatabase
+    from test_automation_intake import setup
+
+    checkout, _ = setup()
+    reviews = IntakeDatabase(MODULE / "migrations")
+    env = types.SimpleNamespace(
+        REVIEWS_DB=reviews,
+        CARTRAY_DB=checkout,
+        REVIEWS_STORE_KEY="store",
+        REVIEWS_ENVIRONMENT="test",
+        REVIEWS_MODE="verified_acquisition_only",
+        REVIEWS_TEST_ADMIN_TOKEN="a" * 40,
+        REVIEWS_SETTLEMENT_TOKEN="s" * 40,
+        REVIEWS_INVITATION_KEY="i" * 40,
+        REVIEWS_REVIEWER_KEY="r" * 40,
+        REVIEWS_CONSENT_SECRET="c" * 40,
+        REVIEWS_DELIVERY_TOKEN="d" * 40,
+        REVIEWS_RECIPIENT_EVIDENCE_SECRET="e" * 40,
+        REVIEWS_AUTOMATION_INGRESS_TOKEN="t" * 40,
+        REVIEWS_AUTOMATION_ACTIVATION_TOKEN="v" * 40,
+    )
+    path = "/reviews-internal/v1/automation-activate"
+    policy = {"policy_version": "greenfield-v1", "delay_seconds": 20, "max_lateness": 100}
+
+    def post(data, bearer="v" * 40):
+        request = types.SimpleNamespace(
+            method="POST", headers={"Authorization": "Bearer " + bearer}, data=data, body=None
+        )
+        return asyncio.run(lifecycle.handle_write(request, env, path))
+
+    assert post(policy).status == 503  # optional module remains disabled
+    env.REVIEWS_AUTOMATION_INTAKE = "test"
+    assert post(policy, bearer=env.REVIEWS_AUTOMATION_INGRESS_TOKEN).status == 401
+    assert post(policy | {"outbox_watermark": 0}).status == 400  # caller cannot specify boundary
+    env.REVIEWS_AUTOMATION_ACTIVATION_TOKEN = env.REVIEWS_AUTOMATION_INGRESS_TOKEN
+    assert post(policy, bearer=env.REVIEWS_AUTOMATION_INGRESS_TOKEN).status == 503
+    env.REVIEWS_AUTOMATION_ACTIVATION_TOKEN = "v" * 40
+    with patch.object(lifecycle.time, "time", return_value=100):
+        first = post(policy)
+        assert first.status == 200
+        assert first.body == {"status": "active", "activation_epoch": 100, "outbox_watermark": 10}
+        assert post(policy).body == first.body
+        assert post(policy | {"delay_seconds": 21}).status == 409
+    env.REVIEWS_ENVIRONMENT = "live"
+    assert post(policy).status == 503
+    assert checkout.db.execute("SELECT delivered_at FROM outbox WHERE id=10").fetchone()[0] is None

@@ -13,6 +13,92 @@ def _rows(result):
     return [row.to_py() if hasattr(row, "to_py") else dict(row) for row in result.results]
 
 
+async def activate_intake(
+    reviews_db, checkout_db, *, store, environment, policy_version, delay_seconds, max_lateness, now
+):
+    """Fence existing outbox events without modifying or acknowledging checkout.
+
+    The committed outbox snapshot is the activation boundary. The CartRay binding
+    must be provisioned by a trusted operator; it does not attest its own scope.
+    """
+    if (
+        environment != "test"
+        or not isinstance(store, str)
+        or not _ID.fullmatch(store)
+        or not isinstance(policy_version, str)
+        or not _ID.fullmatch(policy_version)
+        or type(now) is not int
+        or now < 1
+        or type(delay_seconds) is not int
+        or not 0 <= delay_seconds <= 366 * 86400
+        or type(max_lateness) is not int
+        or not 0 <= max_lateness <= 366 * 86400
+    ):
+        raise ValueError("invalid activation")
+
+    async def existing():
+        return _rows(
+            await reviews_db.prepare(
+                "SELECT a.activation_epoch,a.outbox_watermark,a.delay_seconds,a.max_lateness,a.policy_version,"
+                "f.fence_mode FROM review_automation_activation a "
+                "LEFT JOIN review_automation_fence f ON f.store_key=a.store_key AND f.environment=a.environment "
+                "WHERE a.store_key=? AND a.environment=?"
+            )
+            .bind(store, environment)
+            .all()
+        )
+
+    def result(rows):
+        if len(rows) != 1:
+            raise ValueError("activation unavailable")
+        row = rows[0]
+        if (
+            row["fence_mode"] != "outbox_snapshot"
+            or row["policy_version"] != policy_version
+            or row["delay_seconds"] != delay_seconds
+            or row["max_lateness"] != max_lateness
+        ):
+            raise ValueError("activation conflict")
+        return {
+            "status": "active",
+            "activation_epoch": row["activation_epoch"],
+            "outbox_watermark": row["outbox_watermark"],
+        }
+
+    prior = await existing()
+    if prior:
+        return result(prior)
+    # A stale read replica could re-enrol old events, so the fence must be read
+    # from the authoritative primary session and must fail if unavailable.
+    source = _rows(
+        await checkout_db.withSession("first-primary")
+        .prepare("SELECT COALESCE(MAX(id),0) AS watermark FROM outbox")
+        .all()
+    )
+    if len(source) != 1 or type(source[0]["watermark"]) is not int or source[0]["watermark"] < 0:
+        raise ValueError("source unavailable")
+    watermark = source[0]["watermark"]
+    try:
+        await reviews_db.batch(
+            [
+                reviews_db.prepare("INSERT INTO review_automation_activation VALUES (?,?,?,?,?,?,?)").bind(
+                    store, environment, now, watermark, delay_seconds, max_lateness, policy_version
+                ),
+                reviews_db.prepare("INSERT INTO review_automation_fence VALUES (?,?,?)").bind(
+                    store, environment, "outbox_snapshot"
+                ),
+            ]
+        )
+    except Exception as exc:
+        # A simultaneous identical activation may have committed first. Never
+        # replace its watermark or silently accept different policy settings.
+        prior = await existing()
+        if not prior:
+            raise ValueError("activation unavailable") from exc
+        return result(prior)
+    return result(await existing())
+
+
 async def intake_order(reviews_db, checkout_db, *, store, environment, outbox_id, subject_maps, now):
     """Re-read authoritative settlement and acknowledge only after durable Reviews commit.
 
@@ -25,8 +111,9 @@ async def intake_order(reviews_db, checkout_db, *, store, environment, outbox_id
         raise ValueError("invalid clock")
     policies = _rows(
         await reviews_db.prepare(
-            "SELECT activation_epoch,outbox_watermark,delay_seconds,max_lateness,policy_version "
-            "FROM review_automation_activation WHERE store_key=? AND environment=?"
+            "SELECT a.activation_epoch,a.outbox_watermark,a.delay_seconds,a.max_lateness,a.policy_version,"
+            "f.fence_mode FROM review_automation_activation a LEFT JOIN review_automation_fence f "
+            "ON f.store_key=a.store_key AND f.environment=a.environment WHERE a.store_key=? AND a.environment=?"
         )
         .bind(store, environment)
         .all()
@@ -89,7 +176,9 @@ async def intake_order(reviews_db, checkout_db, *, store, environment, outbox_id
     due = confirmed + policy["delay_seconds"]
     if due > 253402300799:
         raise ValueError("invalid due time")
-    if confirmed <= policy["activation_epoch"] or outbox_id <= policy["outbox_watermark"]:
+    if outbox_id <= policy["outbox_watermark"] or (
+        policy["fence_mode"] != "outbox_snapshot" and confirmed <= policy["activation_epoch"]
+    ):
         disposition = "pre_activation"
     elif now > due + policy["max_lateness"]:
         disposition = "late"
