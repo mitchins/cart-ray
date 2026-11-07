@@ -44,19 +44,26 @@ export async function reviewsPage(subject, cursor = null, snapshot = null, fetch
   } finally { clearTimeout(timer); controller.abort(); }
 }
 
-function line(tag, text, parent) { const node = document.createElement(tag); node.textContent = text; parent.append(node); return node; }
-function renderContribution(item, parent) {
-  if (!item || typeof item !== 'object' || typeof item.body !== 'string' || typeof item.author !== 'string' || !Array.isArray(item.replies) || item.replies.length > 40) throw new Error('Invalid contribution');
-  const article = document.createElement('article');
-  if (typeof item.title === 'string' && item.title) line('h3', item.title, article);
-  line('p', `${item.author || 'Anonymous'}${Number.isInteger(item.rating) && item.rating >= 1 && item.rating <= 5 ? ` · ${item.rating} of 5 stars` : ''}`, article);
-  if (item.verification === 'cartray_verified_acquisition') line('p', 'Verified purchase', article);
-  line('p', item.body, article);
-  for (const reply of item.replies) {
-    if (!reply || typeof reply.author !== 'string' || typeof reply.body !== 'string') throw new Error('Invalid reply');
-    const block = document.createElement('blockquote'); line('p', reply.body, block); line('footer', reply.author || 'Store', block); article.append(block);
+function line(doc, tag, text, parent) { const node = doc.createElement(tag); node.textContent = text; parent.append(node); return node; }
+export function renderContribution(item, parent, doc, budget) {
+  // The public API caps historical contributions at 200 and returns at most
+  // one native staff reply per result. An explicit stack handles deep trees.
+  const pending = [{ item, parent, root: true }];
+  while (pending.length) {
+    const next = pending.pop(), value = next.item;
+    if (!value || typeof value !== 'object' || typeof value.body !== 'string' || typeof value.author !== 'string' || !Array.isArray(value.replies) || --budget.remaining < 0 || value.replies.length + pending.length > budget.remaining) throw new Error('Invalid contribution');
+    const node = doc.createElement(next.root ? 'article' : 'blockquote');
+    if (next.root) {
+      if (typeof value.title === 'string' && value.title) line(doc, 'h3', value.title, node);
+      line(doc, 'p', `${value.author || 'Anonymous'}${Number.isInteger(value.rating) && value.rating >= 1 && value.rating <= 5 ? ` · ${value.rating} of 5 stars` : ''}`, node);
+      if (value.verification === 'cartray_verified_acquisition') line(doc, 'p', 'Verified purchase', node);
+      line(doc, 'p', value.body, node);
+    } else {
+      line(doc, 'p', value.body, node); line(doc, 'footer', value.author || 'Store', node);
+    }
+    next.parent.append(node);
+    for (let i = value.replies.length - 1; i >= 0; i--) pending.push({ item: value.replies[i], parent: node, root: false });
   }
-  parent.append(article);
 }
 
 export function attachReviews(config, doc = document) {
@@ -73,7 +80,8 @@ export function attachReviews(config, doc = document) {
     try {
       const result = await reviewsPage(subject, cursor, snapshot);
       const fragment = doc.createDocumentFragment();
-      for (const item of result.page.contributions) renderContribution(item, fragment);
+      const budget = { remaining: 220 }; // 200 historical + 10 native reviews + their replies.
+      for (const item of result.page.contributions) renderContribution(item, fragment, doc, budget);
       list.append(fragment);
       const rating = result.summary.rating;
       status.textContent = rating.rated_count ? `${rating.average} out of 5 · ${rating.rated_count} ratings · ${result.summary.contribution_count} contributions` : `No ratings yet · ${result.summary.contribution_count} contributions`;
