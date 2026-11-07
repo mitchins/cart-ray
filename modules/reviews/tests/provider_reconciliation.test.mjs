@@ -66,3 +66,17 @@ test('discovery resolves only scoped historical recipient with its own bearer, e
  assert.equal(history,1);assert.equal(provider,1);assert.equal(db.prepare('SELECT state FROM invitation_generations').get().state,'uncertain');
  env.HISTORICAL_RECIPIENT_TOKEN=env.RECONCILIATION_TOKEN;await assert.rejects(discover(input,env,async()=>{throw Error('must not fetch')},200));
 });
+test('discovery safely handles header lists and rejects ambiguous or malformed provider headers',async()=>{
+ const {db,env,input}=setup();
+ const event=headers=>({to:'test@example.org',email_id:'smtp_123',event:'delivered',date:'1970-01-01T00:02:00Z',custom_headers:headers});
+ const lookup=headers=>async()=>Response.json({data:{events:[event(headers)],total_events:1}});
+ for(const headers of [
+  [{header:'X-Reviews-Delivery-Identity',value:delivery},{header:'x-reviews-delivery-identity',value:'c'.repeat(64)}],
+  'not-an-object',
+ ]) await assert.rejects(discover(input,env,lookup(headers),200));
+ assert.equal(db.prepare('SELECT count(*) n FROM review_provider_identity_discoveries').get().n,0);
+ const valid=[{header:'X-Other-Header',value:'irrelevant'},{header:'x-reviews-delivery-identity',value:delivery}];
+ assert.deepEqual(await discover(input,env,lookup(valid),200),{status:'matched_needs_operator',events:['delivered']});
+ assert.equal(db.prepare('SELECT count(*) n FROM review_provider_identity_discoveries').get().n,1);
+ assert.equal(db.prepare('SELECT state FROM invitation_generations').get().state,'uncertain');
+});
