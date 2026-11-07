@@ -252,7 +252,7 @@ def test_all_console_modules_are_served_by_loopback_gateway(monkeypatch):
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     try:
-        for asset in ("reply-controls.mjs", "delivery-controls.mjs"):
+        for asset in ("reply-controls.mjs", "delivery-controls.mjs", "subject-name-controls.mjs"):
             with urllib.request.urlopen(f"http://127.0.0.1:{port}/{asset}", timeout=2) as response:
                 assert response.status == 200
                 assert response.read()

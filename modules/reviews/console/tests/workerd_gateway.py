@@ -34,7 +34,7 @@ CONSOLE = Path(__file__).resolve().parent.parent
 PORT = 48974
 ORIGIN = f"http://127.0.0.1:{PORT}"
 STAFF_PATH = re.compile(
-    r"/reviews-admin/v1/(?:pending|published|deliveries|contributions/[a-f0-9]{64}/"
+    r"/reviews-admin/v1/(?:pending|published|deliveries|subject-display-names|contributions/[a-f0-9]{64}/"
     r"(?:approve|reject|withdraw|revisions|audit|reply|reply-withdraw|reply-revisions|reply-audit))"
 )
 ASSETS = {
@@ -44,6 +44,7 @@ ASSETS = {
     "/console.mjs",
     "/reply-controls.mjs",
     "/delivery-controls.mjs",
+    "/subject-name-controls.mjs",
     "/styles.css",
 }
 
@@ -333,9 +334,10 @@ class Gateway(SimpleHTTPRequestHandler):
 
 def main(arguments=None):
     arguments = sys.argv[1:] if arguments is None else arguments
-    if arguments not in ([], ["--operations"]):
-        raise SystemExit("usage: workerd_gateway.py [--operations]")
+    if len(set(arguments)) != len(arguments) or set(arguments) - {"--operations", "--subjects"}:
+        raise SystemExit("usage: workerd_gateway.py [--operations] [--subjects]")
     permissions = ["reviews:moderate"] + (["reviews:operations"] if "--operations" in arguments else [])
+    permissions += ["reviews:subjects"] if "--subjects" in arguments else []
     directory = tempfile.mkdtemp(prefix="reviews-console-workerd-")
     process = None
     gateway = None
