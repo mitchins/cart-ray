@@ -9,6 +9,17 @@ export default {async fetch(request, env) {
     if (url.pathname.startsWith('/reviews-admin/') || url.pathname.startsWith('/reviews-internal/')) return unavailable(404);
     return env.ASSETS?.fetch ? env.ASSETS.fetch(request) : unavailable(503);
   }
+  if (/^\/reviews\/v1\/subjects\/[A-Za-z0-9_-]{1,128}\/(?:summary|contributions)$/.test(url.pathname)) {
+    if (request.method !== 'GET') return unavailable(405);
+    if (env.ACORN_REVIEWS_GATEWAY !== 'test' || !env.ACORN_STOREFRONT_ORIGIN ||
+        url.origin !== env.ACORN_STOREFRONT_ORIGIN) return unavailable(403);
+    if (url.search.length > 1024 || env.ACORN_REVIEWS_READ_MODE !== 'test' || !env.REVIEWS_PUBLIC?.fetch)
+      return unavailable(503);
+    try {
+      // Public reads must never forward browser cookies, capabilities or staff credentials.
+      return await env.REVIEWS_PUBLIC.fetch(new Request(request.url, {method:'GET', headers:{Accept:'application/json'}}));
+    } catch { return unavailable(503); }
+  }
   if (url.search || !(actions.has(url.pathname) || management.test(url.pathname))) return unavailable(404);
   if (request.method !== 'POST') return unavailable(405);
   if (env.ACORN_REVIEWS_GATEWAY !== 'test' || !env.ACORN_STOREFRONT_ORIGIN ||

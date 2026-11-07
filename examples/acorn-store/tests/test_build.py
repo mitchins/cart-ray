@@ -144,3 +144,13 @@ def test_review_gateway_requires_explicit_test_checkout(tmp_path):
     module.build(out, config, checkout_api="https://example.workers.dev", test_review_gateway=True,
                  preflight_lock=fixture_preflight(tmp_path))
     assert (out / "_worker.js").read_bytes() == (HERE / "reviews_gateway.mjs").read_bytes()
+
+
+def test_public_reads_and_invitation_gateway_can_be_built_together(tmp_path):
+    config = module.configuration(HERE / "store.json")
+    out = tmp_path / "combined"
+    module.build(out, config, checkout_api="https://example.workers.dev", reviews=True,
+                 test_review_gateway=True, preflight_lock=fixture_preflight(tmp_path))
+    assert '"reviewsEnabled": true' in (out / "storefront-config.js").read_text()
+    assert (out / "_worker.js").read_bytes() == (HERE / "reviews_gateway.mjs").read_bytes()
+    assert (out / "review/index.html").exists()

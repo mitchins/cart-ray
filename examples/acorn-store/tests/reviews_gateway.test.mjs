@@ -15,3 +15,17 @@ test('test mode, exact origin, method, and private binding fail closed',async()=
  e.ACORN_REVIEWS_GATEWAY='test'; delete e.REVIEWS_API;assert.equal((await gateway.fetch(request('/reviews/v1/invitation'),e)).status,503);
 });
 test('ordinary storefront assets remain available',async()=>assert.equal(await (await gateway.fetch(new Request(origin+'/review/'),env())).text(),'asset'));
+
+test('public summaries and paginated contributions are bounded and stripped of credentials',async()=>{
+ let calls=0; const e=env(); e.ACORN_REVIEWS_READ_MODE='test'; e.REVIEWS_PUBLIC={fetch:async r=>{
+  calls++;assert.equal(r.method,'GET');assert.equal(r.headers.get('cookie'),null);assert.equal(r.headers.get('authorization'),null);
+  assert.equal(r.headers.get('accept'),'application/json'); return new Response(new URL(r.url).search,{status:200});}};
+ const headers={Cookie:'private=1',Authorization:'Bearer private'};
+ assert.equal((await gateway.fetch(new Request(origin+'/reviews/v1/subjects/acorn-growing-kit/summary',{headers}),e)).status,200);
+ const result=await gateway.fetch(new Request(origin+'/reviews/v1/subjects/acorn-growing-kit/contributions?limit=10&after=cursor&snapshot=revision',{headers}),e);
+ assert.equal(result.status,200);assert.equal(await result.text(),'?limit=10&after=cursor&snapshot=revision');assert.equal(calls,2);
+ assert.equal((await gateway.fetch(new Request(origin+'/reviews/v1/subjects/acorn-growing-kit/contributions?x='+('x'.repeat(1024))),e)).status,503);
+ assert.equal((await gateway.fetch(request('/reviews/v1/subjects/acorn-growing-kit/summary'),e)).status,405);
+ e.ACORN_REVIEWS_READ_MODE='disabled';assert.equal((await gateway.fetch(new Request(origin+'/reviews/v1/subjects/acorn-growing-kit/summary'),e)).status,503);
+ assert.equal(calls,2);
+});
