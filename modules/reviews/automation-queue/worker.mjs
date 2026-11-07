@@ -7,7 +7,8 @@ export async function evaluate(message, env) {
       typeof env.REVIEWS_AUTOMATION_TOKEN !== "string" || env.REVIEWS_AUTOMATION_TOKEN.length < 32 ||
       !env.REVIEWS_API) throw new Error("test queue unavailable");
   if (!message || typeof message !== "object" || Array.isArray(message) ||
-      Object.keys(message).sort().join(",") !== "acquisition_id,claim_token" ||
+      Object.keys(message).length !== 2 || !Object.hasOwn(message, "acquisition_id") ||
+      !Object.hasOwn(message, "claim_token") ||
       typeof message.acquisition_id !== "string" || !idPattern.test(message.acquisition_id) ||
       typeof message.claim_token !== "string" || !tokenPattern.test(message.claim_token)) return "discard";
   const controller = new AbortController();
@@ -47,9 +48,10 @@ export async function evaluate(message, env) {
 
 export default {
   async queue(batch, env) {
+    // Process sequentially to keep resource use bounded; each evaluation has a deadline.
     for (const message of batch.messages) {
       try { await evaluate(message.body, env); message.ack(); }
-      catch (_) { message.retry({delaySeconds: 60}); }
+      catch (_) { /* A failure must be retried, not acknowledged. */ message.retry({delaySeconds: 60}); }
     }
   },
 };
