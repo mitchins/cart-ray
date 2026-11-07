@@ -92,3 +92,28 @@ and demonstrated. Do not enable real collection, live billing or outbound
 campaigns. The production configuration and cache/withdrawal policy require
 separate qualification; do not publish historical or customer data through this
 preview.
+
+## Optional review-request consent bridge
+
+The `--review-consent` build flag exposes an optional review-request choice only
+when an independently authenticated consent authority reports a verified
+purchase context. It also requires the explicit test checkout build and a
+same-origin gateway for `/review-consent/v1/`. The default build never displays
+the choice. Checkout does not call this gateway and continues when it is absent.
+
+`modules/reviews/consent/capture.mjs` is the test-only bridge: it validates
+origin, request shape and rate limits, forwards the authenticated browser cookie
+only to a private service binding, and signs the returned purpose-specific
+consent evidence for the independent Reviews service binding. The browser never
+supplies an event, recipient, store or evidence identity. The authority must
+verify the purchaser against the authoritative acquisition, capture the
+explicit opt-in independently of settlement, persist a stable evidence ID and
+grant timestamp before replying, and return the same evidence on retries. It
+must not treat a checkout session ID alone as purchaser authentication. The
+bridge deliberately fails closed if any required binding is absent.
+
+**No production or reference implementation of that authority is supplied.**
+The flag alone cannot capture usable consent or verify a recipient; it must stay
+disabled until the authority, cookie/session security and trusted bindings have
+been implemented and independently qualified. This bridge does not send email,
+activate collection, or subscribe to purchase events.
