@@ -13,6 +13,42 @@ from pathlib import Path
 IDENTIFIER = re.compile(r"[A-Za-z0-9_-]{1,128}\Z")
 
 
+def open_private(path: Path) -> int:
+    """Open a private regular file once, without following its final symlink."""
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    info = os.fstat(fd)
+    if (not stat.S_ISREG(info.st_mode) or stat.S_IMODE(info.st_mode) != 0o600
+            or info.st_uid != os.geteuid() or info.st_nlink != 1):
+        os.close(fd)
+        raise ValueError("input must be an owned, singly linked, private regular file")
+    return fd
+
+
+def private_text(path: Path, limit: int) -> str:
+    with os.fdopen(open_private(path), "rb") as source:
+        data = source.read(limit + 1)
+    if len(data) > limit:
+        raise ValueError("private input too large")
+    return data.decode("utf-8")
+
+
+def create_private(path: Path, value: str) -> None:
+    # Operate relative to an already-open private directory, avoiding a
+    # check/open race and refusing a symlink as the directory or output.
+    directory = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        info = os.fstat(directory)
+        if info.st_uid != os.geteuid() or stat.S_IMODE(info.st_mode) & 0o077:
+            raise ValueError("output directory must be private and owned")
+        if path.name in ("", ".", ".."):
+            raise ValueError("invalid output name")
+        fd = os.open(path.name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600, dir_fd=directory)
+        with os.fdopen(fd, "w") as output:
+            output.write(value)
+    finally:
+        os.close(directory)
+
+
 def statement(*, key: str, store: str, installation: str, version: str) -> str:
     if len(key) < 32 or not all(IDENTIFIER.fullmatch(value) for value in (store, installation, version)):
         raise ValueError("invalid key or scope")
@@ -77,22 +113,19 @@ def main():
     parser.add_argument("--reviews-snapshot", type=Path, required=True)
     parser.add_argument("--contacts-file", type=Path, help="private JSON array from authoritative purchase source")
     args = parser.parse_args()
-    if stat.S_IMODE(args.key_file.stat().st_mode) != 0o600:
-        raise SystemExit("key file must have mode 0600")
-    if stat.S_IMODE(args.reviews_snapshot.stat().st_mode) != 0o600:
-        raise SystemExit("verified Reviews snapshot must have mode 0600")
-    if args.contacts_file and stat.S_IMODE(args.contacts_file.stat().st_mode) != 0o600:
-        raise SystemExit("contacts file must have mode 0600")
-    key = args.key_file.read_text().strip()
-    contacts = json.loads(args.contacts_file.read_text()) if args.contacts_file else None
-    with sqlite3.connect(args.reviews_snapshot.resolve().as_uri() + "?mode=ro", uri=True) as db:
-        verify_history(db=db, key=key, store=args.store, contacts=contacts)
+    key = private_text(args.key_file, 16384).strip()
+    contacts = json.loads(private_text(args.contacts_file, 2_000_000)) if args.contacts_file else None
+    snapshot = open_private(args.reviews_snapshot)
+    try:
+        # The validated descriptor pins the snapshot despite path replacement.
+        with sqlite3.connect(f"file:/dev/fd/{snapshot}?mode=ro&immutable=1", uri=True) as db:
+            verify_history(db=db, key=key, store=args.store, contacts=contacts)
+    finally:
+        os.close(snapshot)
     value = statement(
         key=key, store=args.store, installation=args.installation, version=args.version
     )
-    fd = os.open(args.output, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-    with os.fdopen(fd, "w") as output:
-        output.write(value)
+    create_private(args.output, value)
     print("Private installation statement created; key material was not written.")
 
 
