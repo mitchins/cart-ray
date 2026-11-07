@@ -10,6 +10,7 @@ import json
 import os
 import re
 import shutil
+import stat
 import subprocess
 import tarfile
 import tempfile
@@ -195,6 +196,25 @@ def _cloudflare_json(path: str, token: str) -> dict:
     return data["result"]
 
 
+def read_private_token(path: Path) -> str:
+    """Read an operator-selected credential without following a final symlink."""
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    try:
+        metadata = os.fstat(fd)
+        if not stat.S_ISREG(metadata.st_mode) or metadata.st_uid != os.geteuid() or metadata.st_mode & 0o077:
+            raise ValueError("token file must be a private regular file owned by the caller")
+        with os.fdopen(fd, "rb", closefd=False) as token_file:
+            raw = token_file.read(4097)
+        if len(raw) > 4096:
+            raise ValueError("control plane token too large")
+        token = raw.decode("utf-8").strip()
+        if not token:
+            raise ValueError("missing control plane token")
+        return token
+    finally:
+        os.close(fd)
+
+
 def attest_version(
     path: Path,
     token_file: Path,
@@ -205,11 +225,7 @@ def attest_version(
 ) -> dict:
     if not re.fullmatch(r"[a-f0-9-]{36}", expected_version):
         raise ValueError("invalid expected version")
-    if token_file.stat().st_mode & 0o077:
-        raise ValueError("token file must be private")
-    token = token_file.read_text().strip()
-    if not token:
-        raise ValueError("missing control plane token")
+    token = read_private_token(token_file)
     if not re.fullmatch(r"[a-f0-9]{40}", expected_commit):
         raise ValueError("invalid expected source commit")
     receipt = json.loads((path / "receipt.json").read_text())

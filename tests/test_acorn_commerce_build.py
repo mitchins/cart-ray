@@ -145,3 +145,92 @@ def test_attestation_rejects_receipt_identity_or_source_revision_tampering(tmp_p
         receipt_path.write_text(json.dumps({**original, field: value}))
         with pytest.raises(ValueError, match=message):
             build.attest_version(tmp_path, token, version, bundle_hash, config_hash, "a" * 40)
+
+
+def test_private_token_rejects_symlinks_broad_permissions_and_oversize(tmp_path):
+    token = tmp_path / "token"
+    token.write_text("synthetic-token")
+    token.chmod(0o600)
+    assert build.read_private_token(token) == "synthetic-token"
+    link = tmp_path / "link"
+    link.symlink_to(token)
+    with pytest.raises(OSError):
+        build.read_private_token(link)
+    token.chmod(0o644)
+    with pytest.raises(ValueError, match="private regular file"):
+        build.read_private_token(token)
+    token.chmod(0o600)
+    token.write_text("x" * 4097)
+    with pytest.raises(ValueError, match="too large"):
+        build.read_private_token(token)
+    with pytest.raises(ValueError, match="private regular file"):
+        build.read_private_token(tmp_path)
+
+
+def test_clean_build_checks_source_and_no_bundle_output(tmp_path, monkeypatch):
+    import io
+    import sys
+    import tarfile
+
+    archive = io.BytesIO()
+    files = {
+        "uv.lock": "[metadata]\n",
+        "examples/acorn-store/catalogue.csv": "catalogue",
+        "src/cartray/worker.py": "worker source",
+        "src/cartray/compiled_catalogue.py": "catalogue",
+    }
+    with tarfile.open(fileobj=archive, mode="w") as tar:
+        for name, content in files.items():
+            data = content.encode()
+            info = tarfile.TarInfo(name)
+            info.size = len(data)
+            tar.addfile(info, io.BytesIO(data))
+    lock = tmp_path / "lock.json"
+    lock.write_text("{}")
+    config = tmp_path / "config.toml"
+    config.write_text(CONFIG)
+    monkeypatch.setattr(build.subprocess, "run", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        build.subprocess,
+        "check_output",
+        lambda args, **kwargs: "a" * 40 if args[1] == "rev-parse" else archive.getvalue(),
+    )
+    monkeypatch.setattr(build, "lock_seed", lambda lock: ("seed", "manifest"))
+    monkeypatch.setattr(build, "verify_vendor", lambda project, lock: {"kinglet": "1.8.3"})
+    state = {"tamper_source": False, "tamper_redeploy": False}
+
+    def fake_run(args, project, env):
+        if "--outdir" not in args:
+            return
+        out = Path(args[args.index("--outdir") + 1])
+        out.mkdir(parents=True)
+        if "--no-bundle" in args:
+            (out / "worker.py").write_text("wrong" if state["tamper_redeploy"] else "bundled")
+        else:
+            (out / "worker.py").write_text("bundled")
+            vendor = project / "python_modules/cartray"
+            vendor.mkdir(parents=True)
+            (vendor / "worker.py").write_text("wrong" if state["tamper_source"] else "worker source")
+            (vendor / "compiled_catalogue.py").write_text("catalogue")
+
+    monkeypatch.setattr(build, "run", fake_run)
+
+    def invoke(output):
+        monkeypatch.setattr(
+            sys,
+            "argv",
+            ["build", "--preflight-lock", str(lock), "--wrangler-config", str(config), "--output", str(output)],
+        )
+        build.main()
+
+    output = tmp_path / "good"
+    invoke(output)
+    receipt = json.loads((output / "receipt.json").read_text())
+    build.verify_output(output, receipt["bundle_sha256"], receipt["deployment_config_sha256"])
+    state["tamper_source"] = True
+    with pytest.raises(RuntimeError, match="Worker source mismatch"):
+        invoke(tmp_path / "bad-source")
+    state["tamper_source"] = False
+    state["tamper_redeploy"] = True
+    with pytest.raises(RuntimeError, match="changed during no-bundle"):
+        invoke(tmp_path / "bad-redeploy")
