@@ -60,9 +60,15 @@ test("post-purchase failure offers a generic retry without exposing the consent 
 
 test("checkout return marker survives URL cleanup and retry only in the same tab and time window", () => {
   const now=10000000, storage={getItem(key){return key === "acorn-review-return" ? String(now-1000) : null;}};
-  assert.equal(isPostPurchase({pathname:"/",storage,now}),true);
-  assert.equal(isPostPurchase({pathname:"/products/item/",storage,now}),false);
-  assert.equal(isPostPurchase({pathname:"/",storage,now:now+7200000}),false);
-  assert.equal(isPostPurchase({pathname:"/",storage:{getItem(){return null;}},now}),false);
-  assert.equal(isPostPurchase({pathname:"/purchase-complete/",storage,now}),true);
+  assert.equal(isPostPurchase({pathname:"/",getStorage:()=>storage,now}),true);
+  assert.equal(isPostPurchase({pathname:"/products/item/",getStorage:()=>storage,now}),false);
+  assert.equal(isPostPurchase({pathname:"/",getStorage:()=>storage,now:now+7200000}),false);
+  assert.equal(isPostPurchase({pathname:"/",getStorage:()=>({getItem(){return null;}}),now}),false);
+  assert.equal(isPostPurchase({pathname:"/purchase-complete/",getStorage:()=>storage,now}),true);
+});
+
+test("denied browser storage does not abort consent setup or purchase-complete fallback", () => {
+ const getStorage=()=>{throw new Error("storage denied")};
+ assert.equal(isPostPurchase({pathname:"/",getStorage}),false);
+ assert.equal(isPostPurchase({pathname:"/purchase-complete/",getStorage}),true);
 });

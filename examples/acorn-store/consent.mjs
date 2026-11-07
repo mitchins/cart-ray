@@ -1,9 +1,9 @@
 /** Optional purpose-specific consent UI; the server authenticates purchase context. */
-export function isPostPurchase({pathname, storage, now = Date.now()}) {
+export function isPostPurchase({pathname, getStorage, now = Date.now()}) {
   if (pathname.replace(/\/+$/, "") === "/purchase-complete") return true;
   if (pathname !== "/") return false;
   try {
-    const raw = storage.getItem("acorn-review-return");
+    const raw = getStorage().getItem("acorn-review-return");
     if (!raw || !/^\d+$/.test(raw)) return false;
     const age = now - Number(raw);
     return Number.isSafeInteger(age) && age >= 0 && age <= 7200000;
@@ -72,5 +72,5 @@ export async function setupConsent({root, fetchImpl = fetch, postPurchase = fals
 }
 
 if (typeof document !== "undefined" && window.CARTRAY_STOREFRONT?.reviewConsentEnabled) {
-  void setupConsent({root: document.querySelector("#review-consent"), postPurchase: isPostPurchase({pathname: location.pathname, storage: window.sessionStorage})});
+  void setupConsent({root: document.querySelector("#review-consent"), postPurchase: isPostPurchase({pathname: location.pathname, getStorage: () => window.sessionStorage})});
 }
