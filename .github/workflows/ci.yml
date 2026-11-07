@@ -31,6 +31,8 @@ jobs:
         run: REVIEWS_QUALIFICATION_BUILD=1 PYTHONPATH=modules/reviews/src uv run pytest modules/reviews/tests
       - name: Test Reviews recovery queue consumer
         run: node --test modules/reviews/tests/dispatch.test.mjs
+      - name: Test Reviews synthetic due queue
+        run: node --test modules/reviews/tests/automation_queue.test.mjs
       - name: Test Reviews moderation console
         run: node --test modules/reviews/console/tests/*.test.mjs
       - name: Test Reviews console fixture safety
@@ -108,6 +110,7 @@ jobs:
           uv run python -c "import xml.etree.ElementTree as E; r=E.parse('coverage/python.xml'); assert any(c.get('filename', '').startswith('modules/reviews/src/') and float(c.get('line-rate', '0')) > 0 for c in r.iter('class')), 'Reviews coverage missing from report'"
           node --test --experimental-test-coverage --test-reporter=spec --test-reporter-destination=stdout --test-reporter=lcov --test-reporter-destination=coverage/m11a.lcov tests/m11a_projection.test.mjs
           node --test --experimental-test-coverage --test-reporter=spec --test-reporter-destination=stdout --test-reporter=lcov --test-reporter-destination=coverage/reviews-dispatch.lcov modules/reviews/tests/dispatch.test.mjs
+          node --test --experimental-test-coverage --test-reporter=spec --test-reporter-destination=stdout --test-reporter=lcov --test-reporter-destination=coverage/reviews-automation-queue.lcov modules/reviews/tests/automation_queue.test.mjs
           node --test --experimental-test-coverage --test-reporter=spec --test-reporter-destination=stdout --test-reporter=lcov --test-reporter-destination=coverage/reviews-publication.lcov modules/reviews/publication/tests/*.test.mjs
           node --test --experimental-test-coverage --test-reporter=spec --test-reporter-destination=stdout --test-reporter=lcov --test-reporter-destination=coverage/reviews-console.lcov modules/reviews/console/tests/*.test.mjs
       - name: Scan and await quality gate

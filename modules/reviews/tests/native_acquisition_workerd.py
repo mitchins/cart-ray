@@ -284,6 +284,12 @@ def main():
                 200,
                 {"status": "unavailable"},
             )
+            subprocess.run(
+                ["node", str(MODULE / "tests/automation_queue_workerd.mjs"), BASE, order_ids[0], AUTOMATION_TOKEN],
+                cwd=ROOT,
+                check=True,
+                timeout=45,
+            )
             with ThreadPoolExecutor(max_workers=8) as pool:
                 due_results = list(pool.map(lambda _: internal(due_path, due_data, AUTOMATION_TOKEN), range(8)))
             assert all(result == (200, {"status": "held"}) for result in due_results)
