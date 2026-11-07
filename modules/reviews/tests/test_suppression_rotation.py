@@ -52,6 +52,20 @@ def context(version, key):
     return ctx
 
 
+def test_wrong_bound_context_stays_frozen():
+    checkout, reviews = setup()
+    run(checkout, reviews)
+    bind_legacy(reviews)
+    wrong = context("key1", OTHER)
+    asyncio.run(freeze(reviews, **scope()))
+    asyncio.run(backfill(reviews, **scope(), old_key=OLD, new_key=NEW, contacts=[EMAIL], now=120))
+    with pytest.raises(ValueError):
+        asyncio.run(switch_context(reviews, wrong, installation="install", old_key=OLD, new_key=NEW, **scope()))
+    with pytest.raises(ValueError):
+        asyncio.run(activate(reviews, wrong, installation="install", new_key=NEW, **scope()))
+    assert reviews.db.execute("SELECT state FROM review_suppression_rotation").fetchone()[0] == "frozen"
+
+
 def test_complete_rotation_preserves_suppression_and_old_link_withdrawal():
     checkout, reviews = setup()
     run(checkout, reviews)

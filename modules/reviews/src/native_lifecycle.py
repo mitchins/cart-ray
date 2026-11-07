@@ -770,6 +770,11 @@ async def handle_write(request, env, path):
                         return fail(409, "rotation unavailable")
                 common = {"store": store, "environment": environment, "old": data["old"], "target": data["target"]}
                 action = data["action"]
+                if action in ("switch", "activate") and (
+                    not str(getattr(env, "REVIEWS_SUPPRESSION_INSTALLATION_ID", ""))
+                    or data.get("installation") != str(env.REVIEWS_SUPPRESSION_INSTALLATION_ID)
+                ):
+                    return fail(409, "rotation unavailable")
                 if action == "freeze" and set(data) == {"action", "old", "target"}:
                     await freeze(env.REVIEWS_DB, **common)
                 elif action == "backfill" and set(data) == {

@@ -67,6 +67,7 @@ def main():
             "REVIEWS_REVIEWER_KEY": "r" * 40, "REVIEWS_UNSUBSCRIBE_KEY": UNSUB,
             "REVIEWS_AUTOMATION_INTAKE": "test", "REVIEWS_AUTOMATION_INGRESS_TOKEN": "m" * 40,
             "REVIEWS_SUPPRESSION_ROTATION_MODE": "test", "REVIEWS_SUPPRESSION_ROTATION_TOKEN": TOKEN,
+            "REVIEWS_SUPPRESSION_INSTALLATION_ID": "install",
         })
         try:
             path = "/reviews-internal/v1/suppression-key-rotation"
@@ -77,6 +78,7 @@ def main():
             assert internal(path, switch, TOKEN)[0] == 409
             backfill = scope | {"action": "backfill", "old_key": OLD, "new_key": NEW, "contacts": [EMAIL]}
             assert internal(path, backfill, TOKEN)[0] == 200
+            assert internal(path, switch | {"installation": "wrong-install"}, TOKEN)[0] == 409
             assert internal(path, switch | {"new_key": "wrong-key-" + "x" * 40}, TOKEN)[0] == 409
             assert internal(path, switch, TOKEN)[0] == 200
             activation = scope | {"action": "activate", "installation": "install", "new_key": NEW}

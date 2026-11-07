@@ -150,6 +150,28 @@ be logged. The operator must independently verify the source Worker, account,
 Reviews and context database bindings, pause old producer deployments, and
 re-attest after deploying any new source version. The route cannot attest its
 own Cloudflare resource identity or ensure older, pre-fence code has stopped.
+Set `REVIEWS_SUPPRESSION_INSTALLATION_ID` to the attested installation identity;
+switch and activate reject a different request identity. This is an additional
+guard, not proof of the bound D1 resource: a clone with the same rows can pass it.
+
+Before switching, compare the actual account and D1 resource IDs and binding names
+in the deployed Reviews Worker and the deployed purchase-evidence producer using
+independent Cloudflare control-plane deployment metadata. Both context bindings
+must resolve to the same intended database, and the producer's attested store,
+environment, installation and source version must match the rotation request.
+Record these checks privately; a request field, registry contents, or operator
+label alone is insufficient. If metadata is unavailable or differs, leave the
+fence closed. Recheck the deployed bindings after updating the producer and
+before activation. This procedure is not hosted-qualified.
+
+If an incorrect binding was already switched or activated, immediately disable
+the evidence producer and dispatch, then freeze Reviews before any recovery.
+Identify the real and mistaken D1 resources using control-plane metadata; retain
+both and their key registry state. Restore the intended binding, reconcile any
+in-flight deliveries and verify alias coverage and suppression records before
+repeating the fenced transition. Do not delete either registry or assume a
+successful activation means the producer can use the new key. Escalate any
+unexplained writes or uncertain deliveries for operator reconciliation.
 
 1. Apply Reviews migration 0030 and context migration 0002, verify the installed
    old-key pin, and ensure no provider delivery is dispatching or uncertain.
