@@ -507,12 +507,18 @@ async def provider_operations(request, env, delivery_id, action, actor, data):
     else:
         return fail(404, "not found")
     try:
-        await db.batch([db.prepare(
-            "INSERT OR IGNORE INTO review_provider_operations_audit VALUES (?,?,?,?,?,?,?,?,?,?,?,?)"
-        ).bind(random_token(), store, environment, acquisition, generation, delivery_id, actor,
-               "refresh_requested" if action == "refresh" else "evidence_acknowledged",
-               event[0]["provider_email_id"] if event else None, event[0]["event_type"] if event else None,
-               event[0]["event_at"] if event else None, int(time.time()))])
+        if event:
+            statement = db.prepare(
+                "INSERT OR IGNORE INTO review_provider_operations_audit VALUES (?,?,?,?,?,?,?,?,?,?,?,?)"
+            ).bind(random_token(), store, environment, acquisition, generation, delivery_id, actor,
+                   "evidence_acknowledged", event[0]["provider_email_id"], event[0]["event_type"],
+                   event[0]["event_at"], int(time.time()))
+        else:
+            statement = db.prepare(
+                "INSERT INTO review_provider_operations_audit VALUES (?,?,?,?,?,?,?,?,NULL,NULL,NULL,?)"
+            ).bind(random_token(), store, environment, acquisition, generation, delivery_id, actor,
+                   "refresh_requested", int(time.time()))
+        await db.batch([statement])
     except Exception:
         return fail(503, "operations unavailable")
     if action == "acknowledge":
@@ -544,7 +550,7 @@ def validate_provider_outcome(outcome):
 
 async def request_provider_refresh(service, token, target, acquisition, generation, delivery_id):
     """Bound a private provider lookup and terminate it if the deadline expires."""
-    from js import AbortController
+    from js import AbortController, Request
 
     controller = AbortController.new()
     try:
@@ -553,7 +559,8 @@ async def request_provider_refresh(service, token, target, acquisition, generati
         options = to_js({"method": "POST", "headers": {"Authorization": "Bearer " + token,
                          "Content-Type": "application/json"}, "body": payload,
                          "signal": controller.signal}, dict_converter=Object.fromEntries)
-        result = await await_promise(service.fetch("https://reviews-reconciliation.internal/" + target, options), 15)
+        request = Request.new("https://reviews-reconciliation.internal/" + target, options)
+        result = await await_promise(service.fetch(request), 15)
         if int(result.status) != 200 or result.body is None:
             raise ValueError("provider evidence unavailable")
         reader = result.body.getReader()
