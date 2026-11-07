@@ -1,0 +1,13 @@
+# Squirrel release-hardening evidence
+
+Verdict: **HOLD** pending the final exact-head security and CI gates and the outstanding hosted qualification below. This is a test-only deployment; production collection, sending, billing and reminders are not authorised.
+
+| Work package | Evidence and limitations |
+| --- | --- |
+| Delivered email | [Sanitized receipt](acorn-delivered-email-2026-11-07.json): the received invitation contained both one-click headers, Gmail reported DKIM pass with both headers covered, and an HTTPS one-click POST returned 200 without a confirmation step. The hosted POST was an idempotent replay against an already-suppressed synthetic recipient; first-time suppression was exercised locally. Gmail's DKIM result is not an independent signature verification. |
+| Provider activity | [Hosted receipt](reviews-provider-hosted-qualification.md): real SMTP2GO activity correlated one provider email ID with the stored delivery identity; repeated reads recorded processed and delivered events without sending. Negative outcomes, uncertain delivery and staff/recovery paths have local integration coverage, not complete hosted fault qualification. Hosted provider Worker bytes were not independently attested. Provider acceptance is not mailbox delivery; absence from provider history is not permission to resend. |
+| Suppression | Version-pinned, fenced key rotation and cross-purchase suppression are qualified locally against Workerd and separate D1 bindings. The rotation command requires a trusted operator and a quiesced, private context snapshot. A cloned database with identical identity rows cannot be distinguished by application data alone; verify control-plane bindings independently. Hosted rotation evidence is recorded separately when available. |
+| Commerce build | [Build receipt](acorn-commerce-build-qualification.md): locked builds were reproducible; the deployed test Worker matched 101 module byte hashes, 13 non-secret bindings and six secret-binding names. This qualifies the identified build and deployment, not arbitrary later source changes. |
+| Release gates | Exact-head CI, Sonar, security findings and independent review must pass or be dispositioned before merge. At the last completed Sonar analysis new-code coverage was 79.9% against an 80% gate, and local-operator file-path findings remained open; a subsequent head adds a meaningful provider ambiguity regression. The development toolchain audit reported four high findings requiring scope and remediation assessment. |
+
+The sender and scheduler must remain disabled after all qualification. No real customer review data or production resources are needed for these checks.
