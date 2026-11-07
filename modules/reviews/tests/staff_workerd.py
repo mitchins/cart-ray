@@ -76,7 +76,9 @@ def main():
             "REVIEWS_STAFF_MODE": "cloudflare_access",
             "REVIEWS_STAFF_ISSUER": ISSUER,
             "REVIEWS_STAFF_AUDIENCE": AUDIENCE,
-            "REVIEWS_STAFF_POLICY": json.dumps({"staff-1": ["reviews:moderate"], "operator": ["reviews:operations"]}),
+            "REVIEWS_STAFF_POLICY": json.dumps(
+                {"staff-1": ["reviews:moderate"], "operator": ["reviews:operations"], "catalogue": ["reviews:subjects"]}
+            ),
             "REVIEWS_STAFF_TEST_JWKS": json.dumps(jwks),
         }
         process = start("wrangler.test.toml", directory, "collect", None, options)
@@ -85,6 +87,7 @@ def main():
             claims = {"iss": ISSUER, "aud": [AUDIENCE], "sub": "staff-1", "iat": now - 1, "exp": now + 120}
             assertion = token(claims)
             operations_assertion = token(claims | {"sub": "operator"})
+            subjects_assertion = token(claims | {"sub": "catalogue"})
             assert signed_call("/reviews-admin/v1/pending", bearer=ADMIN)[0] == 401
             assert signed_call("/reviews-admin/v1/pending", assertion=token(claims | {"exp": now - 1}))[0] == 401
             assert signed_call("/reviews-admin/v1/pending", assertion=token(claims | {"aud": ["wrong"]}))[0] == 401
@@ -96,6 +99,13 @@ def main():
             )
             assert status == 200 and deliveries["deliveries"] == []
             assert signed_call("/reviews-admin/v1/pending", assertion=operations_assertion)[0] == 401
+            naming = {"subject_id": "example-policy", "public_name": "Synthetic Acorn Kit"}
+            assert signed_call("/reviews-admin/v1/subject-display-names", naming, assertion=assertion)[0] == 401
+            assert signed_call("/reviews-admin/v1/subject-display-names", naming, assertion=subjects_assertion) == (
+                200,
+                {"status": "saved"},
+            )
+            assert signed_call("/reviews-admin/v1/pending", assertion=subjects_assertion)[0] == 401
             assert (
                 signed_call(
                     "/reviews-admin/v1/subjects",

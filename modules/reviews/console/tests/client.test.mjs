@@ -95,3 +95,15 @@ test('delivery investigation requires explicit state and paginates by delivery i
   await assert.rejects(client.deliveries('accepted'), /filter/);
   await assert.rejects(createClient(async () => response({}, 401)).deliveries('uncertain'), /permission/);
 });
+
+test('subject naming requires a valid reference and sends only the scoped name', async () => {
+  const calls = [];
+  const client = createClient(async (url, options) => { calls.push({ url, options }); return response({ status: 'saved', ignored_private: 'discard' }); });
+  assert.deepEqual(await client.setSubjectName('acorn-kit', '  Acorn Kit  '), { status: 'saved' });
+  assert.equal(calls[0].url, '/reviews-admin/v1/subject-display-names');
+  assert.equal(calls[0].options.credentials, 'same-origin');
+  assert.deepEqual(JSON.parse(calls[0].options.body), { subject_id: 'acorn-kit', public_name: 'Acorn Kit' });
+  await assert.rejects(client.setSubjectName('../bad', 'Name'), /valid product reference/);
+  await assert.rejects(client.setSubjectName('acorn-kit', '  '), /valid product reference/);
+  await assert.rejects(createClient(async () => response({}, 401)).setSubjectName('acorn-kit', 'Name'), /permission/);
+});

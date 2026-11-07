@@ -31,6 +31,19 @@
       <button id="delivery-more" type="button" hidden>Load more deliveries</button>
       <p>Resend and outcome reconciliation are not available here. Do not resend an uncertain delivery without authoritative provider evidence.</p>
     </section>
+    <section aria-labelledby="subject-name-title" class="deliveries">
+      <h2 id="subject-name-title">Customer-facing product name</h2>
+      <p>Set the name shown on purchase review invitations. Enter the existing product reference from the review list. This requires subject administration permission.</p>
+      <form id="subject-name-form" class="reply-form">
+        <label for="subject-name-id">Product reference</label>
+        <input id="subject-name-id" maxlength="128" required autocomplete="off">
+        <label for="subject-name-value">Customer-facing name</label>
+        <input id="subject-name-value" maxlength="200" required autocomplete="off">
+        <button id="subject-name-save" type="submit">Save name</button>
+      </form>
+      <p id="subject-name-status" role="status" aria-live="polite"></p>
+      <p id="subject-name-error" role="alert" tabindex="-1" hidden></p>
+    </section>
   </main>
   <script type="module" src="./console.mjs"></script>
 </body>

@@ -1,6 +1,7 @@
 import { ConsoleError, createClient } from './client.mjs';
 import { replyControls } from './reply-controls.mjs';
 import { setupDeliveries } from './delivery-controls.mjs';
+import { setupSubjectNames } from './subject-name-controls.mjs';
 const client = createClient();
 const queue = document.querySelector('#queue'), status = document.querySelector('#status'), error = document.querySelector('#error');
 const refresh = document.querySelector('#refresh'), more = document.querySelector('#more'), view = document.querySelector('#view');
@@ -133,4 +134,5 @@ refresh.addEventListener('click', () => startLoad(true));
 more.addEventListener('click', () => startLoad(false));
 view.addEventListener('change', () => startLoad(true));
 setupDeliveries({ client, document, element });
+setupSubjectNames({ client, document });
 await startLoad(true);

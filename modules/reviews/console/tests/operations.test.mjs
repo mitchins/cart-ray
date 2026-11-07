@@ -93,3 +93,31 @@ test('reply history preserves edits made while loading and save locks inputs', a
   const saving = form.children[4].click(); assert.equal(form.children[1].disabled, true); assert.equal(form.children[3].disabled, true);
   resolveSave({ reply_id: replyId, reply_revision_id: replyRevision, state: 'published' }); await saving;
 });
+
+test('subject-name setting preserves input and locks on an uncertain result', async () => {
+  const { setupSubjectNames } = await import('../subject-name-controls.mjs');
+  const ids = ['subject-name-form', 'subject-name-id', 'subject-name-value', 'subject-name-save', 'subject-name-status', 'subject-name-error'];
+  const nodes = Object.fromEntries(ids.map((key) => [key, new Element(key)]));
+  nodes['subject-name-id'].value = 'acorn-kit'; nodes['subject-name-value'].value = 'Acorn Kit';
+  let calls = 0;
+  setupSubjectNames({ client: { async setSubjectName() { calls++; throw new ConsoleError('timeout'); } }, document: { querySelector: (selector) => nodes[selector.slice(1)] } });
+  await nodes['subject-name-form'].listeners.submit({ preventDefault() {} });
+  assert.match(nodes['subject-name-error'].textContent, /outcome is uncertain/);
+  assert.equal(nodes['subject-name-value'].value, 'Acorn Kit');
+  assert.equal(nodes['subject-name-save'].disabled, true);
+  await nodes['subject-name-form'].listeners.submit({ preventDefault() {} });
+  assert.equal(calls, 1);
+});
+
+test('subject-name permission denial preserves input and permits a corrected request', async () => {
+  const { setupSubjectNames } = await import('../subject-name-controls.mjs');
+  const ids = ['subject-name-form', 'subject-name-id', 'subject-name-value', 'subject-name-save', 'subject-name-status', 'subject-name-error'];
+  const nodes = Object.fromEntries(ids.map((key) => [key, new Element(key)]));
+  nodes['subject-name-id'].value = 'acorn-kit'; nodes['subject-name-value'].value = 'Acorn Kit';
+  let allowed = false;
+  setupSubjectNames({ client: { async setSubjectName() { if (!allowed) throw new ConsoleError('Permission required.', 401); } }, document: { querySelector: (selector) => nodes[selector.slice(1)] } });
+  await nodes['subject-name-form'].listeners.submit({ preventDefault() {} });
+  assert.match(nodes['subject-name-error'].textContent, /Permission/); assert.equal(nodes['subject-name-save'].disabled, false);
+  allowed = true; await nodes['subject-name-form'].listeners.submit({ preventDefault() {} });
+  assert.match(nodes['subject-name-status'].textContent, /saved/); assert.equal(nodes['subject-name-value'].value, 'Acorn Kit');
+});

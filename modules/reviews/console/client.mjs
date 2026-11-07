@@ -1,6 +1,7 @@
 // Same-origin only: the trusted access proxy supplies the independently verified assertion.
 const ID = /^[a-f0-9]{64}$/;
 const REQUEST_KEY = /^[A-Za-z0-9_-]{1,128}$/;
+const SUBJECT = /^[A-Za-z0-9_-]{1,128}$/;
 export class ConsoleError extends Error {
   constructor(message, status = 0) { super(message); this.status = status; }
 }
@@ -94,6 +95,12 @@ export function createClient(fetcher = fetch, timeoutMs = 8000) {
       const data = await request(`/reviews-admin/v1/deliveries?state=${state}` + (after ? `&after=${after}` : ''), { credentials: 'same-origin', cache: 'no-store', headers: { Accept: 'application/json' } });
       if (!data || data.state !== state || !Array.isArray(data.deliveries) || data.deliveries.length > 50 || !(data.next_after === null || ID.test(data.next_after)) || data.deliveries.some((row) => !row || !ID.test(row.delivery_identity || '') || !ID.test(row.generation_id || '') || row.state !== state || !Number.isSafeInteger(row.prepared_at) || row.prepared_at < 0 || row.prepared_at > 253402300799) || new Set(data.deliveries.map((row) => row.delivery_identity)).size !== data.deliveries.length || (data.next_after && !data.deliveries.some((row) => row.delivery_identity === data.next_after))) throw new ConsoleError('The review service returned an invalid response.');
       return { records: data.deliveries.map(({ delivery_identity, generation_id, state: rowState, prepared_at }) => ({ delivery_identity, generation_id, state: rowState, prepared_at })), next_after: data.next_after };
+    },
+    async setSubjectName(subject, name) {
+      if (!SUBJECT.test(subject || '') || typeof name !== 'string' || !name.trim() || [...name.trim()].length > 200) throw new ConsoleError('Enter a valid product reference and a public name of up to 200 characters.', 400);
+      const data = await request('/reviews-admin/v1/subject-display-names', { method: 'POST', credentials: 'same-origin', cache: 'no-store', headers: { 'Content-Type': 'application/json', Accept: 'application/json' }, body: JSON.stringify({ subject_id: subject, public_name: name.trim() }) }, true);
+      if (!data || data.status !== 'saved') throw new ConsoleError(UNCERTAIN);
+      return { status: 'saved' };
     },
     async decide(item, action) {
       if (!item || !ID.test(item.review_id || '') || !ID.test(item.revision_id || '') || !['approve', 'reject', 'withdraw'].includes(action)) throw new ConsoleError('Invalid moderation request. Refresh the queue.');

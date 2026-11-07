@@ -14,7 +14,7 @@ class Element {
 const id = 'a'.repeat(64), revision = 'b'.repeat(64);
 const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
 test('review text is rendered as text, decisions use revisions, and a failed refresh preserves content', async () => {
-  const nodes = Object.fromEntries(['queue', 'status', 'error', 'refresh', 'more', 'view', 'queue-title', 'queue-description', 'delivery-state', 'delivery-load', 'delivery-more', 'delivery-results', 'delivery-status', 'delivery-error'].map((name) => [name, new Element(name)]));
+  const nodes = Object.fromEntries(['queue', 'status', 'error', 'refresh', 'more', 'view', 'queue-title', 'queue-description', 'delivery-state', 'delivery-load', 'delivery-more', 'delivery-results', 'delivery-status', 'delivery-error', 'subject-name-form', 'subject-name-id', 'subject-name-value', 'subject-name-save', 'subject-name-status', 'subject-name-error'].map((name) => [name, new Element(name)]));
   nodes.view.value = 'pending';
   globalThis.document = { querySelector: (s) => nodes[s.slice(1)], createElement: (name) => new Element(name) };
   let phase = 'queue', sent, resolveList;
@@ -75,7 +75,7 @@ test('review text is rendered as text, decisions use revisions, and a failed ref
   } finally { delete globalThis.document; delete globalThis.fetch; delete globalThis.lastFocused; }
 });
 test('finishing queue pagination preserves content and moves focus into the labeled queue', async () => {
-  const nodes = Object.fromEntries(['queue', 'status', 'error', 'refresh', 'more', 'view', 'queue-title', 'queue-description', 'delivery-state', 'delivery-load', 'delivery-more', 'delivery-results', 'delivery-status', 'delivery-error'].map((name) => [name, new Element(name)]));
+  const nodes = Object.fromEntries(['queue', 'status', 'error', 'refresh', 'more', 'view', 'queue-title', 'queue-description', 'delivery-state', 'delivery-load', 'delivery-more', 'delivery-results', 'delivery-status', 'delivery-error', 'subject-name-form', 'subject-name-id', 'subject-name-value', 'subject-name-save', 'subject-name-status', 'subject-name-error'].map((name) => [name, new Element(name)]));
   nodes.view.value = 'pending';
   globalThis.document = { querySelector: (s) => nodes[s.slice(1)], createElement: (name) => new Element(name) };
   globalThis.fetch = async (url) => url.includes('?after=')
