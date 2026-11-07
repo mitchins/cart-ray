@@ -33,8 +33,27 @@ def evidence():
             {"product_key": "ACORN-KIT", "quantity": 1, "unit_amount_minor": 2400, "stripe_price_id": "price_a"},
             {"product_key": "ACORN-PLANTER", "quantity": 1, "unit_amount_minor": 1800, "stripe_price_id": "price_b"},
         ],
-        activation=[{"outbox_watermark": 3}],
-        checkpoint=[{"activation_watermark": 3, "last_outbox_id": 8}],
+        activation=[{"outbox_watermark": 3, "fence_mode": "outbox_snapshot"}],
+        checkpoint=[
+            {
+                "activation_watermark": 3,
+                "last_outbox_id": 8,
+                "subscriber_id": "issuer",
+                "installation_id": "install",
+                "source_database_id": "db",
+                "stripe_account_id": module.STRIPE_ACCOUNT,
+                "catalogue_version": module.CATALOGUE,
+                "mapping_sha256": "mapping",
+            }
+        ],
+        expected_checkpoint={
+            "subscriber_id": "issuer",
+            "installation_id": "install",
+            "source_database_id": "db",
+            "stripe_account_id": module.STRIPE_ACCOUNT,
+            "catalogue_version": module.CATALOGUE,
+            "mapping_sha256": "mapping",
+        },
         old_intake=[],
         old_intent=[],
         intake=[{"outbox_id": 8, "acquisition_id": "cr_example", "disposition": "accepted"}],
@@ -84,3 +103,36 @@ def test_unsafe_observation_fails_closed(mutation):
     mutation(data)
     with pytest.raises(ValueError):
         module.validate(**data)
+
+
+@pytest.mark.parametrize(
+    "field",
+    [
+        "subscriber_id",
+        "installation_id",
+        "source_database_id",
+        "stripe_account_id",
+        "catalogue_version",
+        "mapping_sha256",
+    ],
+)
+def test_checkpoint_identity_mismatch_rejected(field):
+    data = evidence()
+    data["checkpoint"][0][field] = "wrong"
+    with pytest.raises(ValueError):
+        module.validate(**data)
+
+
+def test_wrong_fence_rejected():
+    data = evidence()
+    data["activation"][0]["fence_mode"] = "other"
+    with pytest.raises(ValueError):
+        module.validate(**data)
+
+
+def test_deployed_database_mismatch_rejected():
+    with pytest.raises(ValueError):
+        module.check_bindings(
+            [{"name": "REVIEWS_DB", "type": "d1", "database_id": "wrong"}],
+            [("REVIEWS_DB", "d1", "database_id", "correct")],
+        )

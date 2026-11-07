@@ -5,6 +5,7 @@ initiates checkout nor enables delivery and never prints Stripe's customer data.
 """
 
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -41,7 +42,7 @@ def rows(config, query):
     return data[0]["results"]
 
 
-def deployed_version(config, database_id):
+def deployed_version(config, expected_bindings):
     """Check the active deployed source version and actual D1 binding."""
     env = os.environ | {"CLOUDFLARE_ACCOUNT_ID": ACCOUNT}
 
@@ -64,13 +65,14 @@ def deployed_version(config, database_id):
     version_id = versions[0]["version_id"]
     version = wrangler("versions", "view", version_id)
     bindings = version.get("resources", {}).get("bindings", [])
-    db = [x for x in bindings if x.get("name") == "DB" and x.get("type") == "d1"]
-    mode = [x for x in bindings if x.get("name") == "CARTRAY_ENVIRONMENT" and x.get("type") == "plain_text"]
-    require(
-        len(db) == len(mode) == 1 and db[0].get("database_id") == database_id and mode[0].get("text") == "test",
-        "deployed source identity mismatch",
-    )
+    check_bindings(bindings, expected_bindings)
     return version_id
+
+
+def check_bindings(bindings, expected):
+    for name, kind, field, value in expected:
+        matching = [x for x in bindings if x.get("name") == name and x.get("type") == kind]
+        require(len(matching) == 1 and matching[0].get(field) == value, "deployed binding mismatch: " + name)
 
 
 class NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -95,7 +97,19 @@ def stripe_get(key, path):
 
 
 def validate(
-    old_id, old_source, source, items, activation, checkpoint, old_intake, old_intent, intake, intent, session, lines
+    old_id,
+    old_source,
+    source,
+    items,
+    activation,
+    checkpoint,
+    old_intake,
+    old_intent,
+    intake,
+    intent,
+    session,
+    lines,
+    expected_checkpoint,
 ):
     """Reject missing, duplicate, mismatched, unfenced or non-held observations."""
     require(
@@ -103,6 +117,8 @@ def validate(
         "missing or duplicate evidence",
     )
     order, fence, cursor, receipt, held = source[0], activation[0], checkpoint[0], intake[0], intent[0]
+    require(fence["fence_mode"] == "outbox_snapshot", "activation fence mismatch")
+    require(all(cursor.get(key) == value for key, value in expected_checkpoint.items()), "checkpoint identity mismatch")
     require(
         old_id <= fence["outbox_watermark"] == cursor["activation_watermark"] < order["outbox_id"],
         "old order is not fenced",
@@ -175,12 +191,13 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--source-config", required=True, type=Path)
     parser.add_argument("--reviews-config", required=True, type=Path)
+    parser.add_argument("--producer-config", required=True, type=Path)
     parser.add_argument("--stripe-key-file", required=True, type=Path)
     parser.add_argument("--old-outbox-id", required=True, type=int)
     parser.add_argument("--new-outbox-id", required=True, type=int)
     args = parser.parse_args()
     require(0 < args.old_outbox_id < args.new_outbox_id, "invalid outbox ids")
-    configs = [tomllib.loads(x.read_text()) for x in (args.source_config, args.reviews_config)]
+    configs = [tomllib.loads(x.read_text()) for x in (args.source_config, args.reviews_config, args.producer_config)]
     require(all(x.get("account_id") == ACCOUNT for x in configs), "wrong Cloudflare account")
 
     def db_id(config, binding):
@@ -193,7 +210,55 @@ def main():
         source_id != db_id(configs[1], "REVIEWS_DB") and source_id == db_id(configs[1], "CARTRAY_DB"),
         "database isolation mismatch",
     )
-    active_version = deployed_version(args.source_config, source_id)
+    reviews_id = db_id(configs[1], "REVIEWS_DB")
+    require(db_id(configs[2], "COMMERCE_DB") == source_id, "producer database mismatch")
+    variables = configs[2]["vars"]
+    require(
+        variables["SOURCE_DATABASE_ID"] == source_id
+        and variables["STRIPE_ACCOUNT_ID"] == STRIPE_ACCOUNT
+        and variables["CATALOGUE_VERSION"] == CATALOGUE
+        and variables["SOURCE_STORE"] == "acorn-store",
+        "producer identity mismatch",
+    )
+    expected_checkpoint = dict(
+        subscriber_id=variables["SOURCE_ISSUER"],
+        installation_id=variables["SOURCE_INSTALLATION"],
+        source_database_id=source_id,
+        stripe_account_id=STRIPE_ACCOUNT,
+        catalogue_version=CATALOGUE,
+        mapping_sha256=variables["MAPPING_SHA256"],
+    )
+    require(
+        hashlib.sha256(configs[1]["vars"]["REVIEWS_SUBJECT_MAPS"].encode()).hexdigest() == variables["MAPPING_SHA256"],
+        "mapping digest mismatch",
+    )
+    source_bindings = [("DB", "d1", "database_id", source_id), ("CARTRAY_ENVIRONMENT", "plain_text", "text", "test")]
+    reviews_bindings = [
+        ("REVIEWS_DB", "d1", "database_id", reviews_id),
+        ("CARTRAY_DB", "d1", "database_id", source_id),
+        ("REVIEWS_ENVIRONMENT", "plain_text", "text", "test"),
+        ("REVIEWS_STORE_KEY", "plain_text", "text", "acorn-store"),
+    ]
+    reviews_bindings.append(("REVIEWS_SUBJECT_MAPS", "plain_text", "text", configs[1]["vars"]["REVIEWS_SUBJECT_MAPS"]))
+    producer_bindings = [
+        ("COMMERCE_DB", "d1", "database_id", source_id),
+        ("SOURCE_API", "service", "service", configs[0]["name"]),
+        ("REVIEWS_API", "service", "service", configs[1]["name"]),
+    ]
+    producer_bindings.extend(
+        (key, "plain_text", "text", variables[key])
+        for key in (
+            "SOURCE_ISSUER",
+            "SOURCE_INSTALLATION",
+            "SOURCE_DATABASE_ID",
+            "STRIPE_ACCOUNT_ID",
+            "CATALOGUE_VERSION",
+            "MAPPING_SHA256",
+        )
+    )
+    producer_version = deployed_version(args.producer_config, producer_bindings)
+    active_version = deployed_version(args.source_config, source_bindings)
+    reviews_version = deployed_version(args.reviews_config, reviews_bindings)
     # Wrangler DB alias is only local query configuration, never a mutation.
     reviews_text = args.reviews_config.read_text().replace('binding = "REVIEWS_DB"', 'binding = "DB"', 1)
     require('binding = "DB"' in reviews_text, "reviews binding unavailable")
@@ -228,9 +293,15 @@ def main():
             "SELECT product_key,quantity,unit_amount_minor,stripe_price_id "
             f"FROM order_items WHERE order_id='{order_id}'",
         )
-        activation = query(f"SELECT outbox_watermark FROM review_automation_activation WHERE {where}")
+        activation = query(
+            "SELECT a.outbox_watermark,f.fence_mode FROM review_automation_activation a "
+            "JOIN review_automation_fence f USING(store_key,environment) "
+            "WHERE a.store_key='acorn-store' AND a.environment='test'"
+        )
         checkpoint = rows(
-            args.source_config, "SELECT activation_watermark,last_outbox_id FROM reviews_subscriber_checkpoint"
+            args.source_config,
+            "SELECT subscriber_id,installation_id,source_database_id,stripe_account_id,catalogue_version,"
+            "mapping_sha256,activation_watermark,last_outbox_id FROM reviews_subscriber_checkpoint",
         )
         old_intake = query(f"SELECT disposition FROM review_automation_intake WHERE {where} AND outbox_id={old}")
         old_intent = query(f"SELECT outbox_id FROM review_automation_intents WHERE {where} AND outbox_id={old}")
@@ -249,11 +320,41 @@ def main():
     require(bool(re.fullmatch(r"cs_test_[A-Za-z0-9]+", session_id)), "invalid test session")
     session = stripe_get(key, "checkout/sessions/" + session_id)
     lines = stripe_get(key, "checkout/sessions/" + session_id + "/line_items?limit=10")
-    require(deployed_version(args.source_config, source_id) == active_version, "source changed during qualification")
-    receipt = validate(
-        old, old_source, source, items, activation, checkpoint, old_intake, old_intent, intake, intent, session, lines
+    require(
+        deployed_version(args.source_config, source_bindings) == active_version, "source changed during qualification"
     )
-    receipt.update(source_worker=configs[0]["name"], source_version=active_version, source_database_id=source_id)
+    require(
+        deployed_version(args.reviews_config, reviews_bindings) == reviews_version,
+        "reviews changed during qualification",
+    )
+    require(
+        deployed_version(args.producer_config, producer_bindings) == producer_version,
+        "producer changed during qualification",
+    )
+    receipt = validate(
+        old,
+        old_source,
+        source,
+        items,
+        activation,
+        checkpoint,
+        old_intake,
+        old_intent,
+        intake,
+        intent,
+        session,
+        lines,
+        expected_checkpoint,
+    )
+    receipt.update(
+        source_worker=configs[0]["name"],
+        source_version=active_version,
+        source_database_id=source_id,
+        reviews_worker=configs[1]["name"],
+        reviews_version=reviews_version,
+        reviews_database_id=reviews_id,
+        producer_version=producer_version,
+    )
     print(json.dumps(receipt, sort_keys=True))
 
 
