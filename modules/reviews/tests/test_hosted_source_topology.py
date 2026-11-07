@@ -74,3 +74,26 @@ def test_generated_configs_bind_distinct_resources_and_never_embed_secrets():
 def test_invalid_topology_is_rejected(changes):
     with pytest.raises(ValueError):
         module.build(config() | changes)
+
+
+def test_subscriber_checkpoint_identity_is_immutable():
+    import sqlite3
+
+    db = sqlite3.connect(":memory:")
+    db.executescript((module.ROOT / "migrations/0005_reviews_subscriber.sql").read_text())
+    row = ("issuer", "install", "db", "acct", "catalogue", "a" * 64, 10, 10)
+    db.execute("INSERT INTO reviews_subscriber_checkpoint VALUES (?,?,?,?,?,?,?,?)", row)
+    db.execute("UPDATE reviews_subscriber_checkpoint SET last_outbox_id=11 WHERE subscriber_id=?", ("issuer",))
+    for query in (
+        "DELETE FROM reviews_subscriber_checkpoint WHERE subscriber_id='issuer'",
+        "UPDATE reviews_subscriber_checkpoint SET last_outbox_id=9 WHERE subscriber_id='issuer'",
+        "UPDATE reviews_subscriber_checkpoint SET installation_id='other' WHERE subscriber_id='issuer'",
+    ):
+        with pytest.raises(sqlite3.IntegrityError):
+            db.execute(query)
+    with pytest.raises(sqlite3.IntegrityError):
+        db.execute("INSERT OR REPLACE INTO reviews_subscriber_checkpoint VALUES (?,?,?,?,?,?,?,?)", row)
+    assert db.execute("SELECT installation_id,last_outbox_id FROM reviews_subscriber_checkpoint").fetchone() == (
+        "install",
+        11,
+    )

@@ -15,3 +15,8 @@ WHEN OLD.subscriber_id <> NEW.subscriber_id OR OLD.installation_id <> NEW.instal
   OR OLD.catalogue_version <> NEW.catalogue_version OR OLD.mapping_sha256 <> NEW.mapping_sha256
   OR OLD.activation_watermark <> NEW.activation_watermark OR NEW.last_outbox_id < OLD.last_outbox_id
 BEGIN SELECT RAISE(ABORT, 'invalid subscriber checkpoint'); END;
+CREATE TRIGGER reviews_checkpoint_immutable_delete BEFORE DELETE ON reviews_subscriber_checkpoint
+BEGIN SELECT RAISE(ABORT, 'immutable subscriber checkpoint'); END;
+CREATE TRIGGER reviews_checkpoint_immutable_replace BEFORE INSERT ON reviews_subscriber_checkpoint
+WHEN EXISTS (SELECT 1 FROM reviews_subscriber_checkpoint WHERE subscriber_id=NEW.subscriber_id)
+BEGIN SELECT RAISE(ABORT, 'immutable subscriber checkpoint'); END;

@@ -136,8 +136,8 @@ export async function relay(env, fetchApi=fetch) {
   if (!id.test(env.POLICY_VERSION||'') || !Number.isSafeInteger(env.DELAY_SECONDS) || env.DELAY_SECONDS<0 ||
       !Number.isSafeInteger(env.MAX_LATENESS) || env.MAX_LATENESS<0) throw new Error('policy unavailable');
   const watermark=await activate(env), db=env.COMMERCE_DB.withSession('first-primary');
-  await db.prepare('INSERT OR IGNORE INTO reviews_subscriber_checkpoint VALUES (?,?,?,?,?,?,?,?)')
-    .bind(env.SOURCE_ISSUER,env.SOURCE_INSTALLATION,env.SOURCE_DATABASE_ID,env.STRIPE_ACCOUNT_ID,env.CATALOGUE_VERSION,env.MAPPING_SHA256,watermark,watermark).run();
+  await db.prepare('INSERT INTO reviews_subscriber_checkpoint SELECT ?,?,?,?,?,?,?,? WHERE NOT EXISTS (SELECT 1 FROM reviews_subscriber_checkpoint WHERE subscriber_id=?)')
+    .bind(env.SOURCE_ISSUER,env.SOURCE_INSTALLATION,env.SOURCE_DATABASE_ID,env.STRIPE_ACCOUNT_ID,env.CATALOGUE_VERSION,env.MAPPING_SHA256,watermark,watermark,env.SOURCE_ISSUER).run();
   let row=await db.prepare('SELECT installation_id,source_database_id,stripe_account_id,catalogue_version,mapping_sha256,activation_watermark,last_outbox_id FROM reviews_subscriber_checkpoint WHERE subscriber_id=?')
     .bind(env.SOURCE_ISSUER).first();
   if (!row || row.installation_id!==env.SOURCE_INSTALLATION || row.source_database_id!==env.SOURCE_DATABASE_ID ||
