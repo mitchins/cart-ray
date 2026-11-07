@@ -1,0 +1,26 @@
+{
+  "scope": "Synthetic Squirrel sandbox, one previously delivered invitation",
+  "date_utc": "2026-11-07",
+  "source_revision": "c5c978e44d0aa8ab99e5ad5c437a3716bf66ffef",
+  "evidence": {
+    "received_in_approved_mailbox": true,
+    "single_non_promotional_invitation": true,
+    "merchant_and_contact_in_body": true,
+    "human_readable_unsubscribe_link": true,
+    "list_unsubscribe_https": true,
+    "list_unsubscribe_post": "List-Unsubscribe=One-Click",
+    "gmail_authentication_results": {"dkim": "pass", "spf": "pass", "dmarc": "pass"},
+    "dkim_signed_headers_include": ["list-unsubscribe", "list-unsubscribe-post"],
+    "https_one_click_post_status": 200,
+    "https_one_click_post_context": "Replay against a recipient already suppressed by the prior human-readable unsubscribe test",
+    "prior_human_unsubscribe_database_result": "One merchant-wide suppression and one acquisition withdrawal recorded",
+    "local_workerd_first_time_cross_purchase_suppression": "passed"
+  },
+  "limitations": [
+    "The hosted one-click POST was an idempotent replay, not the first operation creating suppression.",
+    "Gmail authentication results are provider-reported; no independent DKIM signature verification was performed.",
+    "SMTP2GO activity lookup was not available to the send-only test API key.",
+    "The original test invitation retains its 60-day expiry; later test invitations are configured without time expiry."
+  ],
+  "privacy": "No email address, message ID, capability, key, or raw MIME source is retained here."
+}
