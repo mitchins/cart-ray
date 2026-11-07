@@ -66,9 +66,11 @@ async function evidence(env, session, contextHash) {
 /** Route only from the first-party storefront gateway. The trusted checkout service
  * supplies the session; the browser cannot choose it through this endpoint. */
 export async function checkoutWithContext(request, env) {
-  if (request.method !== 'POST' || request.headers.get('Origin') !== env.STOREFRONT_ORIGIN || !env.CHECKOUT?.fetch) return unavailable();
+  if (!env.CHECKOUT?.fetch) return unavailable();
   const result = await env.CHECKOUT.fetch(request);
-  if (!result.ok || !configured(env)) return result;
+  // CartRay owns checkout authorization/CORS. Optional context configuration
+  // must never change or prevent the checkout response.
+  if (!result.ok || !configured(env) || request.method !== 'POST' || request.headers.get('Origin') !== env.STOREFRONT_ORIGIN) return result;
   try {
     const clone = result.clone();
     if (Number(clone.headers.get('content-length') || '0') > 16384) return result;

@@ -45,7 +45,7 @@ test('unknown, expired, unconfirmed, mis-scoped, changed recipient and tampered 
 test('checkout continues without authority, database or with live session; browser cannot supply context',async()=>{
  const {env}=setup(); delete env.PURCHASE_EVIDENCE; let r=await checkout(env); assert.equal(r.status,200); assert.equal(r.headers.get('set-cookie'),null);
  env.PURCHASE_EVIDENCE={fetch:async()=>Response.json({})}; env.CHECKOUT.fetch=async()=>Response.json({session_id:'cs_live_abcdefghijk'}); r=await checkout(env); assert.equal(r.status,200); assert.equal(r.headers.get('set-cookie'),null);
- assert.equal((await checkoutWithContext(new Request(ORIGIN+'/checkout',{method:'POST',headers:{Origin:'https://evil.test'},body:'{}'}),env)).status,503);
+ assert.equal((await checkoutWithContext(new Request(ORIGIN+'/checkout',{method:'POST',headers:{Origin:'https://evil.test'},body:'{}'}),env)).headers.get('set-cookie'),null);
 });
 test('expiry, source outage, malformed evidence and duplicate cookies are denied',async()=>{
  const {db,env,setPurchase}=setup(); const cookie=(await checkout(env)).headers.get('set-cookie');
