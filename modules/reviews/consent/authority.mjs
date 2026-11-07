@@ -48,7 +48,8 @@ function requestToken(request) {
   return /^[a-f0-9]{64}$/.test(value) ? value : null;
 }
 async function evidence(env, session, contextHash) {
-  const signal=AbortSignal.timeout(2000);
+  // Five independently bounded source calls, plus D1, share this outer budget.
+  const signal=AbortSignal.timeout(15000);
   const timeout=new Promise((_,reject)=>signal.addEventListener('abort',()=>reject(new Error('timeout')),{once:true}));
   const r = await Promise.race([env.PURCHASE_EVIDENCE.fetch('https://purchase-evidence.internal/confirmed', {
     method:'POST', headers:{'content-type':'application/json'}, body:JSON.stringify({session_id:session,context_hash:contextHash}), signal,
@@ -126,7 +127,7 @@ export async function authority(request, env) {
     const matches=challenge && challenge.event_id===purchase.event_id && challenge.acquisition_id===purchase.acquisition_id &&
       challenge.source_provenance===purchase.source_provenance && challenge.outbox_id===purchase.outbox_id && challenge.recipient_context_hash===purchase.recipient_context_hash && challenge.binding_version===purchase.binding_version;
     if (action==='context') {
-      const verified=!!(matches && challenge.verified_at && challenge.expires_at>now);
+      const verified=!!(matches && challenge.verified_at);
       return Response.json(verified ? {available:true,verified:true,recipient_evidence:await canonicalRecipient(env,challenge,challenge.verified_at)} : {available:true,verified:false},{headers:{'Cache-Control':'no-store'}});
     }
     if (action==='challenge') {
@@ -137,7 +138,8 @@ export async function authority(request, env) {
         .bind(contextHash,purchase.event_id,purchase.acquisition_id,purchase.source_provenance,purchase.outbox_id,'possession_'+token(),purchase.recipient_context_hash,purchase.binding_version,codeHash,now+600).first();
       if (!claimed) return unavailable();
       try {
-        const signal=AbortSignal.timeout(7000);
+        // Transport repeats source verification before its bounded provider call.
+        const signal=AbortSignal.timeout(20000);
         const timeout=new Promise((_,reject)=>signal.addEventListener('abort',()=>reject(new Error('timeout')),{once:true}));
         const delivered=await Promise.race([env.PURCHASE_EMAIL_TRANSPORT.fetch('https://email-possession.internal/send',{method:'POST',headers:{'content-type':'application/json','Authorization':'Bearer '+env.PURCHASE_TRANSPORT_TOKEN},body:JSON.stringify({recipient_reference:purchase.recipient_reference,code,context_hash:contextHash}),signal}),timeout]);
         if (!delivered.ok) throw new Error('uncertain');
@@ -149,7 +151,7 @@ export async function authority(request, env) {
         return unavailable();
       }
     }
-    if (!matches || challenge.delivery_state!=='sent' || challenge.expires_at<=now) return unavailable();
+    if (!matches || challenge.delivery_state!=='sent' || (!challenge.verified_at && challenge.expires_at<=now)) return unavailable();
     if (action==='verify') {
       const verifiedResponse=async(verifiedAt)=>Response.json({verified:true,recipient_evidence:await canonicalRecipient(env,challenge,verifiedAt)});
       if (challenge.verified_at) return await verifiedResponse(challenge.verified_at);

@@ -143,7 +143,7 @@ export async function handleConsent(request, env) {
     headers.set("Content-Type", "application/json");
     const data = await serviceRequest(env.REVIEW_CONSENT_AUTHORITY, "https://consent-authority.internal" + path, {
       method: "POST", headers, body: JSON.stringify(input),
-    }, true, action === 'challenge' ? 9000 : 2000);
+    }, true, action === 'challenge' ? 37000 : 16000);
     if (action === 'context') {
       if(data?.available!==true) return response(503,{error:'unavailable'});
       if(data.verified===true) { try { await recordRecipient(data,env); } catch { return response(200,{available:true,verified:false}); } }

@@ -100,3 +100,23 @@ test('separate verified browser contexts reuse canonical recipient proof only af
  const second=await consent(x.env,b,'verify',JSON.stringify({code:bc})); assert.equal(second.status,200); assert.deepEqual((await second.json()).recipient_evidence,proof);
  assert.equal(x.db.prepare('SELECT count(*) c FROM purchaser_verified_recipients').get().c,1);
 });
+
+test('code expiry limits verification but not already verified purchaser context',async()=>{
+ const x=setup(); const c=(await checkout(x.env)).headers.get('set-cookie');
+ await consent(x.env,c,'challenge'); const code=x.getCode();
+ x.db.prepare('UPDATE purchaser_email_challenges SET expires_at=1').run();
+ assert.equal((await consent(x.env,c,'verify',JSON.stringify({code}))).status,503);
+ x.db.prepare('UPDATE purchaser_email_challenges SET expires_at=?').run(Math.floor(Date.now()/1000)+30);
+ assert.equal((await consent(x.env,c,'verify',JSON.stringify({code}))).status,200);
+ x.db.prepare('UPDATE purchaser_email_challenges SET expires_at=1').run();
+ assert.equal((await (await consent(x.env,c)).json()).verified,true);
+ assert.equal((await consent(x.env,c,'grant','{"accept":true}')).status,200);
+ x.db.prepare('UPDATE purchaser_contexts SET created_at=0,expires_at=1').run();
+ assert.equal((await consent(x.env,c,'grant','{"accept":true}')).status,503);
+});
+test('multi-stage source evidence can complete after two seconds',async()=>{
+ const x=setup(); const c=(await checkout(x.env)).headers.get('set-cookie');
+ const original=x.env.PURCHASE_EVIDENCE.fetch;
+ x.env.PURCHASE_EVIDENCE.fetch=async(...args)=>{await new Promise(r=>setTimeout(r,2100));return original(...args)};
+ assert.equal((await consent(x.env,c)).status,200);
+});

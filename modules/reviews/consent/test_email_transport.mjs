@@ -12,8 +12,8 @@ async function jsonBounded(response,limit=4096){
  n+=part.value.byteLength;if(n>limit)throw Error('large');out+=decoder.decode(part.value,{stream:true});}}
  finally{clearTimeout(timer);void reader.cancel().catch(()=>{});}
 }
-async function call(fetcher,url,init){const controller=new AbortController();let timer;
- const timeout=new Promise((_,reject)=>{timer=setTimeout(()=>{controller.abort();reject(Error('timeout'));},2000)});
+async function call(fetcher,url,init,timeoutMs=2000){const controller=new AbortController();let timer;
+ const timeout=new Promise((_,reject)=>{timer=setTimeout(()=>{controller.abort();reject(Error('timeout'));},timeoutMs)});
  try{return await jsonBounded(await Promise.race([fetcher(url,{...init,redirect:'error',signal:controller.signal}),timeout]));}
  finally{clearTimeout(timer);controller.abort();}}
 function configured(env){return env.TEST_EMAIL_MODE==='test' && env.CONTEXT_DB?.prepare && env.PURCHASE_EVIDENCE?.fetch &&
@@ -33,7 +33,7 @@ export async function sendTestCode(request,env,fetcher=fetch){
  try{
   const recipient=await call(env.PURCHASE_EVIDENCE.fetch.bind(env.PURCHASE_EVIDENCE),'https://purchase-evidence.internal/delivery-recipient',{
    method:'POST',headers:{'Content-Type':'application/json','Authorization':'Bearer '+env.RECIPIENT_RESOLVE_TOKEN},
-   body:JSON.stringify({context_hash:input.context_hash,recipient_reference:input.recipient_reference})});
+   body:JSON.stringify({context_hash:input.context_hash,recipient_reference:input.recipient_reference})},15000);
   if(!equal(recipient.email,env.APPROVED_TEST_EMAIL))return unavailable();
   const now=Math.floor(Date.now()/1000);
   const claimed=await env.CONTEXT_DB.prepare("INSERT INTO purchaser_test_email_claims(token_hash,delivery_state,created_at) VALUES(?,'claimed',?) ON CONFLICT(token_hash) DO NOTHING RETURNING token_hash").bind(input.context_hash,now).first();
