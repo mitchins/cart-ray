@@ -10,14 +10,38 @@ export async function evaluate(message, env) {
       Object.keys(message).sort().join(",") !== "acquisition_id,claim_token" ||
       typeof message.acquisition_id !== "string" || !idPattern.test(message.acquisition_id) ||
       typeof message.claim_token !== "string" || !tokenPattern.test(message.claim_token)) return "discard";
-  const response = await env.REVIEWS_API.fetch("https://reviews.internal/reviews-internal/v1/automation-due-evaluate", {
-    method: "POST",
-    headers: {"content-type": "application/json", authorization: `Bearer ${env.REVIEWS_AUTOMATION_TOKEN}`},
-    body: JSON.stringify(message),
-  });
-  if (!response.ok) throw new Error("evaluation unavailable");
-  const result = await response.json();
-  if (result?.status !== "held") throw new Error("evaluation not due or unavailable");
+  const controller = new AbortController();
+  let timer, reader;
+  try {
+    const request = (async () => {
+      const response = await env.REVIEWS_API.fetch("https://reviews.internal/reviews-internal/v1/automation-due-evaluate", {
+        method: "POST", signal: controller.signal,
+        headers: {"content-type": "application/json", authorization: `Bearer ${env.REVIEWS_AUTOMATION_TOKEN}`},
+        body: JSON.stringify(message),
+      });
+      if (!response.ok || !response.body) throw new Error("evaluation unavailable");
+      reader = response.body.getReader();
+      let size = 0, text = "";
+      const decoder = new TextDecoder();
+      while (true) {
+        const part = await reader.read();
+        if (part.done) break;
+        size += part.value.byteLength;
+        if (size > 4096) throw new Error("evaluation response too large");
+        text += decoder.decode(part.value, {stream:true});
+      }
+      text += decoder.decode();
+      if (JSON.parse(text)?.status !== "held") throw new Error("evaluation not due or unavailable");
+    })();
+    await Promise.race([request, new Promise((_, reject) => {
+      timer = setTimeout(() => reject(new Error("evaluation timed out")), 2000);
+    })]);
+  } finally {
+    clearTimeout(timer);
+    controller.abort();
+    // Cancellation may itself wait on an unresponsive stream: do not await it.
+    if (reader) void reader.cancel().catch(() => {});
+  }
   return "held";
 }
 

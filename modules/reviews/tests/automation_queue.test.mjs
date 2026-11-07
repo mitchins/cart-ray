@@ -30,3 +30,24 @@ test("early, failed or wrongly configured events retry and cannot send", async (
   }
   assert.equal(await evaluate({acquisition_id:"order",claim_token:"bad"},env()),"discard");
 });
+
+test("stalled fetch and oversized responses retry without blocking later messages", async () => {
+  for (const first of ["stall", "oversized"]) {
+    const e=env(); let calls=0, ack=0, retry=0;
+    e.REVIEWS_API.fetch=async()=>{
+      if (++calls === 1) return first === "stall" ? new Promise(()=>{}) : new Response("x".repeat(4097));
+      return Response.json({status:"held"});
+    };
+    await worker.queue({messages:[{body:message,ack(){ack++;},retry(){retry++;}},
+      {body:message,ack(){ack++;},retry(){retry++;}}]},e);
+    assert.equal(retry,1); assert.equal(ack,1); assert.equal(calls,2);
+  }
+});
+
+test("stalled response body is bounded and later message runs", async () => {
+  const e=env(); let calls=0, ack=0, retry=0;
+  e.REVIEWS_API.fetch=async()=> ++calls === 1 ? new Response(new ReadableStream({pull(){return new Promise(()=>{});}})) : Response.json({status:"held"});
+  await worker.queue({messages:[{body:message,ack(){ack++;},retry(){retry++;}},
+    {body:message,ack(){ack++;},retry(){retry++;}}]},e);
+  assert.equal(retry,1); assert.equal(ack,1);
+});
