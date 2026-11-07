@@ -64,6 +64,8 @@ def run():
                     with urllib.request.urlopen(f"http://127.0.0.1:{port}/run", timeout=5) as response:
                         result = json.load(response)
                     break
+                except urllib.error.HTTPError as error:
+                    raise RuntimeError(f"Workerd producer fixture returned HTTP {error.code}") from error
                 except (urllib.error.URLError, TimeoutError):
                     if process.poll() is not None or time.monotonic() >= deadline:
                         raise RuntimeError("Workerd producer fixture did not become ready") from None
