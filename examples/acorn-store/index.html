@@ -17,6 +17,7 @@
     <section aria-labelledby="cart-heading"><h2 id="cart-heading">Cart</h2><ul id="cart"></ul><button id="checkout" type="button" disabled>Checkout</button><a id="continue-shopping" href="/" hidden>Continue shopping</a></section>
   </main>
   <script src="/storefront-config.js"></script>
+  <script>if (window.CARTRAY_STOREFRONT?.reviewConsentEnabled && new URLSearchParams(location.search).get("checkout") === "complete") { try { sessionStorage.setItem("acorn-review-return", String(Date.now())); } catch {} }</script>
   <script type="module" src="/app.js"></script><script type="module" src="/reviews.mjs"></script><script type="module" src="/consent.mjs"></script>
 </body>
 </html>

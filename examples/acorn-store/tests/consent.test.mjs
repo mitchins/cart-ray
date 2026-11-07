@@ -1,6 +1,6 @@
 import {test} from "node:test";
 import assert from "node:assert/strict";
-import {setupConsent} from "../consent.mjs";
+import {setupConsent, isPostPurchase} from "../consent.mjs";
 
 function elements() {
   const accept = {checked:false}, button = {disabled:false}, status = {textContent:""};
@@ -56,4 +56,13 @@ test("post-purchase failure offers a generic retry without exposing the consent 
   await setupConsent({root,postPurchase:true,reload:()=>{reloaded=true;},fetchImpl:async()=>new Response(null,{status:503})});
   assert.equal(root.hidden,false); assert.equal(form.hidden,true); assert.equal(verify.hidden,true);
   assert.match(status.textContent,/couldn’t load/); assert.equal(retry.hidden,false); retry.click(); assert.equal(reloaded,true);
+});
+
+test("checkout return marker survives URL cleanup and retry only in the same tab and time window", () => {
+  const now=10000000, storage={getItem(key){return key === "acorn-review-return" ? String(now-1000) : null;}};
+  assert.equal(isPostPurchase({pathname:"/",storage,now}),true);
+  assert.equal(isPostPurchase({pathname:"/products/item/",storage,now}),false);
+  assert.equal(isPostPurchase({pathname:"/",storage,now:now+7200000}),false);
+  assert.equal(isPostPurchase({pathname:"/",storage:{getItem(){return null;}},now}),false);
+  assert.equal(isPostPurchase({pathname:"/purchase-complete/",storage,now}),true);
 });
