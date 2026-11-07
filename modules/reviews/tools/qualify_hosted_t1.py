@@ -73,6 +73,11 @@ def check_bindings(bindings, expected):
     for name, kind, field, value in expected:
         matching = [x for x in bindings if x.get("name") == name and x.get("type") == kind]
         require(len(matching) == 1 and matching[0].get(field) == value, "deployed binding mismatch: " + name)
+        if kind == "service":
+            require(
+                matching[0].get("environment") in (None, "") and matching[0].get("entrypoint") in (None, ""),
+                "non-default service target: " + name,
+            )
 
 
 class NoRedirect(urllib.request.HTTPRedirectHandler):

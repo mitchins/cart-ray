@@ -136,3 +136,10 @@ def test_deployed_database_mismatch_rejected():
             [{"name": "REVIEWS_DB", "type": "d1", "database_id": "wrong"}],
             [("REVIEWS_DB", "d1", "database_id", "correct")],
         )
+
+
+@pytest.mark.parametrize("field", ["environment", "entrypoint"])
+def test_nondefault_service_target_rejected(field):
+    binding = {"name": "SOURCE_API", "type": "service", "service": "source", field: "other"}
+    with pytest.raises(ValueError):
+        module.check_bindings([binding], [("SOURCE_API", "service", "service", "source")])
