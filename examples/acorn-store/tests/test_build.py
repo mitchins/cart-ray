@@ -25,6 +25,8 @@ def test_fresh_default_build_is_optional_and_isolated(tmp_path):
     text = (out / "storefront-config.js").read_text()
     data = json.loads(text.split(" = ", 1)[1].split(";\n", 1)[0])
     assert data["checkoutEnabled"] is False and data["reviewsEnabled"] is False
+    assert data["reviewConsentEnabled"] is False
+    assert (out / "consent.mjs").is_file()
     assert [x["amount_minor"] for x in data["previewCatalogue"]["products"]].count(0) == 1
     assert set(data["reviewSubjects"]) == {"ACORN-KIT", "ACORN-PLANTER"}
     assert (out / "products/acorn-growing-kit/index.html").is_file()
@@ -110,3 +112,13 @@ def test_invalid_mapping_does_not_build(tmp_path):
     path.write_text(json.dumps(config))
     with pytest.raises(ValueError, match="duplicate review subject"):
         module.configuration(path)
+
+
+def test_consent_ui_requires_explicit_test_checkout(tmp_path):
+    config = module.configuration(HERE / "store.json")
+    with pytest.raises(ValueError, match="requires explicit test checkout"):
+        module.build(tmp_path / "disabled", config, review_consent=True)
+    lock = fixture_preflight(tmp_path)
+    out = tmp_path / "enabled"
+    module.build(out, config, checkout_api="https://example.workers.dev", review_consent=True, preflight_lock=lock)
+    assert '"reviewConsentEnabled": true' in (out / "storefront-config.js").read_text()

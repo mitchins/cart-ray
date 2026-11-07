@@ -107,17 +107,21 @@ def build(
     *,
     checkout_api: str | None = None,
     reviews: bool = False,
+    review_consent: bool = False,
     preflight_lock: Path = PREFLIGHT_LOCK,
 ) -> None:
     if output.exists():
         raise ValueError("output directory already exists; choose a new directory")
     api = test_api(checkout_api)
+    if review_consent and not api:
+        raise ValueError("review consent requires explicit test checkout")
     manifest = asyncio.run(preview_manifest(config, preflight_lock if api else None))
     output.mkdir(parents=True)
     for filename in ("app.js", "styles.css"):
         shutil.copy2(ROOT / "storefront" / filename, output / filename)
     shutil.copy2(HERE / "acorn.css", output / "acorn.css")
     shutil.copy2(HERE / "reviews.mjs", output / "reviews.mjs")
+    shutil.copy2(HERE / "consent.mjs", output / "consent.mjs")
     shutil.copytree(HERE / "assets", output / "assets")
     shutil.copytree(ROOT / "modules/reviews/ui", output / "review")
     paths = {item["product_key"]: item["path"] for item in config["products"]}
@@ -130,6 +134,7 @@ def build(
         "productPaths": paths,
         "reviewSubjects": subjects,
         "reviewsEnabled": reviews,
+        "reviewConsentEnabled": review_consent,
     }
     # JSON is external JS, not HTML: no user-provided text is interpolated into markup.
     (output / "storefront-config.js").write_text(
@@ -153,8 +158,17 @@ def main() -> None:
     parser.add_argument("--config", type=Path, default=HERE / "store.json")
     parser.add_argument("--test-checkout-api", help="explicit HTTPS CartRay TEST Worker origin")
     parser.add_argument("--reviews", action="store_true", help="enable same-origin test Reviews reads")
+    parser.add_argument(
+        "--review-consent", action="store_true", help="enable test-only consent UI with a trusted authority"
+    )
     args = parser.parse_args()
-    build(args.output, configuration(args.config), checkout_api=args.test_checkout_api, reviews=args.reviews)
+    build(
+        args.output,
+        configuration(args.config),
+        checkout_api=args.test_checkout_api,
+        reviews=args.reviews,
+        review_consent=args.review_consent,
+    )
 
 
 if __name__ == "__main__":
