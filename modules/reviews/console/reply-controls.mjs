@@ -33,6 +33,7 @@ export function replyControls(item, { client, element, isBusy, setBusy, message,
   function freeze(frozen) { author.disabled = body.disabled = save.disabled = withdraw.disabled = frozen; retry.hidden = !frozen; }
   async function loadHistory(reset) {
     const page = await client.replyHistory(item, reset ? null : cursor);
+    if (reset && !form.hidden && (author.value !== (current?.author || '') || body.value !== (current?.body || ''))) throw new ConsoleError('Your reply draft is unsaved. Submit it or restore the original text before refreshing.');
     if (!reset && headKey(page.head) !== headIdentity) throw new ConsoleError('The reply changed. Reload the review list before continuing.', 409);
     if (reset) { output.replaceChildren(); resetForm(); head = page.head; headIdentity = headKey(head); }
     for (const record of page.records) {
@@ -78,7 +79,7 @@ export function replyControls(item, { client, element, isBusy, setBusy, message,
   pageButton.addEventListener('click', () => { if (!attempt) return load(false); });
   async function sendAttempt() {
     if (isBusy() || !attempt) return;
-    setBusy(true); retry.disabled = true; message();
+    setBusy(true); retry.disabled = true; author.disabled = body.disabled = save.disabled = withdraw.disabled = true; message();
     let conflict = false;
     try {
       await client.reply(item, attempt.action, attempt.payload, attempt.key);
@@ -132,6 +133,7 @@ export function replyControls(item, { client, element, isBusy, setBusy, message,
     } catch (error) { message(error instanceof ConsoleError ? error.message : 'Reply audit is temporarily unavailable.'); }
     finally { audit.disabled = false; setBusy(false); (finished ? auditOutput : audit).focus(); }
   });
+  section.setReplyLocked = (locked) => { author.disabled = body.disabled = locked; };
   section.hasUnsavedReply = () => Boolean(attempt) || (!form.hidden && (author.value !== (current?.author || '') || body.value !== (current?.body || '')));
   return section;
 }

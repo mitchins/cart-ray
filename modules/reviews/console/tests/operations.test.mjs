@@ -76,3 +76,20 @@ test('delivery investigation is read-only and permission failure does not disabl
   assert.match(nodes['delivery-results'].children[0].children[1].textContent, /Delivery reference/);
   assert.equal(nodes['delivery-results'].children[0].children.length, 3);
 });
+
+test('reply history preserves edits made while loading and save locks inputs', async () => {
+  let loading = false, resolveHistory, resolveSave, msg = '', deferred = false;
+  const page = { head: null, records: [], next_after: null };
+  const client = {
+    replyHistory() { return deferred ? new Promise((resolve) => { resolveHistory = resolve; }) : Promise.resolve(page); },
+    reply() { return new Promise((resolve) => { resolveSave = resolve; }); },
+  };
+  const section = replyControls(item, { client, element, isBusy: () => loading, setBusy: (v) => { loading = v; }, message: (v = '') => { msg = v; }, status: {} });
+  const show = section.children[1], form = section.children[2].children[2];
+  await show.click(); deferred = true;
+  const refresh = show.click(); form.children[1].value = 'Staff'; form.children[3].value = 'Draft while loading'; resolveHistory(page); await refresh;
+  assert.equal(form.children[3].value, 'Draft while loading'); assert.match(msg, /draft is unsaved/);
+  deferred = false;
+  const saving = form.children[4].click(); assert.equal(form.children[1].disabled, true); assert.equal(form.children[3].disabled, true);
+  resolveSave({ reply_id: replyId, reply_revision_id: replyRevision, state: 'published' }); await saving;
+});

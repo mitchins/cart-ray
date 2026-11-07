@@ -86,7 +86,7 @@ function card(item, mode) {
     if (loading || !selected) return;
     if (replies?.hasUnsavedReply()) { message('Your reply draft is unsaved. Submit it or restore the original text before withdrawing the review.'); return; }
     const action = selected;
-    busy(true); confirmButton.disabled = cancelButton.disabled = true; message();
+    busy(true); replies?.setReplyLocked(true); confirmButton.disabled = cancelButton.disabled = true; message();
     try {
       await client.decide(item, action);
       article.remove(); seen.delete(item.review_id); if (replies) replySections.delete(replies);
@@ -94,7 +94,7 @@ function card(item, mode) {
       if (!queue.children.length && !cursor) queue.append(element('p', mode === 'pending' ? 'No reviews are waiting for moderation.' : 'No published reviews found.'));
       refresh.disabled = false; refresh.focus();
     } catch (e) { message(friendly(e)); }
-    finally { confirmButton.disabled = cancelButton.disabled = false; busy(false); }
+    finally { replies?.setReplyLocked(false); confirmButton.disabled = cancelButton.disabled = false; busy(false); }
   });
   article.append(actions, confirmation, history(item));
   if (mode === 'published') {
@@ -112,6 +112,9 @@ async function load(replace) {
   busy(true); message();
   try {
     const result = await client[mode](replace ? null : cursor);
+    if (replace && [...replySections].some((section) => section.hasUnsavedReply())) {
+      view.value = shownMode; message('Your reply draft is unsaved. Submit it or restore the original text before changing the review list.'); return;
+    }
     if (replace) { queue.replaceChildren(); seen.clear(); replySections.clear(); }
     const records = result[mode];
     for (const item of records) if (!seen.has(item.review_id)) { queue.append(card(item, mode)); seen.add(item.review_id); }

@@ -17,10 +17,11 @@ test('review text is rendered as text, decisions use revisions, and a failed ref
   const nodes = Object.fromEntries(['queue', 'status', 'error', 'refresh', 'more', 'view', 'queue-title', 'queue-description', 'delivery-state', 'delivery-load', 'delivery-more', 'delivery-results', 'delivery-status', 'delivery-error'].map((name) => [name, new Element(name)]));
   nodes.view.value = 'pending';
   globalThis.document = { querySelector: (s) => nodes[s.slice(1)], createElement: (name) => new Element(name) };
-  let phase = 'queue', sent;
+  let phase = 'queue', sent, resolveList;
   globalThis.fetch = async (url, options) => {
     if (phase === 'failure') return new Response('{}', { status: 503 });
     if (options.method === 'POST') { sent = [url, options]; return Response.json({ review_id: id, status: url.endsWith('/withdraw') ? 'withdrawn' : 'published' }); }
+    if (phase === 'defer' && url.endsWith('/published')) return new Promise((resolve) => { resolveList = resolve; });
     if (url.endsWith('/published')) return Response.json({ published: [{ review_id: id, revision_id: revision, subject_id: 'product', subject_name: 'Example product', title: 'Helpful', author: 'Customer', rating: 4, body: 'Good' }], next_after: null });
     if (url.endsWith('/reply-revisions')) return Response.json({ review_id: id, state: 'published', current_revision_id: revision, reply: null, reply_revisions: [], next_after: null });
     if (url.endsWith('/revisions')) return Response.json({ review_id: id, revisions: [{ revision_id: revision, title: '<img>', author: 'Customer', body: 'Original', rating: 4 }], next_after: null });
@@ -59,7 +60,10 @@ test('review text is rendered as text, decisions use revisions, and a failed ref
     const reply = published.children[7];
     await reply.children[1].click();
     const form = reply.children[2].children[2];
+    phase = 'defer'; const delayedRefresh = nodes.refresh.click();
     form.children[1].value = 'Staff'; form.children[3].value = 'Unsaved answer';
+    resolveList(Response.json({ published: [], next_after: null })); await delayedRefresh; phase = 'queue';
+    assert.equal(nodes.queue.children[0], published); assert.match(nodes.error.textContent, /draft is unsaved/);
     await nodes.refresh.click(); assert.equal(nodes.queue.children[0], published); assert.match(nodes.error.textContent, /draft is unsaved/);
     nodes.view.value = 'pending'; await nodes.view.change(); assert.equal(nodes.view.value, 'published'); assert.equal(form.children[3].value, 'Unsaved answer');
     await published.children[4].children[0].click(); await published.children[5].children[1].click();
