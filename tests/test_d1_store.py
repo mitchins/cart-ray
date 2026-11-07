@@ -79,7 +79,11 @@ def test_d1_optional_permission_is_bound_before_redirect_and_checkout_survives_a
         "SELECT order_id, wording_version, wording FROM review_invitation_checkout_grants"
     ).fetchall()
     assert len(rows) == 1
-    assert tuple(rows[0]) == (gateway.requests[0].order_id, "review-invitation-v1", "Email me one request to review my purchase.")
+    assert tuple(rows[0]) == (
+        gateway.requests[0].order_id,
+        "review-invitation-v1",
+        "Email me one request to review my purchase.",
+    )
     d1_database.conn.execute("DROP TABLE review_invitation_checkout_grants")
     missing = CheckoutRequest("missing-grant-d1", fixture_catalogue.version, (CanonicalItem("TEST-TEMPLATE", 1),), True)
     asyncio.run(service.checkout(missing))
