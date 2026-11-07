@@ -159,6 +159,29 @@ async function sourceCurrent(env, projection, expectedOrigin, expectedScope) {
   const current = await captureSource(env, projection);
   return current !== null && canonical(current) === canonical(projection);
 }
+// A native-only, test-mode experiment: full source comparison still occurs at
+// publication and recovery. Public reads check the native monotonic revision.
+// Imported/unified sources continue to receive the original full comparison.
+async function sourceCurrentForRead(env, projection, expectedOrigin, expectedScope) {
+  const nativeOnly = (items) => items.every((item) => item.lineage.every((id) => id.startsWith('native:')) && nativeOnly(item.replies));
+  if (env.PUBLICATION_TEST_NATIVE_REVISION_CHECK !== 'enabled' ||
+      !/^native-[0-9]+$/.test(projection.source_snapshot || '') ||
+      !Array.isArray(projection.reviews) || !projection.reviews.length || !nativeOnly(projection.reviews)) {
+    return sourceCurrent(env, projection, expectedOrigin, expectedScope);
+  }
+  if (sourceOrigin(env)?.origin !== expectedOrigin || env.REVIEWS_SOURCE_SCOPE !== expectedScope) return false;
+  try {
+    const id = encodeURIComponent(projection.subject.id), signal = AbortSignal.timeout(10000);
+    const [lookup, summary] = await Promise.all([
+      sourceJson(env, `/reviews/v1/subject-lookup?alias=${id}`, signal),
+      sourceJson(env, `/reviews/v1/subjects/${id}/summary`, signal),
+    ]);
+    return lookup.subject_id === projection.subject.id && lookup.kind === projection.subject.kind &&
+      lookup.canonical_path === projection.subject.canonical_path && summary.subject_id === projection.subject.id &&
+      summary.snapshot_id === projection.source_snapshot && summary.contribution_count === projection.contribution_count &&
+      canonical(summary.rating) === canonical(projection.rating);
+  } catch { return false; }
+}
 async function captureSource(env, approved) {
   try {
     const id = encodeURIComponent(approved.subject.id), signal = AbortSignal.timeout(10000);
@@ -210,7 +233,7 @@ export default {
       // A single primary read binds gate state and immutable artifact together.
       const row = await db.withSession('first-primary').prepare('SELECT g.state,g.digest,g.epoch,a.source_origin,a.source_scope,a.canonical_origin,a.projection,a.html,a.jsonld,a.media FROM publication_gate g JOIN publication_artifacts a ON a.digest=g.digest WHERE g.singleton=1').first();
       if (!row || row.state !== 'active') return new Response(request.method === 'HEAD' ? null : fallback, { status: 503, headers: { ...noStore, 'Content-Type': 'text/html; charset=utf-8' } });
-      if (env.PUBLICATION_CANONICAL_ORIGIN !== row.canonical_origin || !await sourceCurrent(env, JSON.parse(row.projection), row.source_origin, row.source_scope)) {
+      if (env.PUBLICATION_CANONICAL_ORIGIN !== row.canonical_origin || !await sourceCurrentForRead(env, JSON.parse(row.projection), row.source_origin, row.source_scope)) {
         await quarantine(db, row);
         return new Response(request.method === 'HEAD' ? null : fallback, { status: 503, headers: { ...noStore, 'Content-Type': 'text/html; charset=utf-8' } });
       }

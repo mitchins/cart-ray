@@ -28,6 +28,35 @@ test('recovery cannot rebind an artifact to a different canonical origin', async
   assert.equal(response.status, 409); assert.equal(db.calls.filter((call) => typeof call === 'object').length, 0);
 });
 
+test('native revision reads avoid contribution scans and fail closed on change', async () => {
+  const nativeId = 'a'.repeat(64);
+  const projection = { subject: { id: 'example-policy', kind: 'product', canonical_path: '/product/' },
+    source_snapshot: 'native-3', rating: { average: 4, rated_count: 1 }, contribution_count: 1,
+    reviews: [{ id: nativeId, lineage: [`native:${nativeId}`], replies: [] }] };
+  const row = { state: 'active', digest, epoch: 4, canonical_origin: 'https://new.example',
+    source_origin: 'https://source.example', source_scope: 'example-store:test', projection: JSON.stringify(projection),
+    html: '<p>approved</p>', jsonld: '{}', media: '[]' };
+  const db = fakeDb(row), env = { ...environment(db), REVIEWS_PUBLIC_ORIGIN: row.source_origin,
+    REVIEWS_SOURCE_SCOPE: row.source_scope, PUBLICATION_TEST_NATIVE_REVISION_CHECK: 'enabled' };
+  const originalFetch = globalThis.fetch, paths = [];
+  let revision = 'native-3';
+  globalThis.fetch = async (url) => {
+    const path = new URL(url).pathname; paths.push(path);
+    const body = path.endsWith('/subject-lookup') ? { subject_id: projection.subject.id, kind: 'product', canonical_path: '/product/' } :
+      { subject_id: projection.subject.id, snapshot_id: revision, rating: projection.rating, contribution_count: 1 };
+    return Response.json(body, { headers: { 'Cache-Control': 'no-store' } });
+  };
+  try {
+    let response = await worker.fetch(new Request('https://publisher.example/publication/html'), env);
+    assert.equal(response.status, 200); assert.equal(await response.text(), row.html);
+    assert.equal(paths.length, 2); assert.ok(paths.every((path) => !path.endsWith('/contributions')));
+    revision = 'native-4';
+    response = await worker.fetch(new Request('https://publisher.example/publication/html'), env);
+    assert.equal(response.status, 503); assert.doesNotMatch(await response.text(), /approved/);
+    assert.equal(db.calls.filter((entry) => typeof entry === 'object').length, 2);
+  } finally { globalThis.fetch = originalFetch; }
+});
+
 test('SQLite-backed publication and withdrawal preserve the public boundary', async () => {
   const { DatabaseSync } = await import('node:sqlite');
   const { readFileSync } = await import('node:fs');
