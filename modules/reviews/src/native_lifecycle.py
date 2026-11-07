@@ -19,6 +19,7 @@ from cartray_reviews.invitations import (
     record_signed_consent,
     redeem_purchase,
     revoke_purchase,
+    withdraw_signed_consent,
 )
 from cartray_reviews.management import manage_review, management_token
 from cartray_reviews.recovery import accept_recovery_command
@@ -691,14 +692,15 @@ async def handle_write(request, env, path):
             return Response.json(result, headers={"Cache-Control": "no-store"})
         except (ValueError, TypeError, AttributeError, KeyError, json.JSONDecodeError):
             return fail(409, "evidence unavailable")
-    if path == "/reviews-internal/v1/consents":
+    if path in ("/reviews-internal/v1/consents", "/reviews-internal/v1/consents/withdraw"):
         consent_secret = str(getattr(env, "REVIEWS_CONSENT_SECRET", ""))
         if not acquisition_mode or len(consent_secret) < 32 or consent_secret in secrets:
             await discard_body(request)
             return fail(503, "consent unavailable")
         try:
             consent_data = await read_json(request)
-            await record_signed_consent(
+            handler = withdraw_signed_consent if path.endswith("/withdraw") else record_signed_consent
+            await handler(
                 env.REVIEWS_DB,
                 env.CARTRAY_DB,
                 store=store,
