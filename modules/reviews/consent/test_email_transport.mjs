@@ -3,6 +3,14 @@ const encoder=new TextEncoder();
 const hash=/^[a-f0-9]{64}$/;
 const reference=/^ref_[a-f0-9]{64}$/;
 const unavailable=()=>Response.json({error:'unavailable'},{status:503,headers:{'Cache-Control':'no-store'}});
+// Accept one plain mailbox, never a display name, list, header or address literal.
+function mailbox(value){
+ if(typeof value!=='string'||value.length>254||! /^[\x21-\x7e]+$/.test(value))return false;
+ const parts=value.split('@');if(parts.length!==2)return false;
+ const [local,domain]=parts;
+ if(local.length>64||! /^[A-Za-z0-9_+%-]+(?:\.[A-Za-z0-9_+%-]+)*$/.test(local))return false;
+ const labels=domain.split('.');return labels.length>=2&&labels.every(label=>label.length<=63&&/^[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?$/.test(label));
+}
 function equal(a,b){if(typeof a!=='string'||typeof b!=='string'||a.length!==b.length)return false;let x=0;for(let i=0;i<a.length;i++)x|=a.charCodeAt(i)^b.charCodeAt(i);return x===0;}
 async function jsonBounded(response,limit=4096){
  if(!response.ok || !response.body || Number(response.headers.get('content-length')||'0')>limit) throw Error('unavailable');
@@ -20,8 +28,7 @@ function configured(env){return env.TEST_EMAIL_MODE==='test' && env.CONTEXT_DB?.
  typeof env.PURCHASE_TRANSPORT_TOKEN==='string' && env.PURCHASE_TRANSPORT_TOKEN.length>=32 &&
  typeof env.RECIPIENT_RESOLVE_TOKEN==='string' && env.RECIPIENT_RESOLVE_TOKEN.length>=32 &&
  env.PURCHASE_TRANSPORT_TOKEN!==env.RECIPIENT_RESOLVE_TOKEN && typeof env.SMTP2GO_API_KEY==='string' && env.SMTP2GO_API_KEY.startsWith('api-') &&
- typeof env.APPROVED_TEST_EMAIL==='string' && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(env.APPROVED_TEST_EMAIL) &&
- typeof env.TEST_SENDER==='string' && /^[A-Za-z0-9._+-]+@acorn-test\.effectivepolicy\.com\.au$/.test(env.TEST_SENDER);}
+ mailbox(env.APPROVED_TEST_EMAIL) && mailbox(env.TEST_SENDER);}
 export async function sendTestCode(request,env,fetcher=fetch){
  if(!configured(env)||request.method!=='POST'||new URL(request.url).pathname!=='/send' ||
  !equal(request.headers.get('Authorization')||'','Bearer '+env.PURCHASE_TRANSPORT_TOKEN)||

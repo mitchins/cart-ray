@@ -66,14 +66,18 @@ is purchase evidence, not proof of mailbox ownership; verification still
 requires the code.
 
 `test_email_transport.mjs` is an opt-in **test-only** SMTP2GO adapter for the
-verification code, never review invitations. It requires a verified
-`TEST_SENDER` under the Acorn test domain, an API key, the one approved test
+verification code, never review invitations. It requires one independently configured,
+SMTP2GO-verified `TEST_SENDER`, an API key, the one approved test
 mailbox, and separate private transport and recipient-resolution tokens. It
 records one delivery claim per context and holds failures/unknown outcomes
 without resending. SMTP2GO can return HTTP 200 with an application error, so the
 adapter requires one success, no failures, and a provider email ID before it
 reports acceptance. Provider credentials, sender verification, hosted binding
 and real email delivery are not supplied or qualified by these local tests.
+The sender is a single plain mailbox; the adapter does not establish domain
+ownership or verify it with SMTP2GO. Configure and verify that sender with the
+provider before enabling the transport. The approved recipient remains an exact
+single-mailbox match, and no caller may select a different destination.
 
 This implementation uses SMTP2GO's documented [standard email API](https://developers.smtp2go.com/reference/send-standard-email).
 
