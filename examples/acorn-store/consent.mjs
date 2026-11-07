@@ -1,23 +1,21 @@
 /** Optional purpose-specific consent UI; the server authenticates purchase context. */
-export function isPostPurchase({pathname, getStorage, now = Date.now()}) {
-  if (pathname.replace(/\/+$/, "") === "/purchase-complete") return true;
-  if (pathname !== "/") return false;
-  try {
-    const raw = getStorage().getItem("acorn-review-return");
-    if (!raw || !/^\d+$/.test(raw)) return false;
-    const age = now - Number(raw);
-    return Number.isSafeInteger(age) && age >= 0 && age <= 7200000;
-  } catch { return false; }
+export function isPostPurchase({historyState, now = Date.now()}) {
+  const confirmed = historyState?.acornReviewConfirmedAt;
+  if (!Number.isSafeInteger(confirmed)) return false;
+  const age = now - confirmed;
+  return Number.isSafeInteger(age) && age >= 0 && age <= 7200000;
 }
-export async function setupConsent({root, fetchImpl = fetch, postPurchase = false, reload = () => location.reload()}) {
+export async function setupConsent({root, fetchImpl = fetch, postPurchase = false, eventTarget, reload = () => location.reload()}) {
   if (!root) return;
   const endpoint = "/review-consent/v1/";
   const post = (name, data) => fetchImpl(endpoint + name, {
     method: "POST", headers: {"Content-Type": "application/json"},
     credentials: "same-origin", cache: "no-store", body: JSON.stringify(data),
   });
-  let verified;
+  let verified, contextFailed = false;
+  eventTarget?.addEventListener("acorn-order-confirmed", () => { postPurchase = true; if (contextFailed) unavailable(); }, {once: true});
   const unavailable = () => {
+    contextFailed = true;
     if (!postPurchase) return;
     root.hidden = false;
     root.querySelector('[role="status"]').textContent = "We couldn’t load the optional review request preference. Please try again later.";
@@ -72,5 +70,5 @@ export async function setupConsent({root, fetchImpl = fetch, postPurchase = fals
 }
 
 if (typeof document !== "undefined" && window.CARTRAY_STOREFRONT?.reviewConsentEnabled) {
-  void setupConsent({root: document.querySelector("#review-consent"), postPurchase: isPostPurchase({pathname: location.pathname, getStorage: () => window.sessionStorage})});
+  void setupConsent({root: document.querySelector("#review-consent"), postPurchase: isPostPurchase({historyState: window.history.state}), eventTarget: window});
 }

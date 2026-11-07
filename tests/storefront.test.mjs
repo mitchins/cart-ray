@@ -18,6 +18,7 @@ import {
   persistCart,
   pollCheckoutStatus,
   processCheckoutReturn,
+  reviewConsentReturnState,
   startCheckout,
   storePendingCheckout,
   successReturnPath,
@@ -356,4 +357,10 @@ test("confirmed view has an explicit route back to the normal storefront", async
   assert.match(source, /id="continue-shopping" href="\/" hidden/);
   const application = await readFile(new URL("../storefront/app.js", import.meta.url), "utf8");
   assert.match(application, /continueShopping\.hidden = false/);
+});
+
+test("review return state is created only for confirmed opt-in builds", () => {
+  assert.deepEqual(reviewConsentReturnState({reviewConsentEnabled:true},"confirmed",12345),{acornReviewConfirmedAt:12345});
+  assert.equal(reviewConsentReturnState({reviewConsentEnabled:true},"expired",12345),null);
+  assert.equal(reviewConsentReturnState({reviewConsentEnabled:false},"confirmed",12345),null);
 });

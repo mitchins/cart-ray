@@ -58,17 +58,16 @@ test("post-purchase failure offers a generic retry without exposing the consent 
   assert.match(status.textContent,/couldn’t load/); assert.equal(retry.hidden,false); retry.click(); assert.equal(reloaded,true);
 });
 
-test("checkout return marker survives URL cleanup and retry only in the same tab and time window", () => {
-  const now=10000000, storage={getItem(key){return key === "acorn-review-return" ? String(now-1000) : null;}};
-  assert.equal(isPostPurchase({pathname:"/",getStorage:()=>storage,now}),true);
-  assert.equal(isPostPurchase({pathname:"/products/item/",getStorage:()=>storage,now}),false);
-  assert.equal(isPostPurchase({pathname:"/",getStorage:()=>storage,now:now+7200000}),false);
-  assert.equal(isPostPurchase({pathname:"/",getStorage:()=>({getItem(){return null;}}),now}),false);
-  assert.equal(isPostPurchase({pathname:"/purchase-complete/",getStorage:()=>storage,now}),true);
+test("confirmed history marker survives reload and expires without browser storage", () => {
+ const now=10000000, historyState={acornReviewConfirmedAt:now-1000};
+ assert.equal(isPostPurchase({historyState,now}),true);
+ assert.equal(isPostPurchase({historyState,now:now+7200000}),false);
+ assert.equal(isPostPurchase({historyState:null,now}),false);
 });
-
-test("denied browser storage does not abort consent setup or purchase-complete fallback", () => {
- const getStorage=()=>{throw new Error("storage denied")};
- assert.equal(isPostPurchase({pathname:"/",getStorage}),false);
- assert.equal(isPostPurchase({pathname:"/purchase-complete/",getStorage}),true);
+test("failure becomes recoverable only after confirmed checkout notification",async()=>{
+ const {root,form,verify,status,retry}=elements();form.hidden=true;const eventTarget=new EventTarget();
+ await setupConsent({root,eventTarget,fetchImpl:async()=>new Response(null,{status:503})});
+ assert.equal(root.hidden,true);eventTarget.dispatchEvent(new Event("acorn-order-confirmed"));
+ assert.equal(root.hidden,false);assert.equal(form.hidden,true);assert.equal(verify.hidden,true);
+ assert.match(status.textContent,/couldn’t load/);assert.equal(retry.hidden,false);
 });

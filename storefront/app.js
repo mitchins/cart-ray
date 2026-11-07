@@ -178,6 +178,10 @@ export function successReturnPath(pathname, state) {
   return state === "confirmed" || state === "expired" ? pathname : null;
 }
 
+export function reviewConsentReturnState(configuration, state, now = Date.now()) {
+  return configuration.reviewConsentEnabled && state === "confirmed" ? {acornReviewConfirmedAt: now} : null;
+}
+
 export function confirmedCheckoutView(cleared) {
   return {
     checkoutLocked: false,
@@ -399,7 +403,8 @@ async function boot() {
       if (result.cleared) revision = 0;
       const view = confirmedCheckoutView(result.cleared);
       checkoutLocked = view.checkoutLocked;
-      window.history.replaceState(null, "", successReturnPath(window.location.pathname, result.state));
+      window.history.replaceState(reviewConsentReturnState(configuration, result.state), "", successReturnPath(window.location.pathname, result.state));
+      if (configuration.reviewConsentEnabled) window.dispatchEvent(new Event("acorn-order-confirmed"));
       continueShopping.href = window.location.pathname;
       continueShopping.textContent = view.actionLabel;
       continueShopping.hidden = false;
