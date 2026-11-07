@@ -28,6 +28,12 @@ CREATE TABLE purchaser_consent_grants (
   evidence_reference TEXT NOT NULL UNIQUE,
   granted_at INTEGER NOT NULL
 );
+CREATE TABLE purchaser_test_email_claims (
+  token_hash TEXT PRIMARY KEY,
+  delivery_state TEXT NOT NULL CHECK(delivery_state IN ('claimed','accepted','uncertain')),
+  created_at INTEGER NOT NULL,
+  provider_receipt TEXT
+);
 CREATE TRIGGER purchaser_grants_no_update BEFORE UPDATE ON purchaser_consent_grants
 BEGIN SELECT RAISE(ABORT, 'grants immutable'); END;
 CREATE TRIGGER purchaser_grants_no_delete BEFORE DELETE ON purchaser_consent_grants

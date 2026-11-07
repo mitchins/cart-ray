@@ -11,7 +11,7 @@ function setup() {
  const d1={prepare(sql){return {bind(...v){return {async run(){return db.prepare(sql).run(...v)}, async first(){return db.prepare(sql).get(...v) ?? null}}}}}};
  let sentCode; let purchase={recipient_reference:'recipient_ref_1',store:'acorn-store',environment:'test',session_id:SESSION,confirmed:true,source_attested:true,recipient_reference:'recipient_ref_1',event_id:'evt_test_1',acquisition_id:'acq_test_1',source_provenance:'issuer_v1',recipient_context_hash:'a'.repeat(64),binding_version:"v1"};
  const env={ACORN_PURCHASE_CONTEXT:'test',REVIEWS_STORE_KEY:'acorn-store',REVIEWS_ENVIRONMENT:'test',STOREFRONT_ORIGIN:ORIGIN,CONTEXT_DB:d1,
- PURCHASE_CODE_KEY:'z'.repeat(40), PURCHASE_EMAIL_TRANSPORT:{fetch:async(_url,opts)=>{sentCode=JSON.parse(opts.body).code; return new Response(null,{status:204})}}, CHECKOUT:{fetch:async()=>Response.json({session_id:SESSION,checkout_url:'https://checkout.stripe.com/test'})},
+ PURCHASE_CODE_KEY:'z'.repeat(40), PURCHASE_TRANSPORT_TOKEN:'t'.repeat(40), PURCHASE_EMAIL_TRANSPORT:{fetch:async(_url,opts)=>{sentCode=JSON.parse(opts.body).code; return new Response(null,{status:204})}}, CHECKOUT:{fetch:async()=>Response.json({session_id:SESSION,checkout_url:'https://checkout.stripe.com/test'})},
  PURCHASE_EVIDENCE:{fetch:async(_url,opts)=>Response.json({...purchase,context_hash:JSON.parse(opts.body).context_hash,recipient_possession_verified:true})}};
  return {db,env,setPurchase(x){purchase=x},getCode(){return sentCode}};
 }

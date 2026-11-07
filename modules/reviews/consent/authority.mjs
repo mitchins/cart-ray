@@ -111,7 +111,9 @@ export async function authority(request, env) {
       .bind(contextHash,now).first();
     if (!context || !sessionId.test(context.checkout_session_id)) return unavailable();
     const purchase = await evidence(env,context.checkout_session_id,contextHash);
-    if (!env.PURCHASE_EMAIL_TRANSPORT?.fetch || typeof env.PURCHASE_CODE_KEY !== 'string' || env.PURCHASE_CODE_KEY.length < 32) return unavailable();
+    if (!env.PURCHASE_EMAIL_TRANSPORT?.fetch || typeof env.PURCHASE_CODE_KEY !== 'string' || env.PURCHASE_CODE_KEY.length < 32 ||
+        typeof env.PURCHASE_TRANSPORT_TOKEN !== 'string' || env.PURCHASE_TRANSPORT_TOKEN.length < 32 ||
+        env.PURCHASE_TRANSPORT_TOKEN === env.PURCHASE_CODE_KEY) return unavailable();
     const challenge=await env.CONTEXT_DB.prepare('SELECT event_id,acquisition_id,source_provenance,recipient_context_hash,binding_version,delivery_state,verified_at,expires_at FROM purchaser_email_challenges WHERE token_hash=?').bind(contextHash).first();
     const matches=challenge && challenge.event_id===purchase.event_id && challenge.acquisition_id===purchase.acquisition_id &&
       challenge.source_provenance===purchase.source_provenance && challenge.recipient_context_hash===purchase.recipient_context_hash && challenge.binding_version===purchase.binding_version;
@@ -126,7 +128,7 @@ export async function authority(request, env) {
       try {
         const signal=AbortSignal.timeout(2000);
         const timeout=new Promise((_,reject)=>signal.addEventListener('abort',()=>reject(new Error('timeout')),{once:true}));
-        const delivered=await Promise.race([env.PURCHASE_EMAIL_TRANSPORT.fetch('https://email-possession.internal/send',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({recipient_reference:purchase.recipient_reference,code,context_hash:contextHash}),signal}),timeout]);
+        const delivered=await Promise.race([env.PURCHASE_EMAIL_TRANSPORT.fetch('https://email-possession.internal/send',{method:'POST',headers:{'content-type':'application/json','Authorization':'Bearer '+env.PURCHASE_TRANSPORT_TOKEN},body:JSON.stringify({recipient_reference:purchase.recipient_reference,code,context_hash:contextHash}),signal}),timeout]);
         if (!delivered.ok) throw new Error('uncertain');
         if(delivered.body) void delivered.body.cancel().catch(()=>{});
         await env.CONTEXT_DB.prepare("UPDATE purchaser_email_challenges SET delivery_state='sent' WHERE token_hash=? AND delivery_state='claimed'").bind(contextHash).run();
