@@ -30,11 +30,36 @@ test Worker, a merchant must create and independently preflight Stripe **test**
 prices for the three lookup keys. Never add secret keys or real customer data to
 this example or build output.
 
-An explicit `--test-checkout-api https://TEST-WORKER.example` builds the site
-against a separately provisioned CartRay **test-only** checkout Worker. The URL
+To prepare an actual test checkout, create active, fixed, one-time Stripe
+**test-mode** prices for `cr_test_acorn_kit` (AUD 24.00),
+`cr_test_acorn_planter` (AUD 18.00) and `cr_test_acorn_guide` (AUD 0.00).
+No Stripe resources are created by this example. With a read-only `rk_test_`
+or `sk_test_` key supplied securely as `STRIPE_API_KEY` in the environment, run
+the existing read-only preflight:
+
+```sh
+uv run --locked python scripts/preflight_catalogue.py \
+  --catalogue examples/acorn-store/catalogue.csv \
+  --fulfilment-expansions examples/acorn-store/fulfilment-expansions.json \
+  --output-lock examples/acorn-store/.private/stripe-test-preflight.lock.json
+```
+
+The ignored private lock binds the exact test Price identities and catalogue
+version to the `acorn-stripe-test` Worker build profile. Select that profile
+with `CARTRAY_CATALOGUE_PROFILE=acorn-stripe-test` for the existing Worker
+vendoring build. Missing, stale, live-mode or mismatched locks fail closed.
+The lock contains test product/price metadata and must not be committed.
+Use a **separate test-only** Worker, D1 database, signing keys, test Stripe
+webhook secret and storefront origin; the repository's existing Wrangler
+configuration points at another deployment and must not be reused unchanged.
+Provisioning those resources and configuring a test webhook are separate steps.
+
+After preflight, an explicit `--test-checkout-api https://TEST-WORKER.example` builds the site
+against the separately provisioned CartRay **test-only** checkout Worker. The
+build checks that the local test lock matches the catalogue and reference prices. The URL
 is operator-supplied: the build cannot attest the remote Worker's Stripe mode.
 Verify its test-environment and test-key guards and the reviewed price preflight
-before enabling it. No remote Worker, Stripe object or D1 database is created by
+and that its build used the same lock before enabling it. No remote Worker, Stripe object or D1 database is created by
 this build.
 
 ## Optional Reviews
