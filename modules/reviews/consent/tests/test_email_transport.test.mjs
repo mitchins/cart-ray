@@ -30,3 +30,16 @@ test('unauthorized request, wrong resolved recipient or production configuration
  assert.equal((await sendTestCode(x.req(),x.env,x.fetcher)).status,503);assert.equal(x.count(),0);
  x.env.TEST_EMAIL_MODE='production';assert.equal((await sendTestCode(x.req(),x.env,x.fetcher)).status,503);
 });
+test('a separately configured sender domain is used for only the approved test mailbox',async()=>{
+ const x=setup();x.env.TEST_SENDER='verify+acorn@independent-test.example';
+ let calls=0;const fetcher=async(_url,opts)=>{calls++;const body=JSON.parse(opts.body);
+  assert.equal(body.sender,'verify+acorn@independent-test.example');assert.deepEqual(body.to,[recipient]);
+  return Response.json({data:{succeeded:1,failed:0,failures:[],email_id:'receipt'}})};
+ assert.equal((await sendTestCode(x.req(),x.env,fetcher)).status,200);assert.equal(calls,1);
+});
+test('malformed, multiple or header-injected sender and recipient values fail closed',async()=>{
+ for(const value of ['Name <a@example.com>','a@example.com,b@example.com','a@example.com\r\nBcc:b@example.com','a..b@example.com','a@-example.com','a@example..com']){
+  const x=setup();x.env.TEST_SENDER=value;assert.equal((await sendTestCode(x.req(),x.env,x.fetcher)).status,503);assert.equal(x.count(),0);
+  const y=setup();y.env.APPROVED_TEST_EMAIL=value;assert.equal((await sendTestCode(y.req(),y.env,y.fetcher)).status,503);assert.equal(y.count(),0);
+ }
+});
