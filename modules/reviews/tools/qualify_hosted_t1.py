@@ -75,7 +75,8 @@ def check_bindings(bindings, expected):
         require(len(matching) == 1 and matching[0].get(field) == value, "deployed binding mismatch: " + name)
         if kind == "service":
             require(
-                matching[0].get("environment") in (None, "") and matching[0].get("entrypoint") in (None, ""),
+                matching[0].get("environment") in (None, "", "production")
+                and matching[0].get("entrypoint") in (None, ""),
                 "non-default service target: " + name,
             )
 

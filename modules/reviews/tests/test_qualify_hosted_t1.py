@@ -143,3 +143,8 @@ def test_nondefault_service_target_rejected(field):
     binding = {"name": "SOURCE_API", "type": "service", "service": "source", field: "other"}
     with pytest.raises(ValueError):
         module.check_bindings([binding], [("SOURCE_API", "service", "service", "source")])
+
+
+def test_default_production_service_environment_accepted():
+    binding = {"name": "SOURCE_API", "type": "service", "service": "source", "environment": "production"}
+    module.check_bindings([binding], [("SOURCE_API", "service", "service", "source")])
