@@ -112,20 +112,34 @@ def main():
             )
             assert status == 200 and evidence["recipient_binding_recorded"] and evidence["consent_granted"]
             for subject in ("example-policy", "example-bundle"):
-                assert call("/reviews-admin/v1/subjects", {"subject_id":subject,"kind":"product","path":"/"+subject+"/"}, admin=True)[0] == 201
+                assert (
+                    call(
+                        "/reviews-admin/v1/subjects",
+                        {"subject_id": subject, "kind": "product", "path": "/" + subject + "/"},
+                        admin=True,
+                    )[0]
+                    == 201
+                )
             endpoint = "/reviews-internal/v1/automation-initial-prepare"
-            status, prepared = internal(endpoint, {"outbox_id":outbox_id}, AUTOMATION_TOKEN)
+            status, prepared = internal(endpoint, {"outbox_id": outbox_id}, AUTOMATION_TOKEN)
             assert status == 200 and prepared["state"] == "prepared", (status, prepared)
-            assert internal(endpoint, {"outbox_id":outbox_id}, AUTOMATION_TOKEN)[1] == prepared
-            token=prepared["unsubscribe_token"]
-            assert call("/reviews/v1/invitation-unsubscribe", {"token":token})[0] == 200
-            assert call("/reviews/v1/invitation-unsubscribe", {"token":token})[0] == 200
-            assert internal(endpoint, {"outbox_id":outbox_id}, AUTOMATION_TOKEN)[0] == 409
-            claim={"outbox_id":outbox_id, "acquisition_id":prepared["acquisition_id"], "generation_id":prepared["generation_id"], "delivery_identity":prepared["delivery_identity"]}
-            assert internal("/reviews-internal/v1/automation-initial-claim",claim,AUTOMATION_TOKEN)[0] == 409
+            assert internal(endpoint, {"outbox_id": outbox_id}, AUTOMATION_TOKEN)[1] == prepared
+            token = prepared["unsubscribe_token"]
+            assert call("/reviews/v1/invitation-unsubscribe", {"token": token})[0] == 200
+            assert call("/reviews/v1/invitation-unsubscribe", {"token": token})[0] == 200
+            assert internal(endpoint, {"outbox_id": outbox_id}, AUTOMATION_TOKEN)[0] == 409
+            claim = {
+                "outbox_id": outbox_id,
+                "acquisition_id": prepared["acquisition_id"],
+                "generation_id": prepared["generation_id"],
+                "delivery_identity": prepared["delivery_identity"],
+            }
+            assert internal("/reviews-internal/v1/automation-initial-claim", claim, AUTOMATION_TOKEN)[0] == 409
             stop(process)
-            process = start("wrangler.acquisition.test.toml", directory, "disabled", ADMIN, {"REVIEWS_UNSUBSCRIBE_KEY": "u" * 40})
-            assert call("/reviews/v1/invitation-unsubscribe", {"token":token})[0] == 200
+            process = start(
+                "wrangler.acquisition.test.toml", directory, "disabled", ADMIN, {"REVIEWS_UNSUBSCRIBE_KEY": "u" * 40}
+            )
+            assert call("/reviews/v1/invitation-unsubscribe", {"token": token})[0] == 200
             print("Workerd initial due authorization and one-click suppression passed")
             return
             withdrawal = {
