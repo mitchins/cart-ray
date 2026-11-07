@@ -10,9 +10,12 @@ function setup() {
  const item={stripe_price_id:'price_test_1',quantity:1,unit_amount_minor:4200};
  let purchase={id:session,livemode:false,status:'complete',payment_status:'paid',amount_total:4200,currency:'aud',metadata:{cr_order_id:order,cr_catalogue_version:catalogue,cr_items_digest:'abc123'},customer_details:{email:'squirrel@example.com'}};
  const db={prepare(sql){return {bind(){return {async first(){return row},async all(){return {results:[item]}}}}}}};
- const contexts={prepare(){return {bind(){return {async first(){return {checkout_session_id:session}}}}}}};
+ const contexts={prepare(sql){return {bind(){return {async first(){
+  if(sql.includes('review_suppression_key_registry')) return {key_version:'key1',key_check:createHmac('sha256','y'.repeat(40)).update(JSON.stringify(['reviews-suppression-key-check-v1','acorn-store','test','install_test','key1'])).digest('hex')};
+  return {checkout_session_id:session};
+ }}}}}};
  const env={PURCHASE_EVIDENCE_MODE:'test',STORE_KEY:'acorn-store',ENVIRONMENT:'test',COMMERCE_DB:db,CONTEXT_DB:contexts,
- CF_VERSION_METADATA:{id:'authority-uuid'},REVIEWS_API:{fetch:async()=>Response.json({state:'held_eligibility_recipient_consent'})},REVIEWS_AUTOMATION_INGRESS_TOKEN:'i'.repeat(40),STRIPE_TEST_KEY:'sk_test_synthetic',PURCHASE_ATTESTATION_TOKEN:'x'.repeat(40),PURCHASE_ATTESTATION_KEY:attkey,RECIPIENT_HASH_KEY:'y'.repeat(40),RECIPIENT_RESOLVE_TOKEN:'q'.repeat(40),SOURCE_WORKER_VERSION:'source-v',REVIEWS_WORKER_VERSION:'reviews-v',PRODUCER_WORKER_VERSION:'producer-v',APPROVED_TEST_EMAIL:'squirrel@example.com',INSTALLATION_ID:'install_test',STRIPE_ACCOUNT_ID:'acct_test123',CATALOGUE_VERSION:catalogue,MAPPING_SHA256:mapping,COMMERCE_DB_ID:'db-commerce',CONTEXT_DB_ID:'db-context',
+ CF_VERSION_METADATA:{id:'authority-uuid'},REVIEWS_API:{fetch:async()=>Response.json({state:'held_eligibility_recipient_consent'})},REVIEWS_AUTOMATION_INGRESS_TOKEN:'i'.repeat(40),STRIPE_TEST_KEY:'sk_test_synthetic',PURCHASE_ATTESTATION_TOKEN:'x'.repeat(40),PURCHASE_ATTESTATION_KEY:attkey,RECIPIENT_HASH_KEY:'y'.repeat(40),RECIPIENT_HASH_KEY_VERSION:'key1',RECIPIENT_RESOLVE_TOKEN:'q'.repeat(40),SOURCE_WORKER_VERSION:'source-v',REVIEWS_WORKER_VERSION:'reviews-v',PRODUCER_WORKER_VERSION:'producer-v',APPROVED_TEST_EMAIL:'squirrel@example.com',INSTALLATION_ID:'install_test',STRIPE_ACCOUNT_ID:'acct_test123',CATALOGUE_VERSION:catalogue,MAPPING_SHA256:mapping,COMMERCE_DB_ID:'db-commerce',CONTEXT_DB_ID:'db-context',
  ATTESTOR:{async fetch(_url,opts){const {authority_version,nonce}=JSON.parse(opts.body);const proof=['cartray-reviews-purchase-attestation-v1','acorn-store','test','install_test','db-commerce','db-context','acct_test123',catalogue,mapping,'source-v','reviews-v','producer-v',authority_version,nonce,now,now+30];const signature=createHmac('sha256',Buffer.from(attkey,'hex')).update(JSON.stringify(proof)).digest('hex');return Response.json({proof,signature})}}};
  const fetcher=async(url)=>{calls.push(url); if(url.endsWith('/v1/account')) return Response.json({id:'acct_test123'}); if(url.includes('/line_items?')) return Response.json({has_more:false,data:[{price:{id:'price_test_1',unit_amount:4200},quantity:1}]}); return Response.json(purchase)};
  const call=()=>purchaseEvidence(new Request('https://private/confirmed',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({session_id:session,context_hash:context})}),env,fetcher);
@@ -66,6 +69,14 @@ test('automatic evidence uses only a checked-out, confirmed order and signs purc
  x.env.REVIEWS_API.fetch=async(url,opts)=>{if(url.endsWith('/automation-evidence-status')) return Response.json({state:'held_eligibility_recipient_consent'}); sent.push({url,opts}); return Response.json({status:'recorded'})};
  const req=(body={outbox_id:12},token=x.env.AUTOMATION_EVIDENCE_TOKEN)=>new Request('https://private/automation-record',{method:'POST',headers:{'content-type':'application/json',Authorization:'Bearer '+token},body:JSON.stringify(body)});
  assert.equal((await purchaseEvidence(req(),x.env,x.fetcher)).status,200);
+ // Rotating either the identifier or secret without a qualified migration
+ // must never turn existing suppressions into a different pseudonym.
+ x.env.RECIPIENT_HASH_KEY_VERSION='key2'; assert.equal((await purchaseEvidence(req(),x.env,x.fetcher)).status,503);
+ x.env.RECIPIENT_HASH_KEY_VERSION='key1'; x.env.RECIPIENT_HASH_KEY='new-key-'.repeat(5);
+ assert.equal((await purchaseEvidence(req(),x.env,x.fetcher)).status,503); x.env.RECIPIENT_HASH_KEY='y'.repeat(40);
+ const contextPrepare=x.env.CONTEXT_DB.prepare;
+ x.env.CONTEXT_DB.prepare=()=>({bind:()=>({first:async()=>null})});
+ assert.equal((await purchaseEvidence(req(),x.env,x.fetcher)).status,503); x.env.CONTEXT_DB.prepare=contextPrepare;
  const recipient=JSON.parse(sent[0].opts.body), consent=JSON.parse(sent[1].opts.body);
  x.env.AUTOMATION_RECIPIENT_TOKEN='m'.repeat(40);
  const resolve=(token)=>new Request('https://private/automation-recipient',{method:'POST',headers:{'content-type':'application/json',Authorization:'Bearer '+token},body:'{"outbox_id":12}'});

@@ -64,6 +64,16 @@ function normalizeEmail(value) {
 async function resolve(session,contextHash,env,fetcher,{automationOutbox=null}={}) {
   const automatic=automationOutbox!==null;
   if(automatic ? !Number.isSafeInteger(automationOutbox)||automationOutbox<1 : !sessionPattern.test(session) || !hash.test(contextHash)) throw Error('scope');
+  if(automatic) {
+    // Existing suppression pseudonyms cannot be translated from a new key.
+    // Refuse evidence until an explicitly provisioned, immutable registry row
+    // matches both the key version and a domain-separated key check.
+    if(!id.test(env.RECIPIENT_HASH_KEY_VERSION || '')) throw Error('suppression key unavailable');
+    const pinned=await env.CONTEXT_DB.prepare('SELECT key_version,key_check FROM review_suppression_key_registry WHERE store_key=? AND environment=? AND installation_id=?')
+      .bind(env.STORE_KEY,'test',env.INSTALLATION_ID).first();
+    const check=await mac(env.RECIPIENT_HASH_KEY,JSON.stringify(['reviews-suppression-key-check-v1',env.STORE_KEY,'test',env.INSTALLATION_ID,env.RECIPIENT_HASH_KEY_VERSION]));
+    if(!pinned || pinned.key_version!==env.RECIPIENT_HASH_KEY_VERSION || !equal(pinned.key_check,check)) throw Error('suppression key unavailable');
+  }
   const proof=await attest(env);
   const now=Math.floor(Date.now()/1000);
   if(!automatic) {
