@@ -11,7 +11,7 @@ function setup(){
  db.prepare('INSERT INTO review_automation_intents VALUES (?,?,?,?)').run('acorn','test','purchase',10);
  db.prepare('INSERT INTO review_provider_deliveries VALUES (?,?,?,?,?,?,?,?)').run('acorn','test','purchase',generation,delivery,'smtp2go','smtp_123',100);
  const prep=sql=>({bind(...args){return{async first(){return db.prepare(sql).get(...args)??null},async run(){db.prepare(sql).run(...args)}}}});
- const env={REVIEWS_ENVIRONMENT:'test',SMTP2GO_RECONCILIATION:'test',REVIEWS_STORE:'acorn',SMTP2GO_ACTIVITY_KEY:'api-synthetic',RECONCILIATION_TOKEN:'z'.repeat(40),AUTOMATION_RECIPIENT_TOKEN:'r'.repeat(40),APPROVED_TEST_EMAIL:'test@example.org',PURCHASE_EVIDENCE:{fetch:async()=>Response.json({email:'test@example.org'})},REVIEWS_DB:{prepare:prep,async batch(stmts){for(const s of stmts)await s.run()}}};
+ const env={REVIEWS_ENVIRONMENT:'test',SMTP2GO_RECONCILIATION:'test',REVIEWS_STORE:'acorn',SMTP2GO_ACTIVITY_KEY:'api-synthetic',RECONCILIATION_TOKEN:'z'.repeat(40),HISTORICAL_RECIPIENT_TOKEN:'r'.repeat(40),APPROVED_TEST_EMAIL:'test@example.org',PURCHASE_EVIDENCE:{fetch:async()=>Response.json({email:'test@example.org'})},REVIEWS_DB:{prepare:prep,async batch(stmts){for(const s of stmts)await s.run()}}};
  return {db,env,input:{acquisition_id:'purchase',generation_id:generation,delivery_identity:delivery}};
 }
 function provider(events,additional={}){return async(url,opts)=>{assert.equal(url,'https://api.smtp2go.com/v3/activity/search');assert.equal(JSON.parse(opts.body).search_email_id,'smtp_123');return Response.json({data:{events,total_events:events.length,...additional}})}}
@@ -57,4 +57,12 @@ test('discovery fails closed on incomplete, ambiguous and expired evidence',asyn
  await assert.rejects(discover(input,env,async()=>Response.json({data:{events:[event('id1')],total_events:2}}),200));
  assert.deepEqual(await discover(input,env,async()=>{throw Error('not called')},500000),{status:'unknown',reason:'history_window'});
  assert.equal(db.prepare('SELECT count(*) n FROM review_provider_identity_discoveries').get().n,0);
+});
+test('discovery resolves only scoped historical recipient with its own bearer, even after suppression',async()=>{
+ const {db,env,input}=setup();let history=0,provider=0;
+ env.PURCHASE_EVIDENCE.fetch=async(url,options)=>{history++;assert.equal(new URL(url).pathname,'/historical-recipient');assert.equal(options.headers.Authorization,'Bearer '+env.HISTORICAL_RECIPIENT_TOKEN);assert.deepEqual(JSON.parse(options.body),{outbox_id:10,acquisition_id:'purchase',generation_id:generation,delivery_identity:delivery});return Response.json({email:'test@example.org'})};
+ const event={to:'test@example.org',email_id:'smtp_123',event:'delivered',date:'1970-01-01T00:02:00Z',custom_headers:{'X-Reviews-Delivery-Identity':delivery}};
+ assert.deepEqual(await discover(input,env,async()=>{provider++;return Response.json({data:{events:[event],total_events:1}})},200),{status:'matched_needs_operator',events:['delivered']});
+ assert.equal(history,1);assert.equal(provider,1);assert.equal(db.prepare('SELECT state FROM invitation_generations').get().state,'uncertain');
+ env.HISTORICAL_RECIPIENT_TOKEN=env.RECONCILIATION_TOKEN;await assert.rejects(discover(input,env,async()=>{throw Error('must not fetch')},200));
 });

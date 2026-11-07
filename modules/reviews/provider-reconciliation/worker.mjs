@@ -48,8 +48,8 @@ export async function reconcile(input,env,fetcher=fetch,now=Math.floor(Date.now(
 export async function discover(input,env,fetcher=fetch,now=Math.floor(Date.now()/1000)){
  if(env.REVIEWS_ENVIRONMENT!=='test'||env.SMTP2GO_RECONCILIATION!=='test'||!env.REVIEWS_DB?.prepare||
     !env.PURCHASE_EVIDENCE?.fetch||typeof env.SMTP2GO_ACTIVITY_KEY!=='string'||!env.SMTP2GO_ACTIVITY_KEY.startsWith('api-')||
-    typeof env.AUTOMATION_RECIPIENT_TOKEN!=='string'||env.AUTOMATION_RECIPIENT_TOKEN.length<32||
-    env.AUTOMATION_RECIPIENT_TOKEN===env.RECONCILIATION_TOKEN||!ID.test(env.REVIEWS_STORE||'')||
+    typeof env.HISTORICAL_RECIPIENT_TOKEN!=='string'||env.HISTORICAL_RECIPIENT_TOKEN.length<32||
+    [env.RECONCILIATION_TOKEN,env.SMTP2GO_ACTIVITY_KEY].includes(env.HISTORICAL_RECIPIENT_TOKEN)||!ID.test(env.REVIEWS_STORE||'')||
     !input||Object.keys(input).length!==3||!Object.hasOwn(input,'acquisition_id')||
     !Object.hasOwn(input,'delivery_identity')||!Object.hasOwn(input,'generation_id')||
     !ID.test(input.acquisition_id||'')||!HEX.test(input.delivery_identity||'')||!HEX.test(input.generation_id||'')||
@@ -63,8 +63,8 @@ export async function discover(input,env,fetcher=fetch,now=Math.floor(Date.now()
  const controller=new AbortController();let timer;
  try{const deadline=new Promise((_,reject)=>{timer=setTimeout(()=>{controller.abort();reject(Error('timeout'))},15000)});
   return await Promise.race([(async()=>{
-   const recipientResponse=await env.PURCHASE_EVIDENCE.fetch('https://purchase-evidence.internal/automation-recipient',{
-    method:'POST',signal:controller.signal,headers:{'Content-Type':'application/json',Authorization:'Bearer '+env.AUTOMATION_RECIPIENT_TOKEN},body:JSON.stringify({outbox_id:row.outbox_id})});
+   const recipientResponse=await env.PURCHASE_EVIDENCE.fetch('https://purchase-evidence.internal/historical-recipient',{
+    method:'POST',signal:controller.signal,headers:{'Content-Type':'application/json',Authorization:'Bearer '+env.HISTORICAL_RECIPIENT_TOKEN},body:JSON.stringify({outbox_id:row.outbox_id,acquisition_id:input.acquisition_id,generation_id:input.generation_id,delivery_identity:input.delivery_identity})});
    if(!recipientResponse.ok)throw Error('recipient unavailable');const recipient=await readBounded(recipientResponse.body,4096);
    if(typeof recipient.email!=='string'||recipient.email!==env.APPROVED_TEST_EMAIL)throw Error('recipient unavailable');
    const start=new Date(Math.max(0,row.prepared_at-300)*1000).toISOString();

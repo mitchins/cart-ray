@@ -61,7 +61,7 @@ function normalizeEmail(value) {
   if(typeof value!=='string' || value.length>254 || value!==value.trim() || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value)) throw Error('recipient');
   const at=value.lastIndexOf('@'); return value.slice(0,at)+'@'+value.slice(at+1).toLowerCase();
 }
-async function resolve(session,contextHash,env,fetcher,{automationOutbox=null}={}) {
+async function resolve(session,contextHash,env,fetcher,{automationOutbox=null,historical=null}={}) {
   const automatic=automationOutbox!==null;
   if(automatic ? !Number.isSafeInteger(automationOutbox)||automationOutbox<1 : !sessionPattern.test(session) || !hash.test(contextHash)) throw Error('scope');
   if(automatic) {
@@ -129,6 +129,14 @@ async function resolve(session,contextHash,env,fetcher,{automationOutbox=null}={
     : ['acorn-recipient-v1',env.STORE_KEY,'test',row.order_id,version,email]));
   let priorConsent=null;
   if(automatic) {
+    if(historical) {
+      if(historical.acquisition_id!==row.order_id) throw Error('historical acquisition');
+      const match=await callBounded(env.REVIEWS_API.fetch.bind(env.REVIEWS_API),'https://reviews.internal/reviews-internal/v1/historical-recipient-match',{
+        method:'POST',headers:{'Content-Type':'application/json','Authorization':'Bearer '+env.REVIEWS_HISTORICAL_RECIPIENT_TOKEN},
+        body:JSON.stringify({...historical,outbox_id:row.outbox_id,candidate:recipientHash})});
+      if(match.status!=='matched') throw Error('historical recipient mismatch');
+      return {email};
+    }
     const replay=await callBounded(env.REVIEWS_API.fetch.bind(env.REVIEWS_API),'https://reviews.internal/reviews-internal/v1/automation-recipient-replay',{
       method:'POST',headers:{'Content-Type':'application/json','Authorization':'Bearer '+env.REVIEWS_AUTOMATION_INGRESS_TOKEN},
       body:JSON.stringify({outbox_id:row.outbox_id,candidate:recipientHash})});
@@ -164,11 +172,25 @@ export async function buildAutomationEvidence(result,env) {
 
 export async function purchaseEvidence(request,env,fetcher=fetch) {
   const path=new URL(request.url).pathname;
-  if(!configured(env) || request.method!=='POST' || !['/confirmed','/delivery-recipient','/automation-record','/automation-recipient'].includes(path) ||
+  if(!configured(env) || request.method!=='POST' || !['/confirmed','/delivery-recipient','/automation-record','/automation-recipient','/historical-recipient'].includes(path) ||
     (request.headers.get('content-type')||'')!=='application/json') return unavailable();
   try {
     const input=await jsonBounded(new Response(request.body,{headers:request.headers}),512);
     if(!input || Array.isArray(input)) return unavailable();
+    if(path==='/historical-recipient') {
+      const token=env.HISTORICAL_RECIPIENT_TOKEN, reviewsToken=env.REVIEWS_HISTORICAL_RECIPIENT_TOKEN;
+      if(Object.keys(input).sort().join(',')!=='acquisition_id,delivery_identity,generation_id,outbox_id' ||
+        !Number.isSafeInteger(input.outbox_id) || input.outbox_id<1 || !id.test(input.acquisition_id||'') ||
+        !hash.test(input.generation_id||'') || !hash.test(input.delivery_identity||'') ||
+        [token,reviewsToken].some(x=>typeof x!=='string'||x.length<32) ||
+        new Set([token,reviewsToken,env.RECIPIENT_HASH_KEY,env.AUTOMATION_RECIPIENT_TOKEN,env.AUTOMATION_EVIDENCE_TOKEN,
+          env.RECIPIENT_RESOLVE_TOKEN,env.PURCHASE_ATTESTATION_TOKEN,env.REVIEWS_AUTOMATION_INGRESS_TOKEN,
+          env.REVIEWS_RECIPIENT_EVIDENCE_SECRET,env.REVIEWS_CONSENT_SECRET]).size!==10 ||
+        !equal(request.headers.get('Authorization')||'', 'Bearer '+token)) return unavailable();
+      const {outbox_id,...historical}=input;
+      const result=await resolve(null,null,env,fetcher,{automationOutbox:outbox_id,historical});
+      return Response.json({email:result.email},{headers:{'Cache-Control':'no-store'}});
+    }
     if(path==='/automation-recipient') {
       const token=env.AUTOMATION_RECIPIENT_TOKEN;
       if(Object.keys(input).join(',')!=='outbox_id' || !Number.isSafeInteger(input.outbox_id) || input.outbox_id<1 ||

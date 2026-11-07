@@ -98,6 +98,19 @@ test('automatic evidence uses only a checked-out, confirmed order and signs purc
  replay={status:'suppressed'};
  assert.deepEqual(await (await purchaseEvidence(req(),x.env,x.fetcher)).json(),{status:'not_granted'});
  assert.deepEqual(await (await purchaseEvidence(resolve(x.env.AUTOMATION_RECIPIENT_TOKEN),x.env,x.fetcher)).json(),{status:'suppressed'});
+ // Historical investigation has independent credentials and checks the delivery scope; suppression still blocks sending.
+ x.env.HISTORICAL_RECIPIENT_TOKEN='n'.repeat(40); x.env.REVIEWS_HISTORICAL_RECIPIENT_TOKEN='v'.repeat(40);
+ const prior=x.env.REVIEWS_API.fetch; let historicalChecks=0;
+ x.env.REVIEWS_API.fetch=async(url,opts)=>{if(url.endsWith('/historical-recipient-match')) {historicalChecks++; const body=JSON.parse(opts.body); assert.equal(body.acquisition_id,order); assert.equal(body.outbox_id,12); assert.equal(opts.headers.Authorization,'Bearer '+x.env.REVIEWS_HISTORICAL_RECIPIENT_TOKEN); return Response.json({status:'matched'});} return prior(url,opts)};
+ const histInput={outbox_id:12,acquisition_id:order,generation_id:'a'.repeat(64),delivery_identity:'b'.repeat(64)};
+ const historical=(auth,body=histInput)=>new Request('https://private/historical-recipient',{method:'POST',headers:{'content-type':'application/json',Authorization:'Bearer '+auth},body:JSON.stringify(body)});
+ assert.equal((await purchaseEvidence(historical('wrong'),x.env,x.fetcher)).status,503);
+ assert.equal((await purchaseEvidence(historical(x.env.AUTOMATION_RECIPIENT_TOKEN),x.env,x.fetcher)).status,503);
+ assert.equal((await purchaseEvidence(historical(x.env.HISTORICAL_RECIPIENT_TOKEN,{...histInput,acquisition_id:'wrong'}),x.env,x.fetcher)).status,503);
+ assert.deepEqual(await (await purchaseEvidence(historical(x.env.HISTORICAL_RECIPIENT_TOKEN),x.env,x.fetcher)).json(),{email:'squirrel@example.com'});
+ assert.equal(historicalChecks,1);
+ assert.deepEqual(await (await purchaseEvidence(resolve(x.env.AUTOMATION_RECIPIENT_TOKEN),x.env,x.fetcher)).json(),{status:'suppressed'});
+
  replay={status:'new'};
  x.row.order_id='cr_order_2'; x.row.payload_json=JSON.stringify({order_id:'cr_order_2',session_id:session,items_digest:'abc123'});
  x.setPurchase({id:session,livemode:false,status:'complete',payment_status:'paid',amount_total:4200,currency:'aud',metadata:{cr_order_id:'cr_order_2',cr_catalogue_version:catalogue,cr_items_digest:'abc123'},customer_details:{email:'squirrel@example.com'}});

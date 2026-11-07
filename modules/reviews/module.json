@@ -41,7 +41,8 @@
     "migrations/0029_merchant_recipient_suppression.sql",
     "migrations/0030_suppression_rotation.sql",
     "migrations/0031_provider_delivery_receipts.sql",
-    "migrations/0032_provider_operations_audit.sql"
+    "migrations/0032_provider_operations_audit.sql",
+    "migrations/0033_historical_recipient_audit.sql"
   ],
   "routes": [
     "GET /reviews/v1/subject-lookup?alias={alias}",
@@ -72,6 +73,7 @@
     "POST /reviews/v1/contributions (verified_acquisition_only, test only)",
     "POST /reviews-internal/v1/automation-activate (verified_acquisition_only, test only, disabled by default)",
     "POST /reviews-internal/v1/automation-intake (verified_acquisition_only, test only, disabled by default)",
+    "POST /reviews-internal/v1/historical-recipient-match (verified_acquisition_only, test only, disabled by default)",
     "POST /reviews-internal/v1/automation-recipient-evidence (verified_acquisition_only, test only, disabled by default)",
     "POST /reviews-internal/v1/automation-evidence-status (verified_acquisition_only, test only, disabled by default)",
     "POST /reviews-internal/v1/automation-due-evaluate (verified_acquisition_only, test only, disabled by default)",

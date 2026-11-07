@@ -12,7 +12,12 @@ from cartray_reviews.acquisition import confirmed_purchase
 from cartray_reviews.automation_due import claim_due, complete_claim
 from cartray_reviews.automation_initial import due_initial, unsubscribe_token
 from cartray_reviews.automation_intake import activate_intake, intake_order
-from cartray_reviews.automation_recipient import evidence_status, record_recipient, resolve_replay
+from cartray_reviews.automation_recipient import (
+    authorize_historical_recipient,
+    evidence_status,
+    record_recipient,
+    resolve_replay,
+)
 from cartray_reviews.invitations import (
     claim_delivery,
     prepare_initial_delivery,
@@ -1092,6 +1097,25 @@ async def handle_write(request, env, path):
             return Response.json({"status": "recorded"}, status=200, headers={"Cache-Control": "no-store"})
         except (ValueError, TypeError, AttributeError, KeyError, json.JSONDecodeError):
             return fail(409, "recipient evidence unavailable")
+    if path == "/reviews-internal/v1/historical-recipient-match":
+        token = str(getattr(env, "REVIEWS_HISTORICAL_RECIPIENT_TOKEN", ""))
+        excluded = (*secrets, str(getattr(env, "REVIEWS_AUTOMATION_INGRESS_TOKEN", "")),
+                    str(getattr(env, "REVIEWS_CONSENT_SECRET", "")), str(getattr(env, "REVIEWS_DELIVERY_TOKEN", "")),
+                    str(getattr(env, "REVIEWS_RECIPIENT_EVIDENCE_SECRET", "")),
+                    str(getattr(env, "RECONCILIATION_TOKEN", "")),
+                    str(getattr(env, "REVIEWS_UNSUBSCRIBE_KEY", ""))) if acquisition_mode else ()
+        if (not acquisition_mode or len(token) < 32 or token in excluded
+                or not hmac.compare_digest(str(request.headers.get("Authorization") or "").encode(),
+                                           ("Bearer " + token).encode())):
+            await discard_body(request)
+            return fail(503, "historical evidence unavailable")
+        try:
+            data = await read_json(request)
+            result = await authorize_historical_recipient(env.REVIEWS_DB, store=store, environment=environment,
+                         data=data, now=int(time.time()), random_token=random_token)
+            return Response.json(result, headers={"Cache-Control": "no-store"})
+        except Exception:
+            return fail(409, "historical evidence unavailable")
     if path == "/reviews-internal/v1/automation-recipient-replay":
         failure = await automation_authorize(request, env, acquisition_mode, secrets, "evidence unavailable")
         if failure is not None:
