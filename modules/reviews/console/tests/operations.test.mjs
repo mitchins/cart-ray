@@ -68,13 +68,13 @@ test('delivery investigation is read-only and permission failure does not disabl
   const names = ['delivery-state', 'delivery-load', 'delivery-more', 'delivery-results', 'delivery-status', 'delivery-error'];
   const nodes = Object.fromEntries(names.map((name) => [name, new Element(name)])); nodes['delivery-state'].value = 'uncertain';
   let calls = 0, denied = true;
-  const client = { async deliveries(state) { calls++; if (denied) throw new ConsoleError('unauthorized', 401); return { records: [{ delivery_identity: 'f'.repeat(64), state, prepared_at: 1 }], next_after: null }; } };
+  const client = { async deliveries(state) { calls++; if (denied) throw new ConsoleError('unauthorized', 401); return { records: [{ acquisition_id: 'order_1', delivery_identity: 'f'.repeat(64), state, prepared_at: 1 }], next_after: null }; } };
   setupDeliveries({ client, document: { querySelector: (selector) => nodes[selector.slice(1)] }, element });
   assert.equal(calls, 0);
   await nodes['delivery-load'].click(); assert.match(nodes['delivery-error'].textContent, /operations permission/);
   denied = false; await nodes['delivery-load'].click();
   assert.match(nodes['delivery-results'].children[0].children[1].textContent, /Delivery reference/);
-  assert.equal(nodes['delivery-results'].children[0].children.length, 3);
+  assert.equal(nodes['delivery-results'].children[0].children.length, 6);
 });
 
 test('reply history preserves edits made while loading and save locks inputs', async () => {

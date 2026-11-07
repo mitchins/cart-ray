@@ -681,11 +681,10 @@ async def record_delivery_outcome(
     if len(current) != 1:
         raise ValueError("delivery unavailable")
     item = current[0]
-    async def record_provider_identity():
+    def provider_identity_statements():
         if provider_email_id is None:
-            return
-        try:
-            await db.batch([
+            return []
+        return [
                 db.prepare(
                     "INSERT OR IGNORE INTO review_provider_deliveries VALUES (?,?,?,?,?,'smtp2go',?,?)"
                 ).bind(store, environment, acquisition, generation, delivery, provider_email_id, accepted_at),
@@ -695,8 +694,13 @@ async def record_delivery_outcome(
                     "AND delivery_identity=? AND provider='smtp2go' AND provider_email_id=? AND accepted_at=?) "
                     "THEN 1 ELSE 0 END"
                 ).bind(store, environment, acquisition, generation, delivery, provider_email_id, accepted_at),
-                db.prepare("DELETE FROM native_guard"),
-            ])
+            ]
+
+    async def record_provider_identity():
+        if provider_email_id is None:
+            return
+        try:
+            await db.batch([*provider_identity_statements(), db.prepare("DELETE FROM native_guard")])
         except Exception as exc:
             raise ValueError("provider identity conflict") from exc
     if item["state"] == "revoked" and outcome == "accepted" and item["accepted_at"] == accepted_at:
@@ -742,16 +746,7 @@ async def record_delivery_outcome(
             "AND delivery_identity=? AND state=?) THEN 1 ELSE 0 END"
         ).bind(store, environment, acquisition, generation, delivery, item["state"])
     statements = [guard]
-    if provider_email_id is not None:
-        statements.extend([
-            db.prepare("INSERT OR IGNORE INTO review_provider_deliveries VALUES (?,?,?,?,?,'smtp2go',?,?)")
-            .bind(store, environment, acquisition, generation, delivery, provider_email_id, accepted_at),
-            db.prepare(
-                "INSERT INTO native_guard SELECT CASE WHEN EXISTS(SELECT 1 FROM review_provider_deliveries "
-                "WHERE store_key=? AND environment=? AND acquisition_id=? AND generation_id=? AND "
-                "delivery_identity=? AND provider_email_id=? AND accepted_at=?) THEN 1 ELSE 0 END"
-            ).bind(store, environment, acquisition, generation, delivery, provider_email_id, accepted_at),
-        ])
+    statements.extend(provider_identity_statements())
     if outcome == "accepted":
         expiry = -1 if lifetime is None else accepted_at + lifetime
         statements.extend(
@@ -842,6 +837,7 @@ async def record_delivery_outcome(
                             "AND r.state='pending')))) "
                             "THEN 1 ELSE 0 END"
                         ).bind(store, environment, acquisition, generation, delivery, item["state"]),
+                        *provider_identity_statements(),
                         db.prepare(
                             "UPDATE invitation_generations SET state='revoked',accepted_at=?,expires_at=? "
                             "WHERE store_key=? AND environment=? AND acquisition_id=? AND generation_id=? "
@@ -859,7 +855,6 @@ async def record_delivery_outcome(
                         db.prepare("DELETE FROM native_guard"),
                     ]
                 )
-                await record_provider_identity()
                 return {"state": "revoked"}
             except Exception:
                 pass

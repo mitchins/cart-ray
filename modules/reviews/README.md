@@ -113,12 +113,7 @@ Historical imported reviews and reply reactivation are not supported here.
 
 Staff with the separate `reviews:operations` permission can use test-only
 `GET /reviews-admin/v1/deliveries?state=uncertain` to inspect a bounded queue.
-The accepted state filters are `uncertain`, `dispatching` and `failed`; each
-page is scoped to its store and environment and uses an `after` delivery-ID
-cursor. The response excludes recipient, order and bearer-token information.
-It reports only recorded states, not reasons or provider acceptance. There is
-no staff action to resolve or resend a delivery: authoritative provider receipt
-verification and safe operational reconciliation remain unimplemented.
+The accepted state filters are `uncertain`, `dispatching`, `failed`, `accepted` and `revoked`; each page is scoped to its store and environment and uses an `after` delivery-ID cursor. The response includes the acquisition reference for authorized operations staff, but excludes recipient addresses and bearer capabilities. Staff can inspect stored provider observations for a delivery. Provider acceptance and mailbox delivery are distinct. There is no staff action to resend or resolve an uncertain delivery; authoritative operational reconciliation remains a release requirement.
 
 `GET /reviews/v1/subjects/example-policy/summary` and `/reviews/v1/subjects/example-policy/contributions` are scoped to the Worker's configured store and environment. Lists use a limit of 1–50 (default 20); use the returned `next_after` together with `snapshot_id` as `?after=...&snapshot=...` for the next page. A changed publication invalidates an old cursor. Imported reviews order by original source calendar day with unknown days last; native reviews order by submission time. IDs break ties. Replies accompany their selected parent. Only published, allowlisted content is returned. A fresh native subject produces an empty summary without importing anything. When a historical and native subject share the same canonical kind and path, the experimental test-only unified feed orders both by calendar day and source-qualified ID, and binds pagination to both publication versions. Cross-source identity reconciliation is not yet qualified; overlapping subjects fail closed in live.
 

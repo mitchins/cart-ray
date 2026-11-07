@@ -383,11 +383,13 @@ async def delivery_queue_read(request, env, query):
         return fail(400, "invalid query")
     state = params.get("state", [""])[0]
     after = params.get("after", [""])[0]
-    if state not in ("dispatching", "uncertain", "failed") or (after and not re.fullmatch(r"[0-9a-f]{64}", after)):
+    if state not in ("dispatching", "uncertain", "failed", "accepted", "revoked") or (
+        after and not re.fullmatch(r"[0-9a-f]{64}", after)
+    ):
         return fail(400, "invalid query")
     result = rows(
         await env.REVIEWS_DB.prepare(
-            "SELECT generation_id,delivery_identity,state,prepared_at FROM invitation_generations "
+            "SELECT acquisition_id,generation_id,delivery_identity,state,prepared_at FROM invitation_generations "
             "WHERE store_key=? AND environment=? AND state=? AND delivery_identity>? "
             "ORDER BY delivery_identity LIMIT 51"
         )
@@ -395,6 +397,44 @@ async def delivery_queue_read(request, env, query):
         .all()
     )
     return bounded_staff_page("deliveries", result, "delivery_identity", {"state": state})
+
+
+async def provider_evidence_staff_read(request, env, query, delivery_id):
+    """Read scoped provider observations for staff with delivery-operations permission."""
+    if str(env.REVIEWS_ENVIRONMENT) != "test":
+        return fail(503, "operations unavailable")
+    if not await staff_actor(request, env, "reviews:operations"):
+        return fail(401, "unauthorized")
+    if query or not re.fullmatch(r"[0-9a-f]{64}", delivery_id):
+        return fail(400, "invalid query")
+    store, environment = str(env.REVIEWS_STORE_KEY), str(env.REVIEWS_ENVIRONMENT)
+    generation = rows(await env.REVIEWS_DB.prepare(
+        "SELECT acquisition_id,generation_id,state FROM invitation_generations "
+        "WHERE store_key=? AND environment=? AND delivery_identity=? LIMIT 1"
+    ).bind(store, environment, delivery_id).all())
+    if len(generation) != 1:
+        return fail(404, "delivery unavailable")
+    acquisition, generation_id = generation[0]["acquisition_id"], generation[0]["generation_id"]
+    identities = rows(await env.REVIEWS_DB.prepare(
+        "SELECT provider,provider_email_id,accepted_at FROM review_provider_deliveries "
+        "WHERE store_key=? AND environment=? AND acquisition_id=? AND generation_id=? AND delivery_identity=?"
+    ).bind(store, environment, acquisition, generation_id, delivery_id).all())
+    activity = rows(await env.REVIEWS_DB.prepare(
+        "SELECT event_type,event_at,observed_at FROM review_provider_activity "
+        "WHERE store_key=? AND environment=? AND acquisition_id=? AND generation_id=? "
+        "ORDER BY event_at DESC LIMIT 51"
+    ).bind(store, environment, acquisition, generation_id).all())
+    discoveries = rows(await env.REVIEWS_DB.prepare(
+        "SELECT provider_email_id,event_type,event_at,observed_at FROM review_provider_identity_discoveries "
+        "WHERE store_key=? AND environment=? AND acquisition_id=? AND generation_id=? AND delivery_identity=? "
+        "ORDER BY event_at DESC LIMIT 51"
+    ).bind(store, environment, acquisition, generation_id, delivery_id).all())
+    return Response.json({"acquisition_id": acquisition, "generation_id": generation_id,
+                          "delivery_identity": delivery_id, "state": generation[0]["state"],
+                          "provider": identities[0] if identities else None,
+                          "activity": activity[:50], "discoveries": discoveries[:50],
+                          "truncated": len(activity) > 50 or len(discoveries) > 50},
+                         headers={"Cache-Control": "no-store"})
 
 
 async def staff_history_read(request, env, query, review_id, kind):

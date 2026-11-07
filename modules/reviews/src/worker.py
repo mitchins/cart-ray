@@ -14,6 +14,7 @@ from native_lifecycle import (
     handle_write,
     native_read,
     pending_read,
+    provider_evidence_staff_read,
     published_staff_read,
     read_json,
     staff_history_read,
@@ -133,6 +134,11 @@ class Default(WorkerEntrypoint):
             if mode not in ("collect", "verified_acquisition_only"):
                 return Response.json({"error": "not found"}, status=404)
             return await delivery_queue_read(request, self.env, url.query)
+        delivery_evidence = re.fullmatch(r"/reviews-admin/v1/deliveries/([0-9a-f]{64})/provider-evidence", url.path)
+        if str(request.method) == "GET" and delivery_evidence:
+            if mode not in ("collect", "verified_acquisition_only"):
+                return Response.json({"error": "not found"}, status=404)
+            return await provider_evidence_staff_read(request, self.env, url.query, delivery_evidence.group(1))
         staff_history = re.fullmatch(
             r"/reviews-admin/v1/contributions/([0-9a-f]{64})/(revisions|audit|reply-revisions|reply-audit)", url.path
         )

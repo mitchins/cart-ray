@@ -49,6 +49,7 @@
     "GET /reviews-admin/v1/pending (collect, test only)",
     "GET /reviews-admin/v1/published (collect, test only)",
     "GET /reviews-admin/v1/deliveries (collect, test only)",
+    "GET /reviews-admin/v1/deliveries/{delivery_identity}/provider-evidence (collect, test only)",
     "GET /reviews-admin/v1/contributions/{review_id}/{revisions|audit|reply-revisions|reply-audit} (collect, test only)",
     "POST /reviews-admin/v1/* (collect, test only)",
     "POST /reviews-internal/v1/settlements (verified_acquisition_only, test only)",

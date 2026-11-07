@@ -34,7 +34,7 @@ CONSOLE = Path(__file__).resolve().parent.parent
 PORT = 48974
 ORIGIN = f"http://127.0.0.1:{PORT}"
 STAFF_PATH = re.compile(
-    r"/reviews-admin/v1/(?:pending|published|deliveries|subject-display-names|contributions/[a-f0-9]{64}/"
+    r"/reviews-admin/v1/(?:pending|published|deliveries(?:/[a-f0-9]{64}/provider-evidence)?|subject-display-names|contributions/[a-f0-9]{64}/"
     r"(?:approve|reject|withdraw|revisions|audit|reply|reply-withdraw|reply-revisions|reply-audit))"
 )
 ASSETS = {

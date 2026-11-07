@@ -63,12 +63,13 @@ def test_operations_queue_requires_independent_permission_and_is_bounded(lifecyc
     assert (
         read(lifecycle, settings(REVIEWS_DB=db, REVIEWS_ENVIRONMENT="live"), "state=uncertain", assertion).status == 503
     )
-    for query in ("", "state=accepted", "state=uncertain&state=failed", "state=uncertain&after=bad"):
+    for query in ("", "state=unknown", "state=uncertain&state=failed", "state=uncertain&after=bad"):
         assert read(lifecycle, operator, query, assertion).status == 400
     first = read(lifecycle, operator, "state=uncertain", assertion)
     assert first.status == 200 and first.headers["Cache-Control"] == "no-store"
     assert len(first.body["deliveries"]) == 50 and first.body["next_after"] == f"{1050:064x}"
-    assert "private-order" not in str(first.body) and f"{2001:064x}" not in str(first.body)
+    assert first.body["deliveries"][0]["acquisition_id"].startswith("private-order-")
+    assert f"{2001:064x}" not in str(first.body)
     next_page = read(lifecycle, operator, "state=uncertain&after=" + first.body["next_after"], assertion)
     assert len(next_page.body["deliveries"]) == 3 and next_page.body["next_after"] is None
     failed = read(lifecycle, operator, "state=failed", assertion)
@@ -81,3 +82,33 @@ def test_operations_queue_requires_independent_permission_and_is_bounded(lifecyc
     ] == [f"{100:064x}"]
     assert db.db.execute("SELECT count(*) FROM invitation_generations WHERE state='uncertain'").fetchone()[0] == 54
     assert db.db.total_changes == changes
+
+
+def test_provider_evidence_is_operations_scoped_and_excludes_private_fields(lifecycle):
+    db = Database()
+    generation = add_delivery(db, 1)
+    delivery = f"{1001:064x}"
+    db.db.execute(
+        "INSERT INTO review_provider_deliveries VALUES (?,?,?,?,?,'smtp2go',?,?)",
+        ("store", "test", "private-order-1", generation, delivery, "smtp_1", 101),
+    )
+    db.db.execute(
+        "INSERT INTO review_provider_activity VALUES (?,?,?,?,?,?,?,?)",
+        ("store", "test", "private-order-1", generation, "smtp_1", "delivered", "1970-01-01T00:02:00Z", 120),
+    )
+    db.db.commit()
+    assertion = token(claims())
+    req = types.SimpleNamespace(headers={"Cf-Access-Jwt-Assertion": assertion})
+    moderator = settings(REVIEWS_DB=db)
+    operator = settings(REVIEWS_DB=db, REVIEWS_STAFF_POLICY=json.dumps({"staff-1": ["reviews:operations"]}))
+    assert asyncio.run(lifecycle.provider_evidence_staff_read(req, moderator, "", delivery)).status == 401
+    result = asyncio.run(lifecycle.provider_evidence_staff_read(req, operator, "", delivery))
+    assert result.status == 200 and result.headers["Cache-Control"] == "no-store"
+    assert result.body["acquisition_id"] == "private-order-1"
+    assert result.body["provider"]["provider_email_id"] == "smtp_1"
+    assert result.body["activity"][0]["event_type"] == "delivered"
+    assert "recipient" not in str(result.body) and "token_hash" not in str(result.body)
+    assert asyncio.run(lifecycle.provider_evidence_staff_read(req, operator, "x=1", delivery)).status == 400
+    other = settings(REVIEWS_DB=db, REVIEWS_STORE_KEY="other",
+                     REVIEWS_STAFF_POLICY=json.dumps({"staff-1": ["reviews:operations"]}))
+    assert asyncio.run(lifecycle.provider_evidence_staff_read(req, other, "", delivery)).status == 404

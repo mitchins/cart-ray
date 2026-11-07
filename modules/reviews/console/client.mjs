@@ -91,10 +91,22 @@ export function createClient(fetcher = fetch, timeoutMs = 8000) {
       return { reply_id: data.reply_id, reply_revision_id: data.reply_revision_id, state: data.state };
     },
     async deliveries(state, after = null) {
-      if (!['uncertain', 'dispatching', 'failed'].includes(state) || (after !== null && !ID.test(after))) throw new ConsoleError('Invalid delivery filter.');
+      if (!['uncertain', 'dispatching', 'failed', 'accepted', 'revoked'].includes(state) || (after !== null && !ID.test(after))) throw new ConsoleError('Invalid delivery filter.');
       const data = await request(`/reviews-admin/v1/deliveries?state=${state}` + (after ? `&after=${after}` : ''), { credentials: 'same-origin', cache: 'no-store', headers: { Accept: 'application/json' } });
-      if (!data || data.state !== state || !Array.isArray(data.deliveries) || data.deliveries.length > 50 || !(data.next_after === null || ID.test(data.next_after)) || data.deliveries.some((row) => !row || !ID.test(row.delivery_identity || '') || !ID.test(row.generation_id || '') || row.state !== state || !Number.isSafeInteger(row.prepared_at) || row.prepared_at < 0 || row.prepared_at > 253402300799) || new Set(data.deliveries.map((row) => row.delivery_identity)).size !== data.deliveries.length || (data.next_after && !data.deliveries.some((row) => row.delivery_identity === data.next_after))) throw new ConsoleError('The review service returned an invalid response.');
-      return { records: data.deliveries.map(({ delivery_identity, generation_id, state: rowState, prepared_at }) => ({ delivery_identity, generation_id, state: rowState, prepared_at })), next_after: data.next_after };
+      if (!data || data.state !== state || !Array.isArray(data.deliveries) || data.deliveries.length > 50 || !(data.next_after === null || ID.test(data.next_after)) || data.deliveries.some((row) => !row || !ID.test(row.delivery_identity || '') || !ID.test(row.generation_id || '') || !SUBJECT.test(row.acquisition_id || '') || row.state !== state || !Number.isSafeInteger(row.prepared_at) || row.prepared_at < 0 || row.prepared_at > 253402300799) || new Set(data.deliveries.map((row) => row.delivery_identity)).size !== data.deliveries.length || (data.next_after && !data.deliveries.some((row) => row.delivery_identity === data.next_after))) throw new ConsoleError('The review service returned an invalid response.');
+      return { records: data.deliveries.map(({ acquisition_id, delivery_identity, generation_id, state: rowState, prepared_at }) => ({ acquisition_id, delivery_identity, generation_id, state: rowState, prepared_at })), next_after: data.next_after };
+    },
+    async deliveryEvidence(deliveryId) {
+      if (!ID.test(deliveryId || '')) throw new ConsoleError('Invalid delivery reference.');
+      const data = await request(`/reviews-admin/v1/deliveries/${deliveryId}/provider-evidence`, { credentials: 'same-origin', cache: 'no-store', headers: { Accept: 'application/json' } });
+      const validEvent = (row) => row && ['processed', 'delivered', 'rejected', 'soft-bounced', 'hard-bounced'].includes(row.event_type) && typeof row.event_at === 'string' && row.event_at.length <= 40 && Number.isSafeInteger(row.observed_at);
+      if (!data || data.delivery_identity !== deliveryId || !SUBJECT.test(data.acquisition_id || '') || !ID.test(data.generation_id || '') || !Array.isArray(data.activity) || !Array.isArray(data.discoveries) || data.activity.length > 50 || data.discoveries.length > 50 || data.activity.some((row) => !validEvent(row)) || data.discoveries.some((row) => !validEvent(row) || !REQUEST_KEY.test(row.provider_email_id || '')) || (data.provider !== null && (!data.provider || data.provider.provider !== 'smtp2go' || !REQUEST_KEY.test(data.provider.provider_email_id || '') || !Number.isSafeInteger(data.provider.accepted_at))) || typeof data.truncated !== 'boolean') throw new ConsoleError('The review service returned invalid provider evidence.');
+      return {
+        provider: data.provider ? { provider: data.provider.provider, provider_email_id: data.provider.provider_email_id, accepted_at: data.provider.accepted_at } : null,
+        activity: data.activity.map(({event_type, event_at, observed_at}) => ({event_type, event_at, observed_at})),
+        discoveries: data.discoveries.map(({provider_email_id, event_type, event_at, observed_at}) => ({provider_email_id, event_type, event_at, observed_at})),
+        truncated: data.truncated,
+      };
     },
     async setSubjectName(subject, name) {
       if (!SUBJECT.test(subject || '') || typeof name !== 'string' || !name.trim() || [...name.trim()].length > 200) throw new ConsoleError('Enter a valid product reference and a public name of up to 200 characters.', 400);
