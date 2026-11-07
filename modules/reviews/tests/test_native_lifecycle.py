@@ -555,3 +555,64 @@ def test_automation_evidence_routes_require_independent_authorities(lifecycle):
     env.REVIEWS_ENVIRONMENT = "live"
     assert post(recipient_path, data, {"X-Reviews-Recipient-Signature": signature}).status == 503
     assert reviews.db.execute("SELECT count(*) FROM invitation_generations").fetchone()[0] == 0
+
+
+def test_due_evaluation_authentication_and_durable_receipts(lifecycle):
+    from test_automation_intake import run, setup
+
+    checkout, reviews = setup()
+    run(checkout, reviews)
+    token = "automation-synthetic-token-0123456789"
+    env = types.SimpleNamespace(
+        REVIEWS_DB=reviews,
+        CARTRAY_DB=checkout,
+        REVIEWS_STORE_KEY="store",
+        REVIEWS_ENVIRONMENT="test",
+        REVIEWS_MODE="verified_acquisition_only",
+        REVIEWS_TEST_ADMIN_TOKEN="a" * 40,
+        REVIEWS_SETTLEMENT_TOKEN="s" * 40,
+        REVIEWS_INVITATION_KEY="i" * 40,
+        REVIEWS_REVIEWER_KEY="r" * 40,
+        REVIEWS_CONSENT_SECRET="c" * 40,
+        REVIEWS_DELIVERY_TOKEN="d" * 40,
+        REVIEWS_AUTOMATION_INGRESS_TOKEN=token,
+    )
+    path = "/reviews-internal/v1/automation-due-evaluate"
+    body = {"acquisition_id": "order_1", "claim_token": "a" * 64}
+
+    def post(data=body, bearer=token):
+        request = types.SimpleNamespace(
+            method="POST", headers={"Authorization": "Bearer " + bearer}, data=data, body=None
+        )
+        result = asyncio.run(lifecycle.handle_write(request, env, path))
+        reviews.db.commit()
+        return result
+
+    assert post().status == 503
+    env.REVIEWS_AUTOMATION_INTAKE = "test"
+    env.REVIEWS_AUTOMATION_INGRESS_TOKEN = env.REVIEWS_CONSENT_SECRET
+    assert post().status == 503
+    env.REVIEWS_AUTOMATION_INGRESS_TOKEN = token
+    assert post(bearer="wrong").status == 401
+    assert post({"extra": True}).status == 400
+    assert post({**body, "claim_token": "bad"}).status == 409
+    with patch.object(lifecycle.time, "time", return_value=109):
+        assert post().body == {"status": "unavailable"}
+    original_completion = lifecycle.complete_claim
+
+    async def another_worker_completed(*args, **kwargs):
+        assert await original_completion(*args, **kwargs)
+        return False
+
+    with patch.object(lifecycle.time, "time", return_value=110):
+        with patch.object(lifecycle, "complete_claim", side_effect=another_worker_completed):
+            assert post().body == {"status": "held"}
+        assert post().body == {"status": "held"}
+        assert post({**body, "claim_token": "b" * 64}).body == {"status": "unavailable"}
+    assert (
+        reviews.db.execute("SELECT state FROM review_automation_intents").fetchone()[0]
+        == "held_eligibility_recipient_consent"
+    )
+    assert reviews.db.execute("SELECT count(*) FROM invitation_generations").fetchone()[0] == 0
+    env.REVIEWS_ENVIRONMENT = "live"
+    assert post().status == 503

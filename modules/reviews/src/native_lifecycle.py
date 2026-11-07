@@ -8,6 +8,7 @@ import time
 from urllib.parse import parse_qs
 
 from cartray_reviews.acquisition import confirmed_purchase
+from cartray_reviews.automation_due import claim_due, complete_claim
 from cartray_reviews.automation_intake import intake_order
 from cartray_reviews.automation_recipient import evidence_status, record_recipient
 from cartray_reviews.invitations import (
@@ -45,6 +46,29 @@ def rows(result):
 def fail(status, message):
     """Return a bounded error without leaking private state."""
     return Response.json({"error": message}, status=status)
+
+
+async def automation_authorize(request, env, acquisition_mode, secrets, unavailable):
+    """Authenticate test automation requests with an independent bearer."""
+    token = str(getattr(env, "REVIEWS_AUTOMATION_INGRESS_TOKEN", ""))
+    if (
+        not acquisition_mode
+        or str(getattr(env, "REVIEWS_AUTOMATION_INTAKE", "disabled")) != "test"
+        or len(token) < 32
+        or token in secrets
+        or token
+        in (
+            str(getattr(env, "REVIEWS_CONSENT_SECRET", "")),
+            str(getattr(env, "REVIEWS_DELIVERY_TOKEN", "")),
+            str(getattr(env, "REVIEWS_RECIPIENT_EVIDENCE_SECRET", "")),
+        )
+    ):
+        await discard_body(request)
+        return fail(503, unavailable)
+    if not hmac.compare_digest(str(request.headers.get("Authorization") or "").encode(), ("Bearer " + token).encode()):
+        await discard_body(request)
+        return fail(401, "unauthorized")
+    return None
 
 
 def unique_pairs(pairs):
@@ -496,6 +520,51 @@ async def handle_write(request, env, path):
             except Exception:
                 await discard_body(request)
                 return fail(503, "collection unavailable")
+    if path == "/reviews-internal/v1/automation-due-evaluate":
+        failure = await automation_authorize(request, env, acquisition_mode, secrets, "evaluation unavailable")
+        if failure is not None:
+            return failure
+        try:
+            data = await read_json(request)
+            if set(data) != {"acquisition_id", "claim_token"}:
+                return fail(400, "invalid evaluation")
+            now = int(time.time())
+            claim = await claim_due(
+                env.REVIEWS_DB,
+                store=store,
+                environment=environment,
+                acquisition=data["acquisition_id"],
+                token=data["claim_token"],
+                now=now,
+                lease_seconds=60,
+            )
+            completed = False
+            if claim is not None:
+                completed = await complete_claim(
+                    env.REVIEWS_DB,
+                    store=store,
+                    environment=environment,
+                    acquisition=data["acquisition_id"],
+                    token=data["claim_token"],
+                    generation=claim["generation"],
+                    now=int(time.time()),
+                )
+            if not completed:
+                # Another same-token invocation may have completed between claim and update.
+                found = rows(
+                    await env.REVIEWS_DB.prepare(
+                        "SELECT generation FROM review_automation_due_claims WHERE store_key=? AND environment=? "
+                        "AND acquisition_id=? AND claim_token=? AND state='completed'"
+                    )
+                    .bind(store, environment, data["acquisition_id"], data["claim_token"])
+                    .all()
+                )
+                completed = bool(found)
+            return Response.json(
+                {"status": "held" if completed else "unavailable"}, headers={"Cache-Control": "no-store"}
+            )
+        except (ValueError, TypeError, AttributeError, KeyError, json.JSONDecodeError):
+            return fail(409, "evaluation unavailable")
     if path == "/reviews-internal/v1/automation-intake":
         token = str(getattr(env, "REVIEWS_AUTOMATION_INGRESS_TOKEN", ""))
         supplied = str(request.headers.get("Authorization") or "")
@@ -559,25 +628,9 @@ async def handle_write(request, env, path):
         except (ValueError, TypeError, AttributeError, KeyError, json.JSONDecodeError):
             return fail(409, "recipient evidence unavailable")
     if path == "/reviews-internal/v1/automation-evidence-status":
-        token = str(getattr(env, "REVIEWS_AUTOMATION_INGRESS_TOKEN", ""))
-        supplied = str(request.headers.get("Authorization") or "")
-        if (
-            not acquisition_mode
-            or str(getattr(env, "REVIEWS_AUTOMATION_INTAKE", "disabled")) != "test"
-            or len(token) < 32
-            or token in secrets
-            or token
-            in (
-                str(getattr(env, "REVIEWS_CONSENT_SECRET", "")),
-                str(getattr(env, "REVIEWS_DELIVERY_TOKEN", "")),
-                str(getattr(env, "REVIEWS_RECIPIENT_EVIDENCE_SECRET", "")),
-            )
-        ):
-            await discard_body(request)
-            return fail(503, "evidence unavailable")
-        if not hmac.compare_digest(supplied.encode(), ("Bearer " + token).encode()):
-            await discard_body(request)
-            return fail(401, "unauthorized")
+        failure = await automation_authorize(request, env, acquisition_mode, secrets, "evidence unavailable")
+        if failure is not None:
+            return failure
         try:
             data = await read_json(request)
             if set(data) != {"outbox_id"}:
