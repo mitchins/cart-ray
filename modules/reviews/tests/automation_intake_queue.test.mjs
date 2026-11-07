@@ -1,0 +1,46 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { webcrypto } from 'node:crypto';
+import subscriber, {deliver} from '../automation-intake-queue/worker.mjs';
+if (!globalThis.crypto) globalThis.crypto = webcrypto;
+const key = '12'.repeat(32), token = 'x'.repeat(32);
+function env(fetch = async () => Response.json({status:'accepted',due_at:200})) {
+  return {REVIEWS_ENVIRONMENT:'test', REVIEWS_ORDER_SUBSCRIBER:'test', SOURCE_STORE:'acorn-store',
+    SOURCE_ISSUER:'issuer-v1', SOURCE_INSTALLATION:'installation-1', SOURCE_EVENT_KEY:key,
+    REVIEWS_AUTOMATION_TOKEN:token, REVIEWS_API:{fetch}};
+}
+async function message(changes = {}) {
+  const m = {version:1,issuer:'issuer-v1',installation:'installation-1',store:'acorn-store',environment:'test',outbox_id:42,...changes};
+  const payload=JSON.stringify(['cartray-reviews-order-confirmed-v1',m.issuer,m.installation,m.store,m.environment,m.outbox_id]);
+  const k=await crypto.subtle.importKey('raw',Uint8Array.from(key.match(/../g),x=>parseInt(x,16)),{name:'HMAC',hash:'SHA-256'},false,['sign']);
+  m.signature=Buffer.from(await crypto.subtle.sign('HMAC',k,new TextEncoder().encode(payload))).toString('hex');
+  return m;
+}
+test('signed message invokes only the scoped private intake and acknowledges its durable receipt', async()=>{
+  let calls=0;
+  const e=env(async (url,opts)=>{calls++; assert.equal(url,'https://reviews.internal/reviews-internal/v1/automation-intake');
+    assert.deepEqual(JSON.parse(opts.body),{outbox_id:42}); assert.equal(opts.headers.authorization,`Bearer ${token}`);
+    return Response.json({status:'accepted',due_at:200});});
+  const m=await message(); assert.equal(await deliver(m,e),'acknowledged'); assert.equal(await deliver(m,e),'acknowledged'); assert.equal(calls,2);
+});
+test('forged, cross-scope and malformed hints never reach intake',async()=>{
+  let calls=0;const e=env(async()=>{calls++;return Response.json({status:'accepted',due_at:200});});
+  const m=await message(); for(const bad of [{...m,outbox_id:43},{...m,store:'other'},{...m,signature:'00'.repeat(32)}, {...m,extra:1},await message({environment:'live'})]) assert.equal(await deliver(bad,e),'discard');
+  assert.equal(calls,0);
+});
+test('pre-activation and late dispositions are acknowledged without authorizing delivery',async()=>{
+  for (const status of ['pre_activation','late']) assert.equal(await deliver(await message(),env(async()=>Response.json({status,due_at:200}))), 'acknowledged');
+});
+test('configuration and intake failures retry, and invalid hints are discarded',async()=>{
+  const m=await message();let ack=0,retry=0;
+  const q=body=>({body,ack(){ack++},retry(opts){assert.equal(opts.delaySeconds,60);retry++}});
+  await subscriber.queue({messages:[q(m),q({...m,signature:'00'.repeat(32)})]},env(async()=>new Response('',{status:503})));
+  assert.equal(retry,1);assert.equal(ack,1);
+  await assert.rejects(deliver(m,{...env(),SOURCE_EVENT_KEY:''}),/key unavailable/);
+  await assert.rejects(deliver(m,env(async()=>Response.json({status:'accepted',due_at:'200'}))),/receipt/);
+  await assert.rejects(deliver(m,env(async()=>new Response('x'.repeat(4097)))),/too large/);
+});
+test('a stalled intake is bounded and retried', async()=>{
+  const start=Date.now(); await assert.rejects(deliver(await message(),env(()=>new Promise(()=>{}))),/timeout/);
+  assert.ok(Date.now()-start < 3500);
+});
