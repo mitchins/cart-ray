@@ -61,11 +61,17 @@ function binding(version, name, type, value) {
 }
 function serviceBinding(version, name, service) {
   const found=version?.resources?.bindings?.filter(x=>x.name===name && x.type==='service');
-  // A named environment or entrypoint can route to a different target than
-  // the default deployment whose active version was checked below.
+  // Cloudflare reports the default deployment as `production` in version
+  // metadata. Other named environments and entrypoints may route elsewhere.
   return found?.length===1 && found[0].service===service &&
-    (found[0].environment === undefined || found[0].environment === '') &&
+    (found[0].environment === undefined || found[0].environment === '' || found[0].environment === 'production') &&
     (found[0].entrypoint === undefined || found[0].entrypoint === '');
+}
+// Cloudflare has returned both `script_name` (documented) and `script`
+// (observed). If both appear they must agree; unknown or missing values fail.
+function consumerScriptMatches(consumer, expected) {
+  const names=[consumer?.script_name,consumer?.script].filter(value=>value!==undefined);
+  return names.length>0 && names.every(value=>value===expected);
 }
 export async function attest(env, fetchApi=fetch) {
   if (env.REVIEWS_ENVIRONMENT!=='test' || env.REVIEWS_SOURCE_PRODUCER!=='test' ||
@@ -100,7 +106,7 @@ export async function attest(env, fetchApi=fetch) {
         !producer.resources.bindings.some(x=>x.type==='queue' && x.name==='EVENT_QUEUE' && x.queue_name===env.EVENT_QUEUE_NAME) ||
         queue?.queue_id!==env.EVENT_QUEUE_ID || queue?.queue_name!==env.EVENT_QUEUE_NAME ||
         queue?.consumers_total_count!==1 || queue?.consumers?.length!==1 ||
-        queue.consumers[0].type!=='worker' || queue.consumers[0].script_name!==env.CONSUMER_WORKER ||
+        queue.consumers[0].type!=='worker' || !consumerScriptMatches(queue.consumers[0],env.CONSUMER_WORKER) ||
         queue.consumers[0].dead_letter_queue!==env.DEAD_LETTER_QUEUE_NAME ||
         !Number.isSafeInteger(queue.consumers[0].settings?.max_retries) ||
         queue.consumers[0].settings.max_retries<1 || queue.consumers[0].settings.max_retries>10 ||

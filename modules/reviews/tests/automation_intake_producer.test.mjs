@@ -52,6 +52,18 @@ test('wrong actual D1 binding, active version, source account and mapping fail c
     globalThis.fetch=stubControl(f);try {await assert.rejects(relay(f.env));assert.equal(f.sent.length,0);assert.equal(f.cursor,null);} finally {globalThis.fetch=original;}
   }
 });
+test('Cloudflare production service metadata selects the attested default deployment',async()=>{
+  const f=fixture();
+  for (const version of Object.values(f.versions)) {
+    for (const binding of version.resources.bindings) if (binding.type==='service') binding.environment='production';
+  }
+  assert.equal((await attest(f.env,stubControl(f))).source_version,v1);
+  assert.equal((await attestPurchase(f.env,{authority_version:f.versions.authority.id,nonce:'a'.repeat(64)},stubControl(f),1000)).proof[12],f.versions.authority.id);
+  for (const value of ['staging',null]) {
+    const x=fixture();x.versions.source.resources.bindings.at(-1).environment=value;
+    await assert.rejects(relay(x.env,stubControl(x)));assert.equal(x.cursor,null);assert.equal(x.sent.length,0);
+  }
+});
 test('send failure does not advance cursor; retry replays safely',async()=>{
   const f=fixture(),original=globalThis.fetch;globalThis.fetch=stubControl(f);let first=true;
   f.env.EVENT_QUEUE.send=async x=>{if(first){first=false;throw Error('offline');}f.sent.push(x);};
@@ -93,6 +105,27 @@ test('missing or unsafe dead-letter routing fails before any checkpoint or enque
       return Response.json(data);
     };
     await assert.rejects(relay(f.env,control));assert.equal(f.sent.length,0);assert.equal(f.cursor,null);
+  }
+});
+
+test('consumer identity accepts documented and observed API shapes while rejecting conflicts',async()=>{
+  for (const kind of ['documented','observed','both','conflict','missing','wrong-observed','missing-pause','paused']) {
+    const f=fixture(),base=stubControl(f);
+    const control=async (url,options)=>{
+      const response=await base(url,options);
+      if (!url.includes('/queues/')) return response;
+      const data=await response.json(),q=data.result;
+      if(q.queue_name==='queue1') {
+        const c=q.consumers[0];
+        if(kind==='observed'||kind==='wrong-observed'||kind==='missing') delete c.script_name;
+        if(['observed','both','conflict','wrong-observed'].includes(kind)) c.script=kind==='conflict'||kind==='wrong-observed'?'other':'consumer';
+        if(kind==='missing-pause') delete q.settings.delivery_paused;
+        if(kind==='paused') q.settings.delivery_paused=true;
+      }
+      return Response.json(data);
+    };
+    if(['documented','observed','both'].includes(kind)) assert.equal((await attest(f.env,control)).source_version,v1);
+    else { await assert.rejects(relay(f.env,control)); assert.equal(f.sent.length,0); assert.equal(f.cursor,null); }
   }
 });
 
