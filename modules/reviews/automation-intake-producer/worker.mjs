@@ -1,5 +1,8 @@
 /** Test-only source verifier and bounded outbox producer. No mail or collection. */
 const encoder = new TextEncoder();
+// Normalized sqlite_master fingerprint of the optional module migration.
+// An older experimental schema must not be treated as an installed cursor.
+const CHECKPOINT_SCHEMA_SHA256 = '4af9ce45f521b7e00a7b5d37063da9aed64032c71dcfd08b53045a7fb6f33c94';
 const id = /^[A-Za-z0-9_-]{1,128}$/;
 const uuid = /^[a-f0-9-]{36}$/;
 const hex = /^[0-9a-f]{64}$/;
@@ -135,7 +138,14 @@ export async function relay(env, fetchApi=fetch) {
   await attest(env,fetchApi);
   if (!id.test(env.POLICY_VERSION||'') || !Number.isSafeInteger(env.DELAY_SECONDS) || env.DELAY_SECONDS<0 ||
       !Number.isSafeInteger(env.MAX_LATENESS) || env.MAX_LATENESS<0) throw new Error('policy unavailable');
-  const watermark=await activate(env), db=env.COMMERCE_DB.withSession('first-primary');
+  const db=env.COMMERCE_DB.withSession('first-primary');
+  const schema=await db.prepare("SELECT name,sql FROM sqlite_master WHERE (type='table' AND name='reviews_subscriber_checkpoint') OR (type='trigger' AND tbl_name='reviews_subscriber_checkpoint') ORDER BY name").all();
+  if (!Array.isArray(schema.results) || schema.results.length!==4 || schema.results.some(x=>typeof x.name!=='string' || typeof x.sql!=='string'))
+    throw new Error('checkpoint schema unavailable');
+  const normalized=schema.results.map(x=>[x.name,x.sql.trim().replace(/\s+/g,' ')]);
+  const schemaHash=Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256',encoder.encode(JSON.stringify(normalized)))),x=>x.toString(16).padStart(2,'0')).join('');
+  if (schemaHash!==CHECKPOINT_SCHEMA_SHA256) throw new Error('checkpoint schema mismatch');
+  const watermark=await activate(env);
   await db.prepare('INSERT INTO reviews_subscriber_checkpoint SELECT ?,?,?,?,?,?,?,? WHERE NOT EXISTS (SELECT 1 FROM reviews_subscriber_checkpoint WHERE subscriber_id=?)')
     .bind(env.SOURCE_ISSUER,env.SOURCE_INSTALLATION,env.SOURCE_DATABASE_ID,env.STRIPE_ACCOUNT_ID,env.CATALOGUE_VERSION,env.MAPPING_SHA256,watermark,watermark,env.SOURCE_ISSUER).run();
   let row=await db.prepare('SELECT installation_id,source_database_id,stripe_account_id,catalogue_version,mapping_sha256,activation_watermark,last_outbox_id FROM reviews_subscriber_checkpoint WHERE subscriber_id=?')

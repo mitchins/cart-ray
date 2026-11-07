@@ -1,4 +1,5 @@
 import test from 'node:test';
+import {schema} from './fixtures/producer-workerd/schema-fixture.mjs';
 import assert from 'node:assert/strict';
 import {webcrypto} from 'node:crypto';
 import producer, {attest, attestPurchase, relay} from '../automation-intake-producer/worker.mjs';
@@ -16,6 +17,7 @@ function fixture(){
     reviews:{id:v3,resources:{bindings:[d1('CARTRAY_DB'),plain('REVIEWS_ENVIRONMENT','test'),plain('REVIEWS_MODE','verified_acquisition_only'),plain('REVIEWS_AUTOMATION_INTAKE','test'),plain('REVIEWS_STORE_KEY','acorn'),plain('REVIEWS_SUBJECT_MAPS',mapping)]}}};
   let cursor=null;const sent=[];
   const database={withSession:()=>database,prepare(sql){return {args:[],bind(...args){this.args=args;return this},async run(){if (!cursor) cursor={installation_id:this.args[1],source_database_id:this.args[2],stripe_account_id:this.args[3],catalogue_version:this.args[4],mapping_sha256:this.args[5],activation_watermark:this.args[6],last_outbox_id:this.args[7]};},async first(){return {...cursor}},async all(){
+    if(sql.startsWith('SELECT name,sql FROM sqlite_master')) return {results:schema};
     if(sql.startsWith('SELECT id')) return {results:[9,11,12].filter(x=>x>this.args[0]).map(id=>({id}))};
     if(sql.startsWith('UPDATE')) {if(cursor.last_outbox_id!==this.args[2]) return {results:[]};cursor.last_outbox_id=this.args[0];return {results:[{last_outbox_id:cursor.last_outbox_id}]};} throw Error('unexpected sql');}}}};
   const env={REVIEWS_ENVIRONMENT:'test',REVIEWS_SOURCE_PRODUCER:'test',SOURCE_WORKER:'source',PRODUCER_WORKER:'producer',REVIEWS_WORKER:'reviews',AUTHORITY_WORKER:'authority',AUTHORITY_CONTEXT_DB_ID:'77777777-7777-4777-8777-777777777777',PURCHASE_ATTESTATION_KEY:'45'.repeat(32),PURCHASE_ATTESTATION_TOKEN:'p'.repeat(32),CONSUMER_WORKER:'consumer',EVENT_QUEUE_NAME:'queue1',EVENT_QUEUE_ID:'e'.repeat(32),DEAD_LETTER_QUEUE_NAME:'dlq1',DEAD_LETTER_QUEUE_ID:'d'.repeat(32),SOURCE_STORE:'acorn',SOURCE_ISSUER:'issuer1',SOURCE_INSTALLATION:'install1',CF_ACCOUNT_ID:'a'.repeat(32),SOURCE_DATABASE_ID:dbid,STRIPE_ACCOUNT_ID:'acct_123',CATALOGUE_VERSION:catalogue,MAPPING_SHA256:digest,SOURCE_EVENT_KEY:'12'.repeat(32),CF_READ_TOKEN:'c'.repeat(32),SOURCE_IDENTITY_TOKEN:'s'.repeat(32),REVIEWS_ACTIVATION_TOKEN:'a'.repeat(32),TRIGGER_TOKEN:'t'.repeat(32),POLICY_VERSION:'policy1',DELAY_SECONDS:10,MAX_LATENESS:100,CF_VERSION_METADATA:{id:v2},COMMERCE_DB:database,
@@ -106,4 +108,14 @@ test('private attestation route rejects unauthenticated callers and returns scop
     assert.equal((await producer.fetch(request('/',{},'wrong'),f.env)).status,404);
     assert.equal((await producer.fetch(request('/',{},f.env.TRIGGER_TOKEN),f.env)).status,204);
   } finally {globalThis.fetch=original;}
+});
+test('an older or modified checkpoint schema fails before activation or enqueue',async()=>{
+  for (const kind of ['missing-trigger','modified-trigger','extra-trigger']) {
+    const f=fixture(), db=f.env.COMMERCE_DB, prepare=db.prepare;
+    db.prepare=function(sql){const statement=prepare.call(this,sql);if(sql.startsWith('SELECT name,sql FROM sqlite_master')) {
+      statement.all=async()=>({results:kind==='missing-trigger'?schema.slice(1):kind==='modified-trigger'?schema.map((r,i)=>i? r:{...r,sql:r.sql.replace('DELETE','UPDATE')}):[...schema,{name:'extra',sql:'CREATE TRIGGER extra'}]});
+    }return statement;};
+    let activations=0;f.env.REVIEWS_API.fetch=async()=>{activations++;return Response.json({status:'active',outbox_watermark:10});};
+    await assert.rejects(relay(f.env,stubControl(f)),/checkpoint schema/);assert.equal(activations,0);assert.equal(f.sent.length,0);
+  }
 });

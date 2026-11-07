@@ -80,7 +80,8 @@ def test_subscriber_checkpoint_identity_is_immutable():
     import sqlite3
 
     db = sqlite3.connect(":memory:")
-    db.executescript((module.ROOT / "migrations/0005_reviews_subscriber.sql").read_text())
+    migration = module.ROOT / "modules/reviews/automation-intake-producer/migrations/0001_reviews_subscriber.sql"
+    db.executescript(migration.read_text())
     row = ("issuer", "install", "db", "acct", "catalogue", "a" * 64, 10, 10)
     db.execute("INSERT INTO reviews_subscriber_checkpoint VALUES (?,?,?,?,?,?,?,?)", row)
     db.execute("UPDATE reviews_subscriber_checkpoint SET last_outbox_id=11 WHERE subscriber_id=?", ("issuer",))

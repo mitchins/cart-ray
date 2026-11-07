@@ -17,7 +17,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[3]
 CONFIG = ROOT / "modules/reviews/tests/fixtures/producer-workerd/wrangler.toml"
-MIGRATION = ROOT / "migrations/0005_reviews_subscriber.sql"
+MIGRATION = ROOT / "modules/reviews/automation-intake-producer/migrations/0001_reviews_subscriber.sql"
 
 
 def run():
