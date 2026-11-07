@@ -90,3 +90,13 @@ test('verified challenge cannot transfer across acquisition or issuer provenance
  setPurchase({...original,acquisition_id:'acq_test_2'});
  assert.equal((await consent(env,c,'grant','{"accept":true}')).status,503);
 });
+test('separate verified browser contexts reuse canonical recipient proof only after independent verification',async()=>{
+ const x=setup(); const a=(await checkout(x.env)).headers.get('set-cookie'), b=(await checkout(x.env)).headers.get('set-cookie');
+ assert.notEqual(a,b);
+ assert.equal((await consent(x.env,a,'challenge','{}')).status,200); const ac=x.getCode();
+ const first=await consent(x.env,a,'verify',JSON.stringify({code:ac})); assert.equal(first.status,200); const proof=(await first.json()).recipient_evidence;
+ assert.equal((await consent(x.env,b,'grant','{"accept":true}')).status,503);
+ assert.equal((await consent(x.env,b,'challenge','{}')).status,200); const bc=x.getCode();
+ const second=await consent(x.env,b,'verify',JSON.stringify({code:bc})); assert.equal(second.status,200); assert.deepEqual((await second.json()).recipient_evidence,proof);
+ assert.equal(x.db.prepare('SELECT count(*) c FROM purchaser_verified_recipients').get().c,1);
+});

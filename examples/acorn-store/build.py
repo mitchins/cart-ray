@@ -122,6 +122,8 @@ def build(
     shutil.copy2(HERE / "acorn.css", output / "acorn.css")
     shutil.copy2(HERE / "reviews.mjs", output / "reviews.mjs")
     shutil.copy2(HERE / "consent.mjs", output / "consent.mjs")
+    if review_consent:
+        shutil.copy2(HERE / "pages_gateway.mjs", output / "_worker.js")
     shutil.copytree(HERE / "assets", output / "assets")
     shutil.copytree(ROOT / "modules/reviews/ui", output / "review")
     paths = {item["product_key"]: item["path"] for item in config["products"]}
@@ -138,8 +140,11 @@ def build(
     }
     # JSON is external JS, not HTML: no user-provided text is interpolated into markup.
     (output / "storefront-config.js").write_text(
-        "window.CARTRAY_STOREFRONT = " + json.dumps(base, ensure_ascii=True) + ";\n"
-        "window.CARTRAY_STOREFRONT.productKey = document.body.dataset.productKey || null;\n"
+        "window.CARTRAY_STOREFRONT = "
+        + json.dumps(base, ensure_ascii=True)
+        + ";\n"
+        + ("window.CARTRAY_STOREFRONT.apiBaseUrl = window.location.origin;\n" if review_consent else "")
+        + "window.CARTRAY_STOREFRONT.productKey = document.body.dataset.productKey || null;\n"
         "document.title = window.CARTRAY_STOREFRONT.storeName;\n"
         "document.querySelectorAll('[data-store-name]').forEach(e => { "
         "e.textContent = window.CARTRAY_STOREFRONT.storeName; });\n"

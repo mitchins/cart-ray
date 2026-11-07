@@ -63,6 +63,14 @@ async function evidence(env, session, contextHash) {
       !safeId.test(x.binding_version || '') || !Number.isSafeInteger(x.outbox_id) || x.outbox_id<1) throw new Error('unavailable');
   return x;
 }
+async function canonicalRecipient(env,challenge,verifiedAt) {
+  await env.CONTEXT_DB.prepare('INSERT INTO purchaser_verified_recipients(outbox_id,event_id,acquisition_id,source_provenance,recipient_context_hash,binding_version,evidence_reference,verified_at) VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(outbox_id) DO NOTHING')
+    .bind(challenge.outbox_id,challenge.event_id,challenge.acquisition_id,challenge.source_provenance,challenge.recipient_context_hash,challenge.binding_version,challenge.evidence_reference,verifiedAt).run();
+  const proof=await env.CONTEXT_DB.prepare('SELECT event_id,acquisition_id,source_provenance,recipient_context_hash,binding_version,evidence_reference,verified_at FROM purchaser_verified_recipients WHERE outbox_id=?').bind(challenge.outbox_id).first();
+  if(!proof || proof.event_id!==challenge.event_id || proof.acquisition_id!==challenge.acquisition_id ||
+    proof.source_provenance!==challenge.source_provenance || proof.recipient_context_hash!==challenge.recipient_context_hash || proof.binding_version!==challenge.binding_version) throw new Error('recipient conflict');
+  return {outbox_id:challenge.outbox_id,recipient_context_hash:proof.recipient_context_hash,binding_version:proof.binding_version,evidence_reference:proof.evidence_reference,verified_at:proof.verified_at};
+}
 /** Route only from the first-party storefront gateway. The trusted checkout service
  * supplies the session; the browser cannot choose it through this endpoint. */
 export async function checkoutWithContext(request, env) {
@@ -117,10 +125,9 @@ export async function authority(request, env) {
     const challenge=await env.CONTEXT_DB.prepare('SELECT event_id,acquisition_id,source_provenance,outbox_id,evidence_reference,recipient_context_hash,binding_version,delivery_state,verified_at,expires_at FROM purchaser_email_challenges WHERE token_hash=?').bind(contextHash).first();
     const matches=challenge && challenge.event_id===purchase.event_id && challenge.acquisition_id===purchase.acquisition_id &&
       challenge.source_provenance===purchase.source_provenance && challenge.outbox_id===purchase.outbox_id && challenge.recipient_context_hash===purchase.recipient_context_hash && challenge.binding_version===purchase.binding_version;
-    const recipientEvidence=(verifiedAt)=>({outbox_id:challenge.outbox_id,recipient_context_hash:challenge.recipient_context_hash,binding_version:challenge.binding_version,evidence_reference:challenge.evidence_reference,verified_at:verifiedAt});
     if (action==='context') {
       const verified=!!(matches && challenge.verified_at && challenge.expires_at>now);
-      return Response.json(verified ? {available:true,verified:true,recipient_evidence:recipientEvidence(challenge.verified_at)} : {available:true,verified:false},{headers:{'Cache-Control':'no-store'}});
+      return Response.json(verified ? {available:true,verified:true,recipient_evidence:await canonicalRecipient(env,challenge,challenge.verified_at)} : {available:true,verified:false},{headers:{'Cache-Control':'no-store'}});
     }
     if (action==='challenge') {
       if (!safeId.test(purchase.recipient_reference || '')) return unavailable();
@@ -144,12 +151,12 @@ export async function authority(request, env) {
     }
     if (!matches || challenge.delivery_state!=='sent' || challenge.expires_at<=now) return unavailable();
     if (action==='verify') {
-      const verifiedResponse=(verifiedAt)=>Response.json({verified:true,recipient_evidence:recipientEvidence(verifiedAt)});
-      if (challenge.verified_at) return verifiedResponse(challenge.verified_at);
+      const verifiedResponse=async(verifiedAt)=>Response.json({verified:true,recipient_evidence:await canonicalRecipient(env,challenge,verifiedAt)});
+      if (challenge.verified_at) return await verifiedResponse(challenge.verified_at);
       const codeHash=await codeDigest(env.PURCHASE_CODE_KEY,contextHash,input.code);
       const verification=await env.CONTEXT_DB.prepare('UPDATE purchaser_email_challenges SET attempts=attempts+1,verified_at=CASE WHEN code_digest=? THEN ? ELSE NULL END WHERE token_hash=? AND verified_at IS NULL AND attempts<5 AND expires_at>? AND delivery_state=\'sent\' RETURNING verified_at')
         .bind(codeHash,now,contextHash,now).first();
-      return verification?.verified_at ? verifiedResponse(verification.verified_at) : unavailable();
+      return verification?.verified_at ? await verifiedResponse(verification.verified_at) : unavailable();
     }
     if (!challenge.verified_at) return unavailable();
     const reference = 'grant_'+token();

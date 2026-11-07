@@ -68,8 +68,14 @@ def main():
             assert status == 200
             cookie = headers.get("Set-Cookie")
             assert cookie and "HttpOnly" in cookie and "SameSite=Lax" in cookie
-            request_headers = {"Content-Type": "application/json", "Cookie": cookie}
-            assert post(base + "/review-consent/v1/challenge", "{}", request_headers)[0] == 200
+            request_headers = {
+                "Content-Type": "application/json",
+                "Cookie": cookie,
+                "Origin": "https://acorn.test",
+                "CF-Connecting-IP": "192.0.2.1",
+            }
+            challenge = post(base + "/review-consent/v1/challenge", "{}", request_headers)
+            assert challenge[0] == 200, (challenge[0], challenge[2])
             with urllib.request.urlopen(base + "/__test/code", timeout=5) as response:
                 code = json.loads(response.read())["code"]
             assert post(base + "/review-consent/v1/verify", json.dumps({"code": code}), request_headers)[0] == 200
@@ -79,7 +85,12 @@ def main():
             copied = post(
                 base + "/review-consent/v1/context",
                 "{}",
-                {"Content-Type": "application/json", "Cookie": "__Host-acorn-purchase=cs_test_abcdefghijk123456"},
+                {
+                    "Content-Type": "application/json",
+                    "Cookie": "__Host-acorn-purchase=cs_test_abcdefghijk123456",
+                    "Origin": "https://acorn.test",
+                    "CF-Connecting-IP": "192.0.2.1",
+                },
             )
             assert copied[0] == 503
             print("Workerd/D1: opaque cookie, idempotent consent, copied session rejected")

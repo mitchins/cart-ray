@@ -30,6 +30,20 @@ CREATE TABLE purchaser_consent_grants (
   evidence_reference TEXT NOT NULL UNIQUE,
   granted_at INTEGER NOT NULL
 );
+CREATE TABLE purchaser_verified_recipients (
+  outbox_id INTEGER PRIMARY KEY,
+  event_id TEXT NOT NULL,
+  acquisition_id TEXT NOT NULL,
+  source_provenance TEXT NOT NULL,
+  recipient_context_hash TEXT NOT NULL,
+  binding_version TEXT NOT NULL,
+  evidence_reference TEXT NOT NULL,
+  verified_at INTEGER NOT NULL
+);
+CREATE TRIGGER purchaser_recipient_no_update BEFORE UPDATE ON purchaser_verified_recipients
+BEGIN SELECT RAISE(ABORT, 'recipient proof immutable'); END;
+CREATE TRIGGER purchaser_recipient_no_delete BEFORE DELETE ON purchaser_verified_recipients
+BEGIN SELECT RAISE(ABORT, 'recipient proof immutable'); END;
 CREATE TABLE purchaser_test_email_claims (
   token_hash TEXT PRIMARY KEY,
   delivery_state TEXT NOT NULL CHECK(delivery_state IN ('claimed','accepted','uncertain')),

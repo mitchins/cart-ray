@@ -31,13 +31,15 @@ async function callBounded(fetcher,url,init) {
 }
 function configured(env) {
   return env.PURCHASE_EVIDENCE_MODE==='test' && env.STORE_KEY==='acorn-store' && env.ENVIRONMENT==='test' &&
-    env.COMMERCE_DB?.prepare && env.CONTEXT_DB?.prepare && env.ATTESTOR?.fetch && env.CF_VERSION_METADATA?.id &&
+    env.COMMERCE_DB?.prepare && env.CONTEXT_DB?.prepare && env.ATTESTOR?.fetch && env.REVIEWS_API?.fetch && env.CF_VERSION_METADATA?.id &&
     typeof env.STRIPE_TEST_KEY==='string' && /^(sk_test_|rk_test_)/.test(env.STRIPE_TEST_KEY) &&
     typeof env.PURCHASE_ATTESTATION_TOKEN==='string' && env.PURCHASE_ATTESTATION_TOKEN.length>=32 &&
     hash.test(env.PURCHASE_ATTESTATION_KEY||'') && typeof env.RECIPIENT_HASH_KEY==='string' && env.RECIPIENT_HASH_KEY.length>=32 &&
     env.RECIPIENT_HASH_KEY!==env.PURCHASE_ATTESTATION_TOKEN && typeof env.APPROVED_TEST_EMAIL==='string' &&
     typeof env.RECIPIENT_RESOLVE_TOKEN==='string' && env.RECIPIENT_RESOLVE_TOKEN.length>=32 &&
     env.RECIPIENT_RESOLVE_TOKEN!==env.PURCHASE_ATTESTATION_TOKEN && env.RECIPIENT_RESOLVE_TOKEN!==env.RECIPIENT_HASH_KEY &&
+    typeof env.REVIEWS_AUTOMATION_INGRESS_TOKEN==='string' && env.REVIEWS_AUTOMATION_INGRESS_TOKEN.length>=32 &&
+    ![env.PURCHASE_ATTESTATION_TOKEN,env.RECIPIENT_RESOLVE_TOKEN,env.RECIPIENT_HASH_KEY].includes(env.REVIEWS_AUTOMATION_INGRESS_TOKEN) &&
     id.test(env.INSTALLATION_ID||'') && /^acct_[A-Za-z0-9]+$/.test(env.STRIPE_ACCOUNT_ID||'') &&
     /^sha256:[a-f0-9]{64}$/.test(env.CATALOGUE_VERSION||'') && hash.test(env.MAPPING_SHA256||'');
 }
@@ -67,6 +69,9 @@ async function resolve(session,contextHash,env,fetcher) {
   if(!context || context.checkout_session_id!==session) throw Error('context');
   const row=await env.COMMERCE_DB.prepare("SELECT o.order_id,o.manifest_version,o.currency,o.subtotal_minor,o.items_digest,s.external_session_id,s.settlement_event_id,s.stripe_payment_status,s.stripe_amount_total_minor,b.id AS outbox_id,b.payload_json FROM orders o JOIN checkout_sessions s ON s.order_id=o.order_id JOIN outbox b ON b.order_id=o.order_id AND b.event_type='OrderConfirmed' WHERE s.external_session_id=? AND s.settlement_state='confirmed' LIMIT 1").bind(session).first();
   if(!row || row.manifest_version!==proof[7] || row.stripe_payment_status!=='paid' || row.stripe_amount_total_minor!==row.subtotal_minor) throw Error('order');
+  const eligibility=await callBounded(env.REVIEWS_API.fetch.bind(env.REVIEWS_API),'https://reviews.internal/reviews-internal/v1/automation-evidence-status',{
+    method:'POST',headers:{'Content-Type':'application/json','Authorization':'Bearer '+env.REVIEWS_AUTOMATION_INGRESS_TOKEN},body:JSON.stringify({outbox_id:row.outbox_id})});
+  if(eligibility.state!=='held_eligibility_recipient_consent') throw Error('not eligible');
   // Existing CartRay reconciliation uses this canonical acquisition event ID
   // when there is no Stripe webhook event; it is not a Stripe event claim.
   const eventId=row.settlement_event_id || 'recon_'+row.order_id;

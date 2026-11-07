@@ -56,7 +56,9 @@ not hosted identity or end-to-end consent qualification.
 T1 `/attest-purchase` RPC. It validates the signed installation proof and exact
 runtime versions, then checks the context database, confirmed CartRay order and
 outbox, the Stripe account, paid test Checkout Session, metadata and matching
-line items. An explicit `APPROVED_TEST_EMAIL` limits the sandbox to one mailbox.
+line items. It queries the attested Reviews service and requires an existing
+held intake before any code can be sent, so pre-activation purchases remain
+excluded. An explicit `APPROVED_TEST_EMAIL` limits the sandbox to one mailbox.
 The public consent authority receives only a scoped hash and opaque reference.
 The separate authenticated `/delivery-recipient` endpoint resolves that
 reference solely for the private test-code transport. Stripe-reported contact
@@ -74,3 +76,27 @@ reports acceptance. Provider credentials, sender verification, hosted binding
 and real email delivery are not supplied or qualified by these local tests.
 
 This implementation uses SMTP2GO's documented [standard email API](https://developers.smtp2go.com/reference/send-standard-email).
+
+## Same-origin test storefront routing
+
+An Acorn build with `--review-consent` emits a Pages advanced `_worker.js` and
+sets the storefront API base to `window.location.origin`. The normal build does
+neither. Configure that Pages deployment with the exact HTTPS
+`ACORN_STOREFRONT_ORIGIN`, a `CONSENT_GATEWAY` service binding to the attested
+composed authority Worker in `worker.mjs`, and a separate `CHECKOUT` binding to
+the attested CartRay source Worker. Pages supplies its `ASSETS` binding. Only
+`/checkout`, `/catalogue`, `/checkout-status` and the four explicitly listed
+consent endpoints are forwarded; internal evidence and transport routes return
+404. If the optional consent gateway is missing or unavailable, checkout routes
+fall back to CartRay using the same request/idempotency key; consent requests
+fail closed. The gateway does not provide merchant administration.
+
+The composed authority needs its own `CHECKOUT`, `SOURCE_IDENTITY`, `ATTESTOR`,
+`REVIEWS_API`, `COMMERCE_DB`, `CONTEXT_DB` and `CF_VERSION_METADATA` bindings.
+Hosted installation must verify both the Pages service-binding targets and the
+authority's bindings before use. The current local fixture uses synthetic
+services; it does not attest Pages deployment configuration or prove hosted
+browser routing. `--test-checkout-api` remains an explicit test-build gate and
+must identify the intended test deployment; when `--review-consent` is also
+selected, the generated browser client calls `window.location.origin` so the
+HttpOnly host cookie remains first-party.
