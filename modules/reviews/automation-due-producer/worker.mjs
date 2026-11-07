@@ -7,8 +7,13 @@ function configured(env) {
       !id.test(env.REVIEWS_STORE || '') || !env.REVIEWS_DB?.prepare ||
       !env.SCHEDULE_QUEUE?.send || !env.DUE_QUEUE?.send) throw new Error('scheduler unavailable');
 }
-function token() {
-  return Array.from(crypto.getRandomValues(new Uint8Array(32)), x => x.toString(16).padStart(2,'0')).join('');
+async function boundedSend(queue, message, options) {
+  let timer;
+  try {
+    await Promise.race([queue.send(message, options), new Promise((_,reject)=>{
+      timer=setTimeout(()=>reject(new Error('queue timeout')),2000);
+    })]);
+  } finally { clearTimeout(timer); }
 }
 function validateOutbox(outboxId) {
   if (!Number.isSafeInteger(outboxId) || outboxId < 1) throw new Error('invalid outbox identity');
@@ -19,15 +24,15 @@ export async function schedule(outboxId, env, now = Math.floor(Date.now()/1000))
   configured(env); validateOutbox(outboxId);
   if (!Number.isSafeInteger(now) || now < 0) throw new Error('invalid clock');
   await env.REVIEWS_DB.prepare(`INSERT INTO review_automation_due_schedule
-    (store_key,environment,acquisition_id,outbox_id,claim_token,due_at)
-    SELECT store_key,environment,acquisition_id,outbox_id,?,due_at FROM review_automation_intents
+    (store_key,environment,acquisition_id,outbox_id,due_at)
+    SELECT store_key,environment,acquisition_id,outbox_id,due_at FROM review_automation_intents
     WHERE store_key=? AND environment='test' AND outbox_id=?
     ON CONFLICT(store_key,environment,acquisition_id) DO NOTHING`)
-    .bind(token(), env.REVIEWS_STORE, outboxId).run();
-  const row = await env.REVIEWS_DB.prepare(`SELECT acquisition_id,claim_token,due_at FROM review_automation_due_schedule
+    .bind(env.REVIEWS_STORE, outboxId).run();
+  const row = await env.REVIEWS_DB.prepare(`SELECT due_at FROM review_automation_due_schedule
     WHERE store_key=? AND environment='test' AND outbox_id=?`).bind(env.REVIEWS_STORE,outboxId).first();
   if (!row) return 'not_accepted'; // Includes pre-activation and late receipts.
-  await env.SCHEDULE_QUEUE.send({outbox_id:outboxId}, {delaySeconds:Math.min(MAX_DELAY, Math.max(0,row.due_at-now))});
+  await boundedSend(env.SCHEDULE_QUEUE, {outbox_id:outboxId}, {delaySeconds:Math.min(MAX_DELAY, Math.max(0,row.due_at-now))});
   return 'scheduled';
 }
 
@@ -37,14 +42,14 @@ export async function deliverHint(message, env, now = Math.floor(Date.now()/1000
   if (!message || typeof message !== 'object' || Array.isArray(message) || Object.keys(message).length !== 1 ||
       !Number.isSafeInteger(message.outbox_id) || message.outbox_id < 1) return 'discard';
   if (!Number.isSafeInteger(now) || now < 0) throw new Error('invalid clock');
-  const row = await env.REVIEWS_DB.prepare(`SELECT acquisition_id,claim_token,due_at FROM review_automation_due_schedule
+  const row = await env.REVIEWS_DB.prepare(`SELECT due_at FROM review_automation_due_schedule
     WHERE store_key=? AND environment='test' AND outbox_id=?`).bind(env.REVIEWS_STORE,message.outbox_id).first();
   if (!row) return 'discard';
   if (row.due_at > now) {
-    await env.SCHEDULE_QUEUE.send(message, {delaySeconds:Math.min(MAX_DELAY,row.due_at-now)});
+    await boundedSend(env.SCHEDULE_QUEUE, message, {delaySeconds:Math.min(MAX_DELAY,row.due_at-now)});
     return 'deferred';
   }
-  await env.DUE_QUEUE.send({acquisition_id:row.acquisition_id,claim_token:row.claim_token});
+  await boundedSend(env.DUE_QUEUE, {outbox_id:message.outbox_id});
   return 'enqueued';
 }
 async function requestSchedule(request, env) {

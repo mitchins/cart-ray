@@ -20,7 +20,7 @@ function fixture() {
   return {db,env,scheduled,due};
 }
 
-test('accepted intent schedules durably and duplicate calls reuse one token',async()=>{
+test('accepted intent schedules durably and duplicate calls reuse one schedule',async()=>{
   const {db,env,scheduled,due}=fixture();
   db.prepare('INSERT INTO review_automation_intents VALUES (?,?,?,?,?)').run('acorn','test','purchase1',7,150);
   assert.equal(await schedule(7,env,100),'scheduled');
@@ -30,7 +30,7 @@ test('accepted intent schedules durably and duplicate calls reuse one token',asy
   assert.equal(await deliverHint(scheduled[0][0],env,150),'enqueued');
   assert.equal(await deliverHint(scheduled[1][0],env,150),'enqueued');
   assert.deepEqual(due[0],due[1]);
-  assert.match(due[0][0].claim_token,/^[0-9a-f]{64}$/);
+  assert.deepEqual(due[0][0],{outbox_id:7});
 });
 
 test('activation fence and store scope require persisted accepted intent',async()=>{
@@ -46,14 +46,14 @@ test('long delays requeue boundedly and errors leave durable retry state',async(
   db.prepare('INSERT INTO review_automation_intents VALUES (?,?,?,?,?)').run('acorn','test','purchase1',7,100000);
   env.SCHEDULE_QUEUE.send=async()=>{throw Error('queue unavailable');};
   await assert.rejects(schedule(7,env,100));
-  const saved=db.prepare('SELECT claim_token FROM review_automation_due_schedule').get().claim_token;
+  assert.equal(db.prepare('SELECT count(*) AS count FROM review_automation_due_schedule').get().count,1);
   env.SCHEDULE_QUEUE.send=async(...args)=>scheduled.push(args);
   await schedule(7,env,100);
   assert.equal(scheduled[0][1].delaySeconds,43200);
   assert.equal(await deliverHint({outbox_id:7},env,43300),'deferred');
   assert.equal(due.length,0);
   await deliverHint({outbox_id:7},env,100000);
-  assert.equal(due[0][0].claim_token,saved);
+  assert.deepEqual(due[0][0],{outbox_id:7});
 });
 
 test('endpoint rejects unauthenticated and malformed requests and test-off configuration',async()=>{
@@ -63,4 +63,15 @@ test('endpoint rejects unauthenticated and malformed requests and test-off confi
   assert.equal((await worker.fetch(request(env.REVIEWS_DUE_SCHEDULER_TOKEN,'{"outbox_id":3,"email":"x"}'),env)).status,400);
   env.REVIEWS_DUE_SCHEDULER='disabled';
   assert.equal((await worker.fetch(request(env.REVIEWS_DUE_SCHEDULER_TOKEN,'{"outbox_id":3}'),env)).status,503);
+});
+test('stalled queue is bounded and retry reuses the persisted schedule',async()=>{
+  const {db,env}=fixture();
+  db.prepare('INSERT INTO review_automation_intents VALUES (?,?,?,?,?)').run('acorn','test','purchase1',7,150);
+  env.SCHEDULE_QUEUE.send=()=>new Promise(()=>{});
+  const start=Date.now(); await assert.rejects(schedule(7,env,100),/queue timeout/);
+  assert.ok(Date.now()-start<3500);
+  let calls=0; env.SCHEDULE_QUEUE.send=async()=>{calls++;};
+  assert.equal(await schedule(7,env,100),'scheduled');
+  assert.equal(calls,1);
+  assert.equal(db.prepare('SELECT count(*) AS count FROM review_automation_due_schedule').get().count,1);
 });
