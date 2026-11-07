@@ -3,3 +3,4 @@
 # automatic invitation checkout choice. Omit it to disable permission capture.
 [vars]
 CARTRAY_REVIEW_INVITATION_MODE = "automatic"
+CARTRAY_REVIEW_INVITATION_DEFAULT = "checked"

@@ -67,8 +67,29 @@ def test_checkout_succeeds_when_optional_permission_table_is_unavailable(checkou
 def test_checkout_without_opt_in_records_no_grant(checkout_service):
     service, _ = checkout_service
     service.review_invitations_enabled = True
+    service.review_invitation_default_selected = True
     checkout(service, valid_request(service.catalogue))
     assert service.store.connection.execute("SELECT COUNT(*) FROM review_invitation_checkout_grants").fetchone()[0] == 0
+    row = service.store.connection.execute(
+        "SELECT selected,merchant_default_selected,wording_version,wording,recorded_at "
+        "FROM review_invitation_checkout_choices"
+    ).fetchone()
+    assert tuple(row)[:4] == (0, 1, "review-invitation-v1", "Email me one request to review my purchase.")
+    assert row["recorded_at"] > 0
+
+
+def test_preselected_acceptance_is_distinct_from_express_opt_in(checkout_service):
+    service, gateway = checkout_service
+    service.review_invitations_enabled = True
+    service.review_invitation_default_selected = True
+    checkout(service, replace(valid_request(service.catalogue), review_invitation_opt_in=True))
+    row = service.store.connection.execute(
+        "SELECT order_id,merchant_default_selected,selection_basis FROM review_invitation_checkout_grants"
+    ).fetchone()
+    assert tuple(row) == (gateway.requests[0].order_id, 1, "preselected_acceptance")
+    assert tuple(service.store.connection.execute(
+        "SELECT selected,merchant_default_selected FROM review_invitation_checkout_choices"
+    ).fetchone()) == (1, 1)
 
 
 def test_forged_opt_in_does_not_enable_disabled_invitations(checkout_service):

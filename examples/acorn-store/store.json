@@ -3,6 +3,7 @@
   "store_key": "acorn-store",
   "environment": "test",
   "review_invitations": "automatic",
+  "review_invitations_default_checked": true,
   "products": [
     {"product_key": "ACORN-KIT", "path": "/products/acorn-growing-kit/", "review_subject": "acorn-growing-kit"},
     {"product_key": "ACORN-PLANTER", "path": "/products/woodland-planter/", "review_subject": "woodland-planter"},

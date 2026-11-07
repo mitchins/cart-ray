@@ -27,6 +27,8 @@ def configuration(path: Path) -> dict:
         raise ValueError("reference store must use a scoped test environment")
     if config.get("review_invitations", "disabled") not in ("disabled", "automatic"):
         raise ValueError("unsupported review invitation mode")
+    if type(config.get("review_invitations_default_checked", False)) is not bool:
+        raise ValueError("review invitation default must be boolean")
     products = config.get("products")
     if not isinstance(products, list) or len(products) != 3:
         raise ValueError("reference store requires exactly three product mappings")
@@ -133,6 +135,7 @@ def build(
         "reviewSubjects": subjects,
         "reviewsEnabled": reviews,
         "reviewInvitationsEnabled": bool(api and config.get("review_invitations") == "automatic"),
+        "reviewInvitationDefaultChecked": config.get("review_invitations_default_checked", False),
     }
     # JSON is external JS, not HTML: no user-provided text is interpolated into markup.
     (output / "storefront-config.js").write_text(

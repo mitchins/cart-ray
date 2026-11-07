@@ -121,10 +121,15 @@ def test_review_invitation_choice_is_optional_and_enabled_only_for_test_checkout
     out = tmp_path / "enabled"
     module.build(out, config, checkout_api="https://example.workers.dev", preflight_lock=lock)
     assert '"reviewInvitationsEnabled": true' in (out / "storefront-config.js").read_text()
+    assert '"reviewInvitationDefaultChecked": true' in (out / "storefront-config.js").read_text()
     html = (out / "index.html").read_text()
     assert 'id="review-invitation-opt-in" type="checkbox"' in html
     assert "Email me one request to review my purchase." in html
     assert "review-consent" not in html and "verification code" not in html
+    config["review_invitations_default_checked"] = False
+    unchecked = tmp_path / "unchecked"
+    module.build(unchecked, config, checkout_api="https://example.workers.dev", preflight_lock=lock)
+    assert '"reviewInvitationDefaultChecked": false' in (unchecked / "storefront-config.js").read_text()
     config["review_invitations"] = "disabled"
     disabled = tmp_path / "disabled"
     module.build(disabled, config, checkout_api="https://example.workers.dev", preflight_lock=lock)

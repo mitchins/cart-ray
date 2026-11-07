@@ -96,7 +96,7 @@ preview.
 ## Review invitation permission
 
 The test store config selects automatic invitations. When test checkout is
-configured, the cart displays an initially unchecked checkbox asking permission
+configured, the cart displays a checkbox asking permission
 for one post-purchase review email. The choice travels with checkout; the
 server records its own wording version and binds any grant to the created
 order. The browser does not supply a recipient or establish payment authority.
@@ -105,6 +105,10 @@ The separately deployed CartRay test Worker must also opt in with
 `cartray-test-vars.example.toml`. Without that trusted server setting, even a
 forged browser request cannot record a grant. The storefront setting alone
 never enables the feature.
+Squirrel selects a checked default using `CARTRAY_REVIEW_INVITATION_DEFAULT =
+"checked"` and the matching storefront setting. The customer can untick it.
+The stored record distinguishes a preselected acceptance from an express opt-in;
+merchants must establish the appropriate permission basis for their deployment.
 
 The default preview has checkout and the checkbox disabled. This configuration
 alone does not deliver email or activate collection. A confirmed purchase,

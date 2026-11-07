@@ -230,6 +230,7 @@ async def checkout_service_from_environment(env) -> CheckoutService:
     return CheckoutService(
         catalogue, D1OrderStore(env.DB), gateway, success_url, cancel_url,
         review_invitations_enabled=_automatic_invitation_enabled(env),
+        review_invitation_default_selected=getattr(env, "CARTRAY_REVIEW_INVITATION_DEFAULT", None) == "checked",
     )
 
 

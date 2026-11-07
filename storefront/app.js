@@ -3,10 +3,10 @@ const PENDING_CHECKOUT_STORAGE_KEY = "cartray.pending-checkout.v1";
 const CHECKOUT_SESSION_ID_RE = /^cs_[A-Za-z0-9_]+$/;
 const RETURN_POLL_DELAYS_MS = [0, 1_000, 2_000, 4_000, 8_000, 15_000];
 
-export function checkoutPayload(catalogueVersion, cart, checkoutRequestId, reviewInvitationOptIn = false) {
+export function checkoutPayload(catalogueVersion, cart, checkoutRequestId, reviewInvitationOptIn = undefined) {
   return {
     checkout_request_id: checkoutRequestId,
-    ...(reviewInvitationOptIn ? { review_invitation_opt_in: true } : {}),
+    ...(typeof reviewInvitationOptIn === "boolean" ? { review_invitation_opt_in: reviewInvitationOptIn } : {}),
     manifest_version: catalogueVersion,
     items: cartSnapshot(cart).map(([productKey, quantity]) => ({ product_key: productKey, quantity })),
   };
@@ -115,7 +115,7 @@ export async function startCheckout(configuration, payload, fetchImpl = fetch) {
   return { url: result.checkout_url, sessionId: result.session_id };
 }
 
-export async function createCheckoutAndStorePending({ configuration, catalogueVersion, cart, revision, requestId, storage, fetchImpl, reviewInvitationOptIn = false }) {
+export async function createCheckoutAndStorePending({ configuration, catalogueVersion, cart, revision, requestId, storage, fetchImpl, reviewInvitationOptIn = undefined }) {
   const submittedCart = new Map(cart);
   const submittedRevision = revision;
   const checkout = await startCheckout(
@@ -282,6 +282,7 @@ async function boot() {
   const reviewInvitationChoice = document.querySelector("#review-invitation-choice");
   const reviewInvitationOptIn = document.querySelector("#review-invitation-opt-in");
   if (reviewInvitationChoice) reviewInvitationChoice.hidden = !configuration?.reviewInvitationsEnabled;
+  if (reviewInvitationOptIn) reviewInvitationOptIn.checked = configuration?.reviewInvitationDefaultChecked === true;
   if (!configuration) {
     status.textContent = "Storefront configuration is missing. Run the storefront build before serving this page.";
     return;
@@ -373,7 +374,7 @@ async function boot() {
           cart,
           revision,
           requestId: checkoutRequestId(),
-          reviewInvitationOptIn: Boolean(configuration.reviewInvitationsEnabled && reviewInvitationOptIn?.checked),
+          reviewInvitationOptIn: configuration.reviewInvitationsEnabled ? reviewInvitationOptIn?.checked === true : undefined,
           storage,
         });
         window.location.assign(checkout.url);

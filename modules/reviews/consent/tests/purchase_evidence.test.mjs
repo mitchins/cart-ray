@@ -59,9 +59,9 @@ test('missing or non-held Reviews intake rejects before consulting Stripe or sen
 test('automatic evidence uses only a checked-out, confirmed order and signs purchase contact, not mailbox ownership',async()=>{
  const x=setup(), sent=[]; const now=Math.floor(Date.now()/1000);
  x.row.settled_at=now-10;
- const grant={wording_version:'review-invitation-v1',wording:'Email me one request to review my purchase.',granted_at:now-20};
+ const grant={selected:1,merchant_default_selected:0,grant_default:0,selection_basis:'express_opt_in',wording_version:'review-invitation-v1',choice_version:'review-invitation-v1',wording:'Email me one request to review my purchase.',choice_wording:'Email me one request to review my purchase.',granted_at:now-20,recorded_at:now-20};
  const original=x.env.COMMERCE_DB.prepare;
- x.env.COMMERCE_DB.prepare=sql=>sql.includes('review_invitation_checkout_grants') ? {bind:()=>({first:async()=>grant})} : original(sql);
+ x.env.COMMERCE_DB.prepare=sql=>sql.includes('review_invitation_checkout_choices') ? {bind:()=>({first:async()=>grant})} : original(sql);
  Object.assign(x.env,{AUTOMATION_EVIDENCE_TOKEN:'j'.repeat(40),REVIEWS_RECIPIENT_EVIDENCE_SECRET:'k'.repeat(40),REVIEWS_CONSENT_SECRET:'l'.repeat(40)});
  x.env.REVIEWS_API.fetch=async(url,opts)=>{if(url.endsWith('/automation-evidence-status')) return Response.json({state:'held_eligibility_recipient_consent'}); sent.push({url,opts}); return Response.json({status:'recorded'})};
  const req=(body={outbox_id:12},token=x.env.AUTOMATION_EVIDENCE_TOKEN)=>new Request('https://private/automation-record',{method:'POST',headers:{'content-type':'application/json',Authorization:'Bearer '+token},body:JSON.stringify(body)});
@@ -74,6 +74,11 @@ test('automatic evidence uses only a checked-out, confirmed order and signs purc
  assert.equal((await purchaseEvidence(req(),x.env,x.fetcher)).status,200); assert.deepEqual(JSON.parse(sent[2].opts.body),recipient); assert.deepEqual(JSON.parse(sent[3].opts.body),consent);
  assert.equal((await purchaseEvidence(req({outbox_id:12,email:'attacker@example.com'}),x.env,x.fetcher)).status,503);
  assert.equal((await purchaseEvidence(req({outbox_id:12},'wrong'),x.env,x.fetcher)).status,503);
+ grant.merchant_default_selected=1; grant.grant_default=1; grant.selection_basis='preselected_acceptance';
+ assert.equal((await purchaseEvidence(req(),x.env,x.fetcher)).status,200);
+ grant.selected=0; grant.granted_at=null;
+ {const r=await purchaseEvidence(req(),x.env,x.fetcher); assert.equal(r.status,200); assert.deepEqual(await r.json(),{status:'not_granted'});}
+ grant.selected=1; grant.granted_at=grant.recorded_at;
  grant.wording='changed'; assert.equal((await purchaseEvidence(req(),x.env,x.fetcher)).status,503);
 });
 
@@ -81,12 +86,12 @@ test('automatic evidence fails closed without the immutable grant, before intake
  const x=setup(), now=Math.floor(Date.now()/1000); x.row.settled_at=now-10;
  let grant=null, available=false, wrote=0;
  const original=x.env.COMMERCE_DB.prepare;
- x.env.COMMERCE_DB.prepare=sql=>sql.includes('review_invitation_checkout_grants') ? {bind:()=>({first:async()=>grant})} : original(sql);
+ x.env.COMMERCE_DB.prepare=sql=>sql.includes('review_invitation_checkout_choices') ? {bind:()=>({first:async()=>grant})} : original(sql);
  Object.assign(x.env,{AUTOMATION_EVIDENCE_TOKEN:'j'.repeat(40),REVIEWS_RECIPIENT_EVIDENCE_SECRET:'k'.repeat(40),REVIEWS_CONSENT_SECRET:'l'.repeat(40)});
  x.env.REVIEWS_API.fetch=async(url)=>{if(url.endsWith('/automation-evidence-status')) return Response.json({state:available?'held_eligibility_recipient_consent':'pre_activation'}); wrote++; return Response.json({error:'unavailable'},{status:503})};
  const req=()=>new Request('https://private/automation-record',{method:'POST',headers:{'content-type':'application/json',Authorization:'Bearer '+x.env.AUTOMATION_EVIDENCE_TOKEN},body:'{"outbox_id":12}'});
  {const response=await purchaseEvidence(req(),x.env,x.fetcher); assert.equal(response.status,200); assert.deepEqual(await response.json(),{status:'not_granted'});} assert.equal(wrote,0);
- grant={wording_version:'review-invitation-v1',wording:'Email me one request to review my purchase.',granted_at:now-20};
+ grant={selected:1,merchant_default_selected:0,grant_default:0,selection_basis:'express_opt_in',wording_version:'review-invitation-v1',choice_version:'review-invitation-v1',wording:'Email me one request to review my purchase.',choice_wording:'Email me one request to review my purchase.',granted_at:now-20,recorded_at:now-20};
  assert.equal((await purchaseEvidence(req(),x.env,x.fetcher)).status,503); assert.equal(wrote,0);
  available=true; assert.equal((await purchaseEvidence(req(),x.env,x.fetcher)).status,503); assert.equal(wrote,1);
 });

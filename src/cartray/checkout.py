@@ -27,6 +27,7 @@ class CheckoutService:
     success_url: str = "https://store.invalid/purchase-complete/"
     cancel_url: str = "https://store.invalid/checkout-cancelled/"
     review_invitations_enabled: bool = False
+    review_invitation_default_selected: bool = False
 
     async def checkout(self, request: CheckoutRequest) -> CheckoutRedirect:
         # The browser may request an opt-in, but cannot enable the merchant's
@@ -36,8 +37,11 @@ class CheckoutService:
         success_url = checkout_success_url(self.success_url)
         requested_items = canonical_items(request.items)
         fingerprint = request_fingerprint(request.manifest_version, requested_items)
-        if request.review_invitation_opt_in:
-            fingerprint = "sha256:" + sha256((fingerprint + "\nreview-invitation-v1").encode()).hexdigest()
+        if self.review_invitations_enabled:
+            fingerprint = "sha256:" + sha256(
+                (fingerprint + f"\nreview-invitation-v1:{int(request.review_invitation_opt_in)}:"
+                 f"{int(self.review_invitation_default_selected)}").encode()
+            ).hexdigest()
         order = await self.store.find_order_by_request(request.checkout_request_id, fingerprint)
         if order is None:
             order = self._reconstruct_order(request, requested_items, fingerprint)
@@ -104,6 +108,8 @@ class CheckoutService:
             currency=currency or "",
             subtotal_minor=sum(item.unit_amount_minor * item.quantity for item in order_items),
             review_invitation_opt_in=request.review_invitation_opt_in,
+            review_invitation_policy_enabled=self.review_invitations_enabled,
+            review_invitation_default_selected=self.review_invitation_default_selected,
         )
 
 

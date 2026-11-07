@@ -79,9 +79,12 @@ async function resolve(session,contextHash,env,fetcher,{automationOutbox=null}={
   if(!row || row.manifest_version!==proof[7] || row.stripe_payment_status!=='paid' || row.stripe_amount_total_minor!==row.subtotal_minor) throw Error('order');
   let grant;
   if(automatic) {
-    grant=await env.COMMERCE_DB.prepare('SELECT wording_version,wording,granted_at FROM review_invitation_checkout_grants WHERE order_id=?').bind(row.order_id).first();
-    if(!grant) throw Error('no checkout grant');
-    if(grant.wording_version!=='review-invitation-v1' || grant.wording!=='Email me one request to review my purchase.' ||
+    grant=await env.COMMERCE_DB.prepare('SELECT c.selected,c.merchant_default_selected,c.wording_version AS choice_version,c.wording AS choice_wording,c.recorded_at,g.wording_version,g.wording,g.granted_at,g.merchant_default_selected AS grant_default,g.selection_basis FROM review_invitation_checkout_choices c LEFT JOIN review_invitation_checkout_grants g ON g.order_id=c.order_id WHERE c.order_id=?').bind(row.order_id).first();
+    if(!grant || (grant.selected===0 && grant.granted_at===null)) throw Error('no checkout grant');
+    if(grant.selected!==1 || ![0,1].includes(grant.merchant_default_selected) || grant.grant_default!==grant.merchant_default_selected ||
+      grant.selection_basis!==(grant.merchant_default_selected===1 ? 'preselected_acceptance' : 'express_opt_in') ||
+      grant.wording_version!==grant.choice_version || grant.wording!==grant.choice_wording || grant.granted_at!==grant.recorded_at ||
+      grant.wording_version!=='review-invitation-v1' || grant.wording!=='Email me one request to review my purchase.' ||
       !Number.isSafeInteger(grant.granted_at) || grant.granted_at<1 || grant.granted_at>row.settled_at) throw Error('grant');
   }
   const eligibility=await callBounded(env.REVIEWS_API.fetch.bind(env.REVIEWS_API),'https://reviews.internal/reviews-internal/v1/automation-evidence-status',{
@@ -121,7 +124,7 @@ async function resolve(session,contextHash,env,fetcher,{automationOutbox=null}={
 // Build exactly the payloads accepted by the existing Reviews Worker; this
 // authenticates purchase-contact provenance, never mailbox possession.
 export async function buildAutomationEvidence(result,env) {
-  const ref='checkout_'+await mac(env.RECIPIENT_HASH_KEY,JSON.stringify(['checkout-grant-v1',result.acquisition_id,result.grant.wording_version,result.grant.wording,result.grant.granted_at]));
+  const ref='checkout_'+await mac(env.RECIPIENT_HASH_KEY,JSON.stringify(['checkout-grant-v1',result.acquisition_id,result.grant.wording_version,result.grant.wording,result.grant.granted_at,result.grant.merchant_default_selected,result.grant.selection_basis]));
   const recipient={binding_version:result.binding_version,evidence_reference:'purchase_contact_'+result.outbox_id,
     outbox_id:result.outbox_id,recipient_context_hash:result.recipient_context_hash,verified_at:result.settled_at};
   const consent={event_id:result.event_id,evidence_reference:ref,granted_at:result.grant.granted_at,recipient_context_hash:result.recipient_context_hash};

@@ -106,6 +106,8 @@ class CheckoutOrder:
     currency: str
     subtotal_minor: int
     review_invitation_opt_in: bool = False
+    review_invitation_policy_enabled: bool = False
+    review_invitation_default_selected: bool = False
 
 
 @dataclass(frozen=True)
