@@ -9,7 +9,7 @@ const ORIGIN='https://acorn.test', SESSION='cs_test_abcdefghijk123456';
 function setup() {
  const db=new DatabaseSync(':memory:'); db.exec(readFileSync(new URL('../migrations/0001_purchaser_context.sql',import.meta.url),'utf8'));
  const d1={prepare(sql){return {bind(...v){return {async run(){return db.prepare(sql).run(...v)}, async first(){return db.prepare(sql).get(...v) ?? null}}}}}};
- let sentCode; let purchase={recipient_reference:'recipient_ref_1',store:'acorn-store',environment:'test',session_id:SESSION,confirmed:true,source_attested:true,recipient_reference:'recipient_ref_1',event_id:'evt_test_1',acquisition_id:'acq_test_1',source_provenance:'issuer_v1',recipient_context_hash:'a'.repeat(64),binding_version:1};
+ let sentCode; let purchase={recipient_reference:'recipient_ref_1',store:'acorn-store',environment:'test',session_id:SESSION,confirmed:true,source_attested:true,recipient_reference:'recipient_ref_1',event_id:'evt_test_1',acquisition_id:'acq_test_1',source_provenance:'issuer_v1',recipient_context_hash:'a'.repeat(64),binding_version:"v1"};
  const env={ACORN_PURCHASE_CONTEXT:'test',REVIEWS_STORE_KEY:'acorn-store',REVIEWS_ENVIRONMENT:'test',STOREFRONT_ORIGIN:ORIGIN,CONTEXT_DB:d1,
  PURCHASE_CODE_KEY:'z'.repeat(40), PURCHASE_EMAIL_TRANSPORT:{fetch:async(_url,opts)=>{sentCode=JSON.parse(opts.body).code; return new Response(null,{status:204})}}, CHECKOUT:{fetch:async()=>Response.json({session_id:SESSION,checkout_url:'https://checkout.stripe.com/test'})},
  PURCHASE_EVIDENCE:{fetch:async(_url,opts)=>Response.json({...purchase,context_hash:JSON.parse(opts.body).context_hash,recipient_possession_verified:true})}};
@@ -30,15 +30,15 @@ test('unknown, expired, unconfirmed, mis-scoped, changed recipient and tampered 
  const {db,env,setPurchase,getCode}=setup(); let r=await checkout(env); let cookie=r.headers.get('set-cookie');
  assert.equal((await consent(env,'')).status,503);
  assert.equal((await consent(env,cookie,'grant','{"accept":true,"event_id":"forged"}')).status,503);
- setPurchase({store:'other',environment:'test',session_id:SESSION,confirmed:true,source_attested:true,recipient_reference:'recipient_ref_1',event_id:'evt_test_1',acquisition_id:'acq_test_1',source_provenance:'issuer_v1',recipient_context_hash:'a'.repeat(64),binding_version:1});
+ setPurchase({store:'other',environment:'test',session_id:SESSION,confirmed:true,source_attested:true,recipient_reference:'recipient_ref_1',event_id:'evt_test_1',acquisition_id:'acq_test_1',source_provenance:'issuer_v1',recipient_context_hash:'a'.repeat(64),binding_version:"v1"});
  assert.equal((await consent(env,cookie)).status,503);
- setPurchase({store:'acorn-store',environment:'test',session_id:SESSION,confirmed:false,source_attested:true,recipient_reference:'recipient_ref_1',event_id:'evt_test_1',acquisition_id:'acq_test_1',source_provenance:'issuer_v1',recipient_context_hash:'a'.repeat(64),binding_version:1});
+ setPurchase({store:'acorn-store',environment:'test',session_id:SESSION,confirmed:false,source_attested:true,recipient_reference:'recipient_ref_1',event_id:'evt_test_1',acquisition_id:'acq_test_1',source_provenance:'issuer_v1',recipient_context_hash:'a'.repeat(64),binding_version:"v1"});
  assert.equal((await consent(env,cookie)).status,503);
- setPurchase({store:'acorn-store',environment:'test',session_id:SESSION,confirmed:true,source_attested:true,recipient_reference:'recipient_ref_1',event_id:'evt_test_1',acquisition_id:'acq_test_1',source_provenance:'issuer_v1',recipient_context_hash:'a'.repeat(64),binding_version:1});
+ setPurchase({store:'acorn-store',environment:'test',session_id:SESSION,confirmed:true,source_attested:true,recipient_reference:'recipient_ref_1',event_id:'evt_test_1',acquisition_id:'acq_test_1',source_provenance:'issuer_v1',recipient_context_hash:'a'.repeat(64),binding_version:"v1"});
  assert.equal((await consent(env,cookie,'challenge','{}')).status,200);
  assert.equal((await consent(env,cookie,'verify',JSON.stringify({code:getCode()}))).status,200);
  assert.equal((await consent(env,cookie,'grant','{"accept":true}')).status,200);
- setPurchase({store:'acorn-store',environment:'test',session_id:SESSION,confirmed:true,source_attested:true,recipient_reference:'recipient_ref_1',event_id:'evt_test_1',acquisition_id:'acq_test_1',source_provenance:'issuer_v1',recipient_context_hash:'b'.repeat(64),binding_version:2});
+ setPurchase({store:'acorn-store',environment:'test',session_id:SESSION,confirmed:true,source_attested:true,recipient_reference:'recipient_ref_1',event_id:'evt_test_1',acquisition_id:'acq_test_1',source_provenance:'issuer_v1',recipient_context_hash:'b'.repeat(64),binding_version:"v2"});
  assert.equal((await consent(env,cookie,'grant','{"accept":true}')).status,503);
  db.prepare('UPDATE purchaser_contexts SET created_at=1,expires_at=2').run(); assert.equal((await consent(env,cookie)).status,503);
 });
@@ -54,14 +54,14 @@ test('expiry, source outage, malformed evidence and duplicate cookies are denied
  assert.equal((await consent(env,cookie)).status,503);
  env.PURCHASE_EVIDENCE.fetch=async()=>{throw new Error('offline')};
  assert.equal((await consent(env,cookie)).status,503);
- env.PURCHASE_EVIDENCE.fetch=async()=>Response.json({store:'acorn-store',environment:'test',session_id:SESSION,confirmed:true,source_attested:false,recipient_reference:'recipient_ref_1',event_id:'evt_test_1',acquisition_id:'acq_test_1',source_provenance:'issuer_v1',recipient_context_hash:'a'.repeat(64),binding_version:1});
+ env.PURCHASE_EVIDENCE.fetch=async()=>Response.json({store:'acorn-store',environment:'test',session_id:SESSION,confirmed:true,source_attested:false,recipient_reference:'recipient_ref_1',event_id:'evt_test_1',acquisition_id:'acq_test_1',source_provenance:'issuer_v1',recipient_context_hash:'a'.repeat(64),binding_version:"v1"});
  assert.equal((await consent(env,cookie)).status,503);
  db.prepare('UPDATE purchaser_contexts SET created_at=1,expires_at=2').run();
  assert.equal((await consent(env,cookie)).status,503);
 });
 test('possession proof is required and bound to this opaque browser context',async()=>{
  const {env}=setup(); const cookie=(await checkout(env)).headers.get('set-cookie');
- const base={store:'acorn-store',environment:'test',session_id:SESSION,confirmed:true,source_attested:true,recipient_reference:'recipient_ref_1',event_id:'evt_test_1',acquisition_id:'acq_test_1',source_provenance:'issuer_v1',recipient_context_hash:'a'.repeat(64),binding_version:1};
+ const base={store:'acorn-store',environment:'test',session_id:SESSION,confirmed:true,source_attested:true,recipient_reference:'recipient_ref_1',event_id:'evt_test_1',acquisition_id:'acq_test_1',source_provenance:'issuer_v1',recipient_context_hash:'a'.repeat(64),binding_version:"v1"};
  env.PURCHASE_EVIDENCE.fetch=async(_url,opts)=>Response.json({...base,context_hash:JSON.parse(opts.body).context_hash});
  assert.equal((await consent(env,cookie,'grant','{"accept":true}')).status,503);
  env.PURCHASE_EVIDENCE.fetch=async()=>Response.json({...base,context_hash:'b'.repeat(64)});
@@ -83,7 +83,7 @@ test('verified challenge cannot transfer across acquisition or issuer provenance
  const {env,setPurchase,getCode}=setup(); const c=(await checkout(env)).headers.get('set-cookie');
  assert.equal((await consent(env,c,'challenge','{}')).status,200);
  const code=getCode();
- const original={store:'acorn-store',environment:'test',session_id:SESSION,confirmed:true,source_attested:true,recipient_reference:'recipient_ref_1',event_id:'evt_test_1',acquisition_id:'acq_test_1',source_provenance:'issuer_v1',recipient_context_hash:'a'.repeat(64),binding_version:1};
+ const original={store:'acorn-store',environment:'test',session_id:SESSION,confirmed:true,source_attested:true,recipient_reference:'recipient_ref_1',event_id:'evt_test_1',acquisition_id:'acq_test_1',source_provenance:'issuer_v1',recipient_context_hash:'a'.repeat(64),binding_version:"v1"};
  setPurchase({...original,source_provenance:'issuer_v2'});
  assert.equal((await consent(env,c,'verify',JSON.stringify({code}))).status,503);
  setPurchase(original); assert.equal((await consent(env,c,'verify',JSON.stringify({code}))).status,200);

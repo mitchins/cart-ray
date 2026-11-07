@@ -12,7 +12,7 @@ CREATE TABLE purchaser_email_challenges (
   acquisition_id TEXT NOT NULL,
   source_provenance TEXT NOT NULL,
   recipient_context_hash TEXT NOT NULL,
-  binding_version INTEGER NOT NULL,
+  binding_version TEXT NOT NULL,
   code_digest TEXT NOT NULL,
   expires_at INTEGER NOT NULL,
   attempts INTEGER NOT NULL DEFAULT 0 CHECK(attempts BETWEEN 0 AND 5),
@@ -24,7 +24,7 @@ CREATE TABLE purchaser_consent_grants (
   acquisition_id TEXT NOT NULL,
   source_provenance TEXT NOT NULL,
   recipient_context_hash TEXT NOT NULL,
-  binding_version INTEGER NOT NULL,
+  binding_version TEXT NOT NULL,
   evidence_reference TEXT NOT NULL UNIQUE,
   granted_at INTEGER NOT NULL
 );

@@ -60,7 +60,7 @@ async function evidence(env, session, contextHash) {
       x.confirmed !== true ||
       x.source_attested !== true || !safeId.test(x.event_id || '') || !safeId.test(x.acquisition_id || '') ||
       !safeId.test(x.source_provenance || '') || !/^[a-f0-9]{64}$/.test(x.recipient_context_hash || '') ||
-      !Number.isSafeInteger(x.binding_version) || x.binding_version < 1) throw new Error('unavailable');
+      !safeId.test(x.binding_version || '')) throw new Error('unavailable');
   return x;
 }
 /** Route only from the first-party storefront gateway. The trusted checkout service
