@@ -30,8 +30,8 @@ async function cf(env, path, signal, fetchApi) {
   const data=await jsonResponse(response,signal); if (data.success !== true) throw new Error('control plane unavailable');
   return data.result;
 }
-async function queueInfo(env, signal, fetchApi) {
-  const response=await fetchApi(`https://api.cloudflare.com/client/v4/accounts/${env.CF_ACCOUNT_ID}/queues/${env.EVENT_QUEUE_ID}`,
+async function queueInfo(env, queueId, signal, fetchApi) {
+  const response=await fetchApi(`https://api.cloudflare.com/client/v4/accounts/${env.CF_ACCOUNT_ID}/queues/${queueId}`,
     {headers:{authorization:`Bearer ${env.CF_READ_TOKEN}`},signal});
   const data=await jsonResponse(response,signal); if (data.success!==true) throw new Error('queue unavailable');
   return data.result;
@@ -66,19 +66,22 @@ function serviceBinding(version, name, service) {
 }
 export async function attest(env, fetchApi=fetch) {
   if (env.REVIEWS_ENVIRONMENT!=='test' || env.REVIEWS_SOURCE_PRODUCER!=='test' ||
-      ![env.SOURCE_WORKER,env.PRODUCER_WORKER,env.REVIEWS_WORKER,env.CONSUMER_WORKER,env.EVENT_QUEUE_NAME,env.SOURCE_STORE,env.SOURCE_ISSUER,env.SOURCE_INSTALLATION].every(x=>typeof x==='string' && id.test(x)) ||
+      ![env.SOURCE_WORKER,env.PRODUCER_WORKER,env.REVIEWS_WORKER,env.CONSUMER_WORKER,env.EVENT_QUEUE_NAME,env.DEAD_LETTER_QUEUE_NAME,env.SOURCE_STORE,env.SOURCE_ISSUER,env.SOURCE_INSTALLATION].every(x=>typeof x==='string' && id.test(x)) ||
       !/^[a-f0-9]{32}$/.test(env.CF_ACCOUNT_ID||'') || !uuid.test(env.SOURCE_DATABASE_ID||'') ||
       !/^[a-f0-9]{32}$/.test(env.EVENT_QUEUE_ID||'') ||
+      !/^[a-f0-9]{32}$/.test(env.DEAD_LETTER_QUEUE_ID||'') || env.DEAD_LETTER_QUEUE_ID===env.EVENT_QUEUE_ID ||
+      env.DEAD_LETTER_QUEUE_NAME===env.EVENT_QUEUE_NAME ||
       !/^acct_[A-Za-z0-9]+$/.test(env.STRIPE_ACCOUNT_ID||'') || !/^sha256:[a-f0-9]{64}$/.test(env.CATALOGUE_VERSION||'') ||
       !hex.test(env.MAPPING_SHA256||'') || !hex.test(env.SOURCE_EVENT_KEY||'') ||
       !token(env.CF_READ_TOKEN) || !token(env.SOURCE_IDENTITY_TOKEN) || !token(env.REVIEWS_ACTIVATION_TOKEN) || !token(env.TRIGGER_TOKEN) ||
       new Set([env.CF_READ_TOKEN,env.SOURCE_IDENTITY_TOKEN,env.REVIEWS_ACTIVATION_TOKEN,env.SOURCE_EVENT_KEY,env.TRIGGER_TOKEN]).size!==5 ||
       !env.SOURCE_API || !env.REVIEWS_API || !env.COMMERCE_DB || !env.EVENT_QUEUE || !uuid.test(env.CF_VERSION_METADATA?.id||'')) throw new Error('source unavailable');
   return bounded(async signal=>{
-    const [source,producer,reviews,consumer,queue,identity]=await Promise.all([
+    const [source,producer,reviews,consumer,queue,dlq,identity]=await Promise.all([
       activeVersion(env,env.SOURCE_WORKER,signal,fetchApi), activeVersion(env,env.PRODUCER_WORKER,signal,fetchApi),
       activeVersion(env,env.REVIEWS_WORKER,signal,fetchApi),
-      activeVersion(env,env.CONSUMER_WORKER,signal,fetchApi), queueInfo(env,signal,fetchApi),
+      activeVersion(env,env.CONSUMER_WORKER,signal,fetchApi), queueInfo(env,env.EVENT_QUEUE_ID,signal,fetchApi),
+      queueInfo(env,env.DEAD_LETTER_QUEUE_ID,signal,fetchApi),
       env.SOURCE_API.fetch('https://source.internal/internal/reviews-source-identity',{
         headers:{authorization:`Bearer ${env.SOURCE_IDENTITY_TOKEN}`}, signal}).then(response=>jsonResponse(response,signal)),
     ]);
@@ -94,7 +97,11 @@ export async function attest(env, fetchApi=fetch) {
         queue?.queue_id!==env.EVENT_QUEUE_ID || queue?.queue_name!==env.EVENT_QUEUE_NAME ||
         queue?.consumers_total_count!==1 || queue?.consumers?.length!==1 ||
         queue.consumers[0].type!=='worker' || queue.consumers[0].script_name!==env.CONSUMER_WORKER ||
-        queue.settings?.delivery_paused===true ||
+        queue.consumers[0].dead_letter_queue!==env.DEAD_LETTER_QUEUE_NAME ||
+        !Number.isSafeInteger(queue.consumers[0].settings?.max_retries) ||
+        queue.consumers[0].settings.max_retries<1 || queue.consumers[0].settings.max_retries>10 ||
+        queue.settings?.delivery_paused!==false || dlq?.queue_id!==env.DEAD_LETTER_QUEUE_ID ||
+        dlq?.queue_name!==env.DEAD_LETTER_QUEUE_NAME || dlq.consumers_total_count!==0 ||
         !binding(source,'CARTRAY_ENVIRONMENT','plain_text','test') ||
         !binding(source,'CARTRAY_REVIEWS_SOURCE','plain_text','test') ||
         !binding(source,'CARTRAY_REVIEWS_PRODUCER','plain_text','test') ||

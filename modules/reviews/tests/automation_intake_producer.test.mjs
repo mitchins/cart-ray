@@ -18,17 +18,17 @@ function fixture(){
   const database={withSession:()=>database,prepare(sql){return {args:[],bind(...args){this.args=args;return this},async run(){if (!cursor) cursor={installation_id:this.args[1],source_database_id:this.args[2],stripe_account_id:this.args[3],catalogue_version:this.args[4],mapping_sha256:this.args[5],activation_watermark:this.args[6],last_outbox_id:this.args[7]};},async first(){return {...cursor}},async all(){
     if(sql.startsWith('SELECT id')) return {results:[9,11,12].filter(x=>x>this.args[0]).map(id=>({id}))};
     if(sql.startsWith('UPDATE')) {if(cursor.last_outbox_id!==this.args[2]) return {results:[]};cursor.last_outbox_id=this.args[0];return {results:[{last_outbox_id:cursor.last_outbox_id}]};} throw Error('unexpected sql');}}}};
-  const env={REVIEWS_ENVIRONMENT:'test',REVIEWS_SOURCE_PRODUCER:'test',SOURCE_WORKER:'source',PRODUCER_WORKER:'producer',REVIEWS_WORKER:'reviews',AUTHORITY_WORKER:'authority',AUTHORITY_CONTEXT_DB_ID:'77777777-7777-4777-8777-777777777777',PURCHASE_ATTESTATION_KEY:'45'.repeat(32),PURCHASE_ATTESTATION_TOKEN:'p'.repeat(32),CONSUMER_WORKER:'consumer',EVENT_QUEUE_NAME:'queue1',EVENT_QUEUE_ID:'e'.repeat(32),SOURCE_STORE:'acorn',SOURCE_ISSUER:'issuer1',SOURCE_INSTALLATION:'install1',CF_ACCOUNT_ID:'a'.repeat(32),SOURCE_DATABASE_ID:dbid,STRIPE_ACCOUNT_ID:'acct_123',CATALOGUE_VERSION:catalogue,MAPPING_SHA256:digest,SOURCE_EVENT_KEY:'12'.repeat(32),CF_READ_TOKEN:'c'.repeat(32),SOURCE_IDENTITY_TOKEN:'s'.repeat(32),REVIEWS_ACTIVATION_TOKEN:'a'.repeat(32),TRIGGER_TOKEN:'t'.repeat(32),POLICY_VERSION:'policy1',DELAY_SECONDS:10,MAX_LATENESS:100,CF_VERSION_METADATA:{id:v2},COMMERCE_DB:database,
+  const env={REVIEWS_ENVIRONMENT:'test',REVIEWS_SOURCE_PRODUCER:'test',SOURCE_WORKER:'source',PRODUCER_WORKER:'producer',REVIEWS_WORKER:'reviews',AUTHORITY_WORKER:'authority',AUTHORITY_CONTEXT_DB_ID:'77777777-7777-4777-8777-777777777777',PURCHASE_ATTESTATION_KEY:'45'.repeat(32),PURCHASE_ATTESTATION_TOKEN:'p'.repeat(32),CONSUMER_WORKER:'consumer',EVENT_QUEUE_NAME:'queue1',EVENT_QUEUE_ID:'e'.repeat(32),DEAD_LETTER_QUEUE_NAME:'dlq1',DEAD_LETTER_QUEUE_ID:'d'.repeat(32),SOURCE_STORE:'acorn',SOURCE_ISSUER:'issuer1',SOURCE_INSTALLATION:'install1',CF_ACCOUNT_ID:'a'.repeat(32),SOURCE_DATABASE_ID:dbid,STRIPE_ACCOUNT_ID:'acct_123',CATALOGUE_VERSION:catalogue,MAPPING_SHA256:digest,SOURCE_EVENT_KEY:'12'.repeat(32),CF_READ_TOKEN:'c'.repeat(32),SOURCE_IDENTITY_TOKEN:'s'.repeat(32),REVIEWS_ACTIVATION_TOKEN:'a'.repeat(32),TRIGGER_TOKEN:'t'.repeat(32),POLICY_VERSION:'policy1',DELAY_SECONDS:10,MAX_LATENESS:100,CF_VERSION_METADATA:{id:v2},COMMERCE_DB:database,
     EVENT_QUEUE:{async send(x){sent.push(x)}},SOURCE_API:{async fetch(){return Response.json({version_id:v1,stripe_account:'acct_123',catalogue_version:catalogue})}},REVIEWS_API:{async fetch(){return Response.json({status:'active',outbox_watermark:10})}}};
   return {env,versions,sent,get cursor(){return cursor}};
 }
-function stubControl(f){return async url=>{const parts=new URL(url).pathname.split('/'); if(parts.includes('queues')) return Response.json({success:true,result:{queue_id:'e'.repeat(32),queue_name:'queue1',consumers_total_count:1,consumers:[{type:'worker',script_name:'consumer'}]}});const i=parts.indexOf('scripts'),script=parts[i+1]; const v=f.versions[script];
+function stubControl(f){return async url=>{const parts=new URL(url).pathname.split('/'); if(parts.includes('queues')) return Response.json({success:true,result:parts.at(-1)==='d'.repeat(32)?{queue_id:'d'.repeat(32),queue_name:'dlq1',consumers_total_count:0}:{queue_id:'e'.repeat(32),queue_name:'queue1',consumers_total_count:1,settings:{delivery_paused:false},consumers:[{type:'worker',script_name:'consumer',dead_letter_queue:'dlq1',settings:{max_retries:3}}]}});const i=parts.indexOf('scripts'),script=parts[i+1]; const v=f.versions[script];
   if(!v) return new Response('',{status:404});return Response.json({success:true,result:parts[i+2]==='deployments'?[{created_on:'2026-01-01',versions:[{version_id:v.id,percentage:100}]}]:v});};}
 test('attested source relays only post-fence outbox IDs, with signed messages accepted by subscriber',async()=>{
   const f=fixture(), original=globalThis.fetch;globalThis.fetch=stubControl(f);
   try { assert.equal((await attest(f.env)).source_version,v1);assert.deepEqual(await relay(f.env),{last_outbox_id:12});
     assert.deepEqual(f.sent.map(x=>x.outbox_id),[11,12]);
-    const receiver={REVIEWS_ENVIRONMENT:'test',REVIEWS_ORDER_SUBSCRIBER:'test',AUTHORITY_WORKER:'authority',AUTHORITY_CONTEXT_DB_ID:'77777777-7777-4777-8777-777777777777',PURCHASE_ATTESTATION_KEY:'45'.repeat(32),PURCHASE_ATTESTATION_TOKEN:'p'.repeat(32),CONSUMER_WORKER:'consumer',EVENT_QUEUE_NAME:'queue1',EVENT_QUEUE_ID:'e'.repeat(32),SOURCE_STORE:'acorn',SOURCE_ISSUER:'issuer1',SOURCE_INSTALLATION:'install1',SOURCE_EVENT_KEY:f.env.SOURCE_EVENT_KEY,REVIEWS_AUTOMATION_TOKEN:'r'.repeat(32),REVIEWS_API:{fetch:async()=>Response.json({status:'accepted',due_at:100})}};
+    const receiver={REVIEWS_ENVIRONMENT:'test',REVIEWS_ORDER_SUBSCRIBER:'test',AUTHORITY_WORKER:'authority',AUTHORITY_CONTEXT_DB_ID:'77777777-7777-4777-8777-777777777777',PURCHASE_ATTESTATION_KEY:'45'.repeat(32),PURCHASE_ATTESTATION_TOKEN:'p'.repeat(32),CONSUMER_WORKER:'consumer',EVENT_QUEUE_NAME:'queue1',EVENT_QUEUE_ID:'e'.repeat(32),DEAD_LETTER_QUEUE_NAME:'dlq1',DEAD_LETTER_QUEUE_ID:'d'.repeat(32),SOURCE_STORE:'acorn',SOURCE_ISSUER:'issuer1',SOURCE_INSTALLATION:'install1',SOURCE_EVENT_KEY:f.env.SOURCE_EVENT_KEY,REVIEWS_AUTOMATION_TOKEN:'r'.repeat(32),REVIEWS_API:{fetch:async()=>Response.json({status:'accepted',due_at:100})}};
     assert.equal(await deliver(f.sent[0],receiver),'acknowledged');await relay(f.env);assert.equal(f.sent.length,2);
   } finally {globalThis.fetch=original;}
 });
@@ -70,4 +70,22 @@ test('purchase proof pins the active authority and both its actual D1 and servic
       await assert.rejects(attestPurchase(x.env,input,stubControl(x),1000));
     }
   } finally {globalThis.fetch=original;}
+});
+test('missing or unsafe dead-letter routing fails before any checkpoint or enqueue',async()=>{
+  for (const kind of ['wrong-dlq','missing-dlq','zero-retries','paused','unexpected-dlq-consumer','wrong-consumer']) {
+    const f=fixture(),base=stubControl(f);
+    const control=async (url,options)=>{
+      const response=await base(url,options); if (!url.includes('/queues/')) return response;
+      const data=await response.json();const q=data.result;
+      if(q.queue_name==='queue1') {
+        if(kind==='wrong-dlq')q.consumers[0].dead_letter_queue='other';
+        if(kind==='missing-dlq')delete q.consumers[0].dead_letter_queue;
+        if(kind==='zero-retries')q.consumers[0].settings.max_retries=0;
+        if(kind==='paused')q.settings.delivery_paused=true;
+        if(kind==='wrong-consumer')q.consumers[0].script_name='other';
+      } else if(kind==='unexpected-dlq-consumer')q.consumers_total_count=1;
+      return Response.json(data);
+    };
+    await assert.rejects(relay(f.env,control));assert.equal(f.sent.length,0);assert.equal(f.cursor,null);
+  }
 });
