@@ -202,7 +202,11 @@ def main():
             for process in (publication, proxy):
                 if process and process.poll() is None:
                     os.killpg(process.pid, signal.SIGTERM)
-                    process.wait(timeout=10)
+                    try:
+                        process.wait(timeout=10)
+                    except subprocess.TimeoutExpired:
+                        os.killpg(process.pid, signal.SIGKILL)
+                        process.wait()
             stop(source)
 
 
