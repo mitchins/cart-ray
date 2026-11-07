@@ -285,6 +285,33 @@ async def published_staff_read(request, env, query):
     return bounded_staff_page("published", result, "review_id")
 
 
+async def delivery_queue_read(request, env, query):
+    """List held delivery identities without exposing recipients or capabilities."""
+    if str(env.REVIEWS_ENVIRONMENT) != "test":
+        return fail(503, "operations unavailable")
+    if not await staff_actor(request, env, "reviews:operations"):
+        return fail(401, "unauthorized")
+    if len(query) > 512:
+        return fail(400, "invalid query")
+    params = parse_qs(query, keep_blank_values=True)
+    if set(params) - {"state", "after"} or any(len(values) != 1 for values in params.values()):
+        return fail(400, "invalid query")
+    state = params.get("state", [""])[0]
+    after = params.get("after", [""])[0]
+    if state not in ("dispatching", "uncertain", "failed") or (after and not re.fullmatch(r"[0-9a-f]{64}", after)):
+        return fail(400, "invalid query")
+    result = rows(
+        await env.REVIEWS_DB.prepare(
+            "SELECT generation_id,delivery_identity,state,prepared_at FROM invitation_generations "
+            "WHERE store_key=? AND environment=? AND state=? AND delivery_identity>? "
+            "ORDER BY delivery_identity LIMIT 51"
+        )
+        .bind(str(env.REVIEWS_STORE_KEY), str(env.REVIEWS_ENVIRONMENT), state, after)
+        .all()
+    )
+    return bounded_staff_page("deliveries", result, "delivery_identity", {"state": state})
+
+
 async def staff_history_read(request, env, query, review_id, kind):
     """Read only the selected review's revision or audit history."""
     if str(env.REVIEWS_ENVIRONMENT) != "test":
