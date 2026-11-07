@@ -1,0 +1,8 @@
+name = "reviews-attested-producer-local-test"
+main = "worker.mjs"
+compatibility_date = "2026-08-31"
+workers_dev = false
+[[d1_databases]]
+binding = "DB"
+database_name = "producer-local-test"
+database_id = "44444444-4444-4444-8444-444444444444"

@@ -37,6 +37,10 @@ jobs:
         run: node --test modules/reviews/tests/dispatch.test.mjs
       - name: Test Reviews synthetic due queue
         run: node --test modules/reviews/tests/automation_queue.test.mjs
+      - name: Test signed Reviews intake subscriber
+        run: node --test modules/reviews/tests/automation_intake_queue.test.mjs modules/reviews/tests/automation_intake_producer.test.mjs
+      - name: Exercise Reviews outbox producer on Workerd and D1
+        run: uv run --locked python modules/reviews/tests/local_producer_qualification.py
       - name: Test review consent bridge and Acorn UI
         run: node --test modules/reviews/consent/tests/*.test.mjs examples/acorn-store/tests/consent.test.mjs
       - name: Test Reviews moderation console
@@ -121,6 +125,7 @@ jobs:
           node --test --experimental-test-coverage --test-reporter=spec --test-reporter-destination=stdout --test-reporter=lcov --test-reporter-destination=coverage/m11a.lcov tests/m11a_projection.test.mjs
           node --test --experimental-test-coverage --test-reporter=spec --test-reporter-destination=stdout --test-reporter=lcov --test-reporter-destination=coverage/reviews-dispatch.lcov modules/reviews/tests/dispatch.test.mjs
           node --test --experimental-test-coverage --test-reporter=spec --test-reporter-destination=stdout --test-reporter=lcov --test-reporter-destination=coverage/reviews-automation-queue.lcov modules/reviews/tests/automation_queue.test.mjs
+          node --test --experimental-test-coverage --test-reporter=spec --test-reporter-destination=stdout --test-reporter=lcov --test-reporter-destination=coverage/reviews-intake-source.lcov modules/reviews/tests/automation_intake_producer.test.mjs modules/reviews/tests/automation_intake_queue.test.mjs
           node --test --experimental-test-coverage --test-reporter=spec --test-reporter-destination=stdout --test-reporter=lcov --test-reporter-destination=coverage/reviews-publication.lcov modules/reviews/publication/tests/*.test.mjs
           node --test --experimental-test-coverage --test-reporter=spec --test-reporter-destination=stdout --test-reporter=lcov --test-reporter-destination=coverage/reviews-console.lcov modules/reviews/console/tests/*.test.mjs
       - name: Scan and await quality gate

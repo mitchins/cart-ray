@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hmac
 import json
 import re
 from dataclasses import dataclass
@@ -76,6 +77,34 @@ def create_app(
         if not _d1_success(result):
             return Response({"error": "database unavailable"}, status=503)
         return {"service": "cartray", "mode": "test-only", "status": "ok"}
+
+    @app.get("/internal/reviews-source-identity")
+    async def reviews_source_identity(request):
+        # Disabled unless explicitly provisioned. This endpoint never returns
+        # credentials or purchaser data and is not part of checkout.
+        try:
+            env = request.env
+            if _test_environment(env) != "test" or getattr(env, "CARTRAY_REVIEWS_SOURCE", None) != "test":
+                raise RuntimeError("disabled")
+            token = _required_env(env, "CARTRAY_REVIEWS_IDENTITY_TOKEN")
+            provided = request.header("authorization") or ""
+            if len(token) < 32 or not hmac.compare_digest(provided, f"Bearer {token}"):
+                raise RuntimeError("unauthorized")
+            version = getattr(getattr(env, "CF_VERSION_METADATA", None), "id", None)
+            catalogue = COMPILED_CATALOGUE.expected_catalogue_version
+            if not isinstance(version, str) or not version or not isinstance(catalogue, str) or not catalogue:
+                raise RuntimeError("unbound version")
+            client = StripeApiClient(_required_env(env, "STRIPE_API_KEY"), WorkersFetchTransport())
+            account = await client.get("/v1/account", {})
+            account_id = account.get("id")
+            if not isinstance(account_id, str) or not re.fullmatch(r"acct_[A-Za-z0-9]+", account_id):
+                raise RuntimeError("unavailable")
+            return Response(
+                {"version_id": version, "stripe_account": account_id, "catalogue_version": catalogue},
+                headers={"Cache-Control": "no-store"},
+            )
+        except Exception:
+            return Response({"error": "source identity unavailable"}, status=503, headers={"Cache-Control": "no-store"})
 
     @app.get("/catalogue")
     async def catalogue(request):
@@ -372,7 +401,52 @@ except ImportError:
 
 class Default(WorkerEntrypoint):
     async def fetch(self, request):
-        return await app(request, self.env)
+        response = await app(request, self.env)
+        # A committed confirmation can wake the independent subscriber, but a
+        # missing or broken subscriber must not change the webhook response.
+        try:
+            if (
+                getattr(self.env, "CARTRAY_REVIEWS_PRODUCER", "disabled") == "test"
+                and getattr(self.env, "CARTRAY_ENVIRONMENT", "") == "test"
+                and request.method == "POST"
+                and urlparse(str(request.url)).path == "/stripe/webhook"
+                and response.status == 200
+            ):
+                self.ctx.waitUntil(_wake_reviews_subscriber(self.env))
+        except Exception:
+            pass
+        return response
 
     async def scheduled(self, controller, env, ctx):
-        await scheduled_reconciliation_from_environment(self.env)
+        try:
+            await scheduled_reconciliation_from_environment(self.env)
+        finally:
+            try:
+                if getattr(self.env, "CARTRAY_REVIEWS_PRODUCER", "disabled") == "test":
+                    ctx.waitUntil(_wake_reviews_subscriber(self.env))
+            except Exception:
+                pass
+
+
+async def _wake_reviews_subscriber(env):
+    """Best-effort wakeup; durable source cursor and queue own retry semantics."""
+    if getattr(env, "CARTRAY_REVIEWS_PRODUCER", "disabled") != "test":
+        return
+    try:
+        token = _required_env(env, "CARTRAY_REVIEWS_TRIGGER_TOKEN")
+        if _test_environment(env) != "test" or len(token) < 32:
+            return
+        from js import Request
+        from pyodide.ffi import to_js
+
+        request = Request.new(
+            "https://reviews-producer.internal/",
+            to_js(
+                {"method": "POST", "headers": {"authorization": f"Bearer {token}"}},
+                dict_converter=__import__("js").Object.fromEntries,
+            ),
+        )
+        await env.REVIEWS_SOURCE_TRIGGER.fetch(request)
+    except Exception:
+        # Never fail an already committed settlement because a subscriber is down.
+        return
