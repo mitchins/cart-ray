@@ -60,7 +60,7 @@ async function evidence(env, session, contextHash) {
       x.confirmed !== true ||
       x.source_attested !== true || !safeId.test(x.event_id || '') || !safeId.test(x.acquisition_id || '') ||
       !safeId.test(x.source_provenance || '') || !/^[a-f0-9]{64}$/.test(x.recipient_context_hash || '') ||
-      !safeId.test(x.binding_version || '')) throw new Error('unavailable');
+      !safeId.test(x.binding_version || '') || !Number.isSafeInteger(x.outbox_id) || x.outbox_id<1) throw new Error('unavailable');
   return x;
 }
 /** Route only from the first-party storefront gateway. The trusted checkout service
@@ -114,16 +114,20 @@ export async function authority(request, env) {
     if (!env.PURCHASE_EMAIL_TRANSPORT?.fetch || typeof env.PURCHASE_CODE_KEY !== 'string' || env.PURCHASE_CODE_KEY.length < 32 ||
         typeof env.PURCHASE_TRANSPORT_TOKEN !== 'string' || env.PURCHASE_TRANSPORT_TOKEN.length < 32 ||
         env.PURCHASE_TRANSPORT_TOKEN === env.PURCHASE_CODE_KEY) return unavailable();
-    const challenge=await env.CONTEXT_DB.prepare('SELECT event_id,acquisition_id,source_provenance,recipient_context_hash,binding_version,delivery_state,verified_at,expires_at FROM purchaser_email_challenges WHERE token_hash=?').bind(contextHash).first();
+    const challenge=await env.CONTEXT_DB.prepare('SELECT event_id,acquisition_id,source_provenance,outbox_id,evidence_reference,recipient_context_hash,binding_version,delivery_state,verified_at,expires_at FROM purchaser_email_challenges WHERE token_hash=?').bind(contextHash).first();
     const matches=challenge && challenge.event_id===purchase.event_id && challenge.acquisition_id===purchase.acquisition_id &&
-      challenge.source_provenance===purchase.source_provenance && challenge.recipient_context_hash===purchase.recipient_context_hash && challenge.binding_version===purchase.binding_version;
-    if (action==='context') return Response.json({available:true,verified:!!(matches && challenge.verified_at && challenge.expires_at>now)},{headers:{'Cache-Control':'no-store'}});
+      challenge.source_provenance===purchase.source_provenance && challenge.outbox_id===purchase.outbox_id && challenge.recipient_context_hash===purchase.recipient_context_hash && challenge.binding_version===purchase.binding_version;
+    const recipientEvidence=(verifiedAt)=>({outbox_id:challenge.outbox_id,recipient_context_hash:challenge.recipient_context_hash,binding_version:challenge.binding_version,evidence_reference:challenge.evidence_reference,verified_at:verifiedAt});
+    if (action==='context') {
+      const verified=!!(matches && challenge.verified_at && challenge.expires_at>now);
+      return Response.json(verified ? {available:true,verified:true,recipient_evidence:recipientEvidence(challenge.verified_at)} : {available:true,verified:false},{headers:{'Cache-Control':'no-store'}});
+    }
     if (action==='challenge') {
       if (!safeId.test(purchase.recipient_reference || '')) return unavailable();
       if (challenge) return matches && challenge.delivery_state==='sent' && challenge.expires_at>now ? Response.json({sent:true}) : unavailable();
       const code=generateCode(), codeHash=await codeDigest(env.PURCHASE_CODE_KEY,contextHash,code);
-      const claimed=await env.CONTEXT_DB.prepare("INSERT INTO purchaser_email_challenges(token_hash,event_id,acquisition_id,source_provenance,recipient_context_hash,binding_version,code_digest,expires_at,delivery_state) VALUES(?,?,?,?,?,?,?,?,'claimed') ON CONFLICT(token_hash) DO NOTHING RETURNING token_hash")
-        .bind(contextHash,purchase.event_id,purchase.acquisition_id,purchase.source_provenance,purchase.recipient_context_hash,purchase.binding_version,codeHash,now+600).first();
+      const claimed=await env.CONTEXT_DB.prepare("INSERT INTO purchaser_email_challenges(token_hash,event_id,acquisition_id,source_provenance,outbox_id,evidence_reference,recipient_context_hash,binding_version,code_digest,expires_at,delivery_state) VALUES(?,?,?,?,?,?,?,?,?,?,'claimed') ON CONFLICT(token_hash) DO NOTHING RETURNING token_hash")
+        .bind(contextHash,purchase.event_id,purchase.acquisition_id,purchase.source_provenance,purchase.outbox_id,'possession_'+token(),purchase.recipient_context_hash,purchase.binding_version,codeHash,now+600).first();
       if (!claimed) return unavailable();
       try {
         const signal=AbortSignal.timeout(7000);
@@ -140,11 +144,12 @@ export async function authority(request, env) {
     }
     if (!matches || challenge.delivery_state!=='sent' || challenge.expires_at<=now) return unavailable();
     if (action==='verify') {
-      if (challenge.verified_at) return Response.json({verified:true});
+      const verifiedResponse=(verifiedAt)=>Response.json({verified:true,recipient_evidence:recipientEvidence(verifiedAt)});
+      if (challenge.verified_at) return verifiedResponse(challenge.verified_at);
       const codeHash=await codeDigest(env.PURCHASE_CODE_KEY,contextHash,input.code);
       const verification=await env.CONTEXT_DB.prepare('UPDATE purchaser_email_challenges SET attempts=attempts+1,verified_at=CASE WHEN code_digest=? THEN ? ELSE NULL END WHERE token_hash=? AND verified_at IS NULL AND attempts<5 AND expires_at>? AND delivery_state=\'sent\' RETURNING verified_at')
         .bind(codeHash,now,contextHash,now).first();
-      return verification?.verified_at ? Response.json({verified:true}) : unavailable();
+      return verification?.verified_at ? verifiedResponse(verification.verified_at) : unavailable();
     }
     if (!challenge.verified_at) return unavailable();
     const reference = 'grant_'+token();

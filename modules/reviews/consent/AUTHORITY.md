@@ -33,6 +33,10 @@ HMAC-protected, scoped to the cookie digest, expires after ten minutes and has
 at most five attempts. Delivery is claimed once; a failed, ambiguous or
 interrupted delivery is held without automatic resending. A separate secret
 `PURCHASE_CODE_KEY` is required. No production transport is supplied.
+After a successful code, the bridge signs the stable recipient proof with a
+distinct `REVIEWS_RECIPIENT_EVIDENCE_SECRET` and submits it to the existing
+Reviews intake endpoint. A retry or context refresh resubmits the same proof;
+if intake is unavailable, the browser is not told verification is complete.
 
 Grants use a stable, immutable record keyed by source event, with acquisition,
 provenance, recipient binding version and grant time. Changed source or

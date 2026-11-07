@@ -91,8 +91,10 @@ async function resolve(session,contextHash,env,fetcher) {
   const version='v1';
   const recipientHash=await mac(env.RECIPIENT_HASH_KEY,JSON.stringify(['acorn-recipient-v1',env.STORE_KEY,'test',row.order_id,version,email]));
   const reference='ref_'+await mac(env.RECIPIENT_HASH_KEY,JSON.stringify(['acorn-delivery-v1',contextHash,recipientHash]));
+  const sourceProvenance=env.INSTALLATION_ID+'_'+proof[9];
+  if(!id.test(sourceProvenance)) throw Error('source provenance');
   return {email, store:env.STORE_KEY,environment:'test',session_id:session,context_hash:contextHash,confirmed:true,source_attested:true,
-    event_id:eventId,acquisition_id:row.order_id,source_provenance:env.INSTALLATION_ID,recipient_context_hash:recipientHash,
+    event_id:eventId,acquisition_id:row.order_id,source_provenance:sourceProvenance,recipient_context_hash:recipientHash,
     binding_version:version,recipient_reference:reference,outbox_id:row.outbox_id};
 }
 export async function purchaseEvidence(request,env,fetcher=fetch) {

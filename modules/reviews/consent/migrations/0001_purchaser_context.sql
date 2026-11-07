@@ -11,6 +11,8 @@ CREATE TABLE purchaser_email_challenges (
   event_id TEXT NOT NULL,
   acquisition_id TEXT NOT NULL,
   source_provenance TEXT NOT NULL,
+  outbox_id INTEGER NOT NULL,
+  evidence_reference TEXT NOT NULL,
   recipient_context_hash TEXT NOT NULL,
   binding_version TEXT NOT NULL,
   code_digest TEXT NOT NULL,

@@ -127,3 +127,19 @@ test("stalled Reviews request is aborted and its outcome remains unavailable", a
   assert.equal(result.status,503);
   assert.equal(aborted,true);
 });
+test('verified recipient evidence is signed privately and retried on context without leaking to browser', async () => {
+  const {env}=setup(), calls=[];
+  const evidence={outbox_id:12,recipient_context_hash:'a'.repeat(64),binding_version:'v1',evidence_reference:'possession_1',verified_at:10};
+  env.REVIEWS_RECIPIENT_EVIDENCE_SECRET='p'.repeat(40);
+  env.REVIEW_CONSENT_AUTHORITY.fetch=async(url)=>Response.json(url.endsWith('/context') ? {available:true,verified:true,recipient_evidence:evidence} : {verified:true,recipient_evidence:evidence});
+  env.REVIEWS.fetch=async(url,options)=>{calls.push([url,options]); return Response.json({status:'recorded'});};
+  const verified=await handleConsent(request('/review-consent/v1/verify',{code:'123456'}),env);
+  assert.deepEqual(await verified.json(),{verified:true}); assert.equal(calls.length,1);
+  const canonical=JSON.stringify(['reviews-automation-recipient-v1','acorn-store','test',{binding_version:'v1',evidence_reference:'possession_1',outbox_id:12,recipient_context_hash:'a'.repeat(64),verified_at:10}]);
+  assert.equal(calls[0][1].headers['X-Reviews-Recipient-Signature'],createHmac('sha256','p'.repeat(40)).update(canonical).digest('hex'));
+  const context=await handleConsent(request('/review-consent/v1/context',{}),env);
+  assert.deepEqual(await context.json(),{available:true,verified:true}); assert.equal(calls.length,2);
+  env.REVIEWS.fetch=async()=>new Response(null,{status:503});
+  const retriable=await handleConsent(request('/review-consent/v1/context',{}),env);
+  assert.deepEqual(await retriable.json(),{available:true,verified:false});
+});

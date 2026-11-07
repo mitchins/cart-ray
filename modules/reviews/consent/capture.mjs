@@ -100,6 +100,20 @@ async function serviceRequest(binding, url, options, readJson, timeoutMs = 2000)
   }
 }
 
+async function recordRecipient(data, env) {
+  const secret=env.REVIEWS_RECIPIENT_EVIDENCE_SECRET, e=data?.recipient_evidence;
+  if(typeof secret!=='string' || secret.length<32 || secret===env.REVIEWS_CONSENT_SECRET || secret===env.REVIEWS_CONSENT_RATE_KEY ||
+    !e || !Number.isSafeInteger(e.outbox_id) || e.outbox_id<1 || !hashPattern.test(e.recipient_context_hash || '') ||
+    !idPattern.test(e.binding_version || '') || !referencePattern.test(e.evidence_reference || '') ||
+    !Number.isSafeInteger(e.verified_at) || e.verified_at<=0 || e.verified_at>Math.floor(Date.now()/1000)) throw new Error('unavailable');
+  const evidence={binding_version:e.binding_version,evidence_reference:e.evidence_reference,outbox_id:e.outbox_id,
+    recipient_context_hash:e.recipient_context_hash,verified_at:e.verified_at};
+  const signed=await signature(secret,JSON.stringify(['reviews-automation-recipient-v1',env.REVIEWS_STORE_KEY,'test',evidence]));
+  await serviceRequest(env.REVIEWS,'https://reviews.internal/reviews-internal/v1/automation-recipient-evidence',{
+    method:'POST',headers:{'Content-Type':'application/json','X-Reviews-Recipient-Signature':signed},body:JSON.stringify(evidence),
+  },false);
+}
+
 /** The authority MUST authenticate the browser and persist an explicit decision before returning evidence. */
 export async function handleConsent(request, env) {
   const path = new URL(request.url).pathname;
@@ -130,9 +144,17 @@ export async function handleConsent(request, env) {
     const data = await serviceRequest(env.REVIEW_CONSENT_AUTHORITY, "https://consent-authority.internal" + path, {
       method: "POST", headers, body: JSON.stringify(input),
     }, true, action === 'challenge' ? 9000 : 2000);
-    if (action === 'context') return data?.available === true ? response(200, {available: true, verified:data.verified===true}) : response(503, {error: "unavailable"});
+    if (action === 'context') {
+      if(data?.available!==true) return response(503,{error:'unavailable'});
+      if(data.verified===true) { try { await recordRecipient(data,env); } catch { return response(200,{available:true,verified:false}); } }
+      return response(200,{available:true,verified:data.verified===true});
+    }
     if (action === 'challenge') return data?.sent === true ? response(200, {sent:true}) : response(503, {error: "unavailable"});
-    if (action === 'verify') return data?.verified === true ? response(200, {verified:true}) : response(503, {error: "unavailable"});
+    if (action === 'verify') {
+      if(data?.verified!==true) return response(503,{error:'unavailable'});
+      await recordRecipient(data,env);
+      return response(200,{verified:true});
+    }
     if (!data || data.store !== env.REVIEWS_STORE_KEY || data.environment !== "test" ||
         data.purpose !== "review_invitation" || data.decision !== "granted" ||
         !idPattern.test(data.event_id || "") || !hashPattern.test(data.recipient_context_hash || "") ||
