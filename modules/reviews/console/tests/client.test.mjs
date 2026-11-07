@@ -118,10 +118,10 @@ test('delivery evidence operations use scoped same-origin POSTs and do not expos
   const calls = [];
   const client = createClient(async (url, options) => {
     calls.push({url, options});
-    return Response.json({status: url.endsWith('/refresh') ? 'refreshed' : 'acknowledged'});
+    return Response.json(url.endsWith('/refresh') ? {status: 'unknown', reason: 'history_window'} : {status: 'acknowledged'});
   });
   const delivery = 'f'.repeat(64);
-  await client.refreshDeliveryEvidence(delivery);
+  assert.deepEqual(await client.refreshDeliveryEvidence(delivery), {status: 'unknown', reason: 'history_window'});
   await client.acknowledgeDeliveryEvidence(delivery, {provider_email_id: 'smtp_1', event_type: 'delivered', event_at: '2026-01-01T00:00:00Z', ignored: 'private'});
   assert.equal(calls[0].options.credentials, 'same-origin');
   assert.equal(calls[0].url, `/reviews-admin/v1/deliveries/${delivery}/refresh`);

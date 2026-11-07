@@ -151,14 +151,29 @@ def test_refresh_is_audited_scoped_and_never_sends_or_mutates(lifecycle, monkeyp
 
     async def refresh(service, token_value, target, acquisition, gen, ident):
         calls.append((target, acquisition, gen, ident))
-        return 200
+        return {"status": "unknown", "reason": "no_match"}
 
     monkeypatch.setattr(lifecycle, "request_provider_refresh", refresh)
     request = types.SimpleNamespace(headers={"Origin": "https://staff.example"})
     response = asyncio.run(lifecycle.provider_operations(request, env, delivery, "refresh", "staff-1", {}))
-    assert response.status == 200
+    assert response.status == 200 and response.body == {"status": "unknown", "reason": "no_match"}
     assert calls == [("discover", "private-order-1", generation, delivery)]
     assert db.db.execute("SELECT action FROM review_provider_operations_audit").fetchone()[0] == "refresh_requested"
     assert db.db.execute("SELECT state FROM invitation_generations").fetchone()[0] == "uncertain"
     result = asyncio.run(lifecycle.provider_operations(request, env, delivery, "refresh", "staff-1", {"x": 1}))
     assert result.status == 400
+
+
+def test_provider_outcomes_preserve_unknown_and_reject_untrusted_shapes(lifecycle):
+    for reason in ("no_provider_identity", "no_activity", "history_window", "ambiguous", "no_match"):
+        assert lifecycle.validate_provider_outcome({"status": "unknown", "reason": reason}) == {
+            "status": "unknown", "reason": reason
+        }
+    for status in ("observed", "matched_needs_operator"):
+        assert lifecycle.validate_provider_outcome({"status": status, "events": ["delivered"]})["status"] == status
+    import pytest
+    for payload in ({"status": "unknown", "reason": "delivered"}, {"status": "observed", "events": []},
+                    {"status": "observed", "events": ["delivered"], "recipient": "private"},
+                    {"status": "observed", "events": ["delivered"] * 501}):
+        with pytest.raises(ValueError):
+            lifecycle.validate_provider_outcome(payload)

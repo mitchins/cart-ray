@@ -26,11 +26,11 @@ async function responseJson(response, mutation = false) {
   try { return await response.json(); } catch { throw new ConsoleError(mutation ? UNCERTAIN : 'The review service returned an invalid response.'); }
 }
 export function createClient(fetcher = fetch, timeoutMs = 8000) {
-  async function request(url, options, mutation = false) {
+  async function request(url, options, mutation = false, requestTimeout = timeoutMs) {
     const controller = new AbortController();
     let timer;
     const timeout = new Promise((_, reject) => {
-      timer = setTimeout(() => { controller.abort(); reject(new ConsoleError(mutation ? UNCERTAIN : 'The review service timed out. Please try again.')); }, timeoutMs);
+      timer = setTimeout(() => { controller.abort(); reject(new ConsoleError(mutation ? UNCERTAIN : 'The review service timed out. Please try again.')); }, requestTimeout);
     });
     try {
       return await Promise.race([(async () => responseJson(await fetcher(url, { ...options, signal: controller.signal }), mutation))(), timeout]);
@@ -98,8 +98,11 @@ export function createClient(fetcher = fetch, timeoutMs = 8000) {
     },
     async refreshDeliveryEvidence(deliveryId) {
       if (!ID.test(deliveryId || '')) throw new ConsoleError('Invalid delivery reference.');
-      const data = await request(`/reviews-admin/v1/deliveries/${deliveryId}/refresh`, { method: 'POST', credentials: 'same-origin', cache: 'no-store', headers: { 'Content-Type': 'application/json' }, body: '{}' }, true);
-      if (data?.status !== 'refreshed') throw new ConsoleError('Provider evidence is unavailable.');
+      const data = await request(`/reviews-admin/v1/deliveries/${deliveryId}/refresh`, { method: 'POST', credentials: 'same-origin', cache: 'no-store', headers: { 'Content-Type': 'application/json' }, body: '{}' }, true, Math.max(timeoutMs, 19000));
+      const knownEvents = ['processed', 'delivered', 'rejected', 'soft-bounced', 'hard-bounced'];
+      if (data?.status === 'unknown' && ['no_provider_identity', 'no_activity', 'history_window', 'ambiguous', 'no_match'].includes(data.reason)) return { status: data.status, reason: data.reason };
+      if (['observed', 'matched_needs_operator'].includes(data?.status) && Array.isArray(data.events) && data.events.length > 0 && data.events.length <= 500 && data.events.every((event) => knownEvents.includes(event))) return { status: data.status, events: data.events };
+      throw new ConsoleError('Provider evidence is unavailable or incomplete. Do not resend.');
     },
     async acknowledgeDeliveryEvidence(deliveryId, evidence) {
       if (!ID.test(deliveryId || '') || !REQUEST_KEY.test(evidence.provider_email_id || '') || !['processed','delivered','rejected','soft-bounced','hard-bounced'].includes(evidence.event_type) || typeof evidence.event_at !== 'string' || evidence.event_at.length > 40) throw new ConsoleError('Invalid provider evidence.');

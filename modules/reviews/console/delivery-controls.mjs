@@ -53,8 +53,12 @@ export function setupDeliveries({ client, document, element }) {
         const refresh = element('button', 'Refresh provider evidence');
         refresh.addEventListener('click', async () => {
           refresh.disabled = true;
-          try { await client.refreshDeliveryEvidence(row.delivery_identity); evidence.textContent = 'Evidence refreshed. Select View provider evidence to inspect it.'; }
-          catch { evidence.textContent = 'Provider lookup is unavailable or uncertain. Do not resend.'; }
+          try {
+            const result = await client.refreshDeliveryEvidence(row.delivery_identity);
+            const reasons = { no_provider_identity: 'No provider identity is recorded.', no_activity: 'No provider activity was found.', history_window: 'Provider history may have expired.', ambiguous: 'Provider matches are ambiguous.', no_match: 'No matching provider event was found.' };
+            evidence.textContent = result.status === 'unknown' ? `${reasons[result.reason]} The outcome remains unknown. Do not resend.` : result.status === 'matched_needs_operator' ? 'A provider match needs operator review. Select View provider evidence; do not resend.' : 'Provider activity was observed. Select View provider evidence; acceptance and mailbox delivery are distinct.';
+          }
+          catch { evidence.textContent = 'Provider lookup failed or returned incomplete evidence. The outcome remains unknown. Do not resend.'; }
           finally { refresh.disabled = false; }
         });
         card.append(inspect, refresh, evidence);

@@ -517,12 +517,28 @@ async def provider_operations(request, env, delivery_id, action, actor, data):
     if action == "acknowledge":
         return Response.json({"status": "acknowledged"}, headers={"Cache-Control": "no-store"})
     try:
-        status = await request_provider_refresh(service, token, target, acquisition, generation, delivery_id)
-        if status != 200:
-            return fail(503, "provider evidence unavailable")
-        return Response.json({"status": "refreshed"}, headers={"Cache-Control": "no-store"})
+        outcome = await request_provider_refresh(service, token, target, acquisition, generation, delivery_id)
+        return Response.json(validate_provider_outcome(outcome), headers={"Cache-Control": "no-store"})
     except Exception:
         return fail(503, "provider evidence unavailable")
+
+
+def validate_provider_outcome(outcome):
+    """Allowlist provider evidence, keeping absence and uncertainty explicit."""
+    if not isinstance(outcome, dict):
+        raise ValueError("invalid provider outcome")
+    status = outcome.get("status")
+    if status == "unknown" and set(outcome) == {"status", "reason"} and outcome["reason"] in (
+        "no_provider_identity", "no_activity", "history_window", "ambiguous", "no_match"
+    ):
+        return {"status": status, "reason": outcome["reason"]}
+    events = outcome.get("events")
+    if (status in ("observed", "matched_needs_operator") and set(outcome) == {"status", "events"}
+            and isinstance(events, list) and 1 <= len(events) <= 500
+            and all(event in ("processed", "delivered", "rejected", "soft-bounced", "hard-bounced")
+                    for event in events)):
+        return {"status": status, "events": events}
+    raise ValueError("invalid provider outcome")
 
 
 async def request_provider_refresh(service, token, target, acquisition, generation, delivery_id):
@@ -537,13 +553,29 @@ async def request_provider_refresh(service, token, target, acquisition, generati
                          "Content-Type": "application/json"}, "body": payload,
                          "signal": controller.signal}, dict_converter=Object.fromEntries)
         result = await await_promise(service.fetch("https://reviews-reconciliation.internal/" + target, options), 15)
-        status = int(result.status)
-        if result.body is not None:
+        if int(result.status) != 200 or result.body is None:
+            raise ValueError("provider evidence unavailable")
+        reader = result.body.getReader()
+        parts, length, deadline = [], 0, time.monotonic() + 3
+        try:
+            while True:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise TimeoutError("provider response deadline")
+                chunk = await await_promise(reader.read(), remaining)
+                if chunk.done:
+                    break
+                data = bytes(chunk.value.to_py())
+                length += len(data)
+                if length > 16384:
+                    raise ValueError("provider response too large")
+                parts.append(data)
+            return json.loads(b"".join(parts), object_pairs_hook=unique_pairs, parse_constant=invalid_constant)
+        finally:
             try:
-                await await_promise(result.body.cancel(), 0.25)
+                await await_promise(reader.cancel(), 0.25)
             except Exception:
                 pass
-        return status
     finally:
         controller.abort()
 
