@@ -51,10 +51,15 @@ def test_populated_history_cannot_be_pinned_without_a_matching_authoritative_con
     payload = json.dumps(["acorn-recipient-v2", "acorn-store", "test", "Client@example.com"], separators=(",", ":"))
     digest = hmac.new(key.encode(), payload.encode(), hashlib.sha256).hexdigest()
     db.execute("INSERT INTO review_recipient_suppressions VALUES (?,?,?)", ("acorn-store", "test", digest))
-    for wrong_key, contact in [(key, None), ("z" * 40, "Client@example.com"), (key, "client@example.com")]:
+    for wrong_key, contacts in [(key, None), ("z" * 40, ["Client@example.com"]), (key, ["client@example.com"])]:
         with pytest.raises(ValueError):
-            pin.verify_history(db=db, key=wrong_key, store="acorn-store", known_email=contact)
-    pin.verify_history(db=db, key=key, store="acorn-store", known_email="Client@EXAMPLE.COM")
+            pin.verify_history(db=db, key=wrong_key, store="acorn-store", contacts=contacts)
+    pin.verify_history(db=db, key=key, store="acorn-store", contacts=["Client@EXAMPLE.COM"])
+    # One matching identity is not sufficient if other historic suppressions
+    # were made under another key or cannot be matched to authoritative data.
+    db.execute("INSERT INTO review_recipient_suppressions VALUES (?,?,?)", ("acorn-store", "test", "f" * 64))
+    with pytest.raises(ValueError):
+        pin.verify_history(db=db, key=key, store="acorn-store", contacts=["Client@example.com"])
 
 
 def test_verified_empty_history_can_pin_without_contact():
@@ -64,4 +69,17 @@ def test_verified_empty_history_can_pin_without_contact():
         "(store_key,environment,binding_version,recipient_context_hash);"
         "CREATE TABLE review_recipient_suppressions(store_key,environment,recipient_context_hash);"
     )
-    pin.verify_history(db=db, key="y" * 40, store="acorn-store", known_email=None)
+    pin.verify_history(db=db, key="y" * 40, store="acorn-store", contacts=None)
+
+
+def test_versioned_binding_is_populated_history_not_a_fresh_install():
+    db = sqlite3.connect(":memory:")
+    db.executescript(
+        "CREATE TABLE review_automation_recipient_bindings"
+        "(store_key,environment,binding_version,recipient_context_hash);"
+        "CREATE TABLE review_recipient_suppressions(store_key,environment,recipient_context_hash);"
+    )
+    db.execute("INSERT INTO review_automation_recipient_bindings VALUES (?,?,?,?)",
+               ("acorn-store", "test", "v2_key1", "f" * 64))
+    with pytest.raises(ValueError):
+        pin.verify_history(db=db, key="y" * 40, store="acorn-store", contacts=None)

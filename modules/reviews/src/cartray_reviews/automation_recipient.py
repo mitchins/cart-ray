@@ -49,6 +49,17 @@ async def record_recipient(db, *, store, environment, data, signature, secret, n
     ).encode()
     if not hmac.compare_digest(hmac.new(secret, signed, hashlib.sha256).hexdigest(), signature):
         raise ValueError("recipient evidence unavailable")
+    # An already authenticated, byte-identical old binding remains a valid
+    # replay after rotation. Do not attempt a new insert through the key fence.
+    existing = _rows(
+        await db.prepare(
+            "SELECT outbox_id FROM review_automation_recipient_bindings WHERE store_key=? AND environment=? "
+            "AND outbox_id=? AND recipient_context_hash=? AND binding_version=? "
+            "AND evidence_reference=? AND verified_at=?"
+        ).bind(store, environment, outbox, recipient, version, reference, verified).all()
+    )
+    if len(existing) == 1:
+        return
     try:
         await db.batch(
             [
@@ -109,3 +120,38 @@ async def evidence_status(db, *, store, environment, outbox_id, now):
         "recipient_binding_recorded": bool(result[0]["recipient_verified"]),
         "consent_granted": bool(result[0]["consent_granted"]),
     }
+
+
+async def resolve_replay(db, *, store, environment, outbox_id, candidate):
+    """Resolve an old immutable binding only when its new-key alias matches."""
+    if (not isinstance(store, str) or not ID.fullmatch(store) or environment != "test"
+            or type(outbox_id) is not int or outbox_id < 1 or not isinstance(candidate, str)
+            or not HEX.fullmatch(candidate)):
+        raise ValueError("evidence unavailable")
+    records = _rows(await db.prepare(
+        "SELECT b.recipient_context_hash,b.binding_version,b.verified_at,"
+        "c.evidence_reference,c.granted_at,c.revoked_at,"
+        "EXISTS(SELECT 1 FROM review_recipient_suppressions s WHERE s.store_key=b.store_key "
+        "AND s.environment=b.environment AND s.recipient_context_hash=b.recipient_context_hash "
+        "AND s.purpose='review_invitation') AS suppressed "
+        "FROM review_automation_recipient_bindings b LEFT JOIN review_invitation_consents c "
+        "ON c.store_key=b.store_key AND c.environment=b.environment AND c.acquisition_id=b.acquisition_id "
+        "AND c.recipient_context_hash=b.recipient_context_hash AND c.purpose='review_invitation' "
+        "WHERE b.store_key=? AND b.environment=? AND b.outbox_id=?"
+    ).bind(store, environment, outbox_id).all())
+    if not records:
+        return {"status": "new"}
+    item = records[0]
+    if item["recipient_context_hash"] != candidate:
+        match = _rows(await db.prepare(
+            "SELECT 1 ok FROM review_suppression_aliases a JOIN review_suppression_aliases b "
+            "USING(store_key,environment,canonical_hash) WHERE a.store_key=? AND a.environment=? "
+            "AND a.recipient_context_hash=? AND b.recipient_context_hash=? LIMIT 1"
+        ).bind(store, environment, item["recipient_context_hash"], candidate).all())
+        if not match:
+            raise ValueError("evidence unavailable")
+    if item["suppressed"] or item["revoked_at"] is not None:
+        return {"status": "suppressed"}
+    return {"status": "existing", "recipient_context_hash": item["recipient_context_hash"],
+            "binding_version": item["binding_version"], "verified_at": item["verified_at"],
+            "consent_reference": item["evidence_reference"], "granted_at": item["granted_at"]}

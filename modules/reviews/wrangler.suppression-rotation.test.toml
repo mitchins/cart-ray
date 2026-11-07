@@ -1,0 +1,33 @@
+name = "cartray-reviews-acquisition-local-test"
+main = "src/worker.py"
+compatibility_date = "2026-08-31"
+compatibility_flags = ["python_workers", "disable_python_external_sdk"]
+workers_dev = false
+
+[vars]
+REVIEWS_MODE = "disabled"
+REVIEWS_STORE_KEY = "example-store"
+REVIEWS_ENVIRONMENT = "test"
+
+[[ratelimits]]
+name = "REVIEWS_INGRESS"
+namespace_id = "501001"
+simple = { limit = 1000, period = 60 }
+
+[[d1_databases]]
+binding = "REVIEWS_DB"
+database_name = "cartray-reviews-local-test"
+database_id = "00000000-0000-0000-0000-000000000003"
+migrations_dir = "migrations"
+
+[[d1_databases]]
+binding = "CARTRAY_DB"
+database_name = "cartray-acquisition-local-test"
+database_id = "00000000-0000-0000-0000-000000000004"
+migrations_dir = "../../migrations"
+
+[[d1_databases]]
+binding = "SUPPRESSION_CONTEXT_DB"
+database_name = "cartray-suppression-context-local-test"
+database_id = "00000000-0000-0000-0000-000000000005"
+migrations_dir = "consent/migrations"

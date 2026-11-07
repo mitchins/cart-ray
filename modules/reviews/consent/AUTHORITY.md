@@ -128,23 +128,53 @@ key registry in the purchaser-context D1 database. Apply
 `tools/pin_suppression_key.py`. The tool requires a mode-0600, independently
 verified, quiesced snapshot of the correct Reviews D1 and a mode-0600 key file.
 If any v2 bindings or suppressions already exist, it refuses to proceed without
-a mode-0600 known-contact file derived from an authoritative purchase and a hash
-match against that existing history. An empty snapshot is accepted only for a
+a mode-0600 JSON array of authoritative purchase contacts whose hashes cover
+every existing v2 binding and suppression. This also fails closed when history
+contains hashes created under different keys. An empty snapshot is accepted only for a
 verified genuinely empty installation. The operator must verify the snapshot's
 source, scope and freshness and stop concurrent writers; the tool cannot attest
 an arbitrary local file or police a separate deployment. Apply its private SQL
 output only to the verified context database; retain it securely and remove it
 when no longer needed. A missing row, changed key or changed version fails closed
-before purchase evidence or recipient delivery. This is a guard, not a rotation
-mechanism; it does not change existing v2 pseudonyms.
+before purchase evidence or recipient delivery. The immutable epoch records and
+current pointer are separate: a version cannot be reused with a different key.
 
-**Do not change or retire the suppression HMAC key yet.** Hashes cannot be
-translated without the trusted purchase contact. Existing links can unsubscribe
-after a cutover, so copying only current suppression rows would lose later
-withdrawals. A safe future migration must retain old-key verification, map every
-old contact through authoritative purchase evidence, atomically bridge aliases
-for both old and new links, fence old writers during cutover, and verify complete
-coverage including stale links and concurrent unsubscribe before key retirement.
-Until that path is implemented and qualified, key rotation and production release
-remain on hold. Never overwrite the registry or delete suppression rows to force
-an upgrade.
+### Fenced rotation (test only)
+
+The `suppression-key-rotation` private Reviews service-binding route is disabled
+unless `REVIEWS_SUPPRESSION_ROTATION_MODE=test`, an independent
+`REVIEWS_SUPPRESSION_ROTATION_TOKEN` is configured, and
+`SUPPRESSION_CONTEXT_DB` binds the independently verified context D1. It is not a
+public or production route. Requests and contacts must stay private and must not
+be logged. The operator must independently verify the source Worker, account,
+Reviews and context database bindings, pause old producer deployments, and
+re-attest after deploying any new source version. The route cannot attest its
+own Cloudflare resource identity or ensure older, pre-fence code has stopped.
+
+1. Apply Reviews migration 0030 and context migration 0002, verify the installed
+   old-key pin, and ensure no provider delivery is dispatching or uncertain.
+2. Call `freeze` with old and target key versions. The database fences new
+   recipient evidence and delivery claims; unsubscribe remains available. If
+   unresolved deliveries exist, freezing fails rather than hiding them.
+3. Obtain historical purchase contacts from the authoritative source and call
+   `backfill` with both keys in batches of up to 50. Each contact must reproduce
+   an existing old-key binding or tombstone. The transaction links pseudonyms,
+   propagates existing suppressions and pins both key proofs across all batches.
+   Call with an empty contact list only for a verified empty installation.
+4. Call `switch` to pin and select the new key in context D1. It refuses unless
+   all existing v2 bindings and all suppression records have a target alias;
+   legacy v1 bindings intentionally block cutover pending a separate migration.
+   Deploy and attest the evidence Worker using the new key and version while the
+   Reviews fence remains closed, then call `activate`. Activation rechecks both
+   context key and full alias coverage before reopening writes. A failed or
+   interrupted switch leaves the fence closed; retry with the same versions and
+   keys. Old-link unsubscriptions propagate across all linked key epochs.
+
+The existing v2 binding version is preserved for old records; subsequent source
+bindings use `v2_<key-version>`. Authenticated outbox replays resolve a matching
+new pseudonym back to the old immutable binding and consent without granting
+again. Old-key holders must be removed only after source deployment and
+attestation are verified. Key rotation is not a production feature: the current
+adapter and control route are test-only, operator-driven, and still require
+independent hosted qualification. Never bypass the fence or delete suppression
+records to force an upgrade.

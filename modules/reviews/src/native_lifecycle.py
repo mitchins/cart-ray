@@ -12,7 +12,7 @@ from cartray_reviews.acquisition import confirmed_purchase
 from cartray_reviews.automation_due import claim_due, complete_claim
 from cartray_reviews.automation_initial import due_initial, unsubscribe_token
 from cartray_reviews.automation_intake import activate_intake, intake_order
-from cartray_reviews.automation_recipient import evidence_status, record_recipient
+from cartray_reviews.automation_recipient import evidence_status, record_recipient, resolve_replay
 from cartray_reviews.invitations import (
     claim_delivery,
     prepare_initial_delivery,
@@ -27,6 +27,7 @@ from cartray_reviews.management import manage_review, management_token
 from cartray_reviews.recovery import accept_recovery_command
 from cartray_reviews.staff_identity import JwksCache, StaffAuthenticationError, authenticate_staff
 from cartray_reviews.staff_replies import mutate_reply, public_replies
+from cartray_reviews.suppression_rotation import activate, backfill, freeze, switch_context
 from js import Object, Promise, Uint8Array, clearTimeout, crypto, setTimeout
 from pyodide.ffi import create_proxy, to_js
 from workers import Response
@@ -745,6 +746,54 @@ async def handle_write(request, env, path):
         ):
             await discard_body(request)
             return fail(503, "collection unavailable")
+        if path == "/reviews-internal/v1/suppression-key-rotation":
+            rotation_token = str(getattr(env, "REVIEWS_SUPPRESSION_ROTATION_TOKEN", ""))
+            excluded = secrets + tuple(str(getattr(env, name, "")) for name in (
+                "REVIEWS_AUTOMATION_INGRESS_TOKEN", "REVIEWS_AUTOMATION_ACTIVATION_TOKEN",
+                "REVIEWS_RECIPIENT_EVIDENCE_SECRET", "REVIEWS_CONSENT_SECRET", "REVIEWS_DELIVERY_TOKEN",
+                "REVIEWS_UNSUBSCRIBE_KEY",
+            ))
+            if (str(getattr(env, "REVIEWS_SUPPRESSION_ROTATION_MODE", "disabled")) != "test"
+                    or len(rotation_token) < 32 or rotation_token in excluded
+                    or getattr(env, "SUPPRESSION_CONTEXT_DB", None) is None):
+                await discard_body(request)
+                return fail(503, "rotation unavailable")
+            if not hmac.compare_digest(
+                str(request.headers.get("Authorization") or "").encode(), ("Bearer " + rotation_token).encode()
+            ):
+                await discard_body(request)
+                return fail(401, "unauthorized")
+            try:
+                data = await read_json(request)
+                for name in ("old_key", "new_key"):
+                    if name in data and (data[name] == rotation_token or data[name] in excluded):
+                        return fail(409, "rotation unavailable")
+                common = {"store": store, "environment": environment, "old": data["old"], "target": data["target"]}
+                action = data["action"]
+                if action == "freeze" and set(data) == {"action", "old", "target"}:
+                    await freeze(env.REVIEWS_DB, **common)
+                elif action == "backfill" and set(data) == {
+                    "action", "old", "target", "old_key", "new_key", "contacts"
+                }:
+                    await backfill(
+                        env.REVIEWS_DB, **common, old_key=data["old_key"], new_key=data["new_key"],
+                        contacts=data["contacts"], now=int(time.time())
+                    )
+                elif action == "switch" and set(data) == {
+                    "action", "old", "target", "old_key", "new_key", "installation"
+                }:
+                    await switch_context(
+                        env.REVIEWS_DB, env.SUPPRESSION_CONTEXT_DB, **common, installation=data["installation"],
+                        old_key=data["old_key"], new_key=data["new_key"]
+                    )
+                elif action == "activate" and set(data) == {"action", "old", "target", "new_key", "installation"}:
+                    await activate(env.REVIEWS_DB, env.SUPPRESSION_CONTEXT_DB, **common,
+                                   installation=data["installation"], new_key=data["new_key"])
+                else:
+                    return fail(400, "invalid rotation request")
+                return Response.json({"status": "ok"}, headers={"Cache-Control": "no-store"})
+            except (ValueError, TypeError, AttributeError, KeyError, json.JSONDecodeError):
+                return fail(409, "rotation unavailable")
         if path.startswith("/reviews/v1/"):
             source = str(request.headers.get("CF-Connecting-IP") or "local-test")
             if len(source) > 64:
@@ -1031,6 +1080,19 @@ async def handle_write(request, env, path):
             return Response.json({"status": "recorded"}, status=200, headers={"Cache-Control": "no-store"})
         except (ValueError, TypeError, AttributeError, KeyError, json.JSONDecodeError):
             return fail(409, "recipient evidence unavailable")
+    if path == "/reviews-internal/v1/automation-recipient-replay":
+        failure = await automation_authorize(request, env, acquisition_mode, secrets, "evidence unavailable")
+        if failure is not None:
+            return failure
+        try:
+            data = await read_json(request)
+            if set(data) != {"outbox_id", "candidate"}:
+                return fail(400, "invalid evidence query")
+            result = await resolve_replay(env.REVIEWS_DB, store=store, environment=environment,
+                                          outbox_id=data["outbox_id"], candidate=data["candidate"])
+            return Response.json(result, headers={"Cache-Control": "no-store"})
+        except (ValueError, TypeError, AttributeError, KeyError, json.JSONDecodeError):
+            return fail(409, "evidence unavailable")
     if path == "/reviews-internal/v1/automation-evidence-status":
         failure = await automation_authorize(request, env, acquisition_mode, secrets, "evidence unavailable")
         if failure is not None:

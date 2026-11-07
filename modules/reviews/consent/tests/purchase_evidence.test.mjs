@@ -60,13 +60,13 @@ test('missing or non-held Reviews intake rejects before consulting Stripe or sen
 });
 
 test('automatic evidence uses only a checked-out, confirmed order and signs purchase contact, not mailbox ownership',async()=>{
- const x=setup(), sent=[]; const now=Math.floor(Date.now()/1000);
+ const x=setup(), sent=[]; let replay={status:'new'}; const now=Math.floor(Date.now()/1000);
  x.row.settled_at=now-10;
  const grant={selected:1,merchant_default_selected:0,grant_default:0,selection_basis:'express_opt_in',wording_version:'review-invitation-v1',choice_version:'review-invitation-v1',wording:'Email me one request to review my purchase.',choice_wording:'Email me one request to review my purchase.',granted_at:now-20,recorded_at:now-20};
  const original=x.env.COMMERCE_DB.prepare;
  x.env.COMMERCE_DB.prepare=sql=>sql.includes('review_invitation_checkout_choices') ? {bind:()=>({first:async()=>grant})} : original(sql);
  Object.assign(x.env,{AUTOMATION_EVIDENCE_TOKEN:'j'.repeat(40),REVIEWS_RECIPIENT_EVIDENCE_SECRET:'k'.repeat(40),REVIEWS_CONSENT_SECRET:'l'.repeat(40)});
- x.env.REVIEWS_API.fetch=async(url,opts)=>{if(url.endsWith('/automation-evidence-status')) return Response.json({state:'held_eligibility_recipient_consent'}); sent.push({url,opts}); return Response.json({status:'recorded'})};
+ x.env.REVIEWS_API.fetch=async(url,opts)=>{if(url.endsWith('/automation-evidence-status')) return Response.json({state:'held_eligibility_recipient_consent'}); if(url.endsWith('/automation-recipient-replay')) return Response.json(replay); sent.push({url,opts}); return Response.json({status:'recorded'})};
  const req=(body={outbox_id:12},token=x.env.AUTOMATION_EVIDENCE_TOKEN)=>new Request('https://private/automation-record',{method:'POST',headers:{'content-type':'application/json',Authorization:'Bearer '+token},body:JSON.stringify(body)});
  assert.equal((await purchaseEvidence(req(),x.env,x.fetcher)).status,200);
  // Rotating either the identifier or secret without a qualified migration
@@ -87,7 +87,18 @@ test('automatic evidence uses only a checked-out, confirmed order and signs purc
  }
  const delivery=await purchaseEvidence(resolve(x.env.AUTOMATION_RECIPIENT_TOKEN),x.env,x.fetcher);
  assert.equal(delivery.status,200);assert.deepEqual(await delivery.json(),{email:'squirrel@example.com',recipient_context_hash:recipient.recipient_context_hash});
- assert.equal(recipient.binding_version,'v2');
+ assert.equal(recipient.binding_version,'v2_key1');
+ // A reviewed alias preserves immutable old binding and grant on queue replay.
+ replay={status:'existing',recipient_context_hash:'a'.repeat(64),binding_version:'v2',verified_at:x.row.settled_at,
+  consent_reference:'checkout_old',granted_at:grant.granted_at};
+ assert.equal((await purchaseEvidence(req(),x.env,x.fetcher)).status,200);
+ assert.equal(JSON.parse(sent.at(-2).opts.body).recipient_context_hash,'a'.repeat(64));
+ assert.equal(JSON.parse(sent.at(-1).opts.body).evidence_reference,'checkout_old');
+ sent.splice(-2);
+ replay={status:'suppressed'};
+ assert.deepEqual(await (await purchaseEvidence(req(),x.env,x.fetcher)).json(),{status:'not_granted'});
+ assert.deepEqual(await (await purchaseEvidence(resolve(x.env.AUTOMATION_RECIPIENT_TOKEN),x.env,x.fetcher)).json(),{status:'suppressed'});
+ replay={status:'new'};
  x.row.order_id='cr_order_2'; x.row.payload_json=JSON.stringify({order_id:'cr_order_2',session_id:session,items_digest:'abc123'});
  x.setPurchase({id:session,livemode:false,status:'complete',payment_status:'paid',amount_total:4200,currency:'aud',metadata:{cr_order_id:'cr_order_2',cr_catalogue_version:catalogue,cr_items_digest:'abc123'},customer_details:{email:'squirrel@example.com'}});
  const second=await purchaseEvidence(resolve(x.env.AUTOMATION_RECIPIENT_TOKEN),x.env,x.fetcher);

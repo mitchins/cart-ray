@@ -65,6 +65,10 @@ jobs:
         run: REVIEWS_TEST_VERBOSE=1 uv run python modules/reviews/tests/native_acquisition_workerd.py
       - name: Exercise Reviews no-backfill activation on Workerd and D1
         run: REVIEWS_TEST_VERBOSE=1 PYTHONPATH=modules/reviews/src uv run --locked python modules/reviews/tests/activation_workerd.py
+      - name: Exercise initial delivery and withdrawal replay on Workerd and D1
+        run: REVIEWS_TEST_VERBOSE=1 PYTHONPATH=modules/reviews/src uv run --locked python modules/reviews/tests/initial_dispatch_workerd.py
+      - name: Exercise fenced suppression-key rotation on Workerd and D1
+        run: REVIEWS_TEST_VERBOSE=1 PYTHONPATH=modules/reviews/src uv run --locked python modules/reviews/tests/suppression_rotation_workerd.py
       - name: Exercise authenticated staff moderation on Workerd and D1
         run: REVIEWS_TEST_VERBOSE=1 PYTHONPATH=modules/reviews/src uv run --locked python modules/reviews/tests/staff_workerd.py
       - run: npm run test:reviews-publication

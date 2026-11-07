@@ -28,6 +28,7 @@ export async function dispatchInitial(message,env,fetcher=fetch,now=()=>Math.flo
  const landing=safeUrl(env.REVIEWS_LANDING_URL), unsubscribeBase=safeUrl(env.UNSUBSCRIBE_BASE_URL);
  if(!message || Object.keys(message).join(',')!=='outbox_id' || !Number.isSafeInteger(message.outbox_id) || message.outbox_id<1)return 'discard';
  const recipient=await call(env.PURCHASE_EVIDENCE,'/automation-recipient',message,env.AUTOMATION_RECIPIENT_TOKEN);
+ if(recipient.status==='suppressed') return 'suppressed';
  if(recipient.email!==env.APPROVED_TEST_EMAIL || !hex.test(recipient.recipient_context_hash||''))throw Error('recipient unavailable');
  const draft=await call(env.REVIEWS_API,'/reviews-internal/v1/automation-initial-prepare',message,env.REVIEWS_AUTOMATION_TOKEN);
  if(draft.status==='suppressed' && Object.keys(draft).length===1)return 'done';

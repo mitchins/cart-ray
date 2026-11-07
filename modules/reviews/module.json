@@ -39,6 +39,7 @@
     "migrations/0027_consent_withdrawal.sql",
     "migrations/0028_automation_due_schedule.sql",
     "migrations/0029_merchant_recipient_suppression.sql",
+    "migrations/0030_suppression_rotation.sql",
     "migrations/0031_provider_delivery_receipts.sql",
     "migrations/0032_provider_operations_audit.sql"
   ],
@@ -73,7 +74,8 @@
     "POST /reviews-internal/v1/automation-intake (verified_acquisition_only, test only, disabled by default)",
     "POST /reviews-internal/v1/automation-recipient-evidence (verified_acquisition_only, test only, disabled by default)",
     "POST /reviews-internal/v1/automation-evidence-status (verified_acquisition_only, test only, disabled by default)",
-    "POST /reviews-internal/v1/automation-due-evaluate (verified_acquisition_only, test only, disabled by default)"
+    "POST /reviews-internal/v1/automation-due-evaluate (verified_acquisition_only, test only, disabled by default)",
+    "POST /reviews-internal/v1/suppression-key-rotation (test only, disabled by default)"
   ],
   "subscriptions": [],
   "scheduled_tasks": []
