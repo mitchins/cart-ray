@@ -122,7 +122,7 @@ def build(
     shutil.copy2(HERE / "acorn.css", output / "acorn.css")
     shutil.copy2(HERE / "reviews.mjs", output / "reviews.mjs")
     shutil.copy2(HERE / "consent.mjs", output / "consent.mjs")
-    if review_consent:
+    if review_consent or reviews:
         shutil.copy2(HERE / "pages_gateway.mjs", output / "_worker.js")
     shutil.copytree(HERE / "assets", output / "assets")
     shutil.copytree(ROOT / "modules/reviews/ui", output / "review")

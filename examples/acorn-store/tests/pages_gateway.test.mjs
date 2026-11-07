@@ -20,3 +20,28 @@ test('checkout falls back without changing the body if optional gateway fails',a
   assert.equal((await pages.fetch(req('/review-consent/v1/context',{method:'POST',body:'{}'}),e)).status,503);
  }
 });
+test('test Reviews exposes only public reads without forwarding browser credentials',async()=>{
+ const e=env(), calls=[];
+ e.ACORN_REVIEWS_READ_MODE='test';
+ e.REVIEWS_PUBLIC={fetch:async request=>{calls.push(request);return Response.json({contribution_count:3});}};
+ for(const path of ['/reviews/v1/subjects/acorn-growing-kit/summary','/reviews/v1/subjects/woodland-planter/contributions?limit=10']) {
+  const response=await pages.fetch(req(path,{headers:{cookie:'private=secret',authorization:'Bearer secret'}}),e);
+  assert.equal(response.status,200); assert.equal((await response.json()).contribution_count,3);
+ }
+ assert.equal(calls.length,2);
+ for(const request of calls){assert.equal(request.method,'GET');assert.equal(request.headers.get('cookie'),null);assert.equal(request.headers.get('authorization'),null);}
+ assert.equal(new URL(calls[1].url).search,'?limit=10');
+ for(const path of ['/reviews/v1/subjects/acorn-growing-kit/submit','/reviews/admin','/reviews/v1/subjects/%2f/summary'])
+  assert.equal((await pages.fetch(req(path),e)).status,404);
+ assert.equal((await pages.fetch(req('/reviews/v1/subjects/acorn-growing-kit/summary',{method:'POST'}),e)).status,405);
+ assert.equal((await pages.fetch(new Request('https://other.test/reviews/v1/subjects/acorn-growing-kit/summary'),e)).status,403);
+ assert.equal(calls.length,2);
+});
+test('missing or failed Reviews leaves checkout available',async()=>{
+ for(const mode of ['disabled','missing','error']) {
+  const e=env();e.ACORN_REVIEWS_READ_MODE=mode==='disabled'?'disabled':'test';
+  if(mode!=='missing') e.REVIEWS_PUBLIC={fetch:async()=>{throw new Error('unavailable')}};
+  assert.equal((await pages.fetch(req('/reviews/v1/subjects/acorn-growing-kit/summary'),e)).status,503);
+  assert.equal((await pages.fetch(req('/checkout',{method:'POST',body:'synthetic'}),e)).status,200);
+ }
+});

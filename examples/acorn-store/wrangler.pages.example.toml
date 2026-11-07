@@ -1,5 +1,7 @@
 # Example only: copy outside source control and replace every value. The output
 # directory must be generated with --review-consent and its matching test lock.
+# For a read-only Reviews build use --reviews, set ACORN_REVIEWS_READ_MODE to
+# "test", and add a REVIEWS_PUBLIC service binding to the independent test Worker.
 name = "REPLACE-acorn-test-pages"
 pages_build_output_dir = "REPLACE-output-directory"
 compatibility_date = "2026-08-31"
