@@ -72,6 +72,13 @@ test('automatic evidence uses only a checked-out, confirmed order and signs purc
  assert.equal((await purchaseEvidence(resolve('wrong'),x.env,x.fetcher)).status,503);
  const delivery=await purchaseEvidence(resolve(x.env.AUTOMATION_RECIPIENT_TOKEN),x.env,x.fetcher);
  assert.equal(delivery.status,200);assert.deepEqual(await delivery.json(),{email:'squirrel@example.com',recipient_context_hash:recipient.recipient_context_hash});
+ assert.equal(recipient.binding_version,'v2');
+ x.row.order_id='cr_order_2'; x.row.payload_json=JSON.stringify({order_id:'cr_order_2',session_id:session,items_digest:'abc123'});
+ x.setPurchase({id:session,livemode:false,status:'complete',payment_status:'paid',amount_total:4200,currency:'aud',metadata:{cr_order_id:'cr_order_2',cr_catalogue_version:catalogue,cr_items_digest:'abc123'},customer_details:{email:'squirrel@example.com'}});
+ const second=await purchaseEvidence(resolve(x.env.AUTOMATION_RECIPIENT_TOKEN),x.env,x.fetcher);
+ assert.equal(second.status,200);assert.equal((await second.json()).recipient_context_hash,recipient.recipient_context_hash);
+ x.row.order_id=order; x.row.payload_json=JSON.stringify({order_id:order,session_id:session,items_digest:'abc123'});
+ x.setPurchase({id:session,livemode:false,status:'complete',payment_status:'paid',amount_total:4200,currency:'aud',metadata:{cr_order_id:order,cr_catalogue_version:catalogue,cr_items_digest:'abc123'},customer_details:{email:'squirrel@example.com'}});
  assert.equal(recipient.evidence_reference,'purchase_contact_12'); assert.equal(recipient.verified_at,x.row.settled_at);
  assert.equal(consent.granted_at,grant.granted_at); assert.match(consent.evidence_reference,/^checkout_[a-f0-9]{64}$/);
  assert.equal(sent[0].opts.headers['X-Reviews-Recipient-Signature'],createHmac('sha256',x.env.REVIEWS_RECIPIENT_EVIDENCE_SECRET).update(JSON.stringify(['reviews-automation-recipient-v1','acorn-store','test',recipient])).digest('hex'));

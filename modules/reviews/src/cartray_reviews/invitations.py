@@ -629,7 +629,11 @@ async def claim_delivery(db, *, store, environment, acquisition, generation, del
                     "WHERE r.store_key=g.store_key AND r.environment=g.environment "
                     "AND r.acquisition_id=g.acquisition_id "
                     "AND r.request_id=substr(g.request_key,10) AND r.state='pending')) "
-                    "AND c.recipient_context_hash=i.recipient_context_hash) THEN 1 ELSE 0 END"
+                    "AND c.recipient_context_hash=i.recipient_context_hash "
+                    "AND NOT EXISTS(SELECT 1 FROM review_recipient_suppressions rs WHERE "
+                    "rs.store_key=i.store_key AND rs.environment=i.environment "
+                    "AND rs.recipient_context_hash=i.recipient_context_hash AND rs.purpose='review_invitation')"
+                    ") THEN 1 ELSE 0 END"
                 ).bind(store, environment, acquisition, generation, delivery, now),
                 db.prepare(
                     "UPDATE invitation_generations SET state='dispatching' WHERE store_key=? AND environment=? "
@@ -700,7 +704,11 @@ async def record_delivery_outcome(
             "WHERE r.store_key=g.store_key AND r.environment=g.environment AND r.acquisition_id=g.acquisition_id "
             "AND r.request_id=substr(g.request_key,10) AND r.state='pending')) "
             "AND c.recipient_context_hash=i.recipient_context_hash AND c.revoked_at IS NULL "
-            "AND c.purpose='review_invitation' AND c.granted_at<=?) THEN 1 ELSE 0 END"
+            "AND c.purpose='review_invitation' AND c.granted_at<=? "
+            "AND NOT EXISTS(SELECT 1 FROM review_recipient_suppressions rs WHERE "
+            "rs.store_key=i.store_key AND rs.environment=i.environment "
+            "AND rs.recipient_context_hash=i.recipient_context_hash AND rs.purpose='review_invitation')"
+            ") THEN 1 ELSE 0 END"
         ).bind(store, environment, acquisition, generation, delivery, item["state"], now)
     else:
         # Recording a failure or an uncertain outcome must remain possible

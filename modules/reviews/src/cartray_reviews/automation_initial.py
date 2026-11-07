@@ -1,4 +1,4 @@
-"""Test-only due-intent authorization and purchase-scoped suppression."""
+"""Test-only due-intent authorization and merchant-scoped suppression."""
 
 import hashlib
 import hmac
@@ -22,7 +22,10 @@ async def due_initial(db, *, store, environment, outbox_id, now):
             "JOIN review_invitation_consents c USING(store_key,environment,acquisition_id,recipient_context_hash) "
             "WHERE i.store_key=? AND i.environment=? AND i.outbox_id=? AND i.due_at<=? "
             "AND t.disposition='accepted' AND b.verified_at<=? AND c.purpose='review_invitation' "
-            "AND c.granted_at<=? AND c.revoked_at IS NULL "
+            "AND c.granted_at<=? AND c.revoked_at IS NULL AND b.binding_version='v2' "
+            "AND NOT EXISTS(SELECT 1 FROM review_recipient_suppressions r WHERE "
+            "r.store_key=i.store_key AND r.environment=i.environment "
+            "AND r.recipient_context_hash=b.recipient_context_hash AND r.purpose='review_invitation') "
             "AND NOT EXISTS(SELECT 1 FROM review_invitation_consent_withdrawals w WHERE "
             "w.store_key=i.store_key AND w.environment=i.environment AND w.acquisition_id=i.acquisition_id "
             "AND w.recipient_context_hash=b.recipient_context_hash AND w.purpose='review_invitation') LIMIT 1"
@@ -54,7 +57,7 @@ async def unsubscribe(db, *, store, environment, token, secret, now):
     found = _rows(
         await db.prepare(
             "SELECT acquisition_id,recipient_context_hash FROM review_automation_recipient_bindings "
-            "WHERE store_key=? AND environment=? AND outbox_id=?"
+            "WHERE store_key=? AND environment=? AND outbox_id=? AND binding_version='v2'"
         )
         .bind(store, environment, outbox_id)
         .all()
@@ -64,6 +67,11 @@ async def unsubscribe(db, *, store, environment, token, secret, now):
     acquisition, recipient = found[0]["acquisition_id"], found[0]["recipient_context_hash"]
     await db.batch(
         [
+            db.prepare(
+                "INSERT OR IGNORE INTO review_recipient_suppressions "
+                "(store_key,environment,recipient_context_hash,purpose,created_at) "
+                "VALUES (?,?,?,'review_invitation',?)"
+            ).bind(store, environment, recipient, now),
             db.prepare(
                 "INSERT INTO review_invitation_consent_withdrawals "
                 "SELECT ?,?,?,?,'review_invitation',?,? WHERE NOT EXISTS(SELECT 1 "

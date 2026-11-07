@@ -598,6 +598,19 @@ async def handle_write(request, env, path):
             if set(data) != expected:
                 return fail(400, "invalid initial invitation")
             now = int(time.time())
+            if path.endswith("prepare") and type(data["outbox_id"]) is int and data["outbox_id"] > 0:
+                suppressed = rows(
+                    await env.REVIEWS_DB.prepare(
+                        "SELECT 1 FROM review_automation_recipient_bindings b "
+                        "JOIN review_recipient_suppressions r USING(store_key,environment,recipient_context_hash) "
+                        "WHERE b.store_key=? AND b.environment=? AND b.outbox_id=? "
+                        "AND r.purpose='review_invitation' LIMIT 1"
+                    )
+                    .bind(store, environment, data["outbox_id"])
+                    .all()
+                )
+                if suppressed:
+                    return Response.json({"status": "suppressed"}, headers={"Cache-Control": "no-store"})
             eligible = await due_initial(
                 env.REVIEWS_DB, store=store, environment=environment, outbox_id=data["outbox_id"], now=now
             )

@@ -111,8 +111,12 @@ async function resolve(session,contextHash,env,fetcher,{automationOutbox=null}={
   if(JSON.stringify(actual)!==JSON.stringify(expected)) throw Error('stripe items');
   const email=normalizeEmail(stripe.customer_details?.email);
   if(email!==normalizeEmail(env.APPROVED_TEST_EMAIL)) throw Error('test recipient');
-  const version='v1';
-  const recipientHash=await mac(env.RECIPIENT_HASH_KEY,JSON.stringify(['acorn-recipient-v1',env.STORE_KEY,'test',row.order_id,version,email]));
+  // v2 has a stable merchant-scoped pseudonym for purpose suppression.
+  // Retain v1's order-scoped interpretation for the old, test-only authority.
+  const version=automatic ? 'v2' : 'v1';
+  const recipientHash=await mac(env.RECIPIENT_HASH_KEY,JSON.stringify(automatic
+    ? ['acorn-recipient-v2',env.STORE_KEY,'test',email]
+    : ['acorn-recipient-v1',env.STORE_KEY,'test',row.order_id,version,email]));
   const reference='ref_'+await mac(env.RECIPIENT_HASH_KEY,JSON.stringify(['acorn-delivery-v1',automatic ? row.order_id : contextHash,recipientHash]));
   const sourceProvenance=env.INSTALLATION_ID+'_'+proof[9];
   if(!id.test(sourceProvenance)) throw Error('source provenance');

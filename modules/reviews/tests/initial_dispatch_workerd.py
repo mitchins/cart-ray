@@ -80,7 +80,7 @@ def main():
                     *common,
                     "--json",
                     "--command",
-                    "SELECT id FROM outbox WHERE event_type='OrderConfirmed' ORDER BY id LIMIT 1",
+                    "SELECT id FROM outbox WHERE event_type='OrderConfirmed' ORDER BY id LIMIT 2",
                 ],
                 cwd=ROOT,
                 check=True,
@@ -88,6 +88,7 @@ def main():
                 text=True,
             )
             outbox_id = json.loads(query.stdout)[0]["results"][0]["id"]
+            second_outbox = json.loads(query.stdout)[0]["results"][1]["id"]
             assert (
                 internal("/reviews-internal/v1/automation-intake", {"outbox_id": outbox_id}, AUTOMATION_TOKEN)[1][
                     "status"
@@ -124,10 +125,38 @@ def main():
             status, prepared = internal(endpoint, {"outbox_id": outbox_id}, AUTOMATION_TOKEN)
             assert status == 200 and prepared["state"] == "prepared", (status, prepared)
             assert internal(endpoint, {"outbox_id": outbox_id}, AUTOMATION_TOKEN)[1] == prepared
+            assert (
+                internal("/reviews-internal/v1/automation-intake", {"outbox_id": second_outbox}, AUTOMATION_TOKEN)[1][
+                    "status"
+                ]
+                == "accepted"
+            )
+            subprocess.run(
+                ["node", str(MODULE / "consent/tests/automatic_real_reviews.mjs")],
+                cwd=ROOT,
+                env=os.environ
+                | {
+                    "ACORN_TEST_OUTBOX": str(second_outbox),
+                    "ACORN_TEST_EVENT": events[1],
+                    "ACORN_TEST_ORDER": orders[1],
+                    "ACORN_TEST_REVIEWS_BASE": BASE,
+                },
+                check=True,
+            )
+            second_status, second = internal(endpoint, {"outbox_id": second_outbox}, AUTOMATION_TOKEN)
+            assert second_status == 200 and second["state"] == "prepared"
             token = prepared["unsubscribe_token"]
             assert call("/reviews/v1/invitation-unsubscribe", {"token": token})[0] == 200
             assert call("/reviews/v1/invitation-unsubscribe", {"token": token})[0] == 200
-            assert internal(endpoint, {"outbox_id": outbox_id}, AUTOMATION_TOKEN)[0] == 409
+            assert internal(endpoint, {"outbox_id": outbox_id}, AUTOMATION_TOKEN) == (200, {"status": "suppressed"})
+            assert internal(endpoint, {"outbox_id": second_outbox}, AUTOMATION_TOKEN) == (200, {"status": "suppressed"})
+            second_claim = {
+                "outbox_id": second_outbox,
+                "acquisition_id": second["acquisition_id"],
+                "generation_id": second["generation_id"],
+                "delivery_identity": second["delivery_identity"],
+            }
+            assert internal("/reviews-internal/v1/automation-initial-claim", second_claim, AUTOMATION_TOKEN)[0] == 409
             claim = {
                 "outbox_id": outbox_id,
                 "acquisition_id": prepared["acquisition_id"],

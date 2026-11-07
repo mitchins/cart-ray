@@ -30,6 +30,7 @@ export async function dispatchInitial(message,env,fetcher=fetch,now=()=>Math.flo
  const recipient=await call(env.PURCHASE_EVIDENCE,'/automation-recipient',message,env.AUTOMATION_RECIPIENT_TOKEN);
  if(recipient.email!==env.APPROVED_TEST_EMAIL || !hex.test(recipient.recipient_context_hash||''))throw Error('recipient unavailable');
  const draft=await call(env.REVIEWS_API,'/reviews-internal/v1/automation-initial-prepare',message,env.REVIEWS_AUTOMATION_TOKEN);
+ if(draft.status==='suppressed' && Object.keys(draft).length===1)return 'done';
  if(draft.recipient_context_hash!==recipient.recipient_context_hash || !capability.test(draft.unsubscribe_token||'') ||
     !hex.test(draft.generation_id||'') || !hex.test(draft.delivery_identity||'')) throw Error('delivery reconciliation required');
  // An authenticated durable acceptance is terminal. A dispatching or uncertain
