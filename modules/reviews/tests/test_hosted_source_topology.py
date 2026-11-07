@@ -60,6 +60,9 @@ def test_generated_configs_bind_distinct_resources_and_never_embed_secrets():
     [
         {"reviews_db_id": "11111111-1111-4111-8111-111111111111"},
         {"events_queue_id": "c" * 32},
+        {"events_queue_name": "dlq-test"},
+        {"producer_worker": "source-test"},
+        {"consumer_worker": "reviews-test"},
         {"source_worker": "bad/name"},
         {"stripe_account_id": "other"},
         {"storefront_origin": "http://example.test"},

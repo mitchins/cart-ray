@@ -67,6 +67,7 @@ function serviceBinding(version, name, service) {
 export async function attest(env, fetchApi=fetch) {
   if (env.REVIEWS_ENVIRONMENT!=='test' || env.REVIEWS_SOURCE_PRODUCER!=='test' ||
       ![env.SOURCE_WORKER,env.PRODUCER_WORKER,env.REVIEWS_WORKER,env.CONSUMER_WORKER,env.EVENT_QUEUE_NAME,env.DEAD_LETTER_QUEUE_NAME,env.SOURCE_STORE,env.SOURCE_ISSUER,env.SOURCE_INSTALLATION].every(x=>typeof x==='string' && id.test(x)) ||
+      new Set([env.SOURCE_WORKER,env.PRODUCER_WORKER,env.REVIEWS_WORKER,env.CONSUMER_WORKER]).size!==4 ||
       !/^[a-f0-9]{32}$/.test(env.CF_ACCOUNT_ID||'') || !uuid.test(env.SOURCE_DATABASE_ID||'') ||
       !/^[a-f0-9]{32}$/.test(env.EVENT_QUEUE_ID||'') ||
       !/^[a-f0-9]{32}$/.test(env.DEAD_LETTER_QUEUE_ID||'') || env.DEAD_LETTER_QUEUE_ID===env.EVENT_QUEUE_ID ||
@@ -162,6 +163,7 @@ export async function relay(env, fetchApi=fetch) {
 // bindings are independently fetched from the authenticated control plane.
 export async function attestPurchase(env, input, fetchApi=fetch, now=Math.floor(Date.now()/1000)) {
   if (!id.test(env.AUTHORITY_WORKER||'') || !uuid.test(env.AUTHORITY_CONTEXT_DB_ID||'') ||
+      [env.SOURCE_WORKER,env.PRODUCER_WORKER,env.REVIEWS_WORKER,env.CONSUMER_WORKER].includes(env.AUTHORITY_WORKER) ||
       env.AUTHORITY_CONTEXT_DB_ID===env.SOURCE_DATABASE_ID || !hex.test(env.PURCHASE_ATTESTATION_KEY||'') ||
       [env.SOURCE_EVENT_KEY,env.CF_READ_TOKEN,env.SOURCE_IDENTITY_TOKEN,env.REVIEWS_ACTIVATION_TOKEN,
         env.TRIGGER_TOKEN].includes(env.PURCHASE_ATTESTATION_KEY) || !token(env.PURCHASE_ATTESTATION_TOKEN) ||
@@ -175,7 +177,9 @@ export async function attestPurchase(env, input, fetchApi=fetch, now=Math.floor(
   if (authority.id!==input.authority_version || !dbBinding(authority,'COMMERCE_DB',env.SOURCE_DATABASE_ID) ||
       !dbBinding(authority,'CONTEXT_DB',env.AUTHORITY_CONTEXT_DB_ID) ||
       !serviceBinding(authority,'SOURCE_IDENTITY',env.SOURCE_WORKER) ||
+      !serviceBinding(authority,'CHECKOUT',env.SOURCE_WORKER) ||
       !serviceBinding(authority,'ATTESTOR',env.PRODUCER_WORKER) ||
+      !serviceBinding(authority,'REVIEWS_API',env.REVIEWS_WORKER) ||
       !binding(authority,'CF_VERSION_METADATA','version_metadata')) throw new Error('authority binding mismatch');
   const proof=['cartray-reviews-purchase-attestation-v1',env.SOURCE_STORE,'test',env.SOURCE_INSTALLATION,
     env.SOURCE_DATABASE_ID,env.AUTHORITY_CONTEXT_DB_ID,env.STRIPE_ACCOUNT_ID,env.CATALOGUE_VERSION,

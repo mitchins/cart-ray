@@ -11,7 +11,7 @@ const plain=(name,text)=>({name,type:'plain_text',text}), d1=(name)=>({name,type
 function fixture(){
   const versions={source:{id:v1,resources:{bindings:[d1('DB'),plain('CARTRAY_ENVIRONMENT','test'),plain('CARTRAY_REVIEWS_SOURCE','test'),plain('CARTRAY_REVIEWS_PRODUCER','test'),{name:'CF_VERSION_METADATA',type:'version_metadata'},svc('REVIEWS_SOURCE_TRIGGER','producer')]}},
     producer:{id:v2,resources:{bindings:[d1('COMMERCE_DB'),svc('SOURCE_API','source'),svc('REVIEWS_API','reviews'),{name:'EVENT_QUEUE',type:'queue',queue_name:'queue1'}]}},
-    authority:{id:'66666666-6666-4666-8666-666666666666',resources:{bindings:[d1('COMMERCE_DB'),{name:'CONTEXT_DB',type:'d1',database_id:'77777777-7777-4777-8777-777777777777'},svc('SOURCE_IDENTITY','source'),svc('ATTESTOR','producer'),{name:'CF_VERSION_METADATA',type:'version_metadata'}]}},
+    authority:{id:'66666666-6666-4666-8666-666666666666',resources:{bindings:[d1('COMMERCE_DB'),{name:'CONTEXT_DB',type:'d1',database_id:'77777777-7777-4777-8777-777777777777'},svc('SOURCE_IDENTITY','source'),svc('ATTESTOR','producer'),svc('REVIEWS_API','reviews'),svc('CHECKOUT','source'),{name:'CF_VERSION_METADATA',type:'version_metadata'}]}},
     consumer:{id:'55555555-5555-4555-8555-555555555555',resources:{bindings:[svc('REVIEWS_API','reviews'),plain('REVIEWS_ENVIRONMENT','test'),plain('REVIEWS_ORDER_SUBSCRIBER','test'),plain('SOURCE_STORE','acorn'),plain('SOURCE_ISSUER','issuer1'),plain('SOURCE_INSTALLATION','install1')]}},
     reviews:{id:v3,resources:{bindings:[d1('CARTRAY_DB'),plain('REVIEWS_ENVIRONMENT','test'),plain('REVIEWS_MODE','verified_acquisition_only'),plain('REVIEWS_AUTOMATION_INTAKE','test'),plain('REVIEWS_STORE_KEY','acorn'),plain('REVIEWS_SUBJECT_MAPS',mapping)]}}};
   let cursor=null;const sent=[];
@@ -33,8 +33,9 @@ test('attested source relays only post-fence outbox IDs, with signed messages ac
   } finally {globalThis.fetch=original;}
 });
 test('wrong actual D1 binding, active version, source account and mapping fail closed',async()=>{
-  for (const kind of ['source-db','producer-db','reviews-db','version','account','mapping','service','environment','entrypoint','queue','consumer-target']) {
+  for (const kind of ['source-db','producer-db','reviews-db','version','account','mapping','service','environment','entrypoint','queue','consumer-target','duplicate-worker']) {
     const f=fixture(), original=globalThis.fetch;
+    if(kind==='duplicate-worker') f.env.PRODUCER_WORKER='source';
     if(kind==='source-db') f.versions.source.resources.bindings[0].database_id=v1;
     if(kind==='producer-db') f.versions.producer.resources.bindings[0].database_id=v1;
     if(kind==='reviews-db') f.versions.reviews.resources.bindings[0].database_id=v1;
@@ -60,12 +61,15 @@ test('purchase proof pins the active authority and both its actual D1 and servic
   const input={authority_version:f.versions.authority.id,nonce:'a'.repeat(64)};
   try {const result=await attestPurchase(f.env,input,globalThis.fetch,1000);
     assert.equal(result.proof[12],input.authority_version);assert.equal(result.proof[13],input.nonce);assert.equal(result.proof[15],1030);assert.match(result.signature,/^[a-f0-9]{64}$/);
-    for(const kind of ['commerce','context','source','attestor','metadata','version']) {
-      const x=fixture();if(kind==='commerce')x.versions.authority.resources.bindings[0].database_id=v1;
+    for(const kind of ['commerce','context','source','attestor','metadata','version','reviews','authority-name','checkout']) {
+      const x=fixture();if(kind==='authority-name')x.env.AUTHORITY_WORKER='source';
+      if(kind==='commerce')x.versions.authority.resources.bindings[0].database_id=v1;
       if(kind==='context')x.versions.authority.resources.bindings[1].database_id=v1;
       if(kind==='source')x.versions.authority.resources.bindings[2].service='other';
       if(kind==='attestor')x.versions.authority.resources.bindings[3].service='other';
       if(kind==='metadata')x.versions.authority.resources.bindings.pop();
+      if(kind==='reviews')x.versions.authority.resources.bindings[4].service='other';
+      if(kind==='checkout')x.versions.authority.resources.bindings[5].service='other';
       if(kind==='version')x.versions.authority.id=v1;
       await assert.rejects(attestPurchase(x.env,input,stubControl(x),1000));
     }

@@ -68,6 +68,9 @@ def build(config):
     )
     if any(not isinstance(config[k], str) or not ID.fullmatch(config[k]) for k in names):
         raise ValueError("invalid topology identifier")
+    workers = ("source_worker", "producer_worker", "consumer_worker", "reviews_worker")
+    if len({config[k] for k in workers}) != len(workers) or config["events_queue_name"] == config["dlq_name"]:
+        raise ValueError("worker and queue names must be distinct")
     if not HEX32.fullmatch(config["account_id"]) or any(
         not UUID.fullmatch(config[k]) for k in ("commerce_db_id", "reviews_db_id")
     ):
