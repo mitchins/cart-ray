@@ -148,7 +148,7 @@ export async function purchaseEvidence(request,env,fetcher=fetch) {
     if(path==='/automation-recipient') {
       const token=env.AUTOMATION_RECIPIENT_TOKEN;
       if(Object.keys(input).join(',')!=='outbox_id' || !Number.isSafeInteger(input.outbox_id) || input.outbox_id<1 ||
-        typeof token!=='string' || token.length<32 || [env.RECIPIENT_HASH_KEY,env.AUTOMATION_EVIDENCE_TOKEN,env.RECIPIENT_RESOLVE_TOKEN,env.PURCHASE_ATTESTATION_TOKEN].includes(token) ||
+        typeof token!=='string' || token.length<32 || [env.RECIPIENT_HASH_KEY,env.AUTOMATION_EVIDENCE_TOKEN,env.RECIPIENT_RESOLVE_TOKEN,env.PURCHASE_ATTESTATION_TOKEN,env.REVIEWS_AUTOMATION_INGRESS_TOKEN,env.REVIEWS_RECIPIENT_EVIDENCE_SECRET,env.REVIEWS_CONSENT_SECRET].includes(token) ||
         !equal(request.headers.get('Authorization')||'', 'Bearer '+token)) return unavailable();
       const result=await resolve(null,null,env,fetcher,{automationOutbox:input.outbox_id});
       return Response.json({email:result.email,recipient_context_hash:result.recipient_context_hash},{headers:{'Cache-Control':'no-store'}});

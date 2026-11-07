@@ -26,5 +26,16 @@ export default {async fetch(request, env) {
       url.origin !== env.ACORN_STOREFRONT_ORIGIN || request.headers.get('Origin') !== env.ACORN_STOREFRONT_ORIGIN)
     return unavailable(403);
   if (!env.REVIEWS_API?.fetch) return unavailable(503);
-  try { return await env.REVIEWS_API.fetch(request); } catch { return unavailable(503); }
+  // Forward only the customer protocol and the Cloudflare-provided client IP
+  // used by Reviews ingress limits; browser sessions and staff credentials do
+  // not belong on the independent Reviews service binding.
+  const headers = new Headers();
+  for (const name of ['Origin', 'Content-Type', 'Content-Length', 'Idempotency-Key', 'CF-Connecting-IP']) {
+    const value = request.headers.get(name);
+    if (value !== null) headers.set(name, value);
+  }
+  try {
+    const forwarded = new Request(request.url, {method:'POST', headers, body:request.body, duplex:'half'});
+    return await env.REVIEWS_API.fetch(forwarded);
+  } catch { return unavailable(503); }
 }};

@@ -29,3 +29,20 @@ test('public summaries and paginated contributions are bounded and stripped of c
  e.ACORN_REVIEWS_READ_MODE='disabled';assert.equal((await gateway.fetch(new Request(origin+'/reviews/v1/subjects/acorn-growing-kit/summary'),e)).status,503);
  assert.equal(calls,2);
 });
+
+test('customer POST forwards only required protocol headers and body',async()=>{
+ const e=env();let observed=0;
+ e.REVIEWS_API={fetch:async r=>{
+  observed++;assert.equal(r.headers.get('cookie'),null);assert.equal(r.headers.get('authorization'),null);
+  assert.equal(r.headers.get('cf-access-jwt-assertion'),null);assert.equal(r.headers.get('x-unrelated'),null);
+  assert.equal(r.headers.get('origin'),origin);assert.equal(r.headers.get('content-type'),'application/json');
+  assert.equal(r.headers.get('content-length'),'12');assert.equal(r.headers.get('idempotency-key'),'request-123');
+  assert.equal(r.headers.get('cf-connecting-ip'),'192.0.2.5');assert.equal(await r.text(),'{"rating":5}');
+  return new Response('ok');
+ }};
+ const headers={Origin:origin,'Content-Type':'application/json','Content-Length':'12','Idempotency-Key':'request-123',
+  'CF-Connecting-IP':'192.0.2.5',Cookie:'secret=1',Authorization:'Bearer private',
+  'Cf-Access-Jwt-Assertion':'private','X-Unrelated':'private'};
+ const response=await gateway.fetch(request('/reviews/v1/contributions',{headers,body:'{"rating":5}'}),e);
+ assert.equal(response.status,200);assert.equal(observed,1);
+});

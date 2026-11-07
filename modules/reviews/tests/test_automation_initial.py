@@ -153,6 +153,9 @@ def test_merchant_suppression_fences_claim_and_inflight_acceptance():
         "INSERT INTO review_recipient_suppressions VALUES ('store','test',?,'review_invitation',102)", ("a" * 64,)
     )
     reviews.db.commit()
-    with pytest.raises(ValueError):
-        asyncio.run(record_delivery_outcome(reviews, **(claim | {"now": 103}), outcome="accepted", accepted_at=102))
-    assert reviews.db.execute("SELECT state FROM invitation_generations").fetchone()[0] != "accepted"
+    outcome = claim | {"now": 103, "outcome": "accepted", "accepted_at": 102}
+    assert asyncio.run(record_delivery_outcome(reviews, **outcome)) == {"state": "revoked"}
+    assert asyncio.run(record_delivery_outcome(reviews, **outcome)) == {"state": "revoked"}
+    assert reviews.db.execute("SELECT state,accepted_at FROM invitation_generations").fetchone()[:] == ("revoked", 102)
+    assert reviews.db.execute("SELECT expires_at FROM acquisition_invitations").fetchone()[0] == 0
+    assert reviews.db.execute("SELECT count(*) FROM native_reviews").fetchone()[0] == 0

@@ -70,6 +70,10 @@ test('automatic evidence uses only a checked-out, confirmed order and signs purc
  x.env.AUTOMATION_RECIPIENT_TOKEN='m'.repeat(40);
  const resolve=(token)=>new Request('https://private/automation-recipient',{method:'POST',headers:{'content-type':'application/json',Authorization:'Bearer '+token},body:'{"outbox_id":12}'});
  assert.equal((await purchaseEvidence(resolve('wrong'),x.env,x.fetcher)).status,503);
+ for(const name of ['REVIEWS_AUTOMATION_INGRESS_TOKEN','REVIEWS_RECIPIENT_EVIDENCE_SECRET','REVIEWS_CONSENT_SECRET']) {
+  const original=x.env.AUTOMATION_RECIPIENT_TOKEN; x.env.AUTOMATION_RECIPIENT_TOKEN=x.env[name];
+  assert.equal((await purchaseEvidence(resolve(x.env[name]),x.env,x.fetcher)).status,503); x.env.AUTOMATION_RECIPIENT_TOKEN=original;
+ }
  const delivery=await purchaseEvidence(resolve(x.env.AUTOMATION_RECIPIENT_TOKEN),x.env,x.fetcher);
  assert.equal(delivery.status,200);assert.deepEqual(await delivery.json(),{email:'squirrel@example.com',recipient_context_hash:recipient.recipient_context_hash});
  assert.equal(recipient.binding_version,'v2');
