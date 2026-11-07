@@ -19,7 +19,18 @@
       <div id="queue" role="region" aria-labelledby="queue-title" tabindex="-1" aria-busy="true"></div>
       <button id="more" type="button" hidden>Load more reviews</button>
     </section>
-    <aside aria-labelledby="scope-title"><h2 id="scope-title">Other operations</h2><p>Staff replies and delivery reconciliation are not yet available in this test console.</p></aside>
+    <section aria-labelledby="delivery-title" class="deliveries">
+      <h2 id="delivery-title">Delivery investigation</h2>
+      <p>Read-only list of deliveries that need attention. Access requires the separate delivery operations permission.</p>
+      <label for="delivery-state">Delivery state</label>
+      <select id="delivery-state"><option value="uncertain">Uncertain</option><option value="dispatching">Dispatching</option><option value="failed">Failed</option></select>
+      <button id="delivery-load" type="button">Load deliveries</button>
+      <p id="delivery-status" role="status" aria-live="polite"></p>
+      <p id="delivery-error" role="alert" hidden></p>
+      <div id="delivery-results" role="region" aria-labelledby="delivery-title" tabindex="-1"></div>
+      <button id="delivery-more" type="button" hidden>Load more deliveries</button>
+      <p>Resend and outcome reconciliation are not available here. Do not resend an uncertain delivery without authoritative provider evidence.</p>
+    </section>
   </main>
   <script type="module" src="./console.mjs"></script>
 </body>

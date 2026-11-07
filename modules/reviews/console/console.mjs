@@ -1,4 +1,6 @@
 import { ConsoleError, createClient } from './client.mjs';
+import { replyControls } from './reply-controls.mjs';
+import { setupDeliveries } from './delivery-controls.mjs';
 const client = createClient();
 const queue = document.querySelector('#queue'), status = document.querySelector('#status'), error = document.querySelector('#error');
 const refresh = document.querySelector('#refresh'), more = document.querySelector('#more'), view = document.querySelector('#view');
@@ -92,7 +94,9 @@ function card(item, mode) {
     } catch (e) { message(friendly(e)); }
     finally { confirmButton.disabled = cancelButton.disabled = false; busy(false); }
   });
-  article.append(actions, confirmation, history(item)); return article;
+  article.append(actions, confirmation, history(item));
+  if (mode === 'published') article.append(replyControls(item, { client, element, isBusy: () => loading, setBusy: busy, message, status }));
+  return article;
 }
 async function load(replace) {
   if (loading) return;
@@ -117,4 +121,5 @@ function startLoad(replace) { return load(replace).catch((e) => message(friendly
 refresh.addEventListener('click', () => startLoad(true));
 more.addEventListener('click', () => startLoad(false));
 view.addEventListener('change', () => startLoad(true));
+setupDeliveries({ client, document, element });
 await startLoad(true);

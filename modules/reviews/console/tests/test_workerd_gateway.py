@@ -171,7 +171,7 @@ def wait(*args, **kwargs):
     time.sleep(30)
 m.run_owned = wait
 signal.signal(signal.SIGTERM, m.terminate)
-try: m.main()
+try: m.main([])
 except KeyboardInterrupt: pass
 """
     process = subprocess.Popen(
@@ -218,7 +218,7 @@ class FakeServer:
     def server_close(self): record('server-closed')
 m.FixtureServer = FakeServer
 signal.signal(signal.SIGTERM, m.terminate)
-m.main()
+m.main([])
 """
     process = subprocess.Popen(
         [sys.executable, "-c", program, str(PATH), str(directory), str(receipt)],

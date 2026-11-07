@@ -1,5 +1,6 @@
 // Same-origin only: the trusted access proxy supplies the independently verified assertion.
 const ID = /^[a-f0-9]{64}$/;
+const REQUEST_KEY = /^[A-Za-z0-9_-]{1,128}$/;
 export class ConsoleError extends Error {
   constructor(message, status = 0) { super(message); this.status = status; }
 }
@@ -59,6 +60,40 @@ export function createClient(fetcher = fetch, timeoutMs = 8000) {
         ? typeof item.action !== 'string' || typeof item.actor !== 'string' || !Number.isSafeInteger(item.occurred_at) || !ID.test(item.revision_id || '')
         : ['author', 'title', 'body'].some((field) => item[field] != null && typeof item[field] !== 'string') || !(item.rating == null || Number.isInteger(item.rating) && item.rating >= 1 && item.rating <= 5))) throw new ConsoleError('The review service returned an invalid response.');
       return { records: data[kind], next_after: data.next_after };
+    },
+    async replyHistory(item, after = null) {
+      if (!item || !ID.test(item.review_id || '') || !ID.test(item.revision_id || '') || (after !== null && !ID.test(after))) throw new ConsoleError('Invalid reply history request. Refresh the list.');
+      const data = await request(`/reviews-admin/v1/contributions/${item.review_id}/reply-revisions` + (after ? `?after=${after}` : ''), { credentials: 'same-origin', cache: 'no-store', headers: { Accept: 'application/json' } });
+      if (!data || data.review_id !== item.review_id || data.state !== 'published' || data.current_revision_id !== item.revision_id) throw new ConsoleError('This review changed. Refresh the list before trying again.', 409);
+      const head = data.reply;
+      if (head !== null && (!head || !ID.test(head.reply_id || '') || !ID.test(head.reply_revision_id || '') || !ID.test(head.parent_revision_id || '') || !['published', 'withdrawn'].includes(head.state))) throw new ConsoleError('The review service returned an invalid response.');
+      const rows = data.reply_revisions;
+      if (!Array.isArray(rows) || rows.length > 50 || !(data.next_after === null || ID.test(data.next_after)) || rows.some((row) => !row || !ID.test(row.reply_revision_id || '') || typeof row.author !== 'string' || typeof row.body !== 'string' || !Number.isSafeInteger(row.created_at)) || new Set(rows.map((row) => row.reply_revision_id)).size !== rows.length || (data.next_after && !rows.some((row) => row.reply_revision_id === data.next_after))) throw new ConsoleError('The review service returned an invalid response.');
+      return { head, records: rows.map(({ reply_revision_id, author, body, created_at }) => ({ reply_revision_id, author, body, created_at })), next_after: data.next_after };
+    },
+    async replyAudit(item, after = null) {
+      if (!item || !ID.test(item.review_id || '') || !ID.test(item.revision_id || '') || (after !== null && !ID.test(after))) throw new ConsoleError('Invalid reply audit request. Refresh the list.');
+      const data = await request(`/reviews-admin/v1/contributions/${item.review_id}/reply-audit` + (after ? `?after=${after}` : ''), { credentials: 'same-origin', cache: 'no-store', headers: { Accept: 'application/json' } });
+      if (!data || data.review_id !== item.review_id || data.state !== 'published' || data.current_revision_id !== item.revision_id) throw new ConsoleError('This review changed. Refresh the list before trying again.', 409);
+      const rows = data.reply_audit;
+      if (!Array.isArray(rows) || rows.length > 50 || !(data.next_after === null || ID.test(data.next_after)) || rows.some((row) => !row || !ID.test(row.event_id || '') || !ID.test(row.reply_id || '') || !ID.test(row.reply_revision_id || '') || typeof row.actor !== 'string' || typeof row.action !== 'string' || !Number.isSafeInteger(row.occurred_at) || row.occurred_at < 0 || row.occurred_at > 253402300799) || new Set(rows.map((row) => row.event_id)).size !== rows.length || (data.next_after && !rows.some((row) => row.event_id === data.next_after))) throw new ConsoleError('The review service returned an invalid response.');
+      return { records: rows.map(({ event_id, actor, action, occurred_at }) => ({ event_id, actor, action, occurred_at })), next_after: data.next_after };
+    },
+    async reply(item, action, payload, key) {
+      if (!item || !ID.test(item.review_id || '') || !ID.test(item.revision_id || '') || !['upsert', 'withdraw'].includes(action) || !REQUEST_KEY.test(key || '') || !payload || !(payload.expected_reply_revision_id === null || ID.test(payload.expected_reply_revision_id || ''))) throw new ConsoleError('Invalid reply request. Refresh the list.');
+      if (action === 'withdraw' && payload.expected_reply_revision_id === null) throw new ConsoleError('Invalid reply request. Refresh the list.');
+      if (action === 'upsert' && (typeof payload.author !== 'string' || !payload.author.trim() || payload.author.length > 120 || typeof payload.body !== 'string' || payload.body.trim().length < 3 || payload.body.length > 5000)) throw new ConsoleError('Enter a display name and a reply of at least three characters.');
+      const body = { parent_revision_id: item.revision_id, expected_reply_revision_id: payload.expected_reply_revision_id };
+      if (action === 'upsert') { body.author = payload.author; body.body = payload.body; }
+      const data = await request(`/reviews-admin/v1/contributions/${item.review_id}/${action === 'upsert' ? 'reply' : 'reply-withdraw'}`, { method: 'POST', credentials: 'same-origin', cache: 'no-store', headers: { 'Content-Type': 'application/json', Accept: 'application/json', 'Idempotency-Key': key }, body: JSON.stringify(body) }, true);
+      if (!data || !ID.test(data.reply_id || '') || !ID.test(data.reply_revision_id || '') || data.state !== (action === 'upsert' ? 'published' : 'withdrawn')) throw new ConsoleError(UNCERTAIN);
+      return { reply_id: data.reply_id, reply_revision_id: data.reply_revision_id, state: data.state };
+    },
+    async deliveries(state, after = null) {
+      if (!['uncertain', 'dispatching', 'failed'].includes(state) || (after !== null && !ID.test(after))) throw new ConsoleError('Invalid delivery filter.');
+      const data = await request(`/reviews-admin/v1/deliveries?state=${state}` + (after ? `&after=${after}` : ''), { credentials: 'same-origin', cache: 'no-store', headers: { Accept: 'application/json' } });
+      if (!data || data.state !== state || !Array.isArray(data.deliveries) || data.deliveries.length > 50 || !(data.next_after === null || ID.test(data.next_after)) || data.deliveries.some((row) => !row || !ID.test(row.delivery_identity || '') || !ID.test(row.generation_id || '') || row.state !== state || !Number.isSafeInteger(row.prepared_at) || row.prepared_at < 0 || row.prepared_at > 253402300799) || new Set(data.deliveries.map((row) => row.delivery_identity)).size !== data.deliveries.length || (data.next_after && !data.deliveries.some((row) => row.delivery_identity === data.next_after))) throw new ConsoleError('The review service returned an invalid response.');
+      return { records: data.deliveries.map(({ delivery_identity, generation_id, state: rowState, prepared_at }) => ({ delivery_identity, generation_id, state: rowState, prepared_at })), next_after: data.next_after };
     },
     async decide(item, action) {
       if (!item || !ID.test(item.review_id || '') || !ID.test(item.revision_id || '') || !['approve', 'reject', 'withdraw'].includes(action)) throw new ConsoleError('Invalid moderation request. Refresh the queue.');
