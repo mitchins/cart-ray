@@ -2,6 +2,7 @@
 
 import hashlib
 import hmac
+import ipaddress
 import json
 import re
 import time
@@ -22,13 +23,14 @@ from cartray_reviews.invitations import (
 )
 from cartray_reviews.management import manage_review, management_token
 from cartray_reviews.recovery import accept_recovery_command
-from cartray_reviews.staff_identity import StaffAuthenticationError, authenticate_staff
+from cartray_reviews.staff_identity import JwksCache, StaffAuthenticationError, authenticate_staff
 from cartray_reviews.staff_replies import mutate_reply, public_replies
 from js import Object, Promise, Uint8Array, clearTimeout, crypto, setTimeout
 from pyodide.ffi import create_proxy, to_js
 from workers import Response
 
 ID = re.compile(r"[A-Za-z0-9_-]{1,128}\Z")
+STAFF_JWKS_CACHE = JwksCache()
 
 
 def random_token():
@@ -163,11 +165,36 @@ async def staff_actor(request, env, permission):
         return "test_admin" if admin_ok(request, env) else None
     if mode != "cloudflare_access":
         return None
+    admission = str(getattr(env, "REVIEWS_STAFF_ADMISSION", "test_unlimited"))
+    if admission == "edge":
+        try:
+            ip = ipaddress.ip_address(str(request.headers.get("CF-Connecting-IP") or ""))
+            secret = str(getattr(env, "REVIEWS_STAFF_RATE_KEY", ""))
+            store = str(getattr(env, "REVIEWS_STORE_KEY", ""))
+            if len(secret) < 32 or not store:
+                return None
+            scope = str(getattr(env, "REVIEWS_ENVIRONMENT", ""))
+            key = hmac.new(
+                secret.encode(), f"staff-ingress-v1\0{store}\0{scope}\0{ip.compressed}".encode(), hashlib.sha256
+            )
+            limiter = getattr(env, "REVIEWS_STAFF_INGRESS", None)
+            decision = await await_promise(
+                limiter.limit(to_js({"key": key.hexdigest()}, dict_converter=Object.fromEntries)), 1
+            )
+            if not decision.success:
+                return None
+        except Exception:
+            return None
+    elif admission != "test_unlimited":
+        return None
+    crypto_mode = str(getattr(env, "REVIEWS_STAFF_CRYPTO", "python_test"))
+    if crypto_mode not in ("python_test", "webcrypto"):
+        return None
     policy_text = str(getattr(env, "REVIEWS_STAFF_POLICY", ""))
     if len(policy_text) > 16384:
         return None
 
-    async def load_jwks(url):
+    async def fetch_jwks(url):
         # A test-only pinned key fixture permits Workerd integration without a live provider.
         fixture = str(getattr(env, "REVIEWS_STAFF_TEST_JWKS", ""))
         if fixture:
@@ -206,6 +233,33 @@ async def staff_actor(request, env, permission):
                 except Exception:
                     pass
 
+    async def load_jwks(url):
+        # Synthetic fixtures are not cached. Cache is explicitly enabled per Worker.
+        if str(getattr(env, "REVIEWS_STAFF_TEST_JWKS", "")):
+            return await fetch_jwks(url)
+        raw_ttl = str(getattr(env, "REVIEWS_STAFF_JWKS_CACHE_SECONDS", "0"))
+        if raw_ttl == "0":
+            return await fetch_jwks(url)
+        if not raw_ttl.isascii() or not raw_ttl.isdigit():
+            raise StaffAuthenticationError("invalid staff cache policy")
+        return await STAFF_JWKS_CACHE.get(url, fetch_jwks, int(raw_ttl))
+
+    async def verify_webcrypto(key, signature, signed):
+        """Delegate RS256 verification to Workerd WebCrypto without a fallback."""
+        public = {name: key[name] for name in ("kty", "n", "e")}
+        algorithm = to_js({"name": "RSASSA-PKCS1-v1_5", "hash": "SHA-256"}, dict_converter=Object.fromEntries)
+        imported = await await_promise(
+            crypto.subtle.importKey(
+                "jwk", to_js(public, dict_converter=Object.fromEntries), algorithm, False, to_js(["verify"])
+            ),
+            3,
+        )
+        signature_bytes = Uint8Array.new(to_js(list(signature)))
+        signed_bytes = Uint8Array.new(to_js(list(signed)))
+        return bool(
+            await await_promise(crypto.subtle.verify("RSASSA-PKCS1-v1_5", imported, signature_bytes, signed_bytes), 3)
+        )
+
     try:
         policy = json.loads(policy_text, object_pairs_hook=unique_pairs, parse_constant=invalid_constant)
         assertion = str(request.headers.get("Cf-Access-Jwt-Assertion") or "")
@@ -217,6 +271,7 @@ async def staff_actor(request, env, permission):
             required_permission=permission,
             now=int(time.time()),
             load_jwks=load_jwks,
+            verify_signature=verify_webcrypto if crypto_mode == "webcrypto" else None,
         )
         return identity["actor_id"]
     except (StaffAuthenticationError, ValueError, TypeError, AttributeError, RecursionError):
