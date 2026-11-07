@@ -357,3 +357,10 @@ test("confirmed view has an explicit route back to the normal storefront", async
   const application = await readFile(new URL("../storefront/app.js", import.meta.url), "utf8");
   assert.match(application, /continueShopping\.hidden = false/);
 });
+
+test("review invitation permission carries the customer’s actual choice", () => {
+  const cart = new Map([["TEST-TEMPLATE", 1]]);
+  assert.equal(Object.hasOwn(checkoutPayload("v", cart, "id"), "review_invitation_opt_in"), false);
+  assert.equal(checkoutPayload("v", cart, "id", false).review_invitation_opt_in, false);
+  assert.equal(checkoutPayload("v", cart, "id", true).review_invitation_opt_in, true);
+});

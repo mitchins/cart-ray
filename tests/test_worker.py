@@ -2,8 +2,11 @@ import asyncio
 import hmac
 import json
 import time
+import tomllib
 from dataclasses import dataclass
 from hashlib import sha256
+from pathlib import Path
+from types import SimpleNamespace
 
 from kinglet import TestClient
 
@@ -16,6 +19,16 @@ from cartray.stripe import ProjectionSealError
 from cartray.worker import app, create_app
 
 STOREFRONT_ORIGIN = "https://cartray-store-test.pages.dev"
+
+
+def test_invitation_mode_is_explicit_and_squirrel_test_config_selects_automatic():
+    config = tomllib.loads(
+        (Path(__file__).parents[1] / "examples/acorn-store/cartray-test-vars.example.toml").read_text()
+    )["vars"]
+    assert worker_module._automatic_invitation_enabled(SimpleNamespace(**config))
+    for mode in (None, "", "disabled", "receipt-only", "Automatic", True):
+        assert not worker_module._automatic_invitation_enabled(SimpleNamespace(CARTRAY_REVIEW_INVITATION_MODE=mode))
+    assert not worker_module._automatic_invitation_enabled(SimpleNamespace())
 
 
 def test_health_endpoint_declares_test_only_mode():

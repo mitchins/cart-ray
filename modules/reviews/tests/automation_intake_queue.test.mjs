@@ -45,3 +45,22 @@ test('a stalled intake is bounded and retried', async()=>{
   const start=Date.now(); await assert.rejects(deliver(await message(),env(()=>new Promise(()=>{}))),/timeout/);
   assert.ok(Date.now()-start < 3500);
 });
+test('accepted purchases record optional checkout permission; absent permission is acknowledged, outages retry',async()=>{
+  let evidenceCalls=0; const e=env();
+  Object.assign(e,{AUTOMATION_EVIDENCE_ENABLED:'test',AUTOMATION_EVIDENCE_TOKEN:'z'.repeat(32),PURCHASE_EVIDENCE:{fetch:async(url,opts)=>{
+    evidenceCalls++; assert.equal(url,'https://purchase-evidence.internal/automation-record');
+    assert.deepEqual(JSON.parse(opts.body),{outbox_id:42}); assert.equal(opts.headers.authorization,'Bearer '+e.AUTOMATION_EVIDENCE_TOKEN);
+    return Response.json({status:'not_granted'});
+  }}});
+  const m=await message(); assert.equal(await deliver(m,e),'acknowledged'); assert.equal(evidenceCalls,1);
+  e.PURCHASE_EVIDENCE.fetch=async()=>Response.json({status:'recorded'}); assert.equal(await deliver(m,e),'acknowledged');
+  e.PURCHASE_EVIDENCE.fetch=async()=>new Response(null,{status:503}); await assert.rejects(deliver(m,e),/evidence unavailable/);
+  e.PURCHASE_EVIDENCE.fetch=async()=>Response.json({status:'unexpected'}); await assert.rejects(deliver(m,e),/receipt/);
+  e.REVIEWS_API.fetch=async()=>Response.json({status:'pre_activation',due_at:200});
+  e.PURCHASE_EVIDENCE.fetch=async()=>{throw Error('must not run')}; assert.equal(await deliver(m,e),'acknowledged');
+});
+test('purchase evidence has its own bounded deadline after intake',async()=>{
+  const e=env(); Object.assign(e,{AUTOMATION_EVIDENCE_ENABLED:'test',AUTOMATION_EVIDENCE_TOKEN:'z'.repeat(32),
+    PURCHASE_EVIDENCE:{fetch:()=>new Promise(resolve=>setTimeout(()=>resolve(Response.json({status:'recorded'})),2100))}});
+  assert.equal(await deliver(await message(),e),'acknowledged');
+});

@@ -25,6 +25,10 @@ def configuration(path: Path) -> dict:
     config = json.loads(path.read_text())
     if config.get("environment") != "test" or not re.fullmatch(r"[a-z0-9-]{1,64}", config.get("store_key", "")):
         raise ValueError("reference store must use a scoped test environment")
+    if config.get("review_invitations", "disabled") not in ("disabled", "automatic"):
+        raise ValueError("unsupported review invitation mode")
+    if type(config.get("review_invitations_default_checked", False)) is not bool:
+        raise ValueError("review invitation default must be boolean")
     products = config.get("products")
     if not isinstance(products, list) or len(products) != 3:
         raise ValueError("reference store requires exactly three product mappings")
@@ -107,23 +111,17 @@ def build(
     *,
     checkout_api: str | None = None,
     reviews: bool = False,
-    review_consent: bool = False,
     preflight_lock: Path = PREFLIGHT_LOCK,
 ) -> None:
     if output.exists():
         raise ValueError("output directory already exists; choose a new directory")
     api = test_api(checkout_api)
-    if review_consent and not api:
-        raise ValueError("review consent requires explicit test checkout")
     manifest = asyncio.run(preview_manifest(config, preflight_lock if api else None))
     output.mkdir(parents=True)
     for filename in ("app.js", "styles.css"):
         shutil.copy2(ROOT / "storefront" / filename, output / filename)
     shutil.copy2(HERE / "acorn.css", output / "acorn.css")
     shutil.copy2(HERE / "reviews.mjs", output / "reviews.mjs")
-    shutil.copy2(HERE / "consent.mjs", output / "consent.mjs")
-    if review_consent:
-        shutil.copy2(HERE / "pages_gateway.mjs", output / "_worker.js")
     shutil.copytree(HERE / "assets", output / "assets")
     shutil.copytree(ROOT / "modules/reviews/ui", output / "review")
     paths = {item["product_key"]: item["path"] for item in config["products"]}
@@ -136,14 +134,14 @@ def build(
         "productPaths": paths,
         "reviewSubjects": subjects,
         "reviewsEnabled": reviews,
-        "reviewConsentEnabled": review_consent,
+        "reviewInvitationsEnabled": bool(api and config.get("review_invitations") == "automatic"),
+        "reviewInvitationDefaultChecked": config.get("review_invitations_default_checked", False),
     }
     # JSON is external JS, not HTML: no user-provided text is interpolated into markup.
     (output / "storefront-config.js").write_text(
         "window.CARTRAY_STOREFRONT = "
         + json.dumps(base, ensure_ascii=True)
         + ";\n"
-        + ("window.CARTRAY_STOREFRONT.apiBaseUrl = window.location.origin;\n" if review_consent else "")
         + "window.CARTRAY_STOREFRONT.productKey = document.body.dataset.productKey || null;\n"
         "document.title = window.CARTRAY_STOREFRONT.storeName;\n"
         "document.querySelectorAll('[data-store-name]').forEach(e => { "
@@ -163,16 +161,12 @@ def main() -> None:
     parser.add_argument("--config", type=Path, default=HERE / "store.json")
     parser.add_argument("--test-checkout-api", help="explicit HTTPS CartRay TEST Worker origin")
     parser.add_argument("--reviews", action="store_true", help="enable same-origin test Reviews reads")
-    parser.add_argument(
-        "--review-consent", action="store_true", help="enable test-only consent UI with a trusted authority"
-    )
     args = parser.parse_args()
     build(
         args.output,
         configuration(args.config),
         checkout_api=args.test_checkout_api,
         reviews=args.reviews,
-        review_consent=args.review_consent,
     )
 
 

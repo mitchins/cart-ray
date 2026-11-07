@@ -26,7 +26,7 @@ async function jsonBounded(response,max=16384) {
 async function callBounded(fetcher,url,init) {
   const controller=new AbortController(); let timer;
   const timeout=new Promise((_,reject)=>{timer=setTimeout(()=>{controller.abort();reject(Error('timeout'));},2000);});
-  try { return await jsonBounded(await Promise.race([fetcher(url,{...init,redirect:'error',signal:controller.signal}),timeout])); }
+  try { return await jsonBounded(await Promise.race([fetcher(url,{...init,redirect:'manual',signal:controller.signal}),timeout])); }
   finally { clearTimeout(timer); controller.abort(); }
 }
 function configured(env) {
@@ -61,14 +61,32 @@ function normalizeEmail(value) {
   if(typeof value!=='string' || value.length>254 || value!==value.trim() || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value)) throw Error('recipient');
   const at=value.lastIndexOf('@'); return value.slice(0,at)+'@'+value.slice(at+1).toLowerCase();
 }
-async function resolve(session,contextHash,env,fetcher) {
-  if(!sessionPattern.test(session) || !hash.test(contextHash)) throw Error('scope');
+async function resolve(session,contextHash,env,fetcher,{automationOutbox=null}={}) {
+  const automatic=automationOutbox!==null;
+  if(automatic ? !Number.isSafeInteger(automationOutbox)||automationOutbox<1 : !sessionPattern.test(session) || !hash.test(contextHash)) throw Error('scope');
   const proof=await attest(env);
   const now=Math.floor(Date.now()/1000);
-  const context=await env.CONTEXT_DB.prepare('SELECT checkout_session_id FROM purchaser_contexts WHERE token_hash=? AND expires_at>?').bind(contextHash,now).first();
-  if(!context || context.checkout_session_id!==session) throw Error('context');
-  const row=await env.COMMERCE_DB.prepare("SELECT o.order_id,o.manifest_version,o.currency,o.subtotal_minor,o.items_digest,s.external_session_id,s.settlement_event_id,s.stripe_payment_status,s.stripe_amount_total_minor,b.id AS outbox_id,b.payload_json FROM orders o JOIN checkout_sessions s ON s.order_id=o.order_id JOIN outbox b ON b.order_id=o.order_id AND b.event_type='OrderConfirmed' WHERE s.external_session_id=? AND s.settlement_state='confirmed' LIMIT 1").bind(session).first();
+  if(!automatic) {
+    const context=await env.CONTEXT_DB.prepare('SELECT checkout_session_id FROM purchaser_contexts WHERE token_hash=? AND expires_at>?').bind(contextHash,now).first();
+    if(!context || context.checkout_session_id!==session) throw Error('context');
+  }
+  const row=await env.COMMERCE_DB.prepare("SELECT o.order_id,o.manifest_version,o.currency,o.subtotal_minor,o.items_digest,s.external_session_id,s.settlement_event_id,s.settled_at,s.stripe_payment_status,s.stripe_amount_total_minor,b.id AS outbox_id,b.payload_json FROM orders o JOIN checkout_sessions s ON s.order_id=o.order_id JOIN outbox b ON b.order_id=o.order_id AND b.event_type='OrderConfirmed' WHERE "+(automatic ? 'b.id=?' : 's.external_session_id=?')+" AND s.settlement_state='confirmed' LIMIT 1").bind(automatic ? automationOutbox : session).first();
+  if(automatic) {
+    if(!row || row.outbox_id!==automationOutbox || !sessionPattern.test(row.external_session_id || '') ||
+      !Number.isSafeInteger(row.settled_at) || row.settled_at<1 || row.settled_at>now) throw Error('order');
+    session=row.external_session_id;
+  }
   if(!row || row.manifest_version!==proof[7] || row.stripe_payment_status!=='paid' || row.stripe_amount_total_minor!==row.subtotal_minor) throw Error('order');
+  let grant;
+  if(automatic) {
+    grant=await env.COMMERCE_DB.prepare('SELECT c.selected,c.merchant_default_selected,c.wording_version AS choice_version,c.wording AS choice_wording,c.recorded_at,g.wording_version,g.wording,g.granted_at,g.merchant_default_selected AS grant_default,g.selection_basis FROM review_invitation_checkout_choices c LEFT JOIN review_invitation_checkout_grants g ON g.order_id=c.order_id WHERE c.order_id=?').bind(row.order_id).first();
+    if(!grant || (grant.selected===0 && grant.granted_at===null)) throw Error('no checkout grant');
+    if(grant.selected!==1 || ![0,1].includes(grant.merchant_default_selected) || grant.grant_default!==grant.merchant_default_selected ||
+      grant.selection_basis!==(grant.merchant_default_selected===1 ? 'preselected_acceptance' : 'express_opt_in') ||
+      grant.wording_version!==grant.choice_version || grant.wording!==grant.choice_wording || grant.granted_at!==grant.recorded_at ||
+      grant.wording_version!=='review-invitation-v1' || grant.wording!=='Email me one request to review my purchase.' ||
+      !Number.isSafeInteger(grant.granted_at) || grant.granted_at<1 || grant.granted_at>row.settled_at) throw Error('grant');
+  }
   const eligibility=await callBounded(env.REVIEWS_API.fetch.bind(env.REVIEWS_API),'https://reviews.internal/reviews-internal/v1/automation-evidence-status',{
     method:'POST',headers:{'Content-Type':'application/json','Authorization':'Bearer '+env.REVIEWS_AUTOMATION_INGRESS_TOKEN},body:JSON.stringify({outbox_id:row.outbox_id})});
   if(eligibility.state!=='held_eligibility_recipient_consent') throw Error('not eligible');
@@ -95,20 +113,57 @@ async function resolve(session,contextHash,env,fetcher) {
   if(email!==normalizeEmail(env.APPROVED_TEST_EMAIL)) throw Error('test recipient');
   const version='v1';
   const recipientHash=await mac(env.RECIPIENT_HASH_KEY,JSON.stringify(['acorn-recipient-v1',env.STORE_KEY,'test',row.order_id,version,email]));
-  const reference='ref_'+await mac(env.RECIPIENT_HASH_KEY,JSON.stringify(['acorn-delivery-v1',contextHash,recipientHash]));
+  const reference='ref_'+await mac(env.RECIPIENT_HASH_KEY,JSON.stringify(['acorn-delivery-v1',automatic ? row.order_id : contextHash,recipientHash]));
   const sourceProvenance=env.INSTALLATION_ID+'_'+proof[9];
   if(!id.test(sourceProvenance)) throw Error('source provenance');
   return {email, store:env.STORE_KEY,environment:'test',session_id:session,context_hash:contextHash,confirmed:true,source_attested:true,
     event_id:eventId,acquisition_id:row.order_id,source_provenance:sourceProvenance,recipient_context_hash:recipientHash,
-    binding_version:version,recipient_reference:reference,outbox_id:row.outbox_id};
+    binding_version:version,recipient_reference:reference,outbox_id:row.outbox_id,
+    ...(automatic ? {grant,settled_at:row.settled_at} : {})};
 }
+// Build exactly the payloads accepted by the existing Reviews Worker; this
+// authenticates purchase-contact provenance, never mailbox possession.
+export async function buildAutomationEvidence(result,env) {
+  const ref='checkout_'+await mac(env.RECIPIENT_HASH_KEY,JSON.stringify(['checkout-grant-v1',result.acquisition_id,result.grant.wording_version,result.grant.wording,result.grant.granted_at,result.grant.merchant_default_selected,result.grant.selection_basis]));
+  const recipient={binding_version:result.binding_version,evidence_reference:'purchase_contact_'+result.outbox_id,
+    outbox_id:result.outbox_id,recipient_context_hash:result.recipient_context_hash,verified_at:result.settled_at};
+  const consent={event_id:result.event_id,evidence_reference:ref,granted_at:result.grant.granted_at,recipient_context_hash:result.recipient_context_hash};
+  return [
+    ['automation-recipient-evidence','X-Reviews-Recipient-Signature',env.REVIEWS_RECIPIENT_EVIDENCE_SECRET,recipient,'reviews-automation-recipient-v1'],
+    ['consents','X-Reviews-Consent-Signature',env.REVIEWS_CONSENT_SECRET,consent,'reviews-consent-v1'],
+  ];
+}
+
 export async function purchaseEvidence(request,env,fetcher=fetch) {
   const path=new URL(request.url).pathname;
-  if(!configured(env) || request.method!=='POST' || !['/confirmed','/delivery-recipient'].includes(path) ||
+  if(!configured(env) || request.method!=='POST' || !['/confirmed','/delivery-recipient','/automation-record'].includes(path) ||
     (request.headers.get('content-type')||'')!=='application/json') return unavailable();
   try {
     const input=await jsonBounded(new Response(request.body,{headers:request.headers}),512);
     if(!input || Array.isArray(input)) return unavailable();
+    if(path==='/automation-record') {
+      // The caller supplies only an outbox cursor, never order, recipient or grant data.
+      // This private endpoint may be retried after an intake or downstream outage.
+      const token=env.AUTOMATION_EVIDENCE_TOKEN, recipientSecret=env.REVIEWS_RECIPIENT_EVIDENCE_SECRET, consentSecret=env.REVIEWS_CONSENT_SECRET;
+      if(Object.keys(input).join(',')!=='outbox_id' || !Number.isSafeInteger(input.outbox_id) || input.outbox_id<1 ||
+        [token,recipientSecret,consentSecret].some(x=>typeof x!=='string'||x.length<32) ||
+        new Set([token,recipientSecret,consentSecret,env.RECIPIENT_HASH_KEY,env.REVIEWS_AUTOMATION_INGRESS_TOKEN,env.RECIPIENT_RESOLVE_TOKEN,env.PURCHASE_ATTESTATION_TOKEN]).size!==7 ||
+        !equal(request.headers.get('Authorization')||'', 'Bearer '+token)) return unavailable();
+      let result;
+      try { result=await resolve(null,null,env,fetcher,{automationOutbox:input.outbox_id}); }
+      catch(error) {
+        if(error?.message==='no checkout grant') return Response.json({status:'not_granted'},{headers:{'Cache-Control':'no-store'}});
+        throw error;
+      }
+      // Contact evidence reflects Stripe's confirmed purchase contact, not proof
+      // of mailbox ownership. The legacy field is named verified_at.
+      for(const [route,header,secret,data,label] of await buildAutomationEvidence(result,env)) {
+        const signature=await mac(secret,JSON.stringify([label,env.STORE_KEY,'test',data]));
+        await callBounded(env.REVIEWS_API.fetch.bind(env.REVIEWS_API),'https://reviews.internal/reviews-internal/v1/'+route,{
+          method:'POST',headers:{'Content-Type':'application/json',[header]:signature},body:JSON.stringify(data)});
+      }
+      return Response.json({status:'recorded'},{headers:{'Cache-Control':'no-store'}});
+    }
     if(path==='/confirmed') {
       if(Object.keys(input).sort().join(',')!=='context_hash,session_id') return unavailable();
       const {email,...safe}=await resolve(input.session_id,input.context_hash,env,fetcher);

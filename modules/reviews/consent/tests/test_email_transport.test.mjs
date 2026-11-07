@@ -9,7 +9,7 @@ function setup() {
  const contextDB={prepare(sql){return {bind(...v){return {async first(){return db.prepare(sql).get(...v) ?? null},async run(){return db.prepare(sql).run(...v)}}}}}};
  const env={TEST_EMAIL_MODE:'test',CONTEXT_DB:contextDB,PURCHASE_TRANSPORT_TOKEN:'t'.repeat(40),RECIPIENT_RESOLVE_TOKEN:'r'.repeat(40),SMTP2GO_API_KEY:'api-testonly',TEST_SENDER:'reviews@acorn-test.effectivepolicy.com.au',APPROVED_TEST_EMAIL:recipient,PURCHASE_EVIDENCE:{fetch:async()=>Response.json({email:recipient})}};
  let calls=0, result={data:{succeeded:1,failed:0,failures:[],email_id:'test-receipt'}};
- const fetcher=async(_url,opts)=>{calls++;assert.equal(opts.redirect,'error');return Response.json(result)};
+ const fetcher=async(_url,opts)=>{calls++;assert.equal(opts.redirect,'manual');return Response.json(result)};
  const req=(token=env.PURCHASE_TRANSPORT_TOKEN)=>new Request('https://private/send',{method:'POST',headers:{'content-type':'application/json',Authorization:'Bearer '+token},body:JSON.stringify({context_hash:context,recipient_reference:reference,code:'123456'})});
  return {db,env,req,fetcher,count:()=>calls,setResult(x){result=x}};
 }
@@ -42,4 +42,12 @@ test('malformed, multiple or header-injected sender and recipient values fail cl
   const x=setup();x.env.TEST_SENDER=value;assert.equal((await sendTestCode(x.req(),x.env,x.fetcher)).status,503);assert.equal(x.count(),0);
   const y=setup();y.env.APPROVED_TEST_EMAIL=value;assert.equal((await sendTestCode(y.req(),y.env,y.fetcher)).status,503);assert.equal(y.count(),0);
  }
+});
+
+test('provider redirect is rejected without forwarding the API key',async()=>{
+ const x=setup(), seen=[];
+ const redirect=async(url,opts)=>{seen.push({url,mode:opts.redirect});return new Response(null,{status:302,headers:{Location:'https://other.example/'}})};
+ assert.equal((await sendTestCode(x.req(),x.env,redirect)).status,503);
+ assert.deepEqual(seen,[{url:'https://api.smtp2go.com/v3/email/send',mode:'manual'}]);
+ assert.equal(x.db.prepare('SELECT delivery_state FROM purchaser_test_email_claims').get().delivery_state,'uncertain');
 });

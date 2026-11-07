@@ -48,12 +48,13 @@ class CheckoutRequest:
     checkout_request_id: str
     manifest_version: str
     items: tuple[CanonicalItem, ...]
+    review_invitation_opt_in: bool = False
 
     @classmethod
     def from_payload(cls, payload: dict[str, object]) -> CheckoutRequest:
         if not isinstance(payload, dict):
             raise CheckoutValidationError("checkout request must be a JSON object")
-        allowed = {"checkout_request_id", "manifest_version", "items"}
+        allowed = {"checkout_request_id", "manifest_version", "items", "review_invitation_opt_in"}
         unknown = set(payload) - allowed
         if unknown:
             raise CheckoutValidationError(f"unsupported checkout fields: {sorted(unknown)!r}")
@@ -67,6 +68,9 @@ class CheckoutRequest:
                 raise TypeError
             request_id = payload["checkout_request_id"]
             manifest_version = payload["manifest_version"]
+            opt_in = payload.get("review_invitation_opt_in", False)
+            if not isinstance(opt_in, bool):
+                raise TypeError
             if not CHECKOUT_REQUEST_ID_RE.fullmatch(request_id) or not MANIFEST_VERSION_RE.fullmatch(manifest_version):
                 raise TypeError
             if any(not isinstance(item, dict) or set(item) != {"product_key", "quantity"} for item in raw_items):
@@ -76,6 +80,7 @@ class CheckoutRequest:
                 checkout_request_id=request_id,
                 manifest_version=manifest_version,
                 items=items,
+                review_invitation_opt_in=opt_in,
             )
         except (KeyError, TypeError) as error:
             raise CheckoutValidationError("invalid checkout request") from error
@@ -100,6 +105,9 @@ class CheckoutOrder:
     items_digest: str
     currency: str
     subtotal_minor: int
+    review_invitation_opt_in: bool = False
+    review_invitation_policy_enabled: bool = False
+    review_invitation_default_selected: bool = False
 
 
 @dataclass(frozen=True)

@@ -25,9 +25,9 @@ def test_fresh_default_build_is_optional_and_isolated(tmp_path):
     text = (out / "storefront-config.js").read_text()
     data = json.loads(text.split(" = ", 1)[1].split(";\n", 1)[0])
     assert data["checkoutEnabled"] is False and data["reviewsEnabled"] is False
-    assert data["reviewConsentEnabled"] is False
+    assert data["reviewInvitationsEnabled"] is False
     assert not (out / "_worker.js").exists()
-    assert (out / "consent.mjs").is_file()
+    assert not (out / "consent.mjs").exists()
     assert [x["amount_minor"] for x in data["previewCatalogue"]["products"]].count(0) == 1
     assert set(data["reviewSubjects"]) == {"ACORN-KIT", "ACORN-PLANTER"}
     assert (out / "products/acorn-growing-kit/index.html").is_file()
@@ -115,13 +115,22 @@ def test_invalid_mapping_does_not_build(tmp_path):
         module.configuration(path)
 
 
-def test_consent_ui_requires_explicit_test_checkout(tmp_path):
+def test_review_invitation_choice_is_optional_and_enabled_only_for_test_checkout(tmp_path):
     config = module.configuration(HERE / "store.json")
-    with pytest.raises(ValueError, match="requires explicit test checkout"):
-        module.build(tmp_path / "disabled", config, review_consent=True)
     lock = fixture_preflight(tmp_path)
     out = tmp_path / "enabled"
-    module.build(out, config, checkout_api="https://example.workers.dev", review_consent=True, preflight_lock=lock)
-    assert '"reviewConsentEnabled": true' in (out / "storefront-config.js").read_text()
-    assert "window.CARTRAY_STOREFRONT.apiBaseUrl = window.location.origin" in (out / "storefront-config.js").read_text()
-    assert (out / "_worker.js").read_text() == (HERE / "pages_gateway.mjs").read_text()
+    module.build(out, config, checkout_api="https://example.workers.dev", preflight_lock=lock)
+    assert '"reviewInvitationsEnabled": true' in (out / "storefront-config.js").read_text()
+    assert '"reviewInvitationDefaultChecked": true' in (out / "storefront-config.js").read_text()
+    html = (out / "index.html").read_text()
+    assert 'id="review-invitation-opt-in" type="checkbox"' in html
+    assert "Email me one request to review my purchase." in html
+    assert "review-consent" not in html and "verification code" not in html
+    config["review_invitations_default_checked"] = False
+    unchecked = tmp_path / "unchecked"
+    module.build(unchecked, config, checkout_api="https://example.workers.dev", preflight_lock=lock)
+    assert '"reviewInvitationDefaultChecked": false' in (unchecked / "storefront-config.js").read_text()
+    config["review_invitations"] = "disabled"
+    disabled = tmp_path / "disabled"
+    module.build(disabled, config, checkout_api="https://example.workers.dev", preflight_lock=lock)
+    assert '"reviewInvitationsEnabled": false' in (disabled / "storefront-config.js").read_text()

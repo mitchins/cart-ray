@@ -93,28 +93,25 @@ campaigns. The production configuration and cache/withdrawal policy require
 separate qualification; do not publish historical or customer data through this
 preview.
 
-## Optional review-request consent bridge
+## Review invitation permission
 
-The `--review-consent` build flag exposes an optional review-request choice only
-when an independently authenticated consent authority reports a verified
-purchase context. It also requires the explicit test checkout build and a
-same-origin gateway for `/review-consent/v1/`. The default build never displays
-the choice. Checkout does not call this gateway and continues when it is absent.
+The test store config selects automatic invitations. When test checkout is
+configured, the cart displays a checkbox asking permission
+for one post-purchase review email. The choice travels with checkout; the
+server records its own wording version and binds any grant to the created
+order. The browser does not supply a recipient or establish payment authority.
+The separately deployed CartRay test Worker must also opt in with
+`CARTRAY_REVIEW_INVITATION_MODE = "automatic"` in its `[vars]`; see
+`cartray-test-vars.example.toml`. Without that trusted server setting, even a
+forged browser request cannot record a grant. The storefront setting alone
+never enables the feature.
+Squirrel selects a checked default using `CARTRAY_REVIEW_INVITATION_DEFAULT =
+"checked"` and the matching storefront setting. The customer can untick it.
+The stored record distinguishes a preselected acceptance from an express opt-in;
+merchants must establish the appropriate permission basis for their deployment.
 
-`modules/reviews/consent/capture.mjs` is the test-only bridge: it validates
-origin, request shape and rate limits (IPv6 /64 and IPv4-mapped addresses use
-the same admission buckets, keyed with a dedicated secret), forwards the authenticated browser cookie
-only to a private service binding, and signs the returned purpose-specific
-consent evidence for the independent Reviews service binding. The browser never
-supplies an event, recipient, store or evidence identity. The authority must
-verify the purchaser against the authoritative acquisition, capture the
-explicit opt-in independently of settlement, persist a stable evidence ID and
-grant timestamp before replying, and return the same evidence on retries. It
-must not treat a checkout session ID alone as purchaser authentication. The
-bridge deliberately fails closed if any required binding is absent.
-
-**No production or reference implementation of that authority is supplied.**
-The flag alone cannot capture usable consent or verify a recipient; it must stay
-disabled until the authority, cookie/session security and trusted bindings have
-been implemented and independently qualified. This bridge does not send email,
-activate collection, or subscribe to purchase events.
+The default preview has checkout and the checkbox disabled. This configuration
+alone does not deliver email or activate collection. A confirmed purchase,
+trusted recipient and a qualified delivery pipeline are still required before
+sending. Receipt-only invitations are a future option and are not implemented
+by this example.
