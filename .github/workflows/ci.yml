@@ -42,7 +42,9 @@ jobs:
       - name: Exercise Reviews outbox producer on Workerd and D1
         run: uv run --locked python modules/reviews/tests/local_producer_qualification.py
       - name: Test review consent bridge and Acorn UI
-        run: node --test modules/reviews/consent/tests/*.test.mjs examples/acorn-store/tests/consent.test.mjs
+        run: node --test modules/reviews/consent/tests/*.test.mjs examples/acorn-store/tests/consent.test.mjs examples/acorn-store/tests/pages_gateway.test.mjs
+      - name: Exercise purchaser context and consent on Workerd and D1
+        run: uv run --locked python modules/reviews/consent/tests/authority_workerd.py
       - name: Test Reviews moderation console
         run: node --test modules/reviews/console/tests/*.test.mjs
       - name: Test Reviews console fixture safety

@@ -50,6 +50,7 @@ def main():
                 "REVIEWS_CONSENT_SECRET": CONSENT_SECRET,
                 "REVIEWS_AUTOMATION_INGRESS_TOKEN": AUTOMATION_TOKEN,
                 "REVIEWS_AUTOMATION_ACTIVATION_TOKEN": ACTIVATION_TOKEN,
+                "REVIEWS_RECIPIENT_EVIDENCE_SECRET": "p" * 40,
                 "REVIEWS_SUBJECT_MAPS": json.dumps(
                     {manifest: {"TEST-TEMPLATE": "example-policy", "TEST-BUNDLE": "example-bundle"}}
                 ),
@@ -92,6 +93,21 @@ def main():
                 == "accepted"
             )
             recipient = "a" * 64
+            subprocess.run(
+                ["node", str(MODULE / "consent/tests/bridge_real_reviews.mjs")],
+                cwd=ROOT,
+                env=os.environ
+                | {
+                    "ACORN_TEST_OUTBOX": str(outbox_id),
+                    "ACORN_TEST_EVENT": events[0],
+                    "ACORN_TEST_REVIEWS_BASE": BASE,
+                },
+                check=True,
+            )
+            status, evidence = internal(
+                "/reviews-internal/v1/automation-evidence-status", {"outbox_id": outbox_id}, AUTOMATION_TOKEN
+            )
+            assert status == 200 and evidence["recipient_binding_recorded"] and evidence["consent_granted"]
             assert signed_consent(events[0], recipient) == 201
             withdrawal = {
                 "event_id": events[0],

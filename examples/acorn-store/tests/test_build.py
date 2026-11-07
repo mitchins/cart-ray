@@ -26,6 +26,7 @@ def test_fresh_default_build_is_optional_and_isolated(tmp_path):
     data = json.loads(text.split(" = ", 1)[1].split(";\n", 1)[0])
     assert data["checkoutEnabled"] is False and data["reviewsEnabled"] is False
     assert data["reviewConsentEnabled"] is False
+    assert not (out / "_worker.js").exists()
     assert (out / "consent.mjs").is_file()
     assert [x["amount_minor"] for x in data["previewCatalogue"]["products"]].count(0) == 1
     assert set(data["reviewSubjects"]) == {"ACORN-KIT", "ACORN-PLANTER"}
@@ -122,3 +123,5 @@ def test_consent_ui_requires_explicit_test_checkout(tmp_path):
     out = tmp_path / "enabled"
     module.build(out, config, checkout_api="https://example.workers.dev", review_consent=True, preflight_lock=lock)
     assert '"reviewConsentEnabled": true' in (out / "storefront-config.js").read_text()
+    assert "window.CARTRAY_STOREFRONT.apiBaseUrl = window.location.origin" in (out / "storefront-config.js").read_text()
+    assert (out / "_worker.js").read_text() == (HERE / "pages_gateway.mjs").read_text()

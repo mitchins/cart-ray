@@ -1,0 +1,7 @@
+name = "acorn-authority-test"
+main = "authority-workerd.mjs"
+compatibility_date = "2026-08-31"
+[[d1_databases]]
+binding = "CONTEXT_DB"
+database_name = "acorn-authority-test"
+database_id = "00000000-0000-4000-8000-000000000099"
