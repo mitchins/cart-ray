@@ -22,6 +22,7 @@ test('review text is rendered as text, decisions use revisions, and a failed ref
     if (phase === 'failure') return new Response('{}', { status: 503 });
     if (options.method === 'POST') { sent = [url, options]; return Response.json({ review_id: id, status: url.endsWith('/withdraw') ? 'withdrawn' : 'published' }); }
     if (url.endsWith('/published')) return Response.json({ published: [{ review_id: id, revision_id: revision, subject_id: 'product', subject_name: 'Example product', title: 'Helpful', author: 'Customer', rating: 4, body: 'Good' }], next_after: null });
+    if (url.endsWith('/reply-revisions')) return Response.json({ review_id: id, state: 'published', current_revision_id: revision, reply: null, reply_revisions: [], next_after: null });
     if (url.endsWith('/revisions')) return Response.json({ review_id: id, revisions: [{ revision_id: revision, title: '<img>', author: 'Customer', body: 'Original', rating: 4 }], next_after: null });
     if (url.endsWith('/audit')) return Response.json({ review_id: id, audit: [{ event_id: 'c'.repeat(64), revision_id: revision, action: 'approve', actor: 'staff:example', occurred_at: 1700000000 }], next_after: null });
     return Response.json({ pending: [{ review_id: id, revision_id: revision, subject_id: 'product', title: '<img src=x>', author: '<script>', rating: null, body: '<img onerror=bad>' }], next_after: null });
@@ -55,7 +56,16 @@ test('review text is rendered as text, decisions use revisions, and a failed ref
     const auditResults = published.children[6].children[2].children[1];
     assert.match(auditResults.children[0].children[0].textContent, /staff:example/);
     assert.equal(globalThis.lastFocused, auditResults);
+    const reply = published.children[7];
+    await reply.children[1].click();
+    const form = reply.children[2].children[2];
+    form.children[1].value = 'Staff'; form.children[3].value = 'Unsaved answer';
+    await nodes.refresh.click(); assert.equal(nodes.queue.children[0], published); assert.match(nodes.error.textContent, /draft is unsaved/);
+    nodes.view.value = 'pending'; await nodes.view.change(); assert.equal(nodes.view.value, 'published'); assert.equal(form.children[3].value, 'Unsaved answer');
     await published.children[4].children[0].click(); await published.children[5].children[1].click();
+    assert.match(nodes.error.textContent, /draft is unsaved/);
+    form.children[1].value = ''; form.children[3].value = '';
+    await published.children[5].children[1].click();
     assert.match(sent[0], /\/withdraw$/); assert.deepEqual(JSON.parse(sent[1].body), { revision_id: revision });
     assert.match(nodes.status.textContent, /withdrawn/);
   } finally { delete globalThis.document; delete globalThis.fetch; delete globalThis.lastFocused; }

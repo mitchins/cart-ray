@@ -132,5 +132,6 @@ export function replyControls(item, { client, element, isBusy, setBusy, message,
     } catch (error) { message(error instanceof ConsoleError ? error.message : 'Reply audit is temporarily unavailable.'); }
     finally { audit.disabled = false; setBusy(false); (finished ? auditOutput : audit).focus(); }
   });
+  section.hasUnsavedReply = () => Boolean(attempt) || (!form.hidden && (author.value !== (current?.author || '') || body.value !== (current?.body || '')));
   return section;
 }

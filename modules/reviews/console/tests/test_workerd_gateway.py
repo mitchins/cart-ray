@@ -239,3 +239,23 @@ m.main([])
         if process.poll() is None:
             process.kill()
             process.wait()
+
+
+def test_all_console_modules_are_served_by_loopback_gateway(monkeypatch):
+    import urllib.request
+
+    server = gateway.FixtureServer(("127.0.0.1", 0), gateway.Gateway)
+    port = server.server_address[1]
+    monkeypatch.setattr(gateway, "PORT", port)
+    monkeypatch.setattr(gateway, "ORIGIN", f"http://127.0.0.1:{port}")
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        for asset in ("reply-controls.mjs", "delivery-controls.mjs"):
+            with urllib.request.urlopen(f"http://127.0.0.1:{port}/{asset}", timeout=2) as response:
+                assert response.status == 200
+                assert response.read()
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=1)

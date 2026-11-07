@@ -6,7 +6,7 @@ const queue = document.querySelector('#queue'), status = document.querySelector(
 const refresh = document.querySelector('#refresh'), more = document.querySelector('#more'), view = document.querySelector('#view');
 const heading = document.querySelector('#queue-title'), description = document.querySelector('#queue-description');
 let cursor = null, loading = false, shownMode = 'pending';
-const seen = new Set();
+const seen = new Set(), replySections = new Set();
 function message(text = '') { error.textContent = text; error.hidden = !text; }
 function friendly(e) { return e instanceof ConsoleError ? e.message : 'The review service is temporarily unavailable. Please try again.'; }
 function element(tag, text, cls) {
@@ -59,6 +59,7 @@ function history(item) {
 }
 function card(item, mode) {
   const article = element('article', '', 'card');
+  let replies = null;
   const title = element('h3', item.title || 'Customer feedback'); article.append(title);
   article.append(element('p', item.subject_name ? `Product: ${item.subject_name}` : `Product reference: ${item.subject_id}`, 'meta'));
   article.append(element('p', `${item.author || 'Anonymous'} · ${item.rating === null ? 'Unrated' : `${item.rating} out of 5 stars`}`, 'meta'));
@@ -83,11 +84,12 @@ function card(item, mode) {
   }
   confirmButton.addEventListener('click', async () => {
     if (loading || !selected) return;
+    if (replies?.hasUnsavedReply()) { message('Your reply draft is unsaved. Submit it or restore the original text before withdrawing the review.'); return; }
     const action = selected;
     busy(true); confirmButton.disabled = cancelButton.disabled = true; message();
     try {
       await client.decide(item, action);
-      article.remove(); seen.delete(item.review_id);
+      article.remove(); seen.delete(item.review_id); if (replies) replySections.delete(replies);
       status.textContent = { approve: 'Review approved and published.', reject: 'Review rejected and kept private.', withdraw: 'Review withdrawn.' }[action];
       if (!queue.children.length && !cursor) queue.append(element('p', mode === 'pending' ? 'No reviews are waiting for moderation.' : 'No published reviews found.'));
       refresh.disabled = false; refresh.focus();
@@ -95,16 +97,22 @@ function card(item, mode) {
     finally { confirmButton.disabled = cancelButton.disabled = false; busy(false); }
   });
   article.append(actions, confirmation, history(item));
-  if (mode === 'published') article.append(replyControls(item, { client, element, isBusy: () => loading, setBusy: busy, message, status }));
+  if (mode === 'published') {
+    replies = replyControls(item, { client, element, isBusy: () => loading, setBusy: busy, message, status });
+    replySections.add(replies); article.append(replies);
+  }
   return article;
 }
 async function load(replace) {
   if (loading) return;
   const mode = view.value;
+  if (replace && [...replySections].some((section) => section.hasUnsavedReply())) {
+    view.value = shownMode; message('Your reply draft is unsaved. Submit it or restore the original text before changing the review list.'); return;
+  }
   busy(true); message();
   try {
     const result = await client[mode](replace ? null : cursor);
-    if (replace) { queue.replaceChildren(); seen.clear(); }
+    if (replace) { queue.replaceChildren(); seen.clear(); replySections.clear(); }
     const records = result[mode];
     for (const item of records) if (!seen.has(item.review_id)) { queue.append(card(item, mode)); seen.add(item.review_id); }
     cursor = result.next_after; more.hidden = !cursor;

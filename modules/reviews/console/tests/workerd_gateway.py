@@ -37,7 +37,7 @@ STAFF_PATH = re.compile(
     r"/reviews-admin/v1/(?:pending|published|deliveries|contributions/[a-f0-9]{64}/"
     r"(?:approve|reject|withdraw|revisions|audit|reply|reply-withdraw|reply-revisions|reply-audit))"
 )
-ASSETS = {"/", "/index.html", "/client.mjs", "/console.mjs", "/styles.css"}
+ASSETS = {"/", "/index.html", "/client.mjs", "/console.mjs", "/reply-controls.mjs", "/delivery-controls.mjs", "/styles.css"}
 
 
 def stop_owned(process):
