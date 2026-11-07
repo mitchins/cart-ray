@@ -22,7 +22,8 @@ async def accept_recovery_command(db, *, store, environment, token_hash, request
             "JOIN review_invitation_consents c USING(store_key,environment,acquisition_id) "
             "WHERE i.store_key=? AND i.environment=? AND c.purpose='review_invitation' "
             "AND c.recipient_context_hash=i.recipient_context_hash AND c.revoked_at IS NULL AND "
-            "((i.token_hash=? AND i.expires_at>0) OR EXISTS(SELECT 1 FROM invitation_generations g "
+            "((i.token_hash=? AND (i.expires_at>0 OR i.expires_at=-1)) "
+            "OR EXISTS(SELECT 1 FROM invitation_generations g "
             "WHERE g.store_key=i.store_key AND g.environment=i.environment "
             "AND g.acquisition_id=i.acquisition_id AND g.token_hash=? AND g.accepted_at IS NOT NULL)) LIMIT 1"
         )

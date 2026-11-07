@@ -217,6 +217,7 @@ def main():
                 "REVIEWS_REVIEWER_KEY": "r" * 40,
                 "REVIEWS_CONSENT_SECRET": CONSENT_SECRET,
                 "REVIEWS_DELIVERY_TOKEN": DELIVERY_TOKEN,
+                "REVIEWS_INVITATION_LIFETIME": os.environ.get("REVIEWS_INVITATION_LIFETIME", "5184000"),
                 "REVIEWS_AUTOMATION_INTAKE": "test",
                 "REVIEWS_AUTOMATION_INGRESS_TOKEN": AUTOMATION_TOKEN,
                 "REVIEWS_RECIPIENT_EVIDENCE_SECRET": RECIPIENT_SECRET,
@@ -434,6 +435,17 @@ def main():
                     )
                 )
             assert outcomes == [(200, {"state": "accepted"}), (200, {"state": "accepted"})], outcomes
+            if os.environ.get("REVIEWS_INVITATION_LIFETIME") == "never":
+                expiry_result = subprocess.run(
+                    [wrangler, "d1", "execute", "cartray-reviews-local-test", *common, "--json", "--command",
+                     "SELECT i.expires_at AS invitation_expiry, g.expires_at AS generation_expiry "
+                     "FROM acquisition_invitations i JOIN invitation_generations g USING "
+                     "(store_key, environment, acquisition_id) WHERE g.state='accepted'"],
+                    cwd=ROOT, check=True, capture_output=True, text=True,
+                )
+                assert json.loads(expiry_result.stdout)[0]["results"] == [
+                    {"invitation_expiry": -1, "generation_expiry": -1}
+                ]
             capability = {"invitation_token": emailed_token}
             draft_scope = hmac.new(
                 ("r" * 40).encode(),

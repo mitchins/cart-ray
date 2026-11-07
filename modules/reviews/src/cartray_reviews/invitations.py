@@ -274,8 +274,8 @@ async def redeem_purchase(
             "SELECT i.acquisition_id FROM acquisition_invitations i "
             "JOIN acquisition_invitation_subjects s ON s.store_key=i.store_key AND s.environment=i.environment "
             "AND s.acquisition_id=i.acquisition_id WHERE i.store_key=? AND i.environment=? "
-            "AND i.token_hash=? AND s.subject_id=? AND i.revoked_at IS NULL AND i.expires_at>? "
-            "AND i.expires_at>unixepoch()"
+            "AND i.token_hash=? AND s.subject_id=? AND i.revoked_at IS NULL "
+            "AND (i.expires_at=-1 OR (i.expires_at>? AND i.expires_at>unixepoch()))"
         )
         .bind(store, environment, token_hash, subject, now)
         .all()
@@ -320,7 +320,7 @@ async def redeem_purchase(
             "INSERT INTO native_guard SELECT CASE WHEN EXISTS(SELECT 1 FROM acquisition_invitations i "
             "JOIN acquisition_invitation_subjects s ON s.store_key=i.store_key AND s.environment=i.environment "
             "AND s.acquisition_id=i.acquisition_id WHERE i.store_key=? AND i.environment=? AND i.token_hash=? "
-            "AND i.revoked_at IS NULL AND i.expires_at>? AND i.expires_at>unixepoch() "
+            "AND i.revoked_at IS NULL AND (i.expires_at=-1 OR (i.expires_at>? AND i.expires_at>unixepoch())) "
             "AND s.subject_id=? AND s.consumed_at IS NULL) "
             "THEN 1 ELSE 0 END"
         ).bind(store, environment, token_hash, now, subject),
@@ -629,7 +629,11 @@ async def claim_delivery(db, *, store, environment, acquisition, generation, del
                     "WHERE r.store_key=g.store_key AND r.environment=g.environment "
                     "AND r.acquisition_id=g.acquisition_id "
                     "AND r.request_id=substr(g.request_key,10) AND r.state='pending')) "
-                    "AND c.recipient_context_hash=i.recipient_context_hash) THEN 1 ELSE 0 END"
+                    "AND c.recipient_context_hash=i.recipient_context_hash "
+                    "AND NOT EXISTS(SELECT 1 FROM review_recipient_suppressions rs WHERE "
+                    "rs.store_key=i.store_key AND rs.environment=i.environment "
+                    "AND rs.recipient_context_hash=i.recipient_context_hash AND rs.purpose='review_invitation')"
+                    ") THEN 1 ELSE 0 END"
                 ).bind(store, environment, acquisition, generation, delivery, now),
                 db.prepare(
                     "UPDATE invitation_generations SET state='dispatching' WHERE store_key=? AND environment=? "
@@ -657,8 +661,7 @@ async def record_delivery_outcome(
         or type(now) is not int
         or (outcome == "accepted" and (type(accepted_at) is not int or accepted_at > now))
         or (outcome != "accepted" and accepted_at is not None)
-        or type(lifetime) is not int
-        or not 1 <= lifetime <= 365 * 86400
+        or (lifetime is not None and (type(lifetime) is not int or not 1 <= lifetime <= 365 * 86400))
     ):
         raise ValueError("delivery unavailable")
     current = _rows(
@@ -701,7 +704,11 @@ async def record_delivery_outcome(
             "WHERE r.store_key=g.store_key AND r.environment=g.environment AND r.acquisition_id=g.acquisition_id "
             "AND r.request_id=substr(g.request_key,10) AND r.state='pending')) "
             "AND c.recipient_context_hash=i.recipient_context_hash AND c.revoked_at IS NULL "
-            "AND c.purpose='review_invitation' AND c.granted_at<=?) THEN 1 ELSE 0 END"
+            "AND c.purpose='review_invitation' AND c.granted_at<=? "
+            "AND NOT EXISTS(SELECT 1 FROM review_recipient_suppressions rs WHERE "
+            "rs.store_key=i.store_key AND rs.environment=i.environment "
+            "AND rs.recipient_context_hash=i.recipient_context_hash AND rs.purpose='review_invitation')"
+            ") THEN 1 ELSE 0 END"
         ).bind(store, environment, acquisition, generation, delivery, item["state"], now)
     else:
         # Recording a failure or an uncertain outcome must remain possible
@@ -713,6 +720,7 @@ async def record_delivery_outcome(
         ).bind(store, environment, acquisition, generation, delivery, item["state"])
     statements = [guard]
     if outcome == "accepted":
+        expiry = -1 if lifetime is None else accepted_at + lifetime
         statements.extend(
             [
                 db.prepare(
@@ -724,7 +732,7 @@ async def record_delivery_outcome(
                     "WHERE store_key=? AND environment=? AND acquisition_id=? AND token_hash=?"
                 ).bind(
                     item["token_hash"],
-                    accepted_at + lifetime,
+                    expiry,
                     item["key_version"],
                     store,
                     environment,
@@ -734,7 +742,7 @@ async def record_delivery_outcome(
                 db.prepare(
                     "UPDATE invitation_generations SET state='accepted',accepted_at=?,expires_at=? "
                     "WHERE store_key=? AND environment=? AND acquisition_id=? AND generation_id=?"
-                ).bind(accepted_at, accepted_at + lifetime, store, environment, acquisition, generation),
+                ).bind(accepted_at, expiry, store, environment, acquisition, generation),
             ]
         )
         if item["request_key"].startswith("recovery-"):
@@ -788,6 +796,10 @@ async def record_delivery_outcome(
                             "AND g.delivery_identity=? AND g.state=? AND "
                             "(i.token_hash<>g.expected_token_hash OR i.revocation_epoch<>g.expected_revocation_epoch "
                             "OR c.recipient_context_hash<>i.recipient_context_hash OR c.revoked_at IS NOT NULL "
+                            "OR EXISTS(SELECT 1 FROM review_recipient_suppressions rs "
+                            "WHERE rs.store_key=i.store_key AND rs.environment=i.environment "
+                            "AND rs.recipient_context_hash=i.recipient_context_hash "
+                            "AND rs.purpose='review_invitation') "
                             "OR (g.request_key LIKE 'recovery-%' AND NOT EXISTS("
                             "SELECT 1 FROM review_recovery_requests r "
                             "WHERE r.store_key=g.store_key AND r.environment=g.environment "
@@ -799,7 +811,7 @@ async def record_delivery_outcome(
                             "UPDATE invitation_generations SET state='revoked',accepted_at=?,expires_at=? "
                             "WHERE store_key=? AND environment=? AND acquisition_id=? AND generation_id=? "
                             "AND state IN ('dispatching','uncertain')"
-                        ).bind(accepted_at, accepted_at + lifetime, store, environment, acquisition, generation),
+                        ).bind(accepted_at, expiry, store, environment, acquisition, generation),
                         db.prepare(
                             "UPDATE review_recovery_requests SET state='failed' WHERE store_key=? AND environment=? "
                             "AND acquisition_id=? AND request_id=? AND state='pending'"

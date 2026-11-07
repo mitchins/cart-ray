@@ -111,17 +111,22 @@ def build(
     *,
     checkout_api: str | None = None,
     reviews: bool = False,
+    test_review_gateway: bool = False,
     preflight_lock: Path = PREFLIGHT_LOCK,
 ) -> None:
     if output.exists():
         raise ValueError("output directory already exists; choose a new directory")
     api = test_api(checkout_api)
+    if test_review_gateway and not api:
+        raise ValueError("test review gateway requires explicit test checkout")
     manifest = asyncio.run(preview_manifest(config, preflight_lock if api else None))
     output.mkdir(parents=True)
     for filename in ("app.js", "styles.css"):
         shutil.copy2(ROOT / "storefront" / filename, output / filename)
     shutil.copy2(HERE / "acorn.css", output / "acorn.css")
     shutil.copy2(HERE / "reviews.mjs", output / "reviews.mjs")
+    if test_review_gateway:
+        shutil.copy2(HERE / "reviews_gateway.mjs", output / "_worker.js")
     shutil.copytree(HERE / "assets", output / "assets")
     shutil.copytree(ROOT / "modules/reviews/ui", output / "review")
     paths = {item["product_key"]: item["path"] for item in config["products"]}
@@ -161,12 +166,16 @@ def main() -> None:
     parser.add_argument("--config", type=Path, default=HERE / "store.json")
     parser.add_argument("--test-checkout-api", help="explicit HTTPS CartRay TEST Worker origin")
     parser.add_argument("--reviews", action="store_true", help="enable same-origin test Reviews reads")
+    parser.add_argument(
+        "--test-review-gateway", action="store_true", help="enable test-only same-origin invitation routes"
+    )
     args = parser.parse_args()
     build(
         args.output,
         configuration(args.config),
         checkout_api=args.test_checkout_api,
         reviews=args.reviews,
+        test_review_gateway=args.test_review_gateway,
     )
 
 

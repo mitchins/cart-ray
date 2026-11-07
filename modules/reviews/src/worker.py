@@ -2,8 +2,10 @@
 
 import json
 import re
+import time
 from urllib.parse import parse_qs, urlparse
 
+from cartray_reviews.automation_initial import unsubscribe
 from cartray_reviews.lookup import resolve_subject
 from cartray_reviews.unified import unified_read
 from native_lifecycle import (
@@ -13,6 +15,7 @@ from native_lifecycle import (
     native_read,
     pending_read,
     published_staff_read,
+    read_json,
     staff_history_read,
 )
 from workers import Response, WorkerEntrypoint
@@ -72,11 +75,52 @@ def public_contribution(row, attribution):
 class Default(WorkerEntrypoint):
     async def fetch(self, request):
         mode = str(getattr(self.env, "REVIEWS_MODE", "disabled"))
+        url = urlparse(str(request.url))
+        if url.path == "/reviews/v1/invitation-unsubscribe":
+            if str(request.method) != "POST" or url.query:
+                return Response.json({"error": "method not allowed"}, status=405)
+            key = str(getattr(self.env, "REVIEWS_UNSUBSCRIBE_KEY", ""))
+            excluded = [
+                str(getattr(self.env, name, ""))
+                for name in (
+                    "REVIEWS_INVITATION_KEY",
+                    "REVIEWS_CONSENT_SECRET",
+                    "REVIEWS_AUTOMATION_INGRESS_TOKEN",
+                    "REVIEWS_TEST_ADMIN_TOKEN",
+                    "REVIEWS_SETTLEMENT_TOKEN",
+                    "REVIEWS_REVIEWER_KEY",
+                    "REVIEWS_DELIVERY_TOKEN",
+                    "REVIEWS_RECIPIENT_EVIDENCE_SECRET",
+                    "REVIEWS_AUTOMATION_ACTIVATION_TOKEN",
+                )
+            ]
+            if (
+                str(getattr(self.env, "REVIEWS_ENVIRONMENT", "")) != "test"
+                or len(key) < 32
+                or key in excluded
+                or not getattr(self.env, "REVIEWS_DB", None)
+            ):
+                await discard_body(request)
+                return Response.json({"error": "unavailable"}, status=503)
+            try:
+                data = await read_json(request)
+                if set(data) != {"token"}:
+                    raise ValueError("invalid")
+                await unsubscribe(
+                    self.env.REVIEWS_DB,
+                    store=str(self.env.REVIEWS_STORE_KEY),
+                    environment="test",
+                    token=data["token"],
+                    secret=key.encode(),
+                    now=int(time.time()),
+                )
+                return Response.json({"status": "unsubscribed"}, headers={"Cache-Control": "no-store"})
+            except (ValueError, TypeError, AttributeError, KeyError):
+                return Response.json({"error": "unavailable"}, status=409)
         if mode not in ("read_only", "collect", "verified_acquisition_only"):
             if str(request.method) != "GET":
                 await discard_body(request)
             return Response.json({"error": "not found"}, status=404)
-        url = urlparse(str(request.url))
         if str(request.method) == "GET" and url.path == "/reviews-admin/v1/pending":
             if mode not in ("collect", "verified_acquisition_only"):
                 return Response.json({"error": "not found"}, status=404)

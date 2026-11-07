@@ -111,8 +111,12 @@ async function resolve(session,contextHash,env,fetcher,{automationOutbox=null}={
   if(JSON.stringify(actual)!==JSON.stringify(expected)) throw Error('stripe items');
   const email=normalizeEmail(stripe.customer_details?.email);
   if(email!==normalizeEmail(env.APPROVED_TEST_EMAIL)) throw Error('test recipient');
-  const version='v1';
-  const recipientHash=await mac(env.RECIPIENT_HASH_KEY,JSON.stringify(['acorn-recipient-v1',env.STORE_KEY,'test',row.order_id,version,email]));
+  // v2 has a stable merchant-scoped pseudonym for purpose suppression.
+  // Retain v1's order-scoped interpretation for the old, test-only authority.
+  const version=automatic ? 'v2' : 'v1';
+  const recipientHash=await mac(env.RECIPIENT_HASH_KEY,JSON.stringify(automatic
+    ? ['acorn-recipient-v2',env.STORE_KEY,'test',email]
+    : ['acorn-recipient-v1',env.STORE_KEY,'test',row.order_id,version,email]));
   const reference='ref_'+await mac(env.RECIPIENT_HASH_KEY,JSON.stringify(['acorn-delivery-v1',automatic ? row.order_id : contextHash,recipientHash]));
   const sourceProvenance=env.INSTALLATION_ID+'_'+proof[9];
   if(!id.test(sourceProvenance)) throw Error('source provenance');
@@ -136,11 +140,19 @@ export async function buildAutomationEvidence(result,env) {
 
 export async function purchaseEvidence(request,env,fetcher=fetch) {
   const path=new URL(request.url).pathname;
-  if(!configured(env) || request.method!=='POST' || !['/confirmed','/delivery-recipient','/automation-record'].includes(path) ||
+  if(!configured(env) || request.method!=='POST' || !['/confirmed','/delivery-recipient','/automation-record','/automation-recipient'].includes(path) ||
     (request.headers.get('content-type')||'')!=='application/json') return unavailable();
   try {
     const input=await jsonBounded(new Response(request.body,{headers:request.headers}),512);
     if(!input || Array.isArray(input)) return unavailable();
+    if(path==='/automation-recipient') {
+      const token=env.AUTOMATION_RECIPIENT_TOKEN;
+      if(Object.keys(input).join(',')!=='outbox_id' || !Number.isSafeInteger(input.outbox_id) || input.outbox_id<1 ||
+        typeof token!=='string' || token.length<32 || [env.RECIPIENT_HASH_KEY,env.AUTOMATION_EVIDENCE_TOKEN,env.RECIPIENT_RESOLVE_TOKEN,env.PURCHASE_ATTESTATION_TOKEN,env.REVIEWS_AUTOMATION_INGRESS_TOKEN,env.REVIEWS_RECIPIENT_EVIDENCE_SECRET,env.REVIEWS_CONSENT_SECRET].includes(token) ||
+        !equal(request.headers.get('Authorization')||'', 'Bearer '+token)) return unavailable();
+      const result=await resolve(null,null,env,fetcher,{automationOutbox:input.outbox_id});
+      return Response.json({email:result.email,recipient_context_hash:result.recipient_context_hash},{headers:{'Cache-Control':'no-store'}});
+    }
     if(path==='/automation-record') {
       // The caller supplies only an outbox cursor, never order, recipient or grant data.
       // This private endpoint may be retried after an intake or downstream outage.
@@ -165,11 +177,11 @@ export async function purchaseEvidence(request,env,fetcher=fetch) {
       return Response.json({status:'recorded'},{headers:{'Cache-Control':'no-store'}});
     }
     if(path==='/confirmed') {
-      if(Object.keys(input).sort().join(',')!=='context_hash,session_id') return unavailable();
+      if(Object.keys(input).length!==2 || !Object.hasOwn(input,'context_hash') || !Object.hasOwn(input,'session_id')) return unavailable();
       const {email,...safe}=await resolve(input.session_id,input.context_hash,env,fetcher);
       return Response.json(safe,{headers:{'Cache-Control':'no-store'}});
     }
-    if(Object.keys(input).sort().join(',')!=='context_hash,recipient_reference' || !hash.test(input.context_hash || '') ||
+    if(Object.keys(input).length!==2 || !Object.hasOwn(input,'context_hash') || !Object.hasOwn(input,'recipient_reference') || !hash.test(input.context_hash || '') ||
        !equal(request.headers.get('Authorization')||'', 'Bearer '+env.RECIPIENT_RESOLVE_TOKEN)) return unavailable();
     const context=await env.CONTEXT_DB.prepare('SELECT checkout_session_id FROM purchaser_contexts WHERE token_hash=? AND expires_at>?')
       .bind(input.context_hash,Math.floor(Date.now()/1000)).first();
