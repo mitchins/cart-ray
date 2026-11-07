@@ -119,6 +119,7 @@ def test_stalled_http_body_returns_408_without_forwarding(monkeypatch):
 
 def test_readiness_requires_own_listener_and_unpredictable_database_marker(monkeypatch):
     process = SimpleNamespace(pid=1234, poll=lambda: None)
+    monkeypatch.setattr(gateway.sys, "platform", "linux")
     requests = []
     monkeypatch.setattr(gateway.subprocess, "run", lambda *a, **k: SimpleNamespace(returncode=0, stdout="4321\n"))
     monkeypatch.setattr(gateway.os, "getpgid", lambda _pid: 9999)
@@ -259,3 +260,24 @@ def test_all_console_modules_are_served_by_loopback_gateway(monkeypatch):
         server.shutdown()
         server.server_close()
         thread.join(timeout=1)
+
+
+def test_macos_listener_ownership_fails_closed_for_foreign_and_malformed_pids(monkeypatch):
+    monkeypatch.setattr(gateway.sys, "platform", "darwin")
+    monkeypatch.setattr(gateway, "WORKER_PORT", 12345)
+    process = SimpleNamespace(pid=1234, poll=lambda: None)
+    monkeypatch.setattr(gateway.os, "getpgid", lambda pid: 1234 if pid == 42 else 9999)
+    header = "Proto Recv-Q Send-Q Local Foreign state rx tx rh sh process:pid\n"
+    row = "tcp4 0 0 127.0.0.1.12345 *.* LISTEN 0 0 0 0 worker:42\n"
+    foreign = "tcp6 0 0 ::1.12345 *.* LISTEN 0 0 0 0 other:43\n"
+    unrelated = "tcp4 0 0 127.0.0.1.123456 *.* LISTEN 0 0 0 0 other:43\n"
+    output = [header + row + unrelated]
+    monkeypatch.setattr(gateway.subprocess, "run", lambda *a, **k: SimpleNamespace(returncode=0, stdout=output[0]))
+    assert gateway.owns_listener(process)
+    output[0] += foreign
+    assert not gateway.owns_listener(process)
+    output[0] = header + row.replace("worker:42", "worker:?")
+    assert not gateway.owns_listener(process)
+    output[0] = row
+    with pytest.raises(RuntimeError):
+        gateway.owns_listener(process)

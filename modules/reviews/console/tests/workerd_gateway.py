@@ -81,17 +81,29 @@ def owns_listener(process):
     if process.poll() is not None:
         return False
     try:
-        result = subprocess.run(
-            ["lsof", "-nP", f"-tiTCP:{WORKER_PORT}", "-sTCP:LISTEN"], capture_output=True, text=True, timeout=5
-        )
-    except (OSError, subprocess.TimeoutExpired) as exc:
-        raise RuntimeError("cannot identify local Worker listener") from exc
-    if result.returncode not in (0, 1):
-        raise RuntimeError("cannot identify local Worker listener")
-    try:
-        pids = [int(line) for line in result.stdout.splitlines() if line.strip()]
+        if sys.platform == "darwin":
+            result = subprocess.run(["netstat", "-anv", "-p", "tcp"], capture_output=True, text=True, timeout=5)
+            if result.returncode != 0 or "process:pid" not in result.stdout:
+                raise RuntimeError("cannot identify local Worker listener")
+            pids = []
+            for line in result.stdout.splitlines():
+                fields = line.split()
+                if len(fields) < 6 or fields[0] not in ("tcp4", "tcp6"):
+                    continue
+                if fields[3].rsplit(".", 1)[-1] != str(WORKER_PORT) or fields[5] != "LISTEN":
+                    continue
+                if len(fields) < 11 or not re.fullmatch(r"[^:]+:[1-9][0-9]*", fields[10]):
+                    return False
+                pids.append(int(fields[10].rsplit(":", 1)[1]))
+        else:
+            result = subprocess.run(
+                ["lsof", "-nP", f"-tiTCP:{WORKER_PORT}", "-sTCP:LISTEN"], capture_output=True, text=True, timeout=5
+            )
+            if result.returncode not in (0, 1):
+                raise RuntimeError("cannot identify local Worker listener")
+            pids = [int(line) for line in result.stdout.splitlines() if line.strip()]
         return bool(pids) and all(os.getpgid(pid) == process.pid for pid in pids)
-    except (ValueError, ProcessLookupError):
+    except (OSError, subprocess.TimeoutExpired, ValueError):
         return False
 
 
