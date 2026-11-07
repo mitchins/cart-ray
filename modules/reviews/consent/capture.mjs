@@ -21,9 +21,39 @@ async function signature(secret, value) {
   return [...new Uint8Array(bytes)].map((x) => x.toString(16).padStart(2, "0")).join("");
 }
 
-async function readSmallBody(request) {
+// Canonicalize IPv4-mapped IPv6 into the same IPv4 bucket; other IPv6 uses /64.
+function admissionAddress(value) {
+  if (typeof value !== "string" || value.length > 64 || !/^[0-9a-fA-F:.]+$/.test(value)) throw new Error("invalid IP");
+  if (!value.includes(":")) {
+    const parts = value.split(".");
+    if (parts.length !== 4 || parts.some((part) => !/^(0|[1-9][0-9]{0,2})$/.test(part) || Number(part) > 255)) {
+      throw new Error("invalid IP");
+    }
+    return parts.join(".");
+  }
+  // URL parsing accepts compressed IPv6 and IPv4 suffixes, but rejects malformed addresses.
+  const hostname = new URL(`http://[${value}]/`).hostname;
+  if (!hostname.startsWith("[") || !hostname.endsWith("]")) throw new Error("invalid IP");
+  const canonical = hostname.slice(1, -1);
+  const sections = canonical.split("::");
+  if (sections.length > 2) throw new Error("invalid IP");
+  const left = sections[0] ? sections[0].split(":") : [];
+  const right = sections.length === 2 && sections[1] ? sections[1].split(":") : [];
+  const zeros = sections.length === 2 ? 8 - left.length - right.length : 0;
+  if (zeros < 0) throw new Error("invalid IP");
+  const groups = [...left, ...Array(zeros).fill("0"), ...right].map((part) => Number.parseInt(part, 16));
+  if (groups.length !== 8 || groups.some((part) => !Number.isInteger(part) || part < 0 || part > 65535)) {
+    throw new Error("invalid IP");
+  }
+  if (groups.slice(0, 5).every((part) => part === 0) && groups[5] === 65535) {
+    return [groups[6] >> 8, groups[6] & 255, groups[7] >> 8, groups[7] & 255].join(".");
+  }
+  return groups.slice(0, 4).map((part) => part.toString(16).padStart(4, "0")).join(":") + "::/64";
+}
+
+async function readSmallBody(request, maximum = 128) {
   const length = request.headers.get("Content-Length");
-  if (length !== null && (!/^\d{1,3}$/.test(length) || Number(length) > 128)) throw new Error("invalid length");
+  if (length !== null && (!/^\d{1,6}$/.test(length) || Number(length) > maximum)) throw new Error("invalid length");
   const reader = request.body?.getReader();
   if (!reader) throw new Error("missing body");
   let timer;
@@ -35,12 +65,38 @@ async function readSmallBody(request) {
       const part = await Promise.race([reader.read(), deadline]);
       if (part.done) return text + decoder.decode();
       size += part.value.byteLength;
-      if (size > 128) throw new Error("large body");
+      if (size > maximum) throw new Error("large body");
       text += decoder.decode(part.value, {stream: true});
     }
   } finally {
     clearTimeout(timer);
     void reader.cancel().catch(() => {});
+  }
+}
+
+// Abort both an unanswered service call and its body. A timed-out provider outcome
+// is unknown; the authority must return the same durable evidence on retry.
+async function serviceRequest(binding, url, options, readJson) {
+  const controller = new AbortController();
+  let timer;
+  const deadline = new Promise((_, reject) => {
+    timer = setTimeout(() => { controller.abort(); reject(new Error("service timeout")); }, 2000);
+  });
+  try {
+    return await Promise.race([
+      (async () => {
+        const result = await binding.fetch(url, {...options, signal: controller.signal});
+        if (!result.ok) throw new Error("service unavailable");
+        if (!readJson) {
+          if (result.body) void result.body.cancel().catch(() => {});
+          return null;
+        }
+        return JSON.parse(await readSmallBody(result, 4096));
+      })(), deadline,
+    ]);
+  } finally {
+    clearTimeout(timer);
+    controller.abort();
   }
 }
 
@@ -52,28 +108,28 @@ export async function handleConsent(request, env) {
       env.REVIEWS_ENVIRONMENT !== "test" || env.REVIEW_CONSENT_ENABLED !== "test" ||
       !env.REVIEW_CONSENT_AUTHORITY?.fetch || !env.REVIEWS?.fetch ||
       !env.REVIEW_CONSENT_LIMITER?.limit || typeof env.REVIEWS_CONSENT_SECRET !== "string" ||
-      env.REVIEWS_CONSENT_SECRET.length < 32) return response(503, {error: "unavailable"});
+      env.REVIEWS_CONSENT_SECRET.length < 32 || typeof env.REVIEWS_CONSENT_RATE_KEY !== "string" ||
+      env.REVIEWS_CONSENT_RATE_KEY.length < 32 || env.REVIEWS_CONSENT_RATE_KEY === env.REVIEWS_CONSENT_SECRET) return response(503, {error: "unavailable"});
   if (request.headers.get("Origin") !== env.STOREFRONT_ORIGIN) return response(403, {error: "unavailable"});
   if (request.method !== "POST") return response(405, {error: "unavailable"});
   if ((request.headers.get("Content-Type") || "").toLowerCase() !== "application/json") return response(400, {error: "unavailable"});
-  let input;
-  try { input = JSON.parse(await readSmallBody(request)); } catch { return response(400, {error: "unavailable"}); }
   const context = path.endsWith("context");
-  if (!input || Array.isArray(input) || (context ? Object.keys(input).length !== 0 :
-      Object.keys(input).length !== 1 || input.accept !== true)) return response(400, {error: "unavailable"});
-  const ip = request.headers.get("CF-Connecting-IP");
-  if (!ip || ip.length > 64) return response(503, {error: "unavailable"});
   try {
-    if (!(await env.REVIEW_CONSENT_LIMITER.limit({key: ip})).success) return response(429, {error: "unavailable"});
+    const address = admissionAddress(request.headers.get("CF-Connecting-IP"));
+    const limiterKey = await signature(env.REVIEWS_CONSENT_RATE_KEY,
+      `consent-ingress-v1\0${env.REVIEWS_STORE_KEY}\0test\0${address}`);
+    if (!(await env.REVIEW_CONSENT_LIMITER.limit({key: limiterKey})).success) return response(429, {error: "unavailable"});
+    let input;
+    try { input = JSON.parse(await readSmallBody(request)); } catch { return response(400, {error: "unavailable"}); }
+    if (!input || Array.isArray(input) || (context ? Object.keys(input).length !== 0 :
+        Object.keys(input).length !== 1 || input.accept !== true)) return response(400, {error: "unavailable"});
     const headers = new Headers();
     const cookie = request.headers.get("Cookie");
     if (cookie && cookie.length <= 4096) headers.set("Cookie", cookie);
     headers.set("Content-Type", "application/json");
-    const authorityResponse = await env.REVIEW_CONSENT_AUTHORITY.fetch("https://consent-authority.internal" + path, {
+    const data = await serviceRequest(env.REVIEW_CONSENT_AUTHORITY, "https://consent-authority.internal" + path, {
       method: "POST", headers, body: context ? "{}" : '{"accept":true}',
-    });
-    if (!authorityResponse.ok) return response(503, {error: "unavailable"});
-    const data = await authorityResponse.json();
+    }, true);
     if (context) return data?.available === true ? response(200, {available: true}) : response(503, {error: "unavailable"});
     if (!data || data.store !== env.REVIEWS_STORE_KEY || data.environment !== "test" ||
         data.purpose !== "review_invitation" || data.decision !== "granted" ||
@@ -88,10 +144,10 @@ export async function handleConsent(request, env) {
       granted_at: evidence.granted_at, recipient_context_hash: evidence.recipient_context_hash,
     }]);
     const signed = await signature(env.REVIEWS_CONSENT_SECRET, canonical);
-    const result = await env.REVIEWS.fetch("https://reviews.internal/reviews-internal/v1/consents", {
+    await serviceRequest(env.REVIEWS, "https://reviews.internal/reviews-internal/v1/consents", {
       method: "POST", headers: {"Content-Type": "application/json", "X-Reviews-Consent-Signature": signed}, body: JSON.stringify(evidence),
-    });
-    return result.ok ? response(200, {recorded: true}) : response(503, {error: "unavailable"});
+    }, false);
+    return response(200, {recorded: true});
   } catch { return response(503, {error: "unavailable"}); }
 }
 

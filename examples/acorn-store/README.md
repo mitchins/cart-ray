@@ -102,7 +102,8 @@ same-origin gateway for `/review-consent/v1/`. The default build never displays
 the choice. Checkout does not call this gateway and continues when it is absent.
 
 `modules/reviews/consent/capture.mjs` is the test-only bridge: it validates
-origin, request shape and rate limits, forwards the authenticated browser cookie
+origin, request shape and rate limits (IPv6 /64 and IPv4-mapped addresses use
+the same admission buckets, keyed with a dedicated secret), forwards the authenticated browser cookie
 only to a private service binding, and signs the returned purpose-specific
 consent evidence for the independent Reviews service binding. The browser never
 supplies an event, recipient, store or evidence identity. The authority must
