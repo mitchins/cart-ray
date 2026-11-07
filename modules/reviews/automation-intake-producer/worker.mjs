@@ -179,7 +179,7 @@ export async function attestPurchase(env, input, fetchApi=fetch, now=Math.floor(
         env.TRIGGER_TOKEN].includes(env.PURCHASE_ATTESTATION_KEY) || !token(env.PURCHASE_ATTESTATION_TOKEN) ||
       [env.CF_READ_TOKEN,env.SOURCE_IDENTITY_TOKEN,env.REVIEWS_ACTIVATION_TOKEN,env.TRIGGER_TOKEN,
         env.SOURCE_EVENT_KEY,env.PURCHASE_ATTESTATION_KEY].includes(env.PURCHASE_ATTESTATION_TOKEN) ||
-      !input || Object.keys(input).sort().join()!=='authority_version,nonce' ||
+      !input || Object.keys(input).length!==2 || !Object.hasOwn(input,'authority_version') || !Object.hasOwn(input,'nonce') ||
       !uuid.test(input.authority_version||'') || !hex.test(input.nonce||'') || !Number.isSafeInteger(now))
     throw new Error('purchase attestation unavailable');
   const source=await attest(env,fetchApi);

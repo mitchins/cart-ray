@@ -11,7 +11,7 @@ function keyBytes(value) {
 
 function validShape(message) {
   if (!message || typeof message !== 'object' || Array.isArray(message) ||
-      Object.keys(message).sort().join() !== fields.join() || message.version !== 1 ||
+      Object.keys(message).length !== fields.length || !fields.every(field => Object.hasOwn(message, field)) || message.version !== 1 ||
       typeof message.store !== 'string' || !id.test(message.store) ||
       typeof message.issuer !== 'string' || !id.test(message.issuer) ||
       typeof message.installation !== 'string' || !id.test(message.installation) ||
