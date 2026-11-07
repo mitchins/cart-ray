@@ -1,14 +1,26 @@
 """Exercise no-backfill activation against independent local Workerd/D1 bindings."""
 
+import hashlib
+import hmac
 import json
 import os
 import subprocess
 import sys
 import tempfile
+import time
+import urllib.error
+import urllib.request
 from pathlib import Path
 
-from native_acquisition_workerd import AUTOMATION_TOKEN, ISSUER, internal, synthetic_settlement
-from native_workerd import ADMIN
+from native_acquisition_workerd import (
+    AUTOMATION_TOKEN,
+    CONSENT_SECRET,
+    ISSUER,
+    internal,
+    signed_consent,
+    synthetic_settlement,
+)
+from native_workerd import ADMIN, BASE
 from workerd_integration import MODULE, ROOT, start, stop
 
 ACTIVATION_TOKEN = "synthetic-activation-token-0123456789"
@@ -24,7 +36,7 @@ def main():
             [wrangler, "d1", "migrations", "apply", "cartray-acquisition-local-test", *common], cwd=ROOT, check=True
         )
         seed = Path(directory) / "synthetic.sql"
-        manifest, _, _ = synthetic_settlement(seed)
+        manifest, events, _ = synthetic_settlement(seed)
         process = start(
             "wrangler.acquisition.test.toml",
             directory,
@@ -35,6 +47,7 @@ def main():
                 "REVIEWS_INVITATION_KEY": "i" * 40,
                 "REVIEWS_REVIEWER_KEY": "r" * 40,
                 "REVIEWS_AUTOMATION_INTAKE": "test",
+                "REVIEWS_CONSENT_SECRET": CONSENT_SECRET,
                 "REVIEWS_AUTOMATION_INGRESS_TOKEN": AUTOMATION_TOKEN,
                 "REVIEWS_AUTOMATION_ACTIVATION_TOKEN": ACTIVATION_TOKEN,
                 "REVIEWS_SUBJECT_MAPS": json.dumps(
@@ -78,9 +91,36 @@ def main():
                 ]
                 == "accepted"
             )
-            print(
-                "Workerd activation verified primary, authentication, immutable policy and subsequent order"
+            recipient = "a" * 64
+            assert signed_consent(events[0], recipient) == 201
+            withdrawal = {
+                "event_id": events[0],
+                "recipient_context_hash": recipient,
+                "evidence_reference": "synthetic-withdrawal",
+                "withdrawn_at": int(time.time()),
+            }
+            canonical = json.dumps(
+                ["reviews-consent-withdrawal-v1", "example-store", "test", withdrawal],
+                ensure_ascii=True,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode()
+            signature = hmac.new(CONSENT_SECRET.encode(), canonical, hashlib.sha256).hexdigest()
+            request = urllib.request.Request(
+                BASE + "/reviews-internal/v1/consents/withdraw",
+                data=json.dumps(withdrawal).encode(),
+                headers={"Content-Type": "application/json", "X-Reviews-Consent-Signature": signature},
+                method="POST",
             )
+            for _ in range(2):
+                with urllib.request.urlopen(request, timeout=10) as response:
+                    assert response.status == 201
+            try:
+                signed_consent(events[0], recipient)
+                raise AssertionError("withdrawn consent was re-granted")
+            except urllib.error.HTTPError as exc:
+                assert exc.code == 409
+            print("Workerd activation and purpose-bound withdrawal replay passed on two D1 databases")
         finally:
             stop(process)
 

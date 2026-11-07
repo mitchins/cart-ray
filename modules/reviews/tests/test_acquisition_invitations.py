@@ -1325,3 +1325,44 @@ def test_stale_recovery_command_never_rearms_during_fulfilment():
         )
     )
     assert result["request_id"] == "1" * 64
+
+
+def test_signed_withdrawal_route_stops_new_invitation_and_rejects_forgery(lifecycle):
+    reviews, commerce = stores()
+    env = SimpleNamespace(
+        REVIEWS_DB=reviews,
+        CARTRAY_DB=commerce,
+        REVIEWS_STORE_KEY="store",
+        REVIEWS_ENVIRONMENT="test",
+        REVIEWS_MODE="verified_acquisition_only",
+        REVIEWS_TEST_ADMIN_TOKEN="a" * 40,
+        REVIEWS_SETTLEMENT_TOKEN="b" * 40,
+        REVIEWS_INVITATION_KEY="c" * 40,
+        REVIEWS_REVIEWER_KEY="d" * 40,
+        REVIEWS_CONSENT_SECRET="e" * 40,
+        REVIEWS_SUBJECT_MAPS=json.dumps({"v1": {"product_1": "policy"}}),
+    )
+    data = {
+        "event_id": "event_1",
+        "recipient_context_hash": "a" * 64,
+        "evidence_reference": "withdraw-1",
+        "withdrawn_at": 100,
+    }
+    body = json.dumps(
+        ["reviews-consent-withdrawal-v1", "store", "test", data],
+        ensure_ascii=True,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode()
+    signature = hmac.new(env.REVIEWS_CONSENT_SECRET.encode(), body, hashlib.sha256).hexdigest()
+
+    def post(sig):
+        request = SimpleNamespace(method="POST", headers={"X-Reviews-Consent-Signature": sig}, data=data, body=None)
+        return asyncio.run(lifecycle.handle_write(request, env, "/reviews-internal/v1/consents/withdraw"))
+
+    with patch.object(lifecycle.time, "time", return_value=101):
+        assert post("0" * 64).status == 409
+        assert post(signature).status == 201
+        assert post(signature).status == 201
+    with pytest.raises(ValueError, match="invitation unavailable"):
+        issue(reviews, commerce)

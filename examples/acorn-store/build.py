@@ -13,10 +13,12 @@ from urllib.parse import urlsplit
 
 from cartray.catalogue import CsvCatalogueSourceAdapter, FixturePriceResolver
 from cartray.catalogue_bundle import build_runtime_presented_catalogue, compile_catalogue_bundle
+from cartray.preflight import PreflightLock
 from cartray.presentation import CsvPresentationSourceAdapter, validate_presentation_assets
 
 ROOT = Path(__file__).resolve().parents[2]
 HERE = Path(__file__).resolve().parent
+PREFLIGHT_LOCK = HERE / ".private/stripe-test-preflight.lock.json"
 
 
 def configuration(path: Path) -> dict:
@@ -48,15 +50,30 @@ def configuration(path: Path) -> dict:
     return config
 
 
-async def preview_manifest(config: dict) -> dict:
+async def preview_manifest(config: dict, lock_path: Path | None = None) -> dict:
     source = CsvCatalogueSourceAdapter(HERE / "catalogue.csv")
     presentation = CsvPresentationSourceAdapter(HERE / "catalogue-presentation.csv")
-    prices = FixturePriceResolver.from_json(HERE / "price-resolutions.json")
+    fixture_prices = FixturePriceResolver.from_json(HERE / "price-resolutions.json")
+    prices = PreflightLock.from_json(lock_path) if lock_path is not None else fixture_prices
+    if lock_path is not None:
+        lookup_keys = {item.stripe_lookup_key for item in await source.load()}
+        if lookup_keys != set(prices.prices):
+            raise ValueError("test preflight lock does not match catalogue lookup keys")
+        for key in lookup_keys:
+            expected, actual = await fixture_prices.resolve(key), await prices.resolve(key)
+            if (actual.amount_minor, actual.currency) != (expected.amount_minor, expected.currency):
+                raise ValueError("test Stripe price differs from the approved reference amount")
     expansions = {
         key: tuple(value) for key, value in json.loads((HERE / "fulfilment-expansions.json").read_text()).items()
     }
     validate_presentation_assets(await presentation.load(), HERE / "assets/products")
-    bundle = await compile_catalogue_bundle(source, prices, expansions, presentation)
+    bundle = await compile_catalogue_bundle(
+        source,
+        prices,
+        expansions,
+        presentation,
+        expected_catalogue_version=prices.catalogue_version if lock_path is not None else None,
+    )
     result = (await build_runtime_presented_catalogue(bundle, prices)).public_manifest()
     mapped = {item["product_key"]: item for item in config["products"]}
     if {item["product_key"] for item in result["products"]} != set(mapped):
@@ -71,16 +88,31 @@ def test_api(value: str | None) -> str | None:
     if value is None:
         return None
     url = urlsplit(value)
-    if url.scheme != "https" or not url.netloc or url.username or url.password or url.query or url.fragment:
+    if (
+        url.scheme != "https"
+        or not url.netloc
+        or url.username
+        or url.password
+        or url.query
+        or url.fragment
+        or url.path not in ("", "/")
+    ):
         raise ValueError("test checkout API must be an HTTPS origin")
     return value.rstrip("/")
 
 
-def build(output: Path, config: dict, *, checkout_api: str | None = None, reviews: bool = False) -> None:
+def build(
+    output: Path,
+    config: dict,
+    *,
+    checkout_api: str | None = None,
+    reviews: bool = False,
+    preflight_lock: Path = PREFLIGHT_LOCK,
+) -> None:
     if output.exists():
         raise ValueError("output directory already exists; choose a new directory")
-    manifest = asyncio.run(preview_manifest(config))
     api = test_api(checkout_api)
+    manifest = asyncio.run(preview_manifest(config, preflight_lock if api else None))
     output.mkdir(parents=True)
     for filename in ("app.js", "styles.css"):
         shutil.copy2(ROOT / "storefront" / filename, output / filename)

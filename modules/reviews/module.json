@@ -35,7 +35,8 @@
     "migrations/0023_staff_reply_lifecycle.sql",
     "migrations/0024_staff_delivery_queue.sql",
     "migrations/0025_automation_due_claims.sql",
-    "migrations/0026_automation_activation_fence.sql"
+    "migrations/0026_automation_activation_fence.sql",
+    "migrations/0027_consent_withdrawal.sql"
   ],
   "routes": [
     "GET /reviews/v1/subject-lookup?alias={alias}",
@@ -49,6 +50,7 @@
     "POST /reviews-admin/v1/* (collect, test only)",
     "POST /reviews-internal/v1/settlements (verified_acquisition_only, test only)",
     "POST /reviews-internal/v1/consents (verified_acquisition_only, test only)",
+    "POST /reviews-internal/v1/consents/withdraw (verified_acquisition_only, test only)",
     "POST /reviews-internal/v1/invitations/revoke (verified_acquisition_only, test only)",
     "POST /reviews-internal/v1/invitations/replacement (verified_acquisition_only, test only)",
     "POST /reviews-internal/v1/invitations/recovery-next (verified_acquisition_only, test only)",

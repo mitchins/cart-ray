@@ -80,6 +80,7 @@ def main():
                 {"staff-1": ["reviews:moderate"], "operator": ["reviews:operations"], "catalogue": ["reviews:subjects"]}
             ),
             "REVIEWS_STAFF_TEST_JWKS": json.dumps(jwks),
+            "REVIEWS_STAFF_CRYPTO": "webcrypto",
         }
         process = start("wrangler.test.toml", directory, "collect", None, options)
         try:
@@ -88,6 +89,8 @@ def main():
             assertion = token(claims)
             operations_assertion = token(claims | {"sub": "operator"})
             subjects_assertion = token(claims | {"sub": "catalogue"})
+            forged = ".".join(operations_assertion.split(".")[:2] + assertion.split(".")[2:])
+            assert signed_call("/reviews-admin/v1/deliveries?state=uncertain", assertion=forged)[0] == 401
             assert signed_call("/reviews-admin/v1/pending", bearer=ADMIN)[0] == 401
             assert signed_call("/reviews-admin/v1/pending", assertion=token(claims | {"exp": now - 1}))[0] == 401
             assert signed_call("/reviews-admin/v1/pending", assertion=token(claims | {"aud": ["wrong"]}))[0] == 401

@@ -10,6 +10,7 @@ coverage/
 .coverage
 .wrangler/
 storefront-dist/
+examples/acorn-store/.private/
 .env
 .env.*
 .dev.vars

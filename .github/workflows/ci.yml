@@ -59,6 +59,8 @@ jobs:
         run: REVIEWS_TEST_VERBOSE=1 PYTHONPATH=modules/reviews/src uv run --locked python modules/reviews/tests/staff_workerd.py
       - run: npm run test:reviews-publication
       - run: PYTHONPATH=modules/reviews/src uv run --locked python modules/reviews/publication/tests/local_qualification.py
+      - name: Exercise native publication revision and withdrawal
+        run: PYTHONPATH=modules/reviews/src uv run --locked python modules/reviews/publication/tests/local_native_qualification.py
       - run: npm run test:m11a-projection
       - run: npm run build:storefront
       - run: CARTRAY_STOREFRONT_EXPECTED_MODE=preview npm run test:storefront
