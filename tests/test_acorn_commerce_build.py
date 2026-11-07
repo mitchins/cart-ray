@@ -110,19 +110,38 @@ def test_attestation_rejects_changed_modules_bindings_or_split_version(tmp_path,
     monkeypatch.setattr(
         build, "_cloudflare_json", lambda path, _: deployments if path.endswith("/deployments") else remote
     )
-    assert build.attest_version(tmp_path, token, version, bundle_hash, config_hash)["verified_modules"] == 1
+    assert build.attest_version(tmp_path, token, version, bundle_hash, config_hash, "a" * 40)["verified_modules"] == 1
     secret = remote["bindings"].pop()
     with pytest.raises(ValueError, match="secret binding"):
-        build.attest_version(tmp_path, token, version, bundle_hash, config_hash)
+        build.attest_version(tmp_path, token, version, bundle_hash, config_hash, "a" * 40)
     remote["bindings"].append(secret)
     remote["modules"][0]["content_base64"] = base64.b64encode(b"changed").decode()
     with pytest.raises(ValueError, match="modules differ"):
-        build.attest_version(tmp_path, token, version, bundle_hash, config_hash)
+        build.attest_version(tmp_path, token, version, bundle_hash, config_hash, "a" * 40)
     remote["modules"][0]["content_base64"] = base64.b64encode(b"source").decode()
     remote["bindings"][0]["database_id"] = "wrong-db"
     with pytest.raises(ValueError, match="binding mismatch"):
-        build.attest_version(tmp_path, token, version, bundle_hash, config_hash)
+        build.attest_version(tmp_path, token, version, bundle_hash, config_hash, "a" * 40)
     remote["bindings"][0]["database_id"] = "db-one"
     deployments["deployments"][0]["versions"][0]["percentage"] = 50
     with pytest.raises(ValueError, match="version mismatch"):
-        build.attest_version(tmp_path, token, version, bundle_hash, config_hash)
+        build.attest_version(tmp_path, token, version, bundle_hash, config_hash, "a" * 40)
+
+
+def test_attestation_rejects_receipt_identity_or_source_revision_tampering(tmp_path, monkeypatch):
+    _, bundle_hash, config_hash = fixture_artifact(tmp_path)
+    token = tmp_path / "token"
+    token.write_text("synthetic-token")
+    token.chmod(0o600)
+    version = "11111111-2222-3333-4444-555555555555"
+    receipt_path = tmp_path / "receipt.json"
+    original = json.loads(receipt_path.read_text())
+    monkeypatch.setattr(build, "_cloudflare_json", lambda *_: pytest.fail("must fail before network"))
+    for field, value, message in (
+        ("account_id", "b" * 32, "deployment identity"),
+        ("worker_name", "other-worker", "deployment identity"),
+        ("source_commit", "b" * 40, "source commit"),
+    ):
+        receipt_path.write_text(json.dumps({**original, field: value}))
+        with pytest.raises(ValueError, match=message):
+            build.attest_version(tmp_path, token, version, bundle_hash, config_hash, "a" * 40)

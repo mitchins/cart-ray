@@ -76,17 +76,19 @@ uv run --locked python scripts/build_acorn_commerce.py \
   --output /private/path/to/new-acorn-worker-artifact
 ```
 
-Retain the bundle and deployment-configuration SHA-256 values independently
-from `receipt.json`. Before deploying with the pinned Wrangler and `--no-bundle`,
+Retain the source commit and bundle and deployment-configuration SHA-256 values
+together in trusted, independent build evidence, separate from `receipt.json`. Before deploying with the pinned Wrangler and `--no-bundle`,
 verify both digests with `--verify-output`, `--expected-bundle-sha256` and
 `--expected-config-sha256`. Never edit the retained bundle or configuration
 between verification and deployment. The builder itself makes no deployment.
 After deployment, run `--attest-output` with those same independent digests,
-`--version` and `--control-plane-token-file` (a private, read-only Workers
+`--expected-source-commit`, `--version` and `--control-plane-token-file` (a private, read-only Workers
 Scripts token). This compares every module byte against Cloudflare's active
 100% version and checks the configured non-secret variables, D1/service/rate
 bindings, compatibility settings, and required secret-binding **names**. It
-cannot read or verify secret values. Secure the artifact, lock and receipt;
+cannot read or verify secret values. The independently retained commit and digest
+association must come from a trusted clean build; this command cannot prove that
+association from a mutable receipt alone. Secure the artifact, lock and receipt;
 verify the Stripe account, sender/scheduler disabled state and dependent source
 attestation separately. A SHA-256 receipt is not an independently signed
 attestation and does not prove the preflight lock itself was created from the

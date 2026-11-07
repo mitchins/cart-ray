@@ -196,7 +196,12 @@ def _cloudflare_json(path: str, token: str) -> dict:
 
 
 def attest_version(
-    path: Path, token_file: Path, expected_version: str, expected_bundle: str, expected_config: str
+    path: Path,
+    token_file: Path,
+    expected_version: str,
+    expected_bundle: str,
+    expected_config: str,
+    expected_commit: str,
 ) -> dict:
     if not re.fullmatch(r"[a-f0-9-]{36}", expected_version):
         raise ValueError("invalid expected version")
@@ -205,13 +210,24 @@ def attest_version(
     token = token_file.read_text().strip()
     if not token:
         raise ValueError("missing control plane token")
+    if not re.fullmatch(r"[a-f0-9]{40}", expected_commit):
+        raise ValueError("invalid expected source commit")
     receipt = json.loads((path / "receipt.json").read_text())
+    if receipt.get("source_commit") != expected_commit:
+        raise ValueError("receipt source commit mismatch")
     if receipt["bundle_sha256"] != expected_bundle or receipt["deployment_config_sha256"] != expected_config:
         raise ValueError("receipt differs from independently retained digests")
     verify_output(path, expected_bundle, expected_config)
     config = tomllib.loads((path / "bundle/wrangler.toml").read_text())
-    account, worker = receipt["account_id"], receipt["worker_name"]
-    if not re.fullmatch(r"[a-f0-9]{32}", account) or not re.fullmatch(r"[a-zA-Z0-9_-]{1,128}", worker):
+    account, worker = config.get("account_id"), config.get("name")
+    if receipt.get("account_id") != account or receipt.get("worker_name") != worker:
+        raise ValueError("receipt deployment identity mismatch")
+    if (
+        not isinstance(account, str)
+        or not isinstance(worker, str)
+        or not re.fullmatch(r"[a-f0-9]{32}", account)
+        or not re.fullmatch(r"[a-zA-Z0-9_-]{1,128}", worker)
+    ):
         raise ValueError("invalid account or Worker identity")
     prefix = f"accounts/{account}/workers"
     deployments = _cloudflare_json(f"{prefix}/scripts/{worker}/deployments", token)["deployments"]
@@ -284,7 +300,7 @@ def attest_version(
         ):
             raise ValueError("deployed service target mismatch")
     return {
-        "source_commit": receipt["source_commit"],
+        "source_commit": expected_commit,
         "worker": worker,
         "account": account,
         "version": expected_version,
@@ -306,16 +322,21 @@ def main() -> None:
     parser.add_argument("--expected-config-sha256")
     parser.add_argument("--attest-output", type=Path)
     parser.add_argument("--version")
+    parser.add_argument("--expected-source-commit")
     parser.add_argument("--control-plane-token-file", type=Path)
     args = parser.parse_args()
     if args.attest_output:
         if (
-            not args.version
+            not args.expected_source_commit
+            or not args.version
             or not args.control_plane_token_file
             or not args.expected_bundle_sha256
             or not args.expected_config_sha256
         ):
-            parser.error("attestation requires --version, --control-plane-token-file and both expected digests")
+            parser.error(
+                "attestation requires --expected-source-commit, --version, "
+                "--control-plane-token-file and both expected digests"
+            )
         print(
             json.dumps(
                 attest_version(
@@ -324,6 +345,7 @@ def main() -> None:
                     args.version,
                     args.expected_bundle_sha256,
                     args.expected_config_sha256,
+                    args.expected_source_commit,
                 ),
                 indent=2,
             )
