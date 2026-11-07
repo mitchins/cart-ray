@@ -538,8 +538,19 @@ async def handle_write(request, env, path):
                 now=now,
                 lease_seconds=60,
             )
-            if claim is None:
-                # A completed claim is a durable idempotent receipt for this token.
+            completed = False
+            if claim is not None:
+                completed = await complete_claim(
+                    env.REVIEWS_DB,
+                    store=store,
+                    environment=environment,
+                    acquisition=data["acquisition_id"],
+                    token=data["claim_token"],
+                    generation=claim["generation"],
+                    now=int(time.time()),
+                )
+            if not completed:
+                # Another same-token invocation may have completed between claim and update.
                 found = rows(
                     await env.REVIEWS_DB.prepare(
                         "SELECT generation FROM review_automation_due_claims WHERE store_key=? AND environment=? "
@@ -548,18 +559,7 @@ async def handle_write(request, env, path):
                     .bind(store, environment, data["acquisition_id"], data["claim_token"])
                     .all()
                 )
-                return Response.json(
-                    {"status": "held" if found else "unavailable"}, headers={"Cache-Control": "no-store"}
-                )
-            completed = await complete_claim(
-                env.REVIEWS_DB,
-                store=store,
-                environment=environment,
-                acquisition=data["acquisition_id"],
-                token=data["claim_token"],
-                generation=claim["generation"],
-                now=int(time.time()),
-            )
+                completed = bool(found)
             return Response.json(
                 {"status": "held" if completed else "unavailable"}, headers={"Cache-Control": "no-store"}
             )

@@ -598,8 +598,15 @@ def test_due_evaluation_authentication_and_durable_receipts(lifecycle):
     assert post({**body, "claim_token": "bad"}).status == 409
     with patch.object(lifecycle.time, "time", return_value=109):
         assert post().body == {"status": "unavailable"}
+    original_completion = lifecycle.complete_claim
+
+    async def another_worker_completed(*args, **kwargs):
+        assert await original_completion(*args, **kwargs)
+        return False
+
     with patch.object(lifecycle.time, "time", return_value=110):
-        assert post().body == {"status": "held"}
+        with patch.object(lifecycle, "complete_claim", side_effect=another_worker_completed):
+            assert post().body == {"status": "held"}
         assert post().body == {"status": "held"}
         assert post({**body, "claim_token": "b" * 64}).body == {"status": "unavailable"}
     assert (

@@ -284,7 +284,9 @@ def main():
                 200,
                 {"status": "unavailable"},
             )
-            assert internal(due_path, due_data, AUTOMATION_TOKEN) == (200, {"status": "held"})
+            with ThreadPoolExecutor(max_workers=8) as pool:
+                due_results = list(pool.map(lambda _: internal(due_path, due_data, AUTOMATION_TOKEN), range(8)))
+            assert all(result == (200, {"status": "held"}) for result in due_results)
             assert internal(due_path, due_data, AUTOMATION_TOKEN) == (200, {"status": "held"})
             held = subprocess.run(
                 [
