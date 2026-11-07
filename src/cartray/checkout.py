@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+from hashlib import sha256
 from urllib.parse import parse_qsl, urlparse, urlunparse
 from uuid import uuid4
 
@@ -25,11 +26,18 @@ class CheckoutService:
     gateway: PaymentGateway
     success_url: str = "https://store.invalid/purchase-complete/"
     cancel_url: str = "https://store.invalid/checkout-cancelled/"
+    review_invitations_enabled: bool = False
 
     async def checkout(self, request: CheckoutRequest) -> CheckoutRedirect:
+        # The browser may request an opt-in, but cannot enable the merchant's
+        # invitation policy. Unknown or absent server configuration is off.
+        if not self.review_invitations_enabled and request.review_invitation_opt_in:
+            request = replace(request, review_invitation_opt_in=False)
         success_url = checkout_success_url(self.success_url)
         requested_items = canonical_items(request.items)
         fingerprint = request_fingerprint(request.manifest_version, requested_items)
+        if request.review_invitation_opt_in:
+            fingerprint = "sha256:" + sha256((fingerprint + "\nreview-invitation-v1").encode()).hexdigest()
         order = await self.store.find_order_by_request(request.checkout_request_id, fingerprint)
         if order is None:
             order = self._reconstruct_order(request, requested_items, fingerprint)
@@ -95,6 +103,7 @@ class CheckoutService:
             items_digest=items_digest(digest_items),
             currency=currency or "",
             subtotal_minor=sum(item.unit_amount_minor * item.quantity for item in order_items),
+            review_invitation_opt_in=request.review_invitation_opt_in,
         )
 
 

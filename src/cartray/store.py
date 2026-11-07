@@ -10,6 +10,9 @@ from uuid import uuid4
 from .errors import CheckoutInProgress, IdempotencyConflict, SettlementInconsistency
 from .models import CheckoutOrder, CheckoutRedirect, OrderItem
 
+REVIEW_INVITATION_WORDING_VERSION = "review-invitation-v1"
+REVIEW_INVITATION_WORDING = "Email me one request to review my purchase."
+
 SCHEMA = """
 PRAGMA foreign_keys = ON;
 
@@ -52,6 +55,21 @@ CREATE TABLE IF NOT EXISTS checkout_sessions (
   expiration_event_id TEXT,
   expired_at INTEGER
 );
+
+CREATE TABLE IF NOT EXISTS review_invitation_checkout_grants (
+  order_id TEXT PRIMARY KEY REFERENCES orders(order_id),
+  wording_version TEXT NOT NULL,
+  wording TEXT NOT NULL,
+  granted_at INTEGER NOT NULL
+);
+CREATE TRIGGER IF NOT EXISTS review_invitation_checkout_grants_no_update
+BEFORE UPDATE ON review_invitation_checkout_grants BEGIN
+  SELECT RAISE(ABORT, 'checkout grants are immutable');
+END;
+CREATE TRIGGER IF NOT EXISTS review_invitation_checkout_grants_no_delete
+BEFORE DELETE ON review_invitation_checkout_grants BEGIN
+  SELECT RAISE(ABORT, 'checkout grants are immutable');
+END;
 
 CREATE TABLE IF NOT EXISTS outbox (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -266,6 +284,17 @@ class SqliteOrderStore:
                    VALUES (?, 'creating', ?, ?, ?)""",
                 (order.order_id, nonce, now + self.lease_seconds, now),
             )
+            if order.review_invitation_opt_in:
+                try:
+                    self.connection.execute(
+                        "INSERT INTO review_invitation_checkout_grants "
+                        "(order_id, wording_version, wording, granted_at) VALUES (?, ?, ?, ?)",
+                        (order.order_id, REVIEW_INVITATION_WORDING_VERSION, REVIEW_INVITATION_WORDING, now),
+                    )
+                except sqlite3.DatabaseError:
+                    # An unavailable optional Reviews permission store cannot stop checkout.
+                    # No grant is recorded, so invitation authorization remains held.
+                    pass
             self._insert_outbox(order.order_id, "OrderCreated", {"order_id": order.order_id}, now)
             return CheckoutStart(order.order_id, True, "creating", nonce, None)
 
@@ -857,7 +886,19 @@ class D1OrderStore:
             ]
         )
         try:
-            await self.database.batch(statements)
+            if order.review_invitation_opt_in:
+                grant = self.database.prepare(
+                    "INSERT INTO review_invitation_checkout_grants "
+                    "(order_id, wording_version, wording, granted_at) VALUES (?, ?, ?, ?)"
+                ).bind(order.order_id, REVIEW_INVITATION_WORDING_VERSION, REVIEW_INVITATION_WORDING, now)
+                try:
+                    await self.database.batch([*statements, grant])
+                except Exception:
+                    # The optional permission write is best effort. A failed batch is
+                    # atomic; retry commerce without the grant, leaving Reviews held.
+                    await self.database.batch(statements)
+            else:
+                await self.database.batch(statements)
         except Exception:
             winner = await self._checkout_start(order.checkout_request_id, order.request_fingerprint)
             if winner is None:

@@ -36,7 +36,7 @@ def main():
             [wrangler, "d1", "migrations", "apply", "cartray-acquisition-local-test", *common], cwd=ROOT, check=True
         )
         seed = Path(directory) / "synthetic.sql"
-        manifest, events, _ = synthetic_settlement(seed)
+        manifest, events, orders = synthetic_settlement(seed)
         process = start(
             "wrangler.acquisition.test.toml",
             directory,
@@ -94,12 +94,13 @@ def main():
             )
             recipient = "a" * 64
             subprocess.run(
-                ["node", str(MODULE / "consent/tests/bridge_real_reviews.mjs")],
+                ["node", str(MODULE / "consent/tests/automatic_real_reviews.mjs")],
                 cwd=ROOT,
                 env=os.environ
                 | {
                     "ACORN_TEST_OUTBOX": str(outbox_id),
                     "ACORN_TEST_EVENT": events[0],
+                    "ACORN_TEST_ORDER": orders[0],
                     "ACORN_TEST_REVIEWS_BASE": BASE,
                 },
                 check=True,
@@ -108,7 +109,6 @@ def main():
                 "/reviews-internal/v1/automation-evidence-status", {"outbox_id": outbox_id}, AUTOMATION_TOKEN
             )
             assert status == 200 and evidence["recipient_binding_recorded"] and evidence["consent_granted"]
-            assert signed_consent(events[0], recipient) == 201
             withdrawal = {
                 "event_id": events[0],
                 "recipient_context_hash": recipient,

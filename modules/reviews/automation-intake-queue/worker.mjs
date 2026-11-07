@@ -42,8 +42,9 @@ export async function deliver(message, env) {
   // acknowledging it here could permanently lose a committed order.
   if (!await authenticate(message, env)) throw new Error('source authentication failed');
   const controller = new AbortController();
-  let timer, reader;
+  let timer, reader, timeoutReject;
   try {
+    const deadline = new Promise((_,reject)=>{timeoutReject=reject; timer=setTimeout(()=>reject(new Error('intake timeout')),2000);});
     const request = (async () => {
       const response = await env.REVIEWS_API.fetch('https://reviews.internal/reviews-internal/v1/automation-intake', {
         method:'POST', signal:controller.signal,
@@ -62,8 +63,32 @@ export async function deliver(message, env) {
       const receipt = JSON.parse(text);
       if (!receipt || !['accepted','pre_activation','late'].includes(receipt.status) ||
           !Number.isSafeInteger(receipt.due_at) || receipt.due_at < 0) throw new Error('invalid intake receipt');
+      if (receipt.status === 'accepted' && env.AUTOMATION_EVIDENCE_ENABLED === 'test') {
+        if (!env.PURCHASE_EVIDENCE?.fetch || typeof env.AUTOMATION_EVIDENCE_TOKEN !== 'string' ||
+            env.AUTOMATION_EVIDENCE_TOKEN.length < 32 || env.AUTOMATION_EVIDENCE_TOKEN === env.REVIEWS_AUTOMATION_TOKEN)
+          throw new Error('purchase evidence unavailable');
+        // Evidence performs attestation, authoritative Stripe reads and two
+        // independently bounded Reviews writes. It has its own deadline.
+        clearTimeout(timer); timer=setTimeout(()=>timeoutReject(new Error('purchase evidence timeout')),15000);
+        const evidenceResponse = await env.PURCHASE_EVIDENCE.fetch('https://purchase-evidence.internal/automation-record', {
+          method:'POST', signal:controller.signal,
+          headers:{'content-type':'application/json', authorization:`Bearer ${env.AUTOMATION_EVIDENCE_TOKEN}`},
+          body:JSON.stringify({outbox_id:message.outbox_id}),
+        });
+        if (!evidenceResponse.ok || !evidenceResponse.body) throw new Error('purchase evidence unavailable');
+        reader=evidenceResponse.body.getReader(); size=0; text='';
+        for (;;) {
+          const part=await reader.read(); if(part.done) break;
+          size+=part.value.byteLength; if(size>4096) throw new Error('purchase evidence response too large');
+          text+=decoder.decode(part.value,{stream:true});
+        }
+        text+=decoder.decode();
+        const evidence=JSON.parse(text);
+        if (!evidence || Object.keys(evidence).length!==1 || !['recorded','not_granted'].includes(evidence.status))
+          throw new Error('invalid purchase evidence receipt');
+      }
     })();
-    await Promise.race([request, new Promise((_,reject)=>{timer=setTimeout(()=>reject(new Error('intake timeout')),2000);})]);
+    await Promise.race([request, deadline]);
   } finally {
     clearTimeout(timer); controller.abort();
     if (reader) void reader.cancel().catch(()=>{});

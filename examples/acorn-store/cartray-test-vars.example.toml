@@ -1,0 +1,5 @@
+# Fragment for the isolated Squirrel CartRay test Worker, not a deployable
+# Wrangler configuration. Merge into that Worker's [vars] when testing the
+# automatic invitation checkout choice. Omit it to disable permission capture.
+[vars]
+CARTRAY_REVIEW_INVITATION_MODE = "automatic"

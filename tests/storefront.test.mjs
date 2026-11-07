@@ -18,7 +18,6 @@ import {
   persistCart,
   pollCheckoutStatus,
   processCheckoutReturn,
-  reviewConsentReturnState,
   startCheckout,
   storePendingCheckout,
   successReturnPath,
@@ -359,8 +358,9 @@ test("confirmed view has an explicit route back to the normal storefront", async
   assert.match(application, /continueShopping\.hidden = false/);
 });
 
-test("review return state is created only for confirmed opt-in builds", () => {
-  assert.deepEqual(reviewConsentReturnState({reviewConsentEnabled:true},"confirmed",12345),{acornReviewConfirmedAt:12345});
-  assert.equal(reviewConsentReturnState({reviewConsentEnabled:true},"expired",12345),null);
-  assert.equal(reviewConsentReturnState({reviewConsentEnabled:false},"confirmed",12345),null);
+test("review invitation permission is included only when explicitly granted", () => {
+  const cart = new Map([["TEST-TEMPLATE", 1]]);
+  assert.equal(Object.hasOwn(checkoutPayload("v", cart, "id"), "review_invitation_opt_in"), false);
+  assert.equal(Object.hasOwn(checkoutPayload("v", cart, "id", false), "review_invitation_opt_in"), false);
+  assert.equal(checkoutPayload("v", cart, "id", true).review_invitation_opt_in, true);
 });

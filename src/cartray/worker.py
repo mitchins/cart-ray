@@ -227,7 +227,14 @@ async def checkout_service_from_environment(env) -> CheckoutService:
         client,
         CheckoutMetadataSealer(environment, _required_env(env, "CARTRAY_SIGNING_KEY_ID"), signer),
     )
-    return CheckoutService(catalogue, D1OrderStore(env.DB), gateway, success_url, cancel_url)
+    return CheckoutService(
+        catalogue, D1OrderStore(env.DB), gateway, success_url, cancel_url,
+        review_invitations_enabled=_automatic_invitation_enabled(env),
+    )
+
+
+def _automatic_invitation_enabled(env) -> bool:
+    return getattr(env, "CARTRAY_REVIEW_INVITATION_MODE", None) == "automatic"
 
 
 async def catalogue_from_environment(env):

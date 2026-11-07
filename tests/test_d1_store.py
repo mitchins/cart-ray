@@ -69,6 +69,23 @@ def test_d1_store_persists_an_idempotent_checkout_and_outbox(fixture_catalogue, 
     assert [event["event_type"] for event in events.results] == ["OrderCreated", "CheckoutRedirectIssued"]
 
 
+def test_d1_optional_permission_is_bound_before_redirect_and_checkout_survives_absence(fixture_catalogue, d1_database):
+    gateway = FakePaymentGateway()
+    service = CheckoutService(fixture_catalogue, D1OrderStore(d1_database), gateway, review_invitations_enabled=True)
+    request = CheckoutRequest("grant-d1", fixture_catalogue.version, (CanonicalItem("TEST-TEMPLATE", 1),), True)
+    asyncio.run(service.checkout(request))
+    asyncio.run(service.checkout(request))
+    rows = d1_database.conn.execute(
+        "SELECT order_id, wording_version, wording FROM review_invitation_checkout_grants"
+    ).fetchall()
+    assert len(rows) == 1
+    assert tuple(rows[0]) == (gateway.requests[0].order_id, "review-invitation-v1", "Email me one request to review my purchase.")
+    d1_database.conn.execute("DROP TABLE review_invitation_checkout_grants")
+    missing = CheckoutRequest("missing-grant-d1", fixture_catalogue.version, (CanonicalItem("TEST-TEMPLATE", 1),), True)
+    asyncio.run(service.checkout(missing))
+    assert len(gateway.requests) == 2
+
+
 def test_d1_reconciliation_control_claims_and_defers_a_stale_pending_checkout(fixture_catalogue, d1_database):
     store = D1OrderStore(d1_database)
     gateway = FakePaymentGateway()

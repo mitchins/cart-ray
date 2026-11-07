@@ -3,9 +3,10 @@ const PENDING_CHECKOUT_STORAGE_KEY = "cartray.pending-checkout.v1";
 const CHECKOUT_SESSION_ID_RE = /^cs_[A-Za-z0-9_]+$/;
 const RETURN_POLL_DELAYS_MS = [0, 1_000, 2_000, 4_000, 8_000, 15_000];
 
-export function checkoutPayload(catalogueVersion, cart, checkoutRequestId) {
+export function checkoutPayload(catalogueVersion, cart, checkoutRequestId, reviewInvitationOptIn = false) {
   return {
     checkout_request_id: checkoutRequestId,
+    ...(reviewInvitationOptIn ? { review_invitation_opt_in: true } : {}),
     manifest_version: catalogueVersion,
     items: cartSnapshot(cart).map(([productKey, quantity]) => ({ product_key: productKey, quantity })),
   };
@@ -114,12 +115,12 @@ export async function startCheckout(configuration, payload, fetchImpl = fetch) {
   return { url: result.checkout_url, sessionId: result.session_id };
 }
 
-export async function createCheckoutAndStorePending({ configuration, catalogueVersion, cart, revision, requestId, storage, fetchImpl }) {
+export async function createCheckoutAndStorePending({ configuration, catalogueVersion, cart, revision, requestId, storage, fetchImpl, reviewInvitationOptIn = false }) {
   const submittedCart = new Map(cart);
   const submittedRevision = revision;
   const checkout = await startCheckout(
     configuration,
-    checkoutPayload(catalogueVersion, submittedCart, requestId),
+    checkoutPayload(catalogueVersion, submittedCart, requestId, reviewInvitationOptIn),
     fetchImpl,
   );
   storePendingCheckout(storage, checkout, catalogueVersion, submittedCart, submittedRevision);
@@ -176,10 +177,6 @@ export async function processCheckoutReturn({ configuration, sessionId, storage,
 
 export function successReturnPath(pathname, state) {
   return state === "confirmed" || state === "expired" ? pathname : null;
-}
-
-export function reviewConsentReturnState(configuration, state, now = Date.now()) {
-  return configuration.reviewConsentEnabled && state === "confirmed" ? {acornReviewConfirmedAt: now} : null;
 }
 
 export function confirmedCheckoutView(cleared) {
@@ -282,6 +279,9 @@ async function boot() {
   const cartElement = document.querySelector("#cart");
   const checkoutButton = document.querySelector("#checkout");
   const continueShopping = document.querySelector("#continue-shopping");
+  const reviewInvitationChoice = document.querySelector("#review-invitation-choice");
+  const reviewInvitationOptIn = document.querySelector("#review-invitation-opt-in");
+  if (reviewInvitationChoice) reviewInvitationChoice.hidden = !configuration?.reviewInvitationsEnabled;
   if (!configuration) {
     status.textContent = "Storefront configuration is missing. Run the storefront build before serving this page.";
     return;
@@ -373,6 +373,7 @@ async function boot() {
           cart,
           revision,
           requestId: checkoutRequestId(),
+          reviewInvitationOptIn: Boolean(configuration.reviewInvitationsEnabled && reviewInvitationOptIn?.checked),
           storage,
         });
         window.location.assign(checkout.url);
@@ -403,8 +404,7 @@ async function boot() {
       if (result.cleared) revision = 0;
       const view = confirmedCheckoutView(result.cleared);
       checkoutLocked = view.checkoutLocked;
-      window.history.replaceState(reviewConsentReturnState(configuration, result.state), "", successReturnPath(window.location.pathname, result.state));
-      if (configuration.reviewConsentEnabled) window.dispatchEvent(new Event("acorn-order-confirmed"));
+      window.history.replaceState(null, "", successReturnPath(window.location.pathname, result.state));
       continueShopping.href = window.location.pathname;
       continueShopping.textContent = view.actionLabel;
       continueShopping.hidden = false;

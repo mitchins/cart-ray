@@ -1,5 +1,6 @@
 import asyncio
 import sqlite3
+from dataclasses import replace
 
 import pytest
 
@@ -25,6 +26,65 @@ def valid_request(catalogue, request_id: str = "request-1"):
 
 def checkout(service, request):
     return asyncio.run(service.checkout(request))
+
+
+def test_review_invitation_grant_is_optional_immutable_and_bound_to_order(checkout_service):
+    service, gateway = checkout_service
+    service.review_invitations_enabled = True
+    request = replace(valid_request(service.catalogue), review_invitation_opt_in=True)
+    checkout(service, request)
+    checkout(service, request)
+    order_id = gateway.requests[0].order_id
+    rows = service.store.connection.execute(
+        "SELECT order_id, wording_version, wording, granted_at FROM review_invitation_checkout_grants"
+    ).fetchall()
+    assert len(rows) == 1
+    assert tuple(rows[0])[:3] == (order_id, "review-invitation-v1", "Email me one request to review my purchase.")
+    assert rows[0]["granted_at"] > 0
+    with pytest.raises(sqlite3.IntegrityError, match="immutable"):
+        service.store.connection.execute("DELETE FROM review_invitation_checkout_grants WHERE order_id=?", (order_id,))
+    with pytest.raises(IdempotencyConflict):
+        checkout(service, replace(request, review_invitation_opt_in=False))
+
+
+def test_checkout_succeeds_when_optional_permission_table_is_unavailable(checkout_service):
+    service, gateway = checkout_service
+    service.review_invitations_enabled = True
+    service.store.connection.execute("DROP TABLE review_invitation_checkout_grants")
+    request = replace(valid_request(service.catalogue), review_invitation_opt_in=True)
+    redirect = checkout(service, request)
+    assert checkout(service, request) == redirect
+    assert len(gateway.requests) == 1
+    # Restoring the optional store after redirect cannot invent a late grant.
+    service.store.connection.execute(
+        "CREATE TABLE review_invitation_checkout_grants "
+        "(order_id TEXT PRIMARY KEY, wording_version TEXT, wording TEXT, granted_at INTEGER)"
+    )
+    assert checkout(service, request) == redirect
+    assert service.store.connection.execute("SELECT COUNT(*) FROM review_invitation_checkout_grants").fetchone()[0] == 0
+
+
+def test_checkout_without_opt_in_records_no_grant(checkout_service):
+    service, _ = checkout_service
+    service.review_invitations_enabled = True
+    checkout(service, valid_request(service.catalogue))
+    assert service.store.connection.execute("SELECT COUNT(*) FROM review_invitation_checkout_grants").fetchone()[0] == 0
+
+
+def test_forged_opt_in_does_not_enable_disabled_invitations(checkout_service):
+    service, gateway = checkout_service
+    request = replace(valid_request(service.catalogue), review_invitation_opt_in=True)
+    redirect = checkout(service, request)
+    assert redirect.url.startswith("https://checkout.invalid/")
+    assert len(gateway.requests) == 1
+    assert service.store.connection.execute("SELECT COUNT(*) FROM review_invitation_checkout_grants").fetchone()[0] == 0
+
+
+def test_checkout_rejects_non_boolean_review_invitation_choice():
+    payload = {"checkout_request_id": "one", "manifest_version": "sha256:" + "a" * 64,
+               "items": [{"product_key": "TEST-FREE", "quantity": 1}], "review_invitation_opt_in": "true"}
+    with pytest.raises(CheckoutValidationError):
+        CheckoutRequest.from_payload(payload)
 
 
 def test_mixed_cart_creates_immutable_order_and_trusted_gateway_spec(checkout_service):

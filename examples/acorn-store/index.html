@@ -13,10 +13,9 @@
     <p id="status" role="status" aria-live="polite">Loading catalogue…</p>
     <section aria-labelledby="products-heading"><h2 id="products-heading">Our products</h2><div id="products"></div></section>
     <section id="reviews" aria-labelledby="reviews-heading" hidden><h2 id="reviews-heading">Customer reviews</h2><p id="reviews-status" role="status" aria-live="polite"></p><div id="review-list"></div><button type="button" id="reviews-more" hidden>Load more reviews</button></section>
-    <section id="review-consent" aria-labelledby="review-consent-heading" hidden><h2 id="review-consent-heading">Review request</h2><p>Would you like one email asking for a review of your purchase? This is optional.</p><div id="review-verify" hidden><button type="button" id="review-send-code">Send verification code</button><form id="review-code-form" hidden><label>Code <input name="code" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" required></label> <button type="submit">Verify</button></form></div><form id="review-grant" hidden><label><input type="checkbox" name="accept"> Yes, email me a review request.</label> <button type="submit">Save preference</button></form><p role="status" aria-live="polite"></p><button type="button" id="review-retry" hidden>Try again</button></section>
-    <section aria-labelledby="cart-heading"><h2 id="cart-heading">Cart</h2><ul id="cart"></ul><button id="checkout" type="button" disabled>Checkout</button><a id="continue-shopping" href="/" hidden>Continue shopping</a></section>
+    <section aria-labelledby="cart-heading"><h2 id="cart-heading">Cart</h2><ul id="cart"></ul><label id="review-invitation-choice" hidden><input id="review-invitation-opt-in" type="checkbox"> Email me one request to review my purchase.</label><button id="checkout" type="button" disabled>Checkout</button><a id="continue-shopping" href="/" hidden>Continue shopping</a></section>
   </main>
   <script src="/storefront-config.js"></script>
-  <script type="module" src="/app.js"></script><script type="module" src="/reviews.mjs"></script><script type="module" src="/consent.mjs"></script>
+  <script type="module" src="/app.js"></script><script type="module" src="/reviews.mjs"></script>
 </body>
 </html>
