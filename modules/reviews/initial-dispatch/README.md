@@ -1,0 +1,9 @@
+# Test-only initial invitation sender
+
+This isolated adapter accepts a private due-queue message containing only an outbox ID. It resolves the test recipient from the attested purchase evidence service and requires an exact match with one configured approved mailbox. The Reviews Worker checks a due, post-activation intent and matching non-withdrawn checkout permission before preparing a single initial generation. It checks them again and atomically claims delivery immediately before the provider call. Configuration must explicitly set the Reviews automation sending mode and this adapter's send mode to `test`; other environments and missing policies fail closed.
+
+The SMTP2GO adapter sets a stable delivery identity header for subsequent provider investigation, uses only the separately configured test sender and mailbox, and treats every transport, malformed response or acceptance-acknowledgement failure as uncertain. A claimed generation is never blindly resent. A real provider receipt lookup and scheduled producer remain separate integration requirements; this Worker alone does not schedule or reconcile messages. Do not deploy as a production sender.
+
+The email identifies the merchant and contact and carries an HTTPS one-click unsubscribe endpoint. GET and HEAD show a confirmation page without mutating state; a POST writes an acquisition- and recipient-bound consent withdrawal tombstone. This also suppresses queued future invitations, including when collection is disabled. It cannot recall a provider call already in flight. The endpoint and capability are test-only. The public route must be hosted on the configured `UNSUBSCRIBE_BASE_URL` and bound privately to the Reviews Worker.
+
+No send is made by the tests. An authorized hosted qualification must independently validate sender authorization, SMTP2GO headers and authoritative receipt reconciliation before enabling any test delivery.

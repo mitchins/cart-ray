@@ -136,11 +136,19 @@ export async function buildAutomationEvidence(result,env) {
 
 export async function purchaseEvidence(request,env,fetcher=fetch) {
   const path=new URL(request.url).pathname;
-  if(!configured(env) || request.method!=='POST' || !['/confirmed','/delivery-recipient','/automation-record'].includes(path) ||
+  if(!configured(env) || request.method!=='POST' || !['/confirmed','/delivery-recipient','/automation-record','/automation-recipient'].includes(path) ||
     (request.headers.get('content-type')||'')!=='application/json') return unavailable();
   try {
     const input=await jsonBounded(new Response(request.body,{headers:request.headers}),512);
     if(!input || Array.isArray(input)) return unavailable();
+    if(path==='/automation-recipient') {
+      const token=env.AUTOMATION_RECIPIENT_TOKEN;
+      if(Object.keys(input).join(',')!=='outbox_id' || !Number.isSafeInteger(input.outbox_id) || input.outbox_id<1 ||
+        typeof token!=='string' || token.length<32 || [env.RECIPIENT_HASH_KEY,env.AUTOMATION_EVIDENCE_TOKEN,env.RECIPIENT_RESOLVE_TOKEN,env.PURCHASE_ATTESTATION_TOKEN].includes(token) ||
+        !equal(request.headers.get('Authorization')||'', 'Bearer '+token)) return unavailable();
+      const result=await resolve(null,null,env,fetcher,{automationOutbox:input.outbox_id});
+      return Response.json({email:result.email,recipient_context_hash:result.recipient_context_hash},{headers:{'Cache-Control':'no-store'}});
+    }
     if(path==='/automation-record') {
       // The caller supplies only an outbox cursor, never order, recipient or grant data.
       // This private endpoint may be retried after an intake or downstream outage.

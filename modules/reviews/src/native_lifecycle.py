@@ -10,6 +10,7 @@ from urllib.parse import parse_qs
 
 from cartray_reviews.acquisition import confirmed_purchase
 from cartray_reviews.automation_due import claim_due, complete_claim
+from cartray_reviews.automation_initial import due_initial, unsubscribe_token
 from cartray_reviews.automation_intake import activate_intake, intake_order
 from cartray_reviews.automation_recipient import evidence_status, record_recipient
 from cartray_reviews.invitations import (
@@ -580,6 +581,104 @@ async def handle_write(request, env, path):
             except Exception:
                 await discard_body(request)
                 return fail(503, "collection unavailable")
+    if path in ("/reviews-internal/v1/automation-initial-prepare", "/reviews-internal/v1/automation-initial-claim"):
+        failure = await automation_authorize(request, env, acquisition_mode, secrets, "initial invitation unavailable")
+        if failure is not None:
+            return failure
+        if str(getattr(env, "REVIEWS_AUTOMATION_SENDING", "disabled")) != "test":
+            await discard_body(request)
+            return fail(503, "initial invitation unavailable")
+        try:
+            data = await read_json(request)
+            expected = (
+                {"outbox_id"}
+                if path.endswith("prepare")
+                else {"outbox_id", "acquisition_id", "generation_id", "delivery_identity"}
+            )
+            if set(data) != expected:
+                return fail(400, "invalid initial invitation")
+            now = int(time.time())
+            eligible = await due_initial(
+                env.REVIEWS_DB, store=store, environment=environment, outbox_id=data["outbox_id"], now=now
+            )
+            if path.endswith("claim"):
+                matching = rows(
+                    await env.REVIEWS_DB.prepare(
+                        "SELECT 1 FROM invitation_generations WHERE store_key=? AND environment=? AND acquisition_id=? "
+                        "AND generation_id=? AND delivery_identity=? AND request_key=?"
+                    )
+                    .bind(
+                        store,
+                        environment,
+                        eligible["acquisition_id"],
+                        data["generation_id"],
+                        data["delivery_identity"],
+                        "initial_" + str(data["outbox_id"]),
+                    )
+                    .all()
+                )
+                if not matching or data["acquisition_id"] != eligible["acquisition_id"]:
+                    raise ValueError("initial invitation unavailable")
+                result = await claim_delivery(
+                    env.REVIEWS_DB,
+                    store=store,
+                    environment=environment,
+                    acquisition=data["acquisition_id"],
+                    generation=data["generation_id"],
+                    delivery=data["delivery_identity"],
+                    now=now,
+                )
+                return Response.json(result, headers={"Cache-Control": "no-store"})
+            source = rows(
+                await env.CARTRAY_DB.prepare(
+                    "SELECT s.order_id,s.settlement_event_id FROM outbox o "
+                    "JOIN checkout_sessions s ON s.order_id=o.order_id "
+                    "WHERE o.id=? AND o.event_type='OrderConfirmed' AND s.settlement_state='confirmed' LIMIT 1"
+                )
+                .bind(data["outbox_id"])
+                .all()
+            )
+            if len(source) != 1 or source[0]["order_id"] != eligible["acquisition_id"]:
+                raise ValueError("initial invitation unavailable")
+            event = source[0]["settlement_event_id"] or "recon_" + source[0]["order_id"]
+            key = str(getattr(env, "REVIEWS_INVITATION_KEY", ""))
+            if len(key) < 32 or len(set(secrets)) != 4:
+                raise ValueError("initial invitation unavailable")
+            unsub_key = str(getattr(env, "REVIEWS_UNSUBSCRIBE_KEY", ""))
+            if (
+                len(unsub_key) < 32
+                or unsub_key in secrets
+                or unsub_key
+                in (
+                    str(getattr(env, "REVIEWS_CONSENT_SECRET", "")),
+                    str(getattr(env, "REVIEWS_AUTOMATION_INGRESS_TOKEN", "")),
+                )
+            ):
+                raise ValueError("initial invitation unavailable")
+            result = await prepare_initial_delivery(
+                env.REVIEWS_DB,
+                env.CARTRAY_DB,
+                store=store,
+                environment=environment,
+                event_id=event,
+                subject_maps=json.loads(str(getattr(env, "REVIEWS_SUBJECT_MAPS", ""))),
+                recipient_context_hash=eligible["recipient_context_hash"],
+                request_key="initial_" + str(data["outbox_id"]),
+                key_version=str(getattr(env, "REVIEWS_INVITATION_KEY_VERSION", "v1")),
+                secret=key.encode(),
+                now=now,
+                random_token=random_token,
+            )
+            capability = unsubscribe_token(
+                secret=unsub_key.encode(), store=store, environment=environment, outbox_id=data["outbox_id"]
+            )
+            return Response.json(
+                result
+                | {"recipient_context_hash": eligible["recipient_context_hash"], "unsubscribe_token": capability},
+                headers={"Cache-Control": "no-store"},
+            )
+        except (ValueError, TypeError, AttributeError, KeyError, json.JSONDecodeError):
+            return fail(409, "initial invitation unavailable")
     if path == "/reviews-internal/v1/automation-due-evaluate":
         failure = await automation_authorize(request, env, acquisition_mode, secrets, "evaluation unavailable")
         if failure is not None:

@@ -67,6 +67,11 @@ test('automatic evidence uses only a checked-out, confirmed order and signs purc
  const req=(body={outbox_id:12},token=x.env.AUTOMATION_EVIDENCE_TOKEN)=>new Request('https://private/automation-record',{method:'POST',headers:{'content-type':'application/json',Authorization:'Bearer '+token},body:JSON.stringify(body)});
  assert.equal((await purchaseEvidence(req(),x.env,x.fetcher)).status,200);
  const recipient=JSON.parse(sent[0].opts.body), consent=JSON.parse(sent[1].opts.body);
+ x.env.AUTOMATION_RECIPIENT_TOKEN='m'.repeat(40);
+ const resolve=(token)=>new Request('https://private/automation-recipient',{method:'POST',headers:{'content-type':'application/json',Authorization:'Bearer '+token},body:'{"outbox_id":12}'});
+ assert.equal((await purchaseEvidence(resolve('wrong'),x.env,x.fetcher)).status,503);
+ const delivery=await purchaseEvidence(resolve(x.env.AUTOMATION_RECIPIENT_TOKEN),x.env,x.fetcher);
+ assert.equal(delivery.status,200);assert.deepEqual(await delivery.json(),{email:'squirrel@example.com',recipient_context_hash:recipient.recipient_context_hash});
  assert.equal(recipient.evidence_reference,'purchase_contact_12'); assert.equal(recipient.verified_at,x.row.settled_at);
  assert.equal(consent.granted_at,grant.granted_at); assert.match(consent.evidence_reference,/^checkout_[a-f0-9]{64}$/);
  assert.equal(sent[0].opts.headers['X-Reviews-Recipient-Signature'],createHmac('sha256',x.env.REVIEWS_RECIPIENT_EVIDENCE_SECRET).update(JSON.stringify(['reviews-automation-recipient-v1','acorn-store','test',recipient])).digest('hex'));
