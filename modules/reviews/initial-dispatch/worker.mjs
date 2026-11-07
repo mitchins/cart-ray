@@ -31,7 +31,11 @@ export async function dispatchInitial(message,env,fetcher=fetch,now=()=>Math.flo
  if(recipient.email!==env.APPROVED_TEST_EMAIL || !hex.test(recipient.recipient_context_hash||''))throw Error('recipient unavailable');
  const draft=await call(env.REVIEWS_API,'/reviews-internal/v1/automation-initial-prepare',message,env.REVIEWS_AUTOMATION_TOKEN);
  if(draft.recipient_context_hash!==recipient.recipient_context_hash || !capability.test(draft.unsubscribe_token||'') ||
-    draft.state!=='prepared' || !hex.test(draft.token||'') || !hex.test(draft.generation_id||'') || !hex.test(draft.delivery_identity||'')) throw Error('delivery reconciliation required');
+    !hex.test(draft.generation_id||'') || !hex.test(draft.delivery_identity||'')) throw Error('delivery reconciliation required');
+ // An authenticated durable acceptance is terminal. A dispatching or uncertain
+ // generation still needs reconciliation and must never trigger another send.
+ if(draft.state==='accepted')return 'done';
+ if(draft.state!=='prepared' || !hex.test(draft.token||''))throw Error('delivery reconciliation required');
  const claim={outbox_id:message.outbox_id,acquisition_id:draft.acquisition_id,generation_id:draft.generation_id,delivery_identity:draft.delivery_identity};
  const claimed=await call(env.REVIEWS_API,'/reviews-internal/v1/automation-initial-claim',claim,env.REVIEWS_AUTOMATION_TOKEN);
  if(claimed.state!=='dispatching')throw Error('delivery reconciliation required');
