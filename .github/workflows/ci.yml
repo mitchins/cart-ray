@@ -38,7 +38,7 @@ jobs:
       - name: Test Reviews synthetic due queue
         run: node --test modules/reviews/tests/automation_queue.test.mjs
       - name: Test signed Reviews intake subscriber
-        run: node --test modules/reviews/tests/automation_intake_queue.test.mjs
+        run: node --test modules/reviews/tests/automation_intake_queue.test.mjs modules/reviews/tests/automation_intake_producer.test.mjs
       - name: Test review consent bridge and Acorn UI
         run: node --test modules/reviews/consent/tests/*.test.mjs examples/acorn-store/tests/consent.test.mjs
       - name: Test Reviews moderation console

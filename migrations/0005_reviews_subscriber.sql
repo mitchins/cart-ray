@@ -1,0 +1,17 @@
+-- Optional subscriber cursor: independent of the shared commerce outbox acknowledgement.
+CREATE TABLE reviews_subscriber_checkpoint (
+  subscriber_id TEXT PRIMARY KEY,
+  installation_id TEXT NOT NULL,
+  source_database_id TEXT NOT NULL,
+  stripe_account_id TEXT NOT NULL,
+  catalogue_version TEXT NOT NULL,
+  mapping_sha256 TEXT NOT NULL,
+  activation_watermark INTEGER NOT NULL CHECK(activation_watermark >= 0),
+  last_outbox_id INTEGER NOT NULL CHECK(last_outbox_id >= activation_watermark)
+);
+CREATE TRIGGER reviews_checkpoint_immutable_identity BEFORE UPDATE ON reviews_subscriber_checkpoint
+WHEN OLD.subscriber_id <> NEW.subscriber_id OR OLD.installation_id <> NEW.installation_id
+  OR OLD.source_database_id <> NEW.source_database_id OR OLD.stripe_account_id <> NEW.stripe_account_id
+  OR OLD.catalogue_version <> NEW.catalogue_version OR OLD.mapping_sha256 <> NEW.mapping_sha256
+  OR OLD.activation_watermark <> NEW.activation_watermark OR NEW.last_outbox_id < OLD.last_outbox_id
+BEGIN SELECT RAISE(ABORT, 'invalid subscriber checkpoint'); END;

@@ -470,3 +470,75 @@ def test_stripe_webhook_treats_missing_server_secret_as_unavailable():
 
     assert status == 503
     assert json.loads(response_body) == {"error": "Stripe webhook unavailable"}
+
+
+def test_source_identity_uses_deployed_credentials_and_is_fail_closed(monkeypatch):
+    from types import SimpleNamespace
+
+    calls = []
+
+    class Transport:
+        async def request(self, method, path, *, headers, body=None):
+            calls.append((method, path))
+            return 200, {"id": "acct_test123"}
+
+    monkeypatch.setattr(worker_module, "WorkersFetchTransport", Transport)
+    monkeypatch.setattr(worker_module, "COMPILED_CATALOGUE", SimpleNamespace(expected_catalogue_version="sha256:abc"))
+    env = {
+        "CARTRAY_ENVIRONMENT": "test",
+        "CARTRAY_REVIEWS_SOURCE": "test",
+        "CARTRAY_REVIEWS_IDENTITY_TOKEN": "i" * 32,
+        "STRIPE_API_KEY": "sk_test_synthetic",
+        "CF_VERSION_METADATA": SimpleNamespace(id="version-1"),
+    }
+    client = TestClient(create_app(), env=env)
+    for headers in ({}, {"authorization": "Bearer wrong"}):
+        assert client.request("GET", "/internal/reviews-source-identity", headers=headers)[0] == 503
+    assert not calls
+    status, headers, body = client.request(
+        "GET", "/internal/reviews-source-identity", headers={"authorization": "Bearer " + "i" * 32}
+    )
+    assert status == 200 and json.loads(body) == {
+        "version_id": "version-1",
+        "stripe_account": "acct_test123",
+        "catalogue_version": "sha256:abc",
+    }
+    assert calls == [("GET", "/v1/account")]
+    assert headers.get("Cache-Control") == "no-store"
+    for update in (
+        {"CARTRAY_ENVIRONMENT": "live"},
+        {"CARTRAY_REVIEWS_SOURCE": "disabled"},
+        {"STRIPE_API_KEY": "sk_live_never"},
+        {"CF_VERSION_METADATA": None},
+    ):
+        assert (
+            TestClient(create_app(), env=env | update).request(
+                "GET", "/internal/reviews-source-identity", headers={"authorization": "Bearer " + "i" * 32}
+            )[0]
+            == 503
+        )
+
+
+def test_webhook_subscriber_wakeup_does_not_change_checkout_response(monkeypatch):
+    from types import SimpleNamespace
+
+    captured = []
+    response = SimpleNamespace(status=200)
+
+    async def fake_app(request, env):
+        return response
+
+    monkeypatch.setattr(worker_module, "app", fake_app)
+
+    class Context:
+        def waitUntil(self, work):
+            captured.append(work)
+
+    entry = worker_module.Default()
+    entry.env = SimpleNamespace(CARTRAY_REVIEWS_PRODUCER="test", CARTRAY_ENVIRONMENT="test")
+    entry.ctx = Context()
+    result = asyncio.run(entry.fetch(SimpleNamespace(method="POST", url="https://store.test/stripe/webhook")))
+    assert result is response and len(captured) == 1
+    asyncio.run(captured.pop())
+    entry.ctx = None
+    assert asyncio.run(entry.fetch(SimpleNamespace(method="POST", url="https://store.test/stripe/webhook"))) is response
