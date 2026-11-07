@@ -34,6 +34,11 @@ export async function deliver(message, env) {
       typeof env.REVIEWS_AUTOMATION_TOKEN !== 'string' || env.REVIEWS_AUTOMATION_TOKEN.length < 32 ||
       !env.REVIEWS_API || !id.test(env.SOURCE_STORE || '') || !id.test(env.SOURCE_ISSUER || '') ||
       !id.test(env.SOURCE_INSTALLATION || '')) throw new Error('subscriber unavailable');
+  if (env.AUTOMATION_DUE_SCHEDULING_ENABLED === 'test' &&
+      (env.AUTOMATION_EVIDENCE_ENABLED !== 'test' || !env.DUE_SCHEDULER?.fetch ||
+       typeof env.DUE_SCHEDULER_TOKEN !== 'string' || env.DUE_SCHEDULER_TOKEN.length < 32 ||
+       env.DUE_SCHEDULER_TOKEN === env.REVIEWS_AUTOMATION_TOKEN || env.DUE_SCHEDULER_TOKEN === env.AUTOMATION_EVIDENCE_TOKEN))
+    throw new Error('due scheduling unavailable');
   // Validate the configured key even for malformed traffic: absent security configuration must not acknowledge messages.
   keyBytes(env.SOURCE_EVENT_KEY);
   if (!validShape(message)) return 'discard';
@@ -86,6 +91,24 @@ export async function deliver(message, env) {
         const evidence=JSON.parse(text);
         if (!evidence || Object.keys(evidence).length!==1 || !['recorded','not_granted'].includes(evidence.status))
           throw new Error('invalid purchase evidence receipt');
+        if (evidence.status === 'recorded' && env.AUTOMATION_DUE_SCHEDULING_ENABLED === 'test') {
+          const response = await env.DUE_SCHEDULER.fetch('https://due-scheduler.internal/schedule', {
+            method:'POST', signal:controller.signal,
+            headers:{'content-type':'application/json',authorization:`Bearer ${env.DUE_SCHEDULER_TOKEN}`},
+            body:JSON.stringify({outbox_id:message.outbox_id}),
+          });
+          if (!response.ok || !response.body) throw new Error('due scheduling unavailable');
+          reader=response.body.getReader(); size=0; text='';
+          for (;;) {
+            const part=await reader.read(); if(part.done) break;
+            size+=part.value.byteLength; if(size>4096) throw new Error('due scheduler response too large');
+            text+=decoder.decode(part.value,{stream:true});
+          }
+          text+=decoder.decode();
+          const scheduled=JSON.parse(text);
+          if (!scheduled || Object.keys(scheduled).length!==1 || scheduled.status!=='scheduled')
+            throw new Error('invalid due scheduling receipt');
+        }
       }
     })();
     await Promise.race([request, deadline]);

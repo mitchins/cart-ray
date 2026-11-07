@@ -115,3 +115,8 @@ alone does not deliver email or activate collection. A confirmed purchase,
 trusted recipient and a qualified delivery pipeline are still required before
 sending. Receipt-only invitations are a future option and are not implemented
 by this example.
+
+The isolated Squirrel Reviews Worker can use the configuration fragment
+`reviews-test-vars.example.toml` to make newly delivered invitation links
+non-expiring. Revocation and replacement still invalidate links; invitations
+already issued with an expiration keep their existing expiry.

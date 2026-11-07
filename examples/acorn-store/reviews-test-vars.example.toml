@@ -1,0 +1,4 @@
+# Merge into the isolated test Reviews Worker's [vars]. Existing invitations
+# retain their recorded expiration; this applies only to future deliveries.
+[vars]
+REVIEWS_INVITATION_LIFETIME = "never"

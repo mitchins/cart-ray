@@ -239,13 +239,17 @@ def test_one_capability_at_limit_does_not_block_another(lifecycle):
     assert reviews.db.execute("SELECT COUNT(*) FROM native_reviews").fetchone()[0] == 2
 
 
-def test_customer_landing_uses_approved_names_and_scoped_nonconsuming_capability(lifecycle):
+@pytest.mark.parametrize("nonexpiring", [False, True])
+def test_customer_landing_uses_approved_names_and_scoped_nonconsuming_capability(lifecycle, nonexpiring):
     reviews, _ = stores()
     commerce = CommerceDatabase()
     commerce.add_purchase(second=True)
     reviews.db.execute("INSERT INTO review_subjects VALUES ('store','test','second','product','/second/')")
     reviews.db.commit()
     invitation = issue(reviews, commerce, subject_maps={"v1": {"product_1": "policy", "product_2": "second"}})
+    if nonexpiring:
+        reviews.db.execute("UPDATE acquisition_invitations SET expires_at=-1")
+        reviews.db.commit()
     env = SimpleNamespace(
         REVIEWS_DB=reviews,
         CARTRAY_DB=commerce,
@@ -260,7 +264,7 @@ def test_customer_landing_uses_approved_names_and_scoped_nonconsuming_capability
     )
     landing = "/reviews/v1/invitation"
     data = {"invitation_token": invitation["token"]}
-    with patch.object(lifecycle.time, "time", return_value=101):
+    with patch.object(lifecycle.time, "time", return_value=2_000_000_000 if nonexpiring else 101):
         assert invoke(lifecycle, env, landing, data).status == 404
         name_path = "/reviews-admin/v1/subject-display-names"
         for subject, name in (("policy", "Policy"), ("second", "Second product")):
@@ -861,6 +865,44 @@ def test_initial_capability_is_inactive_until_provider_acceptance():
         "v3",
     )
     assert asyncio.run(redeem_purchase(reviews, **(attempt | {"now": 151})))["status"] == "pending"
+
+
+def test_nonexpiring_generation_is_inactive_until_acceptance_and_still_revocable():
+    import secrets
+
+    from cartray_reviews.invitations import (
+        claim_delivery,
+        prepare_initial_delivery,
+        record_delivery_outcome,
+        redeem_purchase,
+        revoke_purchase,
+    )
+
+    reviews, commerce = stores()
+    draft = asyncio.run(prepare_initial_delivery(
+        reviews, commerce, store="store", environment="test", event_id="event_1",
+        subject_maps={"v1": {"product_1": "policy"}}, recipient_context_hash="a" * 64,
+        request_key="nonexpiring", key_version="v1", secret=b"z" * 32, now=100,
+        random_token=lambda: secrets.token_hex(32),
+    ))
+    scope = dict(store="store", environment="test", acquisition="order_1",
+                 generation=draft["generation_id"], delivery=draft["delivery_identity"])
+    attempt = dict(store="store", environment="test", subject="policy", token=draft["token"],
+                   request_key="review", author="Guest", title=None, body="", rating=4,
+                   reviewer_key_secret=b"r" * 32, now=2_000_000_000,
+                   random_token=lambda: secrets.token_hex(32))
+    with pytest.raises(ValueError):
+        asyncio.run(redeem_purchase(reviews, **attempt))
+    asyncio.run(claim_delivery(reviews, **scope, now=101))
+    outcome = dict(**scope, outcome="accepted", accepted_at=120, now=150, lifetime=None)
+    assert asyncio.run(record_delivery_outcome(reviews, **outcome)) == {"state": "accepted"}
+    assert asyncio.run(record_delivery_outcome(reviews, **outcome)) == {"state": "accepted"}
+    assert reviews.db.execute("SELECT expires_at FROM acquisition_invitations").fetchone()[0] == -1
+    assert reviews.db.execute("SELECT expires_at FROM invitation_generations").fetchone()[0] == -1
+    assert asyncio.run(redeem_purchase(reviews, **attempt))["status"] == "pending"
+    asyncio.run(revoke_purchase(reviews, store="store", environment="test", token=draft["token"], now=151))
+    with pytest.raises(ValueError):
+        asyncio.run(redeem_purchase(reviews, **attempt))
 
 
 def test_revocation_before_dispatch_closes_preparation_and_allows_recovery():

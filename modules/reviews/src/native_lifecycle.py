@@ -805,7 +805,8 @@ async def handle_write(request, env, path):
                 expected.add("accepted_at")
             if set(data) != expected:
                 return fail(400, "invalid delivery outcome")
-            lifetime = int(str(getattr(env, "REVIEWS_INVITATION_LIFETIME", "5184000")))
+            lifetime_setting = str(getattr(env, "REVIEWS_INVITATION_LIFETIME", "5184000"))
+            lifetime = None if lifetime_setting == "never" else int(lifetime_setting)
             result = await record_delivery_outcome(
                 env.REVIEWS_DB,
                 store=store,
@@ -1096,7 +1097,8 @@ async def handle_write(request, env, path):
                     "JOIN review_invitation_consents c USING(store_key,environment,acquisition_id) "
                     "WHERE i.store_key=? AND i.environment=? AND c.purpose='review_invitation' "
                     "AND c.recipient_context_hash=i.recipient_context_hash AND c.revoked_at IS NULL AND "
-                    "((i.token_hash=? AND i.expires_at>0) OR EXISTS(SELECT 1 FROM invitation_generations g "
+                    "((i.token_hash=? AND (i.expires_at>0 OR i.expires_at=-1)) "
+                    "OR EXISTS(SELECT 1 FROM invitation_generations g "
                     "WHERE g.store_key=i.store_key AND g.environment=i.environment "
                     "AND g.acquisition_id=i.acquisition_id AND g.token_hash=? AND g.accepted_at IS NOT NULL)) LIMIT 1"
                 )
@@ -1210,7 +1212,7 @@ async def handle_write(request, env, path):
                 "AND n.subject_id=s.subject_id LEFT JOIN native_review_acquisitions a "
                 "ON a.store_key=s.store_key AND a.environment=s.environment AND a.acquisition_id=s.acquisition_id "
                 "AND a.subject_id=s.subject_id WHERE i.store_key=? AND i.environment=? AND i.token_hash=? "
-                "AND i.revoked_at IS NULL AND i.expires_at>? AND i.expires_at>unixepoch() "
+                "AND i.revoked_at IS NULL AND (i.expires_at=-1 OR (i.expires_at>? AND i.expires_at>unixepoch())) "
                 "ORDER BY n.public_name,s.subject_id LIMIT 101"
             )
             .bind(store, environment, token_hash, now)
@@ -1222,7 +1224,7 @@ async def handle_write(request, env, path):
                 "SELECT COUNT(*) count FROM acquisition_invitations i "
                 "JOIN acquisition_invitation_subjects s USING(store_key,environment,acquisition_id) "
                 "WHERE i.store_key=? AND i.environment=? AND i.token_hash=? "
-                "AND i.revoked_at IS NULL AND i.expires_at>? AND i.expires_at>unixepoch()"
+                "AND i.revoked_at IS NULL AND (i.expires_at=-1 OR (i.expires_at>? AND i.expires_at>unixepoch()))"
             )
             .bind(store, environment, token_hash, now)
             .all()
@@ -1388,8 +1390,8 @@ async def handle_write(request, env, path):
                 await db.prepare(
                     "SELECT 1 AS eligible FROM acquisition_invitations i JOIN acquisition_invitation_subjects s "
                     "USING(store_key,environment,acquisition_id) WHERE i.store_key=? AND i.environment=? "
-                    "AND i.token_hash=? AND i.revoked_at IS NULL AND i.expires_at>? "
-                    "AND i.expires_at>unixepoch() AND s.subject_id=?"
+                    "AND i.token_hash=? AND i.revoked_at IS NULL "
+                    "AND (i.expires_at=-1 OR (i.expires_at>? AND i.expires_at>unixepoch())) AND s.subject_id=?"
                 )
                 .bind(store, environment, token_hash, now, sid)
                 .all()
@@ -1404,7 +1406,7 @@ async def handle_write(request, env, path):
                             "acquisition_invitations i JOIN acquisition_invitation_subjects s "
                             "USING(store_key,environment,acquisition_id) WHERE i.store_key=? AND "
                             "i.environment=? AND i.token_hash=? AND i.revoked_at IS NULL AND "
-                            "i.expires_at>? AND i.expires_at>unixepoch() AND s.subject_id=?) "
+                            "(i.expires_at=-1 OR (i.expires_at>? AND i.expires_at>unixepoch())) AND s.subject_id=?) "
                             "THEN 1 ELSE 0 END"
                         ).bind(store, environment, token_hash, now, sid),
                         rate(db, store, environment, "purchase-submit:" + token_hash, now),

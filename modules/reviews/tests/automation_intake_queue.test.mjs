@@ -64,3 +64,20 @@ test('purchase evidence has its own bounded deadline after intake',async()=>{
     PURCHASE_EVIDENCE:{fetch:()=>new Promise(resolve=>setTimeout(()=>resolve(Response.json({status:'recorded'})),2100))}});
   assert.equal(await deliver(await message(),e),'acknowledged');
 });
+test('due scheduling requires recorded permission and acknowledges only durable queue acceptance', async()=>{
+  const e=env(); let state='recorded', calls=0;
+  Object.assign(e,{AUTOMATION_EVIDENCE_ENABLED:'test',AUTOMATION_EVIDENCE_TOKEN:'z'.repeat(32),
+    PURCHASE_EVIDENCE:{fetch:async()=>Response.json({status:state})},
+    AUTOMATION_DUE_SCHEDULING_ENABLED:'test',DUE_SCHEDULER_TOKEN:'d'.repeat(32),
+    DUE_SCHEDULER:{fetch:async(url,opts)=>{calls++;assert.equal(url,'https://due-scheduler.internal/schedule');
+      assert.equal(opts.headers.authorization,'Bearer '+e.DUE_SCHEDULER_TOKEN);
+      assert.deepEqual(JSON.parse(opts.body),{outbox_id:42}); return Response.json({status:'scheduled'});}}});
+  const m=await message();
+  assert.equal(await deliver(m,e),'acknowledged'); assert.equal(calls,1);
+  state='not_granted'; assert.equal(await deliver(m,e),'acknowledged'); assert.equal(calls,1);
+  state='recorded'; e.DUE_SCHEDULER.fetch=async()=>new Response(null,{status:503});
+  await assert.rejects(deliver(m,e),/scheduling unavailable/);
+  e.DUE_SCHEDULER.fetch=async()=>Response.json({status:'not_accepted'});
+  await assert.rejects(deliver(m,e),/scheduling receipt/);
+  e.AUTOMATION_EVIDENCE_ENABLED='disabled'; await assert.rejects(deliver(m,e),/scheduling unavailable/);
+});

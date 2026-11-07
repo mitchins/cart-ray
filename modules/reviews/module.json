@@ -36,7 +36,8 @@
     "migrations/0024_staff_delivery_queue.sql",
     "migrations/0025_automation_due_claims.sql",
     "migrations/0026_automation_activation_fence.sql",
-    "migrations/0027_consent_withdrawal.sql"
+    "migrations/0027_consent_withdrawal.sql",
+    "migrations/0028_automation_due_schedule.sql"
   ],
   "routes": [
     "GET /reviews/v1/subject-lookup?alias={alias}",
