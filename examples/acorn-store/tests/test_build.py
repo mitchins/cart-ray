@@ -48,6 +48,8 @@ def test_profile_and_explicit_test_api(tmp_path):
     )
     built = (tmp_path / "site/storefront-config.js").read_text()
     assert '"checkoutEnabled": true' in built and '"reviewsEnabled": true' in built
+    assert '"reviewConsentEnabled": false' in built
+    assert (tmp_path / "site/_worker.js").is_file()
     for url in ("http://example.com", "https://a.example/?x=1", "https://u:p@example.com"):
         with pytest.raises(ValueError):
             module.test_api(url)

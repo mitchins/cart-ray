@@ -64,10 +64,17 @@ this build.
 
 ## Optional Reviews
 
-`--reviews` enables public read-only rendering on the two mapped product pages.
-A same-origin test gateway must route only `/reviews/v1/` to a separately
-installed Reviews Worker scoped to `acorn-store` / `test`; a missing or stale
-projection displays an unavailable state. The free guide never requests reviews.
+When the operator installs and enables Reviews for this test shop, add `--reviews`
+to the build to display reviews on both mapped product pages. This also includes
+the same-origin Pages gateway. Set `ACORN_REVIEWS_READ_MODE = "test"` in the
+Pages configuration and bind `REVIEWS_PUBLIC` to the independently installed
+Reviews Worker scoped to `acorn-store` / `test`. Populate that Worker with
+approved synthetic data for qualification. The gateway forwards only public
+subject summary and contribution GETs, without browser credentials; it does not
+expose collection or administration. Missing bindings or an unavailable
+projection show an unavailable state without affecting checkout. The free
+guide never requests reviews. This setting is independent of review-request
+consent and email delivery.
 Review text is rendered as text, not HTML. A version mismatch clears the list;
 rated and unrated contributions stay separate and replies remain attached.
 No structured data is emitted until versioned publication and withdrawal are
@@ -76,7 +83,8 @@ and production freshness guarantees are not replaced by this development view.
 
 The output includes the existing test invitation and management forms at
 `/review/`; they require the same-origin Reviews proxy and a valid purchase-bound
-test invitation. Merely opening a page creates no invitation. The separate
+test invitation and a separately configured collection gateway; the read-only
+gateway above does not expose those routes. Merely opening a page creates no invitation. The separate
 staff console in `modules/reviews/console` must be served from its **own**
 authenticated staff origin/gateway. The public build does not contain the
 console and must never route `/reviews-admin/` to the public storefront.
