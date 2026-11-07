@@ -22,7 +22,7 @@ async function jsonBounded(response,limit=4096){
 }
 async function call(fetcher,url,init,timeoutMs=2000){const controller=new AbortController();let timer;
  const timeout=new Promise((_,reject)=>{timer=setTimeout(()=>{controller.abort();reject(Error('timeout'));},timeoutMs)});
- try{return await jsonBounded(await Promise.race([fetcher(url,{...init,redirect:'error',signal:controller.signal}),timeout]));}
+ try{return await jsonBounded(await Promise.race([fetcher(url,{...init,redirect:'manual',signal:controller.signal}),timeout]));}
  finally{clearTimeout(timer);controller.abort();}}
 function configured(env){return env.TEST_EMAIL_MODE==='test' && env.CONTEXT_DB?.prepare && env.PURCHASE_EVIDENCE?.fetch &&
  typeof env.PURCHASE_TRANSPORT_TOKEN==='string' && env.PURCHASE_TRANSPORT_TOKEN.length>=32 &&

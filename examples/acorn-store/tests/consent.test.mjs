@@ -7,8 +7,9 @@ function elements() {
   const form = {hidden:false, addEventListener(_name, cb) {this.submit = cb;},
     querySelector(query) {return query === 'input[name="accept"]' ? accept : button;}};
   const code = {value:""}, verify={hidden:true}, send={disabled:false,addEventListener(_name,cb){this.click=cb;}}, codeForm={hidden:true,addEventListener(_name,cb){this.submit=cb;},querySelector(){return code;}};
-  const root = {hidden:true, querySelector(query) {return ({"#review-grant":form,"#review-verify":verify,"#review-code-form":codeForm,"#review-send-code":send})[query] || status;}};
-  return {root,form,accept,button,status,code,verify,send,codeForm};
+  const retry = {hidden:true, addEventListener(_name,cb){this.click=cb;}};
+  const root = {hidden:true, querySelector(query) {return ({"#review-retry":retry,"#review-grant":form,"#review-verify":verify,"#review-code-form":codeForm,"#review-send-code":send})[query] || status;}};
+  return {root,form,accept,button,status,code,verify,send,codeForm,retry};
 }
 test("consent stays hidden if the authority cannot confirm an eligible session", async () => {
   const {root} = elements();
@@ -48,4 +49,11 @@ test("explicit optional choice sends no purchase or recipient details and recove
   await form.submit(event);
   assert.equal(form.hidden,true);
   assert.match(status.textContent,/saved/);
+});
+
+test("post-purchase failure offers a generic retry without exposing the consent form", async () => {
+  const {root,form,verify,status,retry}=elements(); form.hidden=true; let reloaded=false;
+  await setupConsent({root,postPurchase:true,reload:()=>{reloaded=true;},fetchImpl:async()=>new Response(null,{status:503})});
+  assert.equal(root.hidden,false); assert.equal(form.hidden,true); assert.equal(verify.hidden,true);
+  assert.match(status.textContent,/couldn’t load/); assert.equal(retry.hidden,false); retry.click(); assert.equal(reloaded,true);
 });

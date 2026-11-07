@@ -44,10 +44,10 @@ test('confirmed reconciliation uses CartRay canonical derived event ID without c
 });
 test('Stripe calls reject redirects and never send credentials to a redirected destination',async()=>{
  const x=setup(), seen=[];
- const fetcher=async(url,opts)=>{seen.push([url,opts.redirect]); return Response.json({id:'acct_test123'})};
+ const fetcher=async(url,opts)=>{seen.push([url,opts.redirect]); return new Response(null,{status:302,headers:{Location:'https://other.example/'}})};
  const request=new Request('https://private/confirmed',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({session_id:session,context_hash:context})});
  assert.equal((await purchaseEvidence(request,x.env,fetcher)).status,503);
- assert.ok(seen.length>=1); assert.ok(seen.every(([,redirect])=>redirect==='error'));
+ assert.deepEqual(seen,[['https://api.stripe.com/v1/account','manual']]);
 });
 test('missing or non-held Reviews intake rejects before consulting Stripe or sending a code',async()=>{
  const x=setup(); x.env.REVIEWS_API.fetch=async()=>new Response(null,{status:409});

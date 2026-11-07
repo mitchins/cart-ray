@@ -1,5 +1,5 @@
 /** Optional purpose-specific consent UI; the server authenticates purchase context. */
-export async function setupConsent({root, fetchImpl = fetch}) {
+export async function setupConsent({root, fetchImpl = fetch, postPurchase = false, reload = () => location.reload()}) {
   if (!root) return;
   const endpoint = "/review-consent/v1/";
   const post = (name, data) => fetchImpl(endpoint + name, {
@@ -7,13 +7,21 @@ export async function setupConsent({root, fetchImpl = fetch}) {
     credentials: "same-origin", cache: "no-store", body: JSON.stringify(data),
   });
   let verified;
+  const unavailable = () => {
+    if (!postPurchase) return;
+    root.hidden = false;
+    root.querySelector('[role="status"]').textContent = "We couldn’t load the optional review request preference. Please try again later.";
+    const retry = root.querySelector("#review-retry");
+    retry.hidden = false;
+    retry.addEventListener("click", reload);
+  };
   try {
     const context = await post("context", {});
-    if (!context.ok) return;
+    if (!context.ok) { unavailable(); return; }
     const data = await context.json();
-    if (data.available !== true) return;
+    if (data.available !== true) { unavailable(); return; }
     verified = data.verified === true;
-  } catch { return; }
+  } catch { unavailable(); return; }
   root.hidden = false;
   const form = root.querySelector("#review-grant");
   const verify = root.querySelector("#review-verify");
@@ -54,5 +62,5 @@ export async function setupConsent({root, fetchImpl = fetch}) {
 }
 
 if (typeof document !== "undefined" && window.CARTRAY_STOREFRONT?.reviewConsentEnabled) {
-  void setupConsent({root: document.querySelector("#review-consent")});
+  void setupConsent({root: document.querySelector("#review-consent"), postPurchase: location.pathname.replace(/\/+$/, "") === "/purchase-complete"});
 }

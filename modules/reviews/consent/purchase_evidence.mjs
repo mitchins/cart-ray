@@ -26,7 +26,7 @@ async function jsonBounded(response,max=16384) {
 async function callBounded(fetcher,url,init) {
   const controller=new AbortController(); let timer;
   const timeout=new Promise((_,reject)=>{timer=setTimeout(()=>{controller.abort();reject(Error('timeout'));},2000);});
-  try { return await jsonBounded(await Promise.race([fetcher(url,{...init,redirect:'error',signal:controller.signal}),timeout])); }
+  try { return await jsonBounded(await Promise.race([fetcher(url,{...init,redirect:'manual',signal:controller.signal}),timeout])); }
   finally { clearTimeout(timer); controller.abort(); }
 }
 function configured(env) {
