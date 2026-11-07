@@ -26,7 +26,7 @@ async function jsonBounded(response,max=16384) {
 async function callBounded(fetcher,url,init) {
   const controller=new AbortController(); let timer;
   const timeout=new Promise((_,reject)=>{timer=setTimeout(()=>{controller.abort();reject(Error('timeout'));},2000);});
-  try { return await jsonBounded(await Promise.race([fetcher(url,{...init,signal:controller.signal}),timeout])); }
+  try { return await jsonBounded(await Promise.race([fetcher(url,{...init,redirect:'error',signal:controller.signal}),timeout])); }
   finally { clearTimeout(timer); controller.abort(); }
 }
 function configured(env) {
@@ -66,7 +66,11 @@ async function resolve(session,contextHash,env,fetcher) {
   const context=await env.CONTEXT_DB.prepare('SELECT checkout_session_id FROM purchaser_contexts WHERE token_hash=? AND expires_at>?').bind(contextHash,now).first();
   if(!context || context.checkout_session_id!==session) throw Error('context');
   const row=await env.COMMERCE_DB.prepare("SELECT o.order_id,o.manifest_version,o.currency,o.subtotal_minor,o.items_digest,s.external_session_id,s.settlement_event_id,s.stripe_payment_status,s.stripe_amount_total_minor,b.id AS outbox_id,b.payload_json FROM orders o JOIN checkout_sessions s ON s.order_id=o.order_id JOIN outbox b ON b.order_id=o.order_id AND b.event_type='OrderConfirmed' WHERE s.external_session_id=? AND s.settlement_state='confirmed' LIMIT 1").bind(session).first();
-  if(!row || row.manifest_version!==proof[7] || row.stripe_payment_status!=='paid' || !row.settlement_event_id || row.stripe_amount_total_minor!==row.subtotal_minor) throw Error('order');
+  if(!row || row.manifest_version!==proof[7] || row.stripe_payment_status!=='paid' || row.stripe_amount_total_minor!==row.subtotal_minor) throw Error('order');
+  // Existing CartRay reconciliation uses this canonical acquisition event ID
+  // when there is no Stripe webhook event; it is not a Stripe event claim.
+  const eventId=row.settlement_event_id || 'recon_'+row.order_id;
+  if(!id.test(eventId)) throw Error('event');
   const payload=JSON.parse(row.payload_json);
   if(payload.order_id!==row.order_id || payload.session_id!==session || payload.items_digest!==row.items_digest || Object.keys(payload).length!==3) throw Error('outbox');
   const items=(await env.COMMERCE_DB.prepare('SELECT stripe_price_id,quantity,unit_amount_minor FROM order_items WHERE order_id=? ORDER BY stripe_price_id LIMIT 101').bind(row.order_id).all()).results;
@@ -88,7 +92,7 @@ async function resolve(session,contextHash,env,fetcher) {
   const recipientHash=await mac(env.RECIPIENT_HASH_KEY,JSON.stringify(['acorn-recipient-v1',env.STORE_KEY,'test',row.order_id,version,email]));
   const reference='ref_'+await mac(env.RECIPIENT_HASH_KEY,JSON.stringify(['acorn-delivery-v1',contextHash,recipientHash]));
   return {email, store:env.STORE_KEY,environment:'test',session_id:session,context_hash:contextHash,confirmed:true,source_attested:true,
-    event_id:row.settlement_event_id,acquisition_id:row.order_id,source_provenance:env.INSTALLATION_ID,recipient_context_hash:recipientHash,
+    event_id:eventId,acquisition_id:row.order_id,source_provenance:env.INSTALLATION_ID,recipient_context_hash:recipientHash,
     binding_version:version,recipient_reference:reference,outbox_id:row.outbox_id};
 }
 export async function purchaseEvidence(request,env,fetcher=fetch) {

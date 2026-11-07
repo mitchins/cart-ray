@@ -47,3 +47,26 @@ Run `node --test modules/reviews/consent/tests/authority.test.mjs` and
 `uv run --locked python modules/reviews/consent/tests/authority_workerd.py`.
 The latter uses real local Workerd/D1, but a synthetic evidence binding. It is
 not hosted identity or end-to-end consent qualification.
+
+`purchase_evidence.mjs` implements the private test Stripe/D1 reader behind the
+T1 `/attest-purchase` RPC. It validates the signed installation proof and exact
+runtime versions, then checks the context database, confirmed CartRay order and
+outbox, the Stripe account, paid test Checkout Session, metadata and matching
+line items. An explicit `APPROVED_TEST_EMAIL` limits the sandbox to one mailbox.
+The public consent authority receives only a scoped hash and opaque reference.
+The separate authenticated `/delivery-recipient` endpoint resolves that
+reference solely for the private test-code transport. Stripe-reported contact
+is purchase evidence, not proof of mailbox ownership; verification still
+requires the code.
+
+`test_email_transport.mjs` is an opt-in **test-only** SMTP2GO adapter for the
+verification code, never review invitations. It requires a verified
+`TEST_SENDER` under the Acorn test domain, an API key, the one approved test
+mailbox, and separate private transport and recipient-resolution tokens. It
+records one delivery claim per context and holds failures/unknown outcomes
+without resending. SMTP2GO can return HTTP 200 with an application error, so the
+adapter requires one success, no failures, and a provider email ID before it
+reports acceptance. Provider credentials, sender verification, hosted binding
+and real email delivery are not supplied or qualified by these local tests.
+
+This implementation uses SMTP2GO's documented [standard email API](https://developers.smtp2go.com/reference/send-standard-email).

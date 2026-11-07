@@ -38,3 +38,14 @@ test('recipient address is available only over the private authorized transport 
  assert.equal((await purchaseEvidence(request(x.env.RECIPIENT_RESOLVE_TOKEN,'ref_wrong'),x.env,x.fetcher)).status,503);
  const r=await purchaseEvidence(request(x.env.RECIPIENT_RESOLVE_TOKEN,initial.recipient_reference),x.env,x.fetcher); assert.equal(r.status,200); assert.deepEqual(await r.json(),{email:'squirrel@example.com'});
 });
+test('confirmed reconciliation uses CartRay canonical derived event ID without claiming a Stripe event',async()=>{
+ const x=setup(); x.row.settlement_event_id=null;
+ const r=await x.call(), data=await r.json(); assert.equal(r.status,200); assert.equal(data.event_id,'recon_'+order);
+});
+test('Stripe calls reject redirects and never send credentials to a redirected destination',async()=>{
+ const x=setup(), seen=[];
+ const fetcher=async(url,opts)=>{seen.push([url,opts.redirect]); return Response.json({id:'acct_test123'})};
+ const request=new Request('https://private/confirmed',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({session_id:session,context_hash:context})});
+ assert.equal((await purchaseEvidence(request,x.env,fetcher)).status,503);
+ assert.ok(seen.length>=1); assert.ok(seen.every(([,redirect])=>redirect==='error'));
+});

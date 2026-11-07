@@ -76,11 +76,11 @@ async function readSmallBody(request, maximum = 128) {
 
 // Abort both an unanswered service call and its body. A timed-out provider outcome
 // is unknown; the authority must return the same durable evidence on retry.
-async function serviceRequest(binding, url, options, readJson) {
+async function serviceRequest(binding, url, options, readJson, timeoutMs = 2000) {
   const controller = new AbortController();
   let timer;
   const deadline = new Promise((_, reject) => {
-    timer = setTimeout(() => { controller.abort(); reject(new Error("service timeout")); }, 2000);
+    timer = setTimeout(() => { controller.abort(); reject(new Error("service timeout")); }, timeoutMs);
   });
   try {
     return await Promise.race([
@@ -129,7 +129,7 @@ export async function handleConsent(request, env) {
     headers.set("Content-Type", "application/json");
     const data = await serviceRequest(env.REVIEW_CONSENT_AUTHORITY, "https://consent-authority.internal" + path, {
       method: "POST", headers, body: JSON.stringify(input),
-    }, true);
+    }, true, action === 'challenge' ? 9000 : 2000);
     if (action === 'context') return data?.available === true ? response(200, {available: true, verified:data.verified===true}) : response(503, {error: "unavailable"});
     if (action === 'challenge') return data?.sent === true ? response(200, {sent:true}) : response(503, {error: "unavailable"});
     if (action === 'verify') return data?.verified === true ? response(200, {verified:true}) : response(503, {error: "unavailable"});

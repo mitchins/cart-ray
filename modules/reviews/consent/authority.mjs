@@ -126,7 +126,7 @@ export async function authority(request, env) {
         .bind(contextHash,purchase.event_id,purchase.acquisition_id,purchase.source_provenance,purchase.recipient_context_hash,purchase.binding_version,codeHash,now+600).first();
       if (!claimed) return unavailable();
       try {
-        const signal=AbortSignal.timeout(2000);
+        const signal=AbortSignal.timeout(7000);
         const timeout=new Promise((_,reject)=>signal.addEventListener('abort',()=>reject(new Error('timeout')),{once:true}));
         const delivered=await Promise.race([env.PURCHASE_EMAIL_TRANSPORT.fetch('https://email-possession.internal/send',{method:'POST',headers:{'content-type':'application/json','Authorization':'Bearer '+env.PURCHASE_TRANSPORT_TOKEN},body:JSON.stringify({recipient_reference:purchase.recipient_reference,code,context_hash:contextHash}),signal}),timeout]);
         if (!delivered.ok) throw new Error('uncertain');
