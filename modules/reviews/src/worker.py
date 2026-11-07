@@ -87,6 +87,11 @@ class Default(WorkerEntrypoint):
                     "REVIEWS_CONSENT_SECRET",
                     "REVIEWS_AUTOMATION_INGRESS_TOKEN",
                     "REVIEWS_TEST_ADMIN_TOKEN",
+                    "REVIEWS_SETTLEMENT_TOKEN",
+                    "REVIEWS_REVIEWER_KEY",
+                    "REVIEWS_DELIVERY_TOKEN",
+                    "REVIEWS_RECIPIENT_EVIDENCE_SECRET",
+                    "REVIEWS_AUTOMATION_ACTIVATION_TOKEN",
                 )
             ]
             if (

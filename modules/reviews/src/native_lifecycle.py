@@ -652,6 +652,9 @@ async def handle_write(request, env, path):
                 in (
                     str(getattr(env, "REVIEWS_CONSENT_SECRET", "")),
                     str(getattr(env, "REVIEWS_AUTOMATION_INGRESS_TOKEN", "")),
+                    str(getattr(env, "REVIEWS_DELIVERY_TOKEN", "")),
+                    str(getattr(env, "REVIEWS_RECIPIENT_EVIDENCE_SECRET", "")),
+                    str(getattr(env, "REVIEWS_AUTOMATION_ACTIVATION_TOKEN", "")),
                 )
             ):
                 raise ValueError("initial invitation unavailable")
