@@ -96,6 +96,16 @@ export function createClient(fetcher = fetch, timeoutMs = 8000) {
       if (!data || data.state !== state || !Array.isArray(data.deliveries) || data.deliveries.length > 50 || !(data.next_after === null || ID.test(data.next_after)) || data.deliveries.some((row) => !row || !ID.test(row.delivery_identity || '') || !ID.test(row.generation_id || '') || !SUBJECT.test(row.acquisition_id || '') || row.state !== state || !Number.isSafeInteger(row.prepared_at) || row.prepared_at < 0 || row.prepared_at > 253402300799) || new Set(data.deliveries.map((row) => row.delivery_identity)).size !== data.deliveries.length || (data.next_after && !data.deliveries.some((row) => row.delivery_identity === data.next_after))) throw new ConsoleError('The review service returned an invalid response.');
       return { records: data.deliveries.map(({ acquisition_id, delivery_identity, generation_id, state: rowState, prepared_at }) => ({ acquisition_id, delivery_identity, generation_id, state: rowState, prepared_at })), next_after: data.next_after };
     },
+    async refreshDeliveryEvidence(deliveryId) {
+      if (!ID.test(deliveryId || '')) throw new ConsoleError('Invalid delivery reference.');
+      const data = await request(`/reviews-admin/v1/deliveries/${deliveryId}/refresh`, { method: 'POST', credentials: 'same-origin', cache: 'no-store', headers: { 'Content-Type': 'application/json' }, body: '{}' }, true);
+      if (data?.status !== 'refreshed') throw new ConsoleError('Provider evidence is unavailable.');
+    },
+    async acknowledgeDeliveryEvidence(deliveryId, evidence) {
+      if (!ID.test(deliveryId || '') || !REQUEST_KEY.test(evidence.provider_email_id || '') || !['processed','delivered','rejected','soft-bounced','hard-bounced'].includes(evidence.event_type) || typeof evidence.event_at !== 'string' || evidence.event_at.length > 40) throw new ConsoleError('Invalid provider evidence.');
+      const data = await request(`/reviews-admin/v1/deliveries/${deliveryId}/acknowledge`, { method: 'POST', credentials: 'same-origin', cache: 'no-store', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ provider_email_id: evidence.provider_email_id, event_type: evidence.event_type, event_at: evidence.event_at }) }, true);
+      if (data?.status !== 'acknowledged') throw new ConsoleError('Provider evidence could not be acknowledged.');
+    },
     async deliveryEvidence(deliveryId) {
       if (!ID.test(deliveryId || '')) throw new ConsoleError('Invalid delivery reference.');
       const data = await request(`/reviews-admin/v1/deliveries/${deliveryId}/provider-evidence`, { credentials: 'same-origin', cache: 'no-store', headers: { Accept: 'application/json' } });
@@ -105,6 +115,7 @@ export function createClient(fetcher = fetch, timeoutMs = 8000) {
         provider: data.provider ? { provider: data.provider.provider, provider_email_id: data.provider.provider_email_id, accepted_at: data.provider.accepted_at } : null,
         activity: data.activity.map(({event_type, event_at, observed_at}) => ({event_type, event_at, observed_at})),
         discoveries: data.discoveries.map(({provider_email_id, event_type, event_at, observed_at}) => ({provider_email_id, event_type, event_at, observed_at})),
+        audit: (Array.isArray(data.audit) ? data.audit : []).filter((row) => row && typeof row.actor === 'string' && ['refresh_requested', 'evidence_acknowledged'].includes(row.action) && Number.isSafeInteger(row.occurred_at)).map(({actor, action, occurred_at}) => ({actor, action, occurred_at})),
         truncated: data.truncated,
       };
     },

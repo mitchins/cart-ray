@@ -429,12 +429,123 @@ async def provider_evidence_staff_read(request, env, query, delivery_id):
         "WHERE store_key=? AND environment=? AND acquisition_id=? AND generation_id=? AND delivery_identity=? "
         "ORDER BY event_at DESC LIMIT 51"
     ).bind(store, environment, acquisition, generation_id, delivery_id).all())
+    audit = rows(await env.REVIEWS_DB.prepare(
+        "SELECT actor,action,provider_email_id,event_type,event_at,occurred_at FROM review_provider_operations_audit "
+        "WHERE store_key=? AND environment=? AND delivery_identity=? ORDER BY occurred_at DESC,event_id DESC LIMIT 51"
+    ).bind(store, environment, delivery_id).all())
     return Response.json({"acquisition_id": acquisition, "generation_id": generation_id,
                           "delivery_identity": delivery_id, "state": generation[0]["state"],
                           "provider": identities[0] if identities else None,
-                          "activity": activity[:50], "discoveries": discoveries[:50],
-                          "truncated": len(activity) > 50 or len(discoveries) > 50},
+                          "activity": activity[:50], "discoveries": discoveries[:50], "audit": audit[:50],
+                          "truncated": len(activity) > 50 or len(discoveries) > 50 or len(audit) > 50},
                          headers={"Cache-Control": "no-store"})
+
+
+async def provider_operations(request, env, delivery_id, action, actor, data):
+    """Refresh or acknowledge evidence without changing delivery state or sending mail."""
+    from urllib.parse import urlparse
+
+    origin = str(getattr(env, "REVIEWS_STAFF_ORIGIN", ""))
+    parsed = urlparse(origin)
+    if (not origin or not parsed.hostname or parsed.username or parsed.password
+            or (parsed.scheme != "https" and not (
+                parsed.scheme == "http" and parsed.hostname in ("localhost", "127.0.0.1")
+            ))
+            or parsed.path or parsed.query or parsed.fragment
+            or str(request.headers.get("Origin") or "") != origin):
+        return fail(403, "operations unavailable")
+    if not re.fullmatch(r"[0-9a-f]{64}", delivery_id):
+        return fail(400, "invalid request")
+    db, store, environment = env.REVIEWS_DB, str(env.REVIEWS_STORE_KEY), str(env.REVIEWS_ENVIRONMENT)
+    found = rows(await db.prepare(
+        "SELECT acquisition_id,generation_id FROM invitation_generations "
+        "WHERE store_key=? AND environment=? AND delivery_identity=? LIMIT 1"
+    ).bind(store, environment, delivery_id).all())
+    if len(found) != 1:
+        return fail(404, "delivery unavailable")
+    acquisition, generation = found[0]["acquisition_id"], found[0]["generation_id"]
+    event = None
+    if action == "refresh":
+        if data:
+            return fail(400, "invalid request")
+        service = getattr(env, "REVIEWS_RECONCILIATION", None)
+        token = str(getattr(env, "RECONCILIATION_TOKEN", ""))
+        if (service is None or len(token) < 32 or token in (
+            str(getattr(env, "REVIEWS_TEST_ADMIN_TOKEN", "")),
+            str(getattr(env, "REVIEWS_DELIVERY_TOKEN", "")),
+            str(getattr(env, "REVIEWS_AUTOMATION_INGRESS_TOKEN", "")),
+            str(getattr(env, "REVIEWS_CONSENT_SECRET", "")),
+        )):
+            return fail(503, "operations unavailable")
+        recorded = rows(await db.prepare(
+            "SELECT provider_email_id FROM review_provider_deliveries "
+            "WHERE store_key=? AND environment=? AND acquisition_id=? AND generation_id=? AND delivery_identity=?"
+        ).bind(store, environment, acquisition, generation, delivery_id).all())
+        target = "reconcile" if recorded else "discover"
+    elif action == "acknowledge":
+        if set(data) != {"provider_email_id", "event_type", "event_at"}:
+            return fail(400, "invalid request")
+        provider, kind, when = data["provider_email_id"], data["event_type"], data["event_at"]
+        if (not isinstance(provider, str) or not ID.fullmatch(provider)
+                or kind not in ("processed", "delivered", "rejected", "soft-bounced", "hard-bounced")
+                or not isinstance(when, str) or len(when) > 40):
+            return fail(400, "invalid request")
+        event = rows(await db.prepare(
+            "SELECT provider_email_id,event_type,event_at FROM review_provider_identity_discoveries "
+            "WHERE store_key=? AND environment=? AND acquisition_id=? AND generation_id=? AND delivery_identity=? "
+            "AND provider_email_id=? AND event_type=? AND event_at=? UNION ALL "
+            "SELECT a.provider_email_id,a.event_type,a.event_at FROM review_provider_activity a "
+            "JOIN review_provider_deliveries d USING(store_key,environment,acquisition_id,generation_id,"
+            "provider_email_id) "
+            "WHERE d.store_key=? AND d.environment=? AND d.acquisition_id=? AND d.generation_id=? "
+            "AND d.delivery_identity=? AND a.provider_email_id=? AND a.event_type=? AND a.event_at=? LIMIT 1"
+        ).bind(store, environment, acquisition, generation, delivery_id, provider, kind, when,
+               store, environment, acquisition, generation, delivery_id, provider, kind, when).all())
+        if not event:
+            return fail(409, "provider evidence unavailable")
+    else:
+        return fail(404, "not found")
+    try:
+        await db.batch([db.prepare(
+            "INSERT OR IGNORE INTO review_provider_operations_audit VALUES (?,?,?,?,?,?,?,?,?,?,?,?)"
+        ).bind(random_token(), store, environment, acquisition, generation, delivery_id, actor,
+               "refresh_requested" if action == "refresh" else "evidence_acknowledged",
+               event[0]["provider_email_id"] if event else None, event[0]["event_type"] if event else None,
+               event[0]["event_at"] if event else None, int(time.time()))])
+    except Exception:
+        return fail(503, "operations unavailable")
+    if action == "acknowledge":
+        return Response.json({"status": "acknowledged"}, headers={"Cache-Control": "no-store"})
+    try:
+        status = await request_provider_refresh(service, token, target, acquisition, generation, delivery_id)
+        if status != 200:
+            return fail(503, "provider evidence unavailable")
+        return Response.json({"status": "refreshed"}, headers={"Cache-Control": "no-store"})
+    except Exception:
+        return fail(503, "provider evidence unavailable")
+
+
+async def request_provider_refresh(service, token, target, acquisition, generation, delivery_id):
+    """Bound a private provider lookup and terminate it if the deadline expires."""
+    from js import AbortController
+
+    controller = AbortController.new()
+    try:
+        payload = json.dumps({"acquisition_id": acquisition, "generation_id": generation,
+                              "delivery_identity": delivery_id}, separators=(",", ":"))
+        options = to_js({"method": "POST", "headers": {"Authorization": "Bearer " + token,
+                         "Content-Type": "application/json"}, "body": payload,
+                         "signal": controller.signal}, dict_converter=Object.fromEntries)
+        result = await await_promise(service.fetch("https://reviews-reconciliation.internal/" + target, options), 15)
+        status = int(result.status)
+        if result.body is not None:
+            try:
+                await await_promise(result.body.cancel(), 0.25)
+            except Exception:
+                pass
+        return status
+    finally:
+        controller.abort()
 
 
 async def staff_history_read(request, env, query, review_id, kind):
@@ -1195,7 +1306,9 @@ async def handle_write(request, env, path):
     admin = path.startswith("/reviews-admin/")
     actor = None
     if admin:
+        operation_match = re.fullmatch(r"/reviews-admin/v1/deliveries/([0-9a-f]{64})/(refresh|acknowledge)", path)
         permission = (
+            "reviews:operations" if operation_match else
             "reviews:subjects"
             if path in ("/reviews-admin/v1/subjects", "/reviews-admin/v1/subject-display-names")
             else "reviews:moderate"
@@ -1223,6 +1336,8 @@ async def handle_write(request, env, path):
         data = await read_json(request)
     except (ValueError, TypeError, json.JSONDecodeError):
         return fail(400, "invalid request")
+    if admin and operation_match:
+        return await provider_operations(request, env, operation_match.group(1), operation_match.group(2), actor, data)
     if path == "/reviews/v1/invitation-recovery":
         if not acquisition_mode or set(data) != {"invitation_token"}:
             return fail(400, "invalid request")

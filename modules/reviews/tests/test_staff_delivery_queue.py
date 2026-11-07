@@ -112,3 +112,53 @@ def test_provider_evidence_is_operations_scoped_and_excludes_private_fields(life
     other = settings(REVIEWS_DB=db, REVIEWS_STORE_KEY="other",
                      REVIEWS_STAFF_POLICY=json.dumps({"staff-1": ["reviews:operations"]}))
     assert asyncio.run(lifecycle.provider_evidence_staff_read(req, other, "", delivery)).status == 404
+
+
+def test_operator_acknowledgement_requires_existing_scoped_evidence_and_audits(lifecycle, monkeypatch):
+    db = Database()
+    generation = add_delivery(db, 1)
+    delivery = f"{1001:064x}"
+    db.db.execute(
+        "INSERT INTO review_provider_identity_discoveries VALUES (?,?,?,?,?,?,?,?,?)",
+        ("store", "test", "private-order-1", generation, delivery, "smtp_1", "delivered", "2026-01-01T00:00:00Z", 120),
+    )
+    db.db.commit()
+    env = settings(REVIEWS_DB=db, REVIEWS_STAFF_ORIGIN="https://staff.example")
+    monkeypatch.setattr(lifecycle, "random_token", lambda: "f" * 64)
+    request = types.SimpleNamespace(headers={"Origin": "https://staff.example"})
+    evidence = {"provider_email_id": "smtp_1", "event_type": "delivered", "event_at": "2026-01-01T00:00:00Z"}
+    def action(req, ident, payload):
+        return asyncio.run(lifecycle.provider_operations(req, env, ident, "acknowledge", "staff-1", payload))
+    assert action(types.SimpleNamespace(headers={}), delivery, evidence).status == 403
+    assert action(request, f"{1002:064x}", evidence).status == 404
+    assert action(request, delivery, dict(evidence, event_type="rejected")).status == 409
+    assert action(request, delivery, evidence).status == 200
+    assert tuple(db.db.execute("SELECT actor,action,event_type FROM review_provider_operations_audit").fetchone()) == (
+        "staff-1", "evidence_acknowledged", "delivered"
+    )
+    assert db.db.execute("SELECT state FROM invitation_generations").fetchone()[0] == "uncertain"
+
+
+def test_refresh_is_audited_scoped_and_never_sends_or_mutates(lifecycle, monkeypatch):
+    db = Database()
+    generation = add_delivery(db, 1)
+    delivery = f"{1001:064x}"
+    db.db.commit()
+    env = settings(REVIEWS_DB=db, REVIEWS_STAFF_ORIGIN="https://staff.example",
+                   REVIEWS_RECONCILIATION=object(), RECONCILIATION_TOKEN="z" * 40)
+    monkeypatch.setattr(lifecycle, "random_token", lambda: "f" * 64)
+    calls = []
+
+    async def refresh(service, token_value, target, acquisition, gen, ident):
+        calls.append((target, acquisition, gen, ident))
+        return 200
+
+    monkeypatch.setattr(lifecycle, "request_provider_refresh", refresh)
+    request = types.SimpleNamespace(headers={"Origin": "https://staff.example"})
+    response = asyncio.run(lifecycle.provider_operations(request, env, delivery, "refresh", "staff-1", {}))
+    assert response.status == 200
+    assert calls == [("discover", "private-order-1", generation, delivery)]
+    assert db.db.execute("SELECT action FROM review_provider_operations_audit").fetchone()[0] == "refresh_requested"
+    assert db.db.execute("SELECT state FROM invitation_generations").fetchone()[0] == "uncertain"
+    result = asyncio.run(lifecycle.provider_operations(request, env, delivery, "refresh", "staff-1", {"x": 1}))
+    assert result.status == 400

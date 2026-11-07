@@ -64,7 +64,7 @@ test('reply editing waits until the current revision is found in paginated histo
   assert.equal(calls, 2);
 });
 
-test('delivery investigation is read-only and permission failure does not disable moderation', async () => {
+test('delivery investigation permission failure does not disable moderation', async () => {
   const names = ['delivery-state', 'delivery-load', 'delivery-more', 'delivery-results', 'delivery-status', 'delivery-error'];
   const nodes = Object.fromEntries(names.map((name) => [name, new Element(name)])); nodes['delivery-state'].value = 'uncertain';
   let calls = 0, denied = true;
@@ -74,7 +74,7 @@ test('delivery investigation is read-only and permission failure does not disabl
   await nodes['delivery-load'].click(); assert.match(nodes['delivery-error'].textContent, /operations permission/);
   denied = false; await nodes['delivery-load'].click();
   assert.match(nodes['delivery-results'].children[0].children[1].textContent, /Delivery reference/);
-  assert.equal(nodes['delivery-results'].children[0].children.length, 6);
+  assert.equal(nodes['delivery-results'].children[0].children.length, 7);
 });
 
 test('reply history preserves edits made while loading and save locks inputs', async () => {

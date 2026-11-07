@@ -113,3 +113,18 @@ test('provider evidence is restricted to operations output and excludes unknown 
  assert.equal((await client.deliveryEvidence(id)).discoveries[0].event_type,'delivered');assert.match(calls[0][0],/provider-evidence$/);
  await assert.rejects(client.deliveryEvidence('invalid'),/reference/);
 });
+
+test('delivery evidence operations use scoped same-origin POSTs and do not expose resend', async () => {
+  const calls = [];
+  const client = createClient(async (url, options) => {
+    calls.push({url, options});
+    return Response.json({status: url.endsWith('/refresh') ? 'refreshed' : 'acknowledged'});
+  });
+  const delivery = 'f'.repeat(64);
+  await client.refreshDeliveryEvidence(delivery);
+  await client.acknowledgeDeliveryEvidence(delivery, {provider_email_id: 'smtp_1', event_type: 'delivered', event_at: '2026-01-01T00:00:00Z', ignored: 'private'});
+  assert.equal(calls[0].options.credentials, 'same-origin');
+  assert.equal(calls[0].url, `/reviews-admin/v1/deliveries/${delivery}/refresh`);
+  assert.deepEqual(JSON.parse(calls[1].options.body), {provider_email_id: 'smtp_1', event_type: 'delivered', event_at: '2026-01-01T00:00:00Z'});
+  assert.equal('resend' in client, false);
+});

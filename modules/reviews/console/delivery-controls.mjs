@@ -1,6 +1,6 @@
 import { ConsoleError } from './client.mjs';
 
-// Separate permission and read-only API: no resend or delivery outcome mutation.
+// Separate permission; evidence controls never resend or mutate delivery state.
 export function setupDeliveries({ client, document, element }) {
   const filter = document.querySelector('#delivery-state'), load = document.querySelector('#delivery-load');
   const more = document.querySelector('#delivery-more'), output = document.querySelector('#delivery-results');
@@ -31,13 +31,33 @@ export function setupDeliveries({ client, document, element }) {
             const result = await client.deliveryEvidence(row.delivery_identity);
             evidence.replaceChildren();
             evidence.append(element('p', result.provider ? `Provider accepted: ${result.provider.provider_email_id}` : 'No provider acceptance identity recorded.'));
-            for (const event of result.activity) evidence.append(element('p', `${event.event_type}: ${event.event_at}`));
-            for (const event of result.discoveries) evidence.append(element('p', `Unconfirmed identity ${event.provider_email_id}: ${event.event_type} ${event.event_at}`));
+            const showEvent = (event, provider) => {
+              const line = element('p', `${provider}: ${event.event_type} ${event.event_at} `);
+              const acknowledge = element('button', 'Acknowledge evidence');
+              acknowledge.addEventListener('click', async () => {
+                acknowledge.disabled = true;
+                try {
+                  await client.acknowledgeDeliveryEvidence(row.delivery_identity, { ...event, provider_email_id: provider });
+                  acknowledge.textContent = 'Evidence acknowledged; delivery state unchanged';
+                } catch { acknowledge.disabled = false; acknowledge.textContent = 'Acknowledgement unavailable'; }
+              });
+              line.append(acknowledge); evidence.append(line);
+            };
+            for (const event of result.activity) showEvent(event, result.provider.provider_email_id);
+            for (const event of result.discoveries) showEvent(event, event.provider_email_id);
+            for (const event of result.audit) evidence.append(element('p', `${event.action} by ${event.actor} at ${new Date(event.occurred_at * 1000).toISOString()}`));
             if (result.truncated) evidence.append(element('p', 'Additional evidence exists; contact an operator.'));
           } catch { evidence.textContent = 'Provider evidence is unavailable. Do not resend without reconciliation.'; }
           finally { inspect.disabled = false; }
         });
-        card.append(inspect, evidence);
+        const refresh = element('button', 'Refresh provider evidence');
+        refresh.addEventListener('click', async () => {
+          refresh.disabled = true;
+          try { await client.refreshDeliveryEvidence(row.delivery_identity); evidence.textContent = 'Evidence refreshed. Select View provider evidence to inspect it.'; }
+          catch { evidence.textContent = 'Provider lookup is unavailable or uncertain. Do not resend.'; }
+          finally { refresh.disabled = false; }
+        });
+        card.append(inspect, refresh, evidence);
         output.append(card);
       }
       cursor = page.next_after; loadedState = selected; more.hidden = !cursor;
