@@ -26,3 +26,8 @@ aside { margin-top: 2rem; }
 .history h4 { margin: 0 0 .6rem; }
 .history-group { margin-bottom: .7rem; }
 .history-entry { border-left: 3px solid #d5dfe8; margin-top: .6rem; padding-left: .7rem; }
+.reply-form label { display: block; font-weight: 600; margin-top: .75rem; }
+.reply-form input, .reply-form textarea { display: block; font: inherit; width: 100%; max-width: 42rem; padding: .5rem; border: 1px solid #8192a1; border-radius: .3rem; }
+.reply-form button { margin: .75rem .5rem 0 0; }
+.deliveries { border-top: 1px solid #d5dfe8; margin-top: 2rem; padding-top: 1.5rem; }
+#delivery-error { border-left: 4px solid #a12929; padding: .7rem; color: #802020; background: #fff1ef; }

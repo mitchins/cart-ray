@@ -62,3 +62,36 @@ test('staff authorization, conflict and rate errors provide actionable messages'
     await assert.rejects(createClient(async () => response({}, code)).pending(), text);
   }
 });
+
+test('reply requests bind parent and reply revisions and retain caller idempotency key', async () => {
+  const replyId = 'c'.repeat(64), replyRevision = 'd'.repeat(64), calls = [];
+  const client = createClient(async (url, options) => {
+    calls.push([url, options]);
+    if (url.includes('reply-revisions')) return response({ review_id: id, state: 'published', current_revision_id: revision, reply: { reply_id: replyId, reply_revision_id: replyRevision, parent_revision_id: revision, state: 'published' }, reply_revisions: [{ reply_revision_id: replyRevision, author: 'Store', body: 'Thanks', created_at: 1 }], next_after: null });
+    if (url.includes('reply-audit')) return response({ review_id: id, state: 'published', current_revision_id: revision, reply_audit: [{ event_id: 'e'.repeat(64), reply_id: replyId, reply_revision_id: replyRevision, actor: 'staff:x', action: 'created', occurred_at: 1 }], next_after: null });
+    return response({ reply_id: replyId, reply_revision_id: replyRevision, state: url.endsWith('reply-withdraw') ? 'withdrawn' : 'published' });
+  });
+  assert.equal((await client.replyHistory(review)).head.reply_revision_id, replyRevision);
+  await client.reply(review, 'upsert', { expected_reply_revision_id: replyRevision, author: 'Store', body: 'Thanks' }, 'request-1');
+  assert.equal(calls[1][1].headers['Idempotency-Key'], 'request-1');
+  assert.deepEqual(JSON.parse(calls[1][1].body), { parent_revision_id: revision, expected_reply_revision_id: replyRevision, author: 'Store', body: 'Thanks' });
+  await client.reply(review, 'withdraw', { expected_reply_revision_id: replyRevision }, 'request-2');
+  assert.match(calls[2][0], /reply-withdraw$/);
+  assert.equal((await client.replyAudit(review)).records[0].action, 'created');
+  await assert.rejects(client.reply(review, 'upsert', { expected_reply_revision_id: null, author: ' ', body: 'x' }, 'x'), /display name/);
+  await assert.rejects(createClient(async () => response({ review_id: id, state: 'published', current_revision_id: 'f'.repeat(64) })).replyHistory(review), /changed/);
+});
+
+test('delivery investigation requires explicit state and paginates by delivery identity', async () => {
+  const generation = 'c'.repeat(64), delivery = 'd'.repeat(64), calls = [];
+  const client = createClient(async (url, options) => {
+    calls.push([url, options]);
+    return response({ state: 'uncertain', deliveries: [{ generation_id: generation, delivery_identity: delivery, state: 'uncertain', prepared_at: 10, private_email: 'discard' }], next_after: delivery });
+  });
+  const page = await client.deliveries('uncertain');
+  assert.equal(page.records[0].private_email, undefined);
+  await client.deliveries('uncertain', page.next_after);
+  assert.match(calls[1][0], new RegExp(`after=${delivery}$`));
+  await assert.rejects(client.deliveries('accepted'), /filter/);
+  await assert.rejects(createClient(async () => response({}, 401)).deliveries('uncertain'), /permission/);
+});

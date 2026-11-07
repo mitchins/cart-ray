@@ -34,9 +34,18 @@ CONSOLE = Path(__file__).resolve().parent.parent
 PORT = 48974
 ORIGIN = f"http://127.0.0.1:{PORT}"
 STAFF_PATH = re.compile(
-    r"/reviews-admin/v1/(?:pending|published|contributions/[a-f0-9]{64}/(?:approve|reject|withdraw|revisions|audit))"
+    r"/reviews-admin/v1/(?:pending|published|deliveries|contributions/[a-f0-9]{64}/"
+    r"(?:approve|reject|withdraw|revisions|audit|reply|reply-withdraw|reply-revisions|reply-audit))"
 )
-ASSETS = {"/", "/index.html", "/client.mjs", "/console.mjs", "/styles.css"}
+ASSETS = {
+    "/",
+    "/index.html",
+    "/client.mjs",
+    "/console.mjs",
+    "/reply-controls.mjs",
+    "/delivery-controls.mjs",
+    "/styles.css",
+}
 
 
 def stop_owned(process):
@@ -72,17 +81,29 @@ def owns_listener(process):
     if process.poll() is not None:
         return False
     try:
-        result = subprocess.run(
-            ["lsof", "-nP", f"-tiTCP:{WORKER_PORT}", "-sTCP:LISTEN"], capture_output=True, text=True, timeout=5
-        )
-    except (OSError, subprocess.TimeoutExpired) as exc:
-        raise RuntimeError("cannot identify local Worker listener") from exc
-    if result.returncode not in (0, 1):
-        raise RuntimeError("cannot identify local Worker listener")
-    try:
-        pids = [int(line) for line in result.stdout.splitlines() if line.strip()]
+        if sys.platform == "darwin":
+            result = subprocess.run(["netstat", "-anv", "-p", "tcp"], capture_output=True, text=True, timeout=5)
+            if result.returncode != 0 or "process:pid" not in result.stdout:
+                return False
+            pids = []
+            for line in result.stdout.splitlines():
+                fields = line.split()
+                if len(fields) < 6 or fields[0] not in ("tcp4", "tcp6"):
+                    continue
+                if fields[3].rsplit(".", 1)[-1] != str(WORKER_PORT) or fields[5] != "LISTEN":
+                    continue
+                if len(fields) < 11 or not re.fullmatch(r"[^:]+:[1-9][0-9]*", fields[10]):
+                    return False
+                pids.append(int(fields[10].rsplit(":", 1)[1]))
+        else:
+            result = subprocess.run(
+                ["lsof", "-nP", f"-tiTCP:{WORKER_PORT}", "-sTCP:LISTEN"], capture_output=True, text=True, timeout=5
+            )
+            if result.returncode not in (0, 1):
+                raise RuntimeError("cannot identify local Worker listener")
+            pids = [int(line) for line in result.stdout.splitlines() if line.strip()]
         return bool(pids) and all(os.getpgid(pid) == process.pid for pid in pids)
-    except (ValueError, ProcessLookupError):
+    except (OSError, subprocess.TimeoutExpired, ValueError):
         return False
 
 
@@ -262,6 +283,12 @@ class Gateway(SimpleHTTPRequestHandler):
                 self.send_error(408)
                 return
             headers["Content-Type"] = self.headers.get("Content-Type", "")
+            if path.path.endswith(("/reply", "/reply-withdraw")):
+                key = self.headers.get("Idempotency-Key", "")
+                if not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", key):
+                    self.send_error(400)
+                    return
+                headers["Idempotency-Key"] = key
         try:
             require_owned(self.server.worker_process, self.server.marker_subject, self.server.marker_version)
         except RuntimeError:
@@ -304,7 +331,11 @@ class Gateway(SimpleHTTPRequestHandler):
         return self.proxy()
 
 
-def main():
+def main(arguments=None):
+    arguments = sys.argv[1:] if arguments is None else arguments
+    if arguments not in ([], ["--operations"]):
+        raise SystemExit("usage: workerd_gateway.py [--operations]")
+    permissions = ["reviews:moderate"] + (["reviews:operations"] if "--operations" in arguments else [])
     directory = tempfile.mkdtemp(prefix="reviews-console-workerd-")
     process = None
     gateway = None
@@ -318,6 +349,15 @@ def main():
             f"VALUES('example-store','test','{marker_subject}','product','/{marker_subject}/'); "
             "INSERT INTO native_publication_versions(store_key,environment,subject_id,version) "
             f"VALUES('example-store','test','{marker_subject}',{marker_version});"
+            "INSERT INTO acquisition_invitations(store_key,environment,acquisition_id,source_event_id,"
+            "recipient_context_hash,subject_set_hash,key_version,token_hash,expires_at) "
+            f"VALUES('example-store','test','synthetic-delivery','synthetic-event','{'1' * 64}',"
+            f"'{'2' * 64}','v1','{'3' * 64}',4102444800); "
+            "INSERT INTO invitation_generations(store_key,environment,acquisition_id,generation_id,request_key,"
+            "token_hash,key_version,expected_token_hash,expected_revoked,expected_revocation_epoch,"
+            "delivery_identity,state,prepared_at) "
+            f"VALUES('example-store','test','synthetic-delivery','{'4' * 64}','synthetic-request',"
+            f"'{'5' * 64}','v1','{'3' * 64}',0,0,'{'6' * 64}','uncertain',1700000000);"
         )
         run_owned(
             [
@@ -376,7 +416,7 @@ def main():
             "REVIEWS_STAFF_MODE": "cloudflare_access",
             "REVIEWS_STAFF_ISSUER": ISSUER,
             "REVIEWS_STAFF_AUDIENCE": AUDIENCE,
-            "REVIEWS_STAFF_POLICY": json.dumps({"staff-1": ["reviews:moderate"]}),
+            "REVIEWS_STAFF_POLICY": json.dumps({"staff-1": permissions}),
             "REVIEWS_STAFF_TEST_JWKS": json.dumps(jwks),
         }
         process = start_owned(directory, marker_subject, marker_version, extra_vars=options)
