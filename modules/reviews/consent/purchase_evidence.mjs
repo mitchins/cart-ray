@@ -179,7 +179,7 @@ export async function purchaseEvidence(request,env,fetcher=fetch) {
     if(!input || Array.isArray(input)) return unavailable();
     if(path==='/historical-recipient') {
       const token=env.HISTORICAL_RECIPIENT_TOKEN, reviewsToken=env.REVIEWS_HISTORICAL_RECIPIENT_TOKEN;
-      if(Object.keys(input).sort().join(',')!=='acquisition_id,delivery_identity,generation_id,outbox_id' ||
+      if(Object.keys(input).length!==4 || !['acquisition_id','delivery_identity','generation_id','outbox_id'].every(k=>Object.hasOwn(input,k)) ||
         !Number.isSafeInteger(input.outbox_id) || input.outbox_id<1 || !id.test(input.acquisition_id||'') ||
         !hash.test(input.generation_id||'') || !hash.test(input.delivery_identity||'') ||
         [token,reviewsToken].some(x=>typeof x!=='string'||x.length<32) ||
