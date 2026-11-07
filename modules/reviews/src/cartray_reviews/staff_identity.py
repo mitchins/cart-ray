@@ -196,6 +196,10 @@ class JwksCache:
     """
 
     def __init__(self, *, capacity=8, clock=time.monotonic):
+        if not isinstance(capacity, int) or isinstance(capacity, bool) or capacity < 1:
+            raise ValueError("staff cache capacity must be a positive integer")
+        if not callable(clock):
+            raise TypeError("staff cache clock must be callable")
         self.capacity, self.clock, self.entries, self.refreshing = capacity, clock, {}, set()
 
     async def get(self, url, loader, ttl):
@@ -217,9 +221,10 @@ class JwksCache:
             self.refreshing.remove(url)
         if not isinstance(result, dict) or not isinstance(result.get("keys"), list) or len(result["keys"]) > 20:
             raise StaffAuthenticationError("invalid signing keys")
+        if self.clock() >= now + ttl:
+            raise StaffAuthenticationError("staff keys expired during refresh")
         if len(self.entries) >= self.capacity:
             oldest = min(self.entries, key=lambda key: self.entries[key][0])
             del self.entries[oldest]
-        inserted = self.clock()
-        self.entries[url] = (inserted + ttl, result, inserted)
+        self.entries[url] = (now + ttl, result, now)
         return result

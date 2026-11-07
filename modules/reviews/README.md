@@ -8,13 +8,16 @@ to the Python test verifier. Optional `REVIEWS_STAFF_ADMISSION=edge` requires a
 separate `REVIEWS_STAFF_INGRESS` rate-limit binding, a secret
 `REVIEWS_STAFF_RATE_KEY` of at least 32 characters and a valid Cloudflare-supplied
 `CF-Connecting-IP`. Missing or unavailable admission fails closed before JWKS
-loading. Cloudflare's rate limits are approximate and per-location, not a global
+loading. IPv4 addresses use individual buckets; IPv4-mapped addresses share the
+corresponding IPv4 bucket, and IPv6 addresses share a /64 bucket. Cloudflare's
+rate limits are approximate and per-location, not a global
 hard bound. A caller-supplied IP is trustworthy only behind a correctly configured
 Cloudflare ingress; the test mode is not itself an authentication proxy.
 
 Optional `REVIEWS_STAFF_JWKS_CACHE_SECONDS` accepts 1–60 seconds (0 disables
 caching). Keys are cached per issuer in a bounded per-isolate cache, never served
-stale after expiry or on provider failure. Key removal and new key recognition may
+stale after expiry or on provider failure. The lifetime starts when a fetch begins,
+and a fetch that consumes the entire lifetime fails closed. Key removal and new key recognition may
 take up to the configured TTL; unknown key IDs do not force unlimited refreshes.
 This is a test-qualified adapter, not permission to activate live staff access.
 Production policy, edge bindings, rotation/revocation limits, actual provider

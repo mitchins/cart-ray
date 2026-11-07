@@ -61,6 +61,33 @@ def test_cache_bounds_and_shorter_policy_are_respected():
             run(cache.get("d", loader, ttl))
 
 
+def test_cache_rejects_invalid_capacity_and_clock():
+    for capacity in (0, -1, True, 1.5, float("nan"), "2"):
+        with pytest.raises(ValueError):
+            JwksCache(capacity=capacity)
+    with pytest.raises(TypeError):
+        JwksCache(clock=None)
+
+
+def test_cache_lifetime_starts_at_fetch_and_slow_refresh_fails_closed():
+    now = [0.0]
+    cache = JwksCache(clock=lambda: now[0])
+    calls = []
+
+    async def loader(url):
+        calls.append(url)
+        now[0] += 6
+        return {"keys": []}
+
+    run(cache.get("issuer", loader, 10))
+    now[0] = 10
+    run(cache.get("issuer", loader, 10))
+    assert len(calls) == 2
+    with pytest.raises(StaffAuthenticationError, match="expired during refresh"):
+        run(cache.get("other", loader, 5))
+    assert "other" not in cache.entries
+
+
 def test_cache_rejects_malformed_sets_without_storing_them():
     cache = JwksCache()
 
@@ -163,6 +190,12 @@ def test_edge_admission_fails_closed_and_uses_actor_specific_hashed_key(lifecycl
     request.headers["CF-Connecting-IP"] = "192.0.2.2"
     assert run(lifecycle.staff_actor(request, env, "reviews:moderate")).startswith("staff:")
     assert seen[0] != seen[1]
+    for address in ("2001:db8:1:2::1", "2001:db8:1:2::ffff", "2001:db8:1:3::1", "::ffff:192.0.2.1"):
+        request.headers["CF-Connecting-IP"] = address
+        assert run(lifecycle.staff_actor(request, env, "reviews:moderate")).startswith("staff:")
+    assert seen[2] == seen[3]
+    assert seen[3] != seen[4]
+    assert seen[5] == seen[0]
     env.REVIEWS_STAFF_INGRESS = None
     assert run(lifecycle.staff_actor(request, env, "reviews:moderate")) is None
 

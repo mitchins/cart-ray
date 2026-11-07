@@ -169,6 +169,10 @@ async def staff_actor(request, env, permission):
     if admission == "edge":
         try:
             ip = ipaddress.ip_address(str(request.headers.get("CF-Connecting-IP") or ""))
+            if ip.version == 6 and ip.ipv4_mapped is not None:
+                ip = ip.ipv4_mapped
+            elif ip.version == 6:
+                ip = ipaddress.ip_network(f"{ip}/64", strict=False).network_address
             secret = str(getattr(env, "REVIEWS_STAFF_RATE_KEY", ""))
             store = str(getattr(env, "REVIEWS_STORE_KEY", ""))
             if len(secret) < 32 or not store:
