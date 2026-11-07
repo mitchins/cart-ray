@@ -135,7 +135,11 @@ verified genuinely empty installation. The operator must verify the snapshot's
 source, scope and freshness and stop concurrent writers; the tool cannot attest
 an arbitrary local file or police a separate deployment. Apply its private SQL
 output only to the verified context database; retain it securely and remove it
-when no longer needed. A missing row, changed key or changed version fails closed
+when no longer needed. The tool requires owned, singly linked regular 0600 input
+files and writes a new file in an owned private directory (0700 or stricter).
+It reads the snapshot through an open descriptor; provide a complete, quiesced
+SQLite snapshot rather than a database with uncheckpointed journal data.
+A missing row, changed key or changed version fails closed
 before purchase evidence or recipient delivery. The immutable epoch records and
 current pointer are separate: a version cannot be reused with a different key.
 
