@@ -918,6 +918,8 @@ async def handle_write(request, env, path):
             expected = {"acquisition_id", "generation_id", "delivery_identity", "outcome"}
             if data.get("outcome") == "accepted":
                 expected.add("accepted_at")
+                if "provider_email_id" in data:
+                    expected.add("provider_email_id")
             if set(data) != expected:
                 return fail(400, "invalid delivery outcome")
             lifetime_setting = str(getattr(env, "REVIEWS_INVITATION_LIFETIME", "5184000"))
@@ -933,6 +935,7 @@ async def handle_write(request, env, path):
                 now=int(time.time()),
                 accepted_at=data.get("accepted_at"),
                 lifetime=lifetime,
+                provider_email_id=data.get("provider_email_id"),
             )
             return Response.json(result, headers={"Cache-Control": "no-store"})
         except (ValueError, TypeError, AttributeError, KeyError):

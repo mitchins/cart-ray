@@ -12,3 +12,8 @@ test('lost acceptance acknowledgement never causes another provider call',async(
 test('missing permission, bad recipient and disabled or live mode do not send',async()=>{for(const alter of [t=>t.withdraw(),t=>{t.env.APPROVED_TEST_EMAIL='other@example.org'},t=>{t.env.INITIAL_SEND_MODE='disabled'},t=>{t.env.REVIEWS_ENVIRONMENT='live'}]){const t=setup();alter(t);await assert.rejects(t.send());assert.equal(t.sent,0)}});
 test('a suppressed due purchase is acknowledged without sending',async()=>{const t=setup();t.env.REVIEWS_API.fetch=async()=>Response.json({status:'suppressed'});assert.equal(await t.send(),'done');assert.equal(t.sent,0)});
 test('GET and HEAD never unsubscribe; POST invokes scoped suppression',async()=>{let calls=0;const env={REVIEWS_ENVIRONMENT:'test',REVIEWS_API:{fetch:async(_url,opts)=>{calls++;assert.deepEqual(JSON.parse(opts.body),{token:unsub});return Response.json({status:'unsubscribed'})}}};const url='https://store.example.org/unsubscribe/'+unsub;assert.equal((await unsubscribeGateway(new Request(url),env)).status,200);assert.equal((await unsubscribeGateway(new Request(url,{method:'HEAD'}),env)).status,200);assert.equal(calls,0);assert.equal((await unsubscribeGateway(new Request(url,{method:'POST',body:'List-Unsubscribe=One-Click'}),env)).status,200);assert.equal(calls,1)});
+test('accepted provider identity is sent with durable delivery outcome',async()=>{
+ const t=setup(), original=t.env.REVIEWS_API.fetch;let evidence;
+ t.env.REVIEWS_API.fetch=async(url,opts)=>{if(url.endsWith('/delivery-outcome'))evidence=JSON.parse(opts.body);return original(url,opts)};
+ assert.equal(await t.send(),'sent');assert.equal(evidence.provider_email_id,'id_1');assert.equal(evidence.delivery_identity,del);
+});

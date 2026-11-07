@@ -38,7 +38,8 @@
     "migrations/0026_automation_activation_fence.sql",
     "migrations/0027_consent_withdrawal.sql",
     "migrations/0028_automation_due_schedule.sql",
-    "migrations/0029_merchant_recipient_suppression.sql"
+    "migrations/0029_merchant_recipient_suppression.sql",
+    "migrations/0031_provider_delivery_receipts.sql"
   ],
   "routes": [
     "GET /reviews/v1/subject-lookup?alias={alias}",

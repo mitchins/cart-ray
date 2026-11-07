@@ -8,7 +8,7 @@ const digest = async text => Array.from(new Uint8Array(await crypto.subtle.diges
 async function fixture() {
   let state = "pending", sends = 0, outcomeAttempts = 0, breakOutcome = false, apiCalls = 0;
   const hash = await digest(recipient);
-  const pending = {acquisition_id:"order", request_id:"a".repeat(64), source_event_id:"event", recipient_context_hash:hash};
+  const pending = {acquisition_id:"order", request_id:"a".repeat(64), source_event_id:"event", recipient_context_hash:hash, outbox_id:10};
   const api = {async fetch(url, init) {
     apiCalls++;
     const path = new URL(url).pathname;
@@ -75,4 +75,28 @@ test("invalid delivery configuration fails before any claim or API mutation", as
     await assert.rejects(processCommand(f.command,f.env,()=>101));
     assert.equal(f.apiCalls(),0); assert.equal(f.sends(),0);
   }
+});
+
+test('SMTP2GO recovery records the trusted provider ID while generic MAIL remains compatible', async () => {
+  const f=await fixture();f.env.SYNTHETIC_MAIL_PROVIDER='smtp2go';let captured;
+  const api=f.env.REVIEWS_API.fetch;
+  f.env.REVIEWS_API.fetch=async(url,init)=>{if(url.endsWith('/delivery-outcome'))captured=JSON.parse(init.body);return api(url,init)};
+  f.env.SMTP2GO_MAIL_TOKEN='x'.repeat(40);f.env.SMTP2GO_MAIL={fetch:async()=>Response.json({email_id:'smtp_recovery_1'})};
+  f.env.AUTOMATION_RECIPIENT_TOKEN='r'.repeat(40);f.env.PURCHASE_EVIDENCE={fetch:async()=>Response.json({email:recipient,recipient_context_hash:await digest(recipient)})};
+  assert.equal(await processCommand(f.command,f.env,()=>101),'done');assert.equal(captured.provider_email_id,'smtp_recovery_1');
+});
+test('SMTP2GO recovery with an ambiguous receipt remains uncertain and is never resent', async () => {
+  const f=await fixture();f.env.SYNTHETIC_MAIL_PROVIDER='smtp2go';let calls=0;
+  f.env.SMTP2GO_MAIL_TOKEN='x'.repeat(40);f.env.SMTP2GO_MAIL={fetch:async()=>{calls++;return Response.json({})}};
+  f.env.AUTOMATION_RECIPIENT_TOKEN='r'.repeat(40);f.env.PURCHASE_EVIDENCE={fetch:async()=>Response.json({email:recipient,recipient_context_hash:await digest(recipient)})};
+  await assert.rejects(processCommand(f.command,f.env,()=>101),/reconciliation/);
+  await assert.rejects(processCommand(f.command,f.env,()=>102));assert.equal(calls,1);
+});
+test('SMTP2GO recovery requires the authoritative purchase recipient and binding', async () => {
+ for(const response of [{email:'other@example.org',recipient_context_hash:await digest(recipient)}, {email:recipient,recipient_context_hash:'f'.repeat(64)}]) {
+  const f=await fixture();f.env.SYNTHETIC_MAIL_PROVIDER='smtp2go';f.env.SMTP2GO_MAIL_TOKEN='x'.repeat(40);
+  f.env.SMTP2GO_MAIL={fetch:async()=>{throw Error('must not send')}};f.env.AUTOMATION_RECIPIENT_TOKEN='r'.repeat(40);
+  f.env.PURCHASE_EVIDENCE={fetch:async()=>Response.json(response)};
+  await assert.rejects(processCommand(f.command,f.env,()=>101),/recipient/);assert.equal(f.sends(),0);
+ }
 });

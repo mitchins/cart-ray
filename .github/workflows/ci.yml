@@ -31,6 +31,8 @@ jobs:
         run: |
           uv run --locked pytest examples/acorn-store/tests/test_build.py
           node --test examples/acorn-store/tests/reviews.test.mjs
+      - name: Test provider reconciliation on Workerd and D1
+        run: node --test modules/reviews/tests/provider_reconciliation_workerd.mjs
       - name: Test optional Reviews snapshot rehearsal
         run: REVIEWS_QUALIFICATION_BUILD=1 PYTHONPATH=modules/reviews/src uv run pytest modules/reviews/tests
       - name: Test Reviews recovery queue consumer
@@ -129,6 +131,8 @@ jobs:
           node --test --experimental-test-coverage --test-reporter=spec --test-reporter-destination=stdout --test-reporter=lcov --test-reporter-destination=coverage/reviews-automation-queue.lcov modules/reviews/tests/automation_queue.test.mjs
           node --test --experimental-test-coverage --test-reporter=spec --test-reporter-destination=stdout --test-reporter=lcov --test-reporter-destination=coverage/reviews-intake-source.lcov modules/reviews/tests/automation_intake_producer.test.mjs modules/reviews/tests/automation_intake_queue.test.mjs
           node --test --experimental-test-coverage --test-reporter=spec --test-reporter-destination=stdout --test-reporter=lcov --test-reporter-destination=coverage/reviews-initial.lcov modules/reviews/tests/automation_due_producer.test.mjs modules/reviews/tests/initial_dispatch.test.mjs
+          node --test --experimental-test-coverage --test-reporter=spec --test-reporter-destination=stdout --test-reporter=lcov --test-reporter-destination=coverage/reviews-recovery-smtp.lcov modules/reviews/tests/smtp2go_recovery.test.mjs
+          node --test --experimental-test-coverage --test-reporter=spec --test-reporter-destination=stdout --test-reporter=lcov --test-reporter-destination=coverage/reviews-provider.lcov modules/reviews/tests/provider_reconciliation.test.mjs
           node --test --experimental-test-coverage --test-reporter=spec --test-reporter-destination=stdout --test-reporter=lcov --test-reporter-destination=coverage/reviews-consent.lcov modules/reviews/consent/tests/*.test.mjs
           node --test --experimental-test-coverage --test-reporter=spec --test-reporter-destination=stdout --test-reporter=lcov --test-reporter-destination=coverage/reviews-publication.lcov modules/reviews/publication/tests/*.test.mjs
           node --test --experimental-test-coverage --test-reporter=spec --test-reporter-destination=stdout --test-reporter=lcov --test-reporter-destination=coverage/reviews-console.lcov modules/reviews/console/tests/*.test.mjs

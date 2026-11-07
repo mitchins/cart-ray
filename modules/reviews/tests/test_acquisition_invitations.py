@@ -619,12 +619,19 @@ def test_replacement_is_pending_until_delivery_and_preserves_consumed_subjects()
     assert asyncio.run(claim_delivery(reviews, **claim)) == {"state": "dispatching"}
     with pytest.raises(ValueError):
         asyncio.run(claim_delivery(reviews, **claim))
-    assert asyncio.run(record_delivery_outcome(reviews, **outcome, outcome="accepted", accepted_at=103)) == {
+    assert asyncio.run(record_delivery_outcome(reviews, **outcome, outcome="accepted", accepted_at=103,
+                                               provider_email_id="provider_123")) == {
         "state": "accepted"
     }
-    assert asyncio.run(record_delivery_outcome(reviews, **outcome, outcome="accepted", accepted_at=103)) == {
+    assert asyncio.run(record_delivery_outcome(reviews, **outcome, outcome="accepted", accepted_at=103,
+                                               provider_email_id="provider_123")) == {
         "state": "accepted"
     }
+    saved_id = reviews.db.execute("SELECT provider_email_id FROM review_provider_deliveries").fetchone()[0]
+    assert saved_id == "provider_123"
+    with pytest.raises(ValueError):
+        asyncio.run(record_delivery_outcome(reviews, **outcome, outcome="accepted", accepted_at=103,
+                                            provider_email_id="conflicting"))
     row = reviews.db.execute("SELECT expires_at FROM acquisition_invitations").fetchone()
     assert row[0] == 103 + 60 * 86400
     with pytest.raises(ValueError):
