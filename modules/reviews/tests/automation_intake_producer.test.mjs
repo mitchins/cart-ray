@@ -3,6 +3,7 @@ import {schema} from './fixtures/producer-workerd/schema-fixture.mjs';
 import assert from 'node:assert/strict';
 import {webcrypto} from 'node:crypto';
 import producer, {attest, attestPurchase, relay} from '../automation-intake-producer/worker.mjs';
+import {inspectDeployment,inspectInstallation,installationFields} from '../automation-intake-producer/operator.mjs';
 import {deliver} from '../automation-intake-queue/worker.mjs';
 if (!globalThis.crypto) globalThis.crypto=webcrypto;
 const v1='11111111-1111-4111-8111-111111111111',v2='22222222-2222-4222-8222-222222222222',v3='33333333-3333-4333-8333-333333333333',dbid='44444444-4444-4444-8444-444444444444';
@@ -16,7 +17,7 @@ function fixture(){
     consumer:{id:'55555555-5555-4555-8555-555555555555',resources:{bindings:[svc('REVIEWS_API','reviews'),plain('REVIEWS_ENVIRONMENT','test'),plain('REVIEWS_ORDER_SUBSCRIBER','test'),plain('SOURCE_STORE','acorn'),plain('SOURCE_ISSUER','issuer1'),plain('SOURCE_INSTALLATION','install1')]}},
     reviews:{id:v3,resources:{bindings:[d1('CARTRAY_DB'),plain('REVIEWS_ENVIRONMENT','test'),plain('REVIEWS_MODE','verified_acquisition_only'),plain('REVIEWS_AUTOMATION_INTAKE','test'),plain('REVIEWS_STORE_KEY','acorn'),plain('REVIEWS_SUBJECT_MAPS',mapping)]}}};
   let cursor=null;const sent=[];
-  const database={withSession:()=>database,prepare(sql){return {args:[],bind(...args){this.args=args;return this},async run(){if (!cursor) cursor={installation_id:this.args[1],source_database_id:this.args[2],stripe_account_id:this.args[3],catalogue_version:this.args[4],mapping_sha256:this.args[5],activation_watermark:this.args[6],last_outbox_id:this.args[7]};},async first(){return {...cursor}},async all(){
+  const database={withSession:()=>database,prepare(sql){return {args:[],bind(...args){this.args=args;return this},async run(){if (!cursor) cursor={installation_id:this.args[1],source_database_id:this.args[2],stripe_account_id:this.args[3],catalogue_version:this.args[4],mapping_sha256:this.args[5],activation_watermark:this.args[6],last_outbox_id:this.args[7]};},async first(){if(sql.includes("reviews_verified_deployment")) return installationFields(env,{source_version:v1,producer_version:v2,reviews_version:v3,consumer_version:versions.consumer.id,authority_version:versions.authority.id},1000) && {...installationFields(env,{source_version:v1,producer_version:v2,reviews_version:v3,consumer_version:versions.consumer.id,authority_version:versions.authority.id},1000),revision:1};return {...cursor}},async all(){
     if(sql.startsWith('SELECT name,sql FROM sqlite_master')) return {results:schema};
     if(sql.startsWith('SELECT id')) return {results:[9,11,12].filter(x=>x>this.args[0]).map(id=>({id}))};
     if(sql.startsWith('UPDATE')) {if(cursor.last_outbox_id!==this.args[2]) return {results:[]};cursor.last_outbox_id=this.args[0];return {results:[{last_outbox_id:cursor.last_outbox_id}]};} throw Error('unexpected sql');}}}};
@@ -49,7 +50,7 @@ test('wrong actual D1 binding, active version, source account and mapping fail c
     if(kind==='queue') f.versions.producer.resources.bindings[3].queue_name='other';
     if(kind==='consumer-target') f.versions.consumer.resources.bindings[0].service='other';
     if(kind==='entrypoint') f.versions.producer.resources.bindings[2].entrypoint='Other';
-    globalThis.fetch=stubControl(f);try {await assert.rejects(relay(f.env));assert.equal(f.sent.length,0);assert.equal(f.cursor,null);} finally {globalThis.fetch=original;}
+    globalThis.fetch=stubControl(f);try {await assert.rejects(inspectDeployment(f.env,stubControl(f)));assert.equal(f.sent.length,0);assert.equal(f.cursor,null);} finally {globalThis.fetch=original;}
   }
 });
 test('Cloudflare production service metadata selects the attested default deployment',async()=>{
@@ -61,7 +62,7 @@ test('Cloudflare production service metadata selects the attested default deploy
   assert.equal((await attestPurchase(f.env,{authority_version:f.versions.authority.id,nonce:'a'.repeat(64)},stubControl(f),1000)).proof[12],f.versions.authority.id);
   for (const value of ['staging',null]) {
     const x=fixture();x.versions.source.resources.bindings.at(-1).environment=value;
-    await assert.rejects(relay(x.env,stubControl(x)));assert.equal(x.cursor,null);assert.equal(x.sent.length,0);
+    await assert.rejects(inspectDeployment(x.env,stubControl(x)));assert.equal(x.cursor,null);assert.equal(x.sent.length,0);
   }
 });
 test('send failure does not advance cursor; retry replays safely',async()=>{
@@ -84,8 +85,8 @@ test('purchase proof pins the active authority and both its actual D1 and servic
       if(kind==='metadata')x.versions.authority.resources.bindings.pop();
       if(kind==='reviews')x.versions.authority.resources.bindings[4].service='other';
       if(kind==='checkout')x.versions.authority.resources.bindings[5].service='other';
-      if(kind==='version')x.versions.authority.id=v1;
-      await assert.rejects(attestPurchase(x.env,input,stubControl(x),1000));
+      if(kind==='version')x.versions.authority.resources.bindings[0].database_id=v1;
+      await assert.rejects(inspectInstallation(x.env,stubControl(x)));
     }
   } finally {globalThis.fetch=original;}
 });
@@ -104,7 +105,7 @@ test('missing or unsafe dead-letter routing fails before any checkpoint or enque
       } else if(kind==='unexpected-dlq-consumer')q.consumers_total_count=1;
       return Response.json(data);
     };
-    await assert.rejects(relay(f.env,control));assert.equal(f.sent.length,0);assert.equal(f.cursor,null);
+    await assert.rejects(inspectDeployment(f.env,control));assert.equal(f.sent.length,0);assert.equal(f.cursor,null);
   }
 });
 
@@ -124,8 +125,8 @@ test('consumer identity accepts documented and observed API shapes while rejecti
       }
       return Response.json(data);
     };
-    if(['documented','observed','both'].includes(kind)) assert.equal((await attest(f.env,control)).source_version,v1);
-    else { await assert.rejects(relay(f.env,control)); assert.equal(f.sent.length,0); assert.equal(f.cursor,null); }
+    if(['documented','observed','both'].includes(kind)) assert.equal((await inspectDeployment(f.env,control)).source_version,v1);
+    else { await assert.rejects(inspectDeployment(f.env,control)); assert.equal(f.sent.length,0); assert.equal(f.cursor,null); }
   }
 });
 
@@ -150,5 +151,26 @@ test('an older or modified checkpoint schema fails before activation or enqueue'
     }return statement;};
     let activations=0;f.env.REVIEWS_API.fetch=async()=>{activations++;return Response.json({status:'active',outbox_watermark:10});};
     await assert.rejects(relay(f.env,stubControl(f)),/checkpoint schema/);assert.equal(activations,0);assert.equal(f.sent.length,0);
+  }
+});
+
+test('runtime relay and purchase evidence survive unavailable control plane without CF credential',async()=>{
+  const f=fixture();delete f.env.CF_READ_TOKEN;
+  const unavailable=()=>{throw Error('control plane unavailable')};
+  f.env.SOURCE_API.fetch=async (url,options)=>{assert.equal(url,'https://source.internal/internal/reviews-runtime-identity');assert.equal(options.headers.authorization,`Bearer ${f.env.SOURCE_IDENTITY_TOKEN}`);return Response.json({version_id:v1,catalogue_version:catalogue});};
+  assert.deepEqual(await relay(f.env,unavailable),{last_outbox_id:12});
+  assert.equal((await attestPurchase(f.env,{authority_version:f.versions.authority.id,nonce:'a'.repeat(64)},unavailable,1000)).proof[12],f.versions.authority.id);
+});
+test('missing record, mismatched record, producer/source versions and authority versions fail closed',async()=>{
+  for(const kind of ['missing','store','producer','source','authority','inactive']) {
+    const f=fixture(),base=f.env.COMMERCE_DB.prepare;
+    f.env.COMMERCE_DB.prepare=function(sql){const stmt=base.call(this,sql);if(sql.includes('reviews_verified_deployment')) {const first=stmt.first;stmt.first=async()=>{
+      const r=await first();if(kind==='missing')return null;
+      if(kind==='store')r.store_key='forged';if(kind==='producer')r.producer_version=v1;
+      if(kind==='source')r.source_version=v2;if(kind==='authority')r.authority_version=v1;
+      if(kind==='inactive')r.activation_status='disabled';return r;
+    };}return stmt;};
+    await assert.rejects(attestPurchase(f.env,{authority_version:f.versions.authority.id,nonce:'a'.repeat(64)}));
+    assert.equal(f.sent.length,0);assert.equal(f.cursor,null);
   }
 });

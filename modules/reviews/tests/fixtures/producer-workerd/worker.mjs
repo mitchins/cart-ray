@@ -1,4 +1,5 @@
 // Local-only qualification fixture: mocked control plane, real Workerd D1.
+import {verifyInstallation,doctor} from '../../../automation-intake-producer/operator.mjs';
 import {relay} from '../../../automation-intake-producer/worker.mjs';
 import {deliver} from '../../../automation-intake-queue/worker.mjs';
 const a='11111111-1111-4111-8111-111111111111',b='22222222-2222-4222-8222-222222222222',c='33333333-3333-4333-8333-333333333333',dbid='44444444-4444-4444-8444-444444444444';
@@ -11,7 +12,19 @@ export default {async fetch(request,bindings) {
   const sent=[];
   const e={REVIEWS_ENVIRONMENT:'test',REVIEWS_SOURCE_PRODUCER:'test',SOURCE_WORKER:'source',PRODUCER_WORKER:'producer',REVIEWS_WORKER:'reviews',CONSUMER_WORKER:'consumer',EVENT_QUEUE_NAME:'queue1',EVENT_QUEUE_ID:'e'.repeat(32),DEAD_LETTER_QUEUE_NAME:'dlq1',DEAD_LETTER_QUEUE_ID:'d'.repeat(32),SOURCE_STORE:'acorn',SOURCE_ISSUER:'issuer1',SOURCE_INSTALLATION:'install1',CF_ACCOUNT_ID:'a'.repeat(32),SOURCE_DATABASE_ID:dbid,STRIPE_ACCOUNT_ID:'acct_123',CATALOGUE_VERSION:catalogue,MAPPING_SHA256:digest,SOURCE_EVENT_KEY:'12'.repeat(32),CF_READ_TOKEN:'c'.repeat(32),SOURCE_IDENTITY_TOKEN:'s'.repeat(32),REVIEWS_ACTIVATION_TOKEN:'a'.repeat(32),TRIGGER_TOKEN:'t'.repeat(32),POLICY_VERSION:'policy1',DELAY_SECONDS:10,MAX_LATENESS:100,CF_VERSION_METADATA:{id:b},COMMERCE_DB:bindings.DB,EVENT_QUEUE:{async send(x){sent.push(x)}},SOURCE_API:{async fetch(){return Response.json({version_id:a,stripe_account:'acct_123',catalogue_version:catalogue})}},REVIEWS_API:{async fetch(){return Response.json({status:'active',outbox_watermark:10})}}};
   const control=async url=>{const x=new URL(url).pathname.split('/');if(x.includes('queues')) return Response.json({success:true,result:x.at(-1)==='d'.repeat(32)?{queue_id:'d'.repeat(32),queue_name:'dlq1',consumers_total_count:0}:{queue_id:'e'.repeat(32),queue_name:'queue1',consumers_total_count:1,settings:{delivery_paused:false},consumers:[{type:'worker',script_name:'consumer',dead_letter_queue:'dlq1',settings:{max_retries:3}}]}});const i=x.indexOf('scripts'),v=versions[x[i+1]];return Response.json({success:true,result:x[i+2]==='deployments'?[{created_on:'2026-01-01',versions:[{version_id:v.id,percentage:100}]}]:v});};
-  const first=await relay(e,control),second=await relay(e,control);
+  e.AUTHORITY_WORKER='authority';e.AUTHORITY_CONTEXT_DB_ID='77777777-7777-4777-8777-777777777777';
+  const reject=async fn=>{try{await fn();throw Error('expected failure')}catch(error){if(error.message==='expected failure')throw error}};
+  await reject(()=>relay(e,()=>{throw Error('control plane unavailable')}));
+  versions.authority={id:'66666666-6666-4666-8666-666666666666',resources:{bindings:[d1('COMMERCE_DB'),{name:'CONTEXT_DB',type:'d1',database_id:e.AUTHORITY_CONTEXT_DB_ID},svc('SOURCE_IDENTITY','source'),svc('CHECKOUT','source'),svc('ATTESTOR','producer'),svc('REVIEWS_API','reviews'),{name:'CF_VERSION_METADATA',type:'version_metadata'}]}};
+  const record=await verifyInstallation(e,0,control);
+  if(record.activation_status!=='verified' || record.revision!==1)throw Error('bootstrap verification failed');
+  const health=await doctor(e,control);if(health.revision!==1 || health.status!=='verified')throw Error('doctor mismatch');
+  await reject(()=>verifyInstallation(e,0,control));
+  await reject(()=>bindings.DB.prepare('UPDATE reviews_verified_deployment SET revision=2').run());
+  await reject(()=>bindings.DB.prepare('DELETE FROM reviews_verified_deployment').run());
+  const unavailable=()=>{throw Error('control plane unavailable')};delete e.CF_READ_TOKEN;
+  e.CF_VERSION_METADATA.id=a;await reject(()=>relay(e,unavailable));e.CF_VERSION_METADATA.id=b;
+  const first=await relay(e,unavailable),second=await relay(e,unavailable);
   const receiver={REVIEWS_ENVIRONMENT:'test',REVIEWS_ORDER_SUBSCRIBER:'test',CONSUMER_WORKER:'consumer',EVENT_QUEUE_NAME:'queue1',EVENT_QUEUE_ID:'e'.repeat(32),DEAD_LETTER_QUEUE_NAME:'dlq1',DEAD_LETTER_QUEUE_ID:'d'.repeat(32),SOURCE_STORE:'acorn',SOURCE_ISSUER:'issuer1',SOURCE_INSTALLATION:'install1',SOURCE_EVENT_KEY:e.SOURCE_EVENT_KEY,REVIEWS_AUTOMATION_TOKEN:'r'.repeat(32),REVIEWS_API:{fetch:async()=>Response.json({status:'accepted',due_at:100})}};
   const receipts=[]; for (const m of sent) receipts.push(await deliver(m,receiver));
   return Response.json({first,second,ids:sent.map(x=>x.outbox_id),receipts});
