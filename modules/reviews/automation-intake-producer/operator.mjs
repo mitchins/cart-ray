@@ -143,13 +143,21 @@ export function installationFields(env, versions, now=Math.floor(Date.now()/1000
     event_queue_name:env.EVENT_QUEUE_NAME,dead_letter_queue_name:env.DEAD_LETTER_QUEUE_NAME,
     activation_status:'active',verified_at:now};
 }
+const checkpointFields=['installation_id','source_database_id','stripe_account_id','catalogue_version','mapping_sha256'];
+async function installationCheckpoint(db, subscriber) {
+  return db.prepare('SELECT installation_id,source_database_id,stripe_account_id,catalogue_version,mapping_sha256 FROM reviews_subscriber_checkpoint WHERE subscriber_id=?')
+    .bind(subscriber).first();
+}
+function checkpointMismatches(checkpoint,record) {
+  return checkpoint ? checkpointFields.filter(field=>checkpoint[field]!==record[field]).map(field=>'checkpoint.'+field) : [];
+}
 // expectedRevision is required: simultaneous operators cannot overwrite each other.
 export async function verifyInstallation(env, expectedRevision, fetchApi=fetch) {
   if (!Number.isSafeInteger(expectedRevision) || expectedRevision<0) throw new Error('expected revision required');
   const record=installationFields(env,await inspectInstallation(env,fetchApi));
   const db=env.COMMERCE_DB.withSession('first-primary');
-  const checkpoint=await db.prepare('SELECT activation_watermark FROM reviews_subscriber_checkpoint WHERE subscriber_id=? AND installation_id=?')
-    .bind(env.SOURCE_ISSUER,env.SOURCE_INSTALLATION).first();
+  const checkpoint=await installationCheckpoint(db,env.SOURCE_ISSUER);
+  if (checkpointMismatches(checkpoint,record).length) throw new Error('existing checkpoint scope differs from verified installation');
   // Existing activation owns the no-backfill watermark; verification never resets it.
   record.activation_status=checkpoint ? 'active' : 'verified';
   const keys=Object.keys(record);
@@ -162,8 +170,10 @@ export async function doctor(env, fetchApi=fetch) {
   const actual=installationFields(env,await inspectInstallation(env,fetchApi));
   const record=await env.COMMERCE_DB.withSession('first-primary').prepare('SELECT * FROM reviews_verified_deployment WHERE subscriber_id=? AND installation_id=? ORDER BY revision DESC LIMIT 1')
     .bind(env.SOURCE_ISSUER,env.SOURCE_INSTALLATION).first();
-  return {revision:record?.revision??0,status:record && Object.entries(actual).every(([k,v])=>k==='verified_at' || k==='activation_status' || record[k]===v) ? record.activation_status : 'mismatch',
-    mismatches:Object.keys(actual).filter(k=>k!=='verified_at' && k!=='activation_status' && record?.[k]!==actual[k])};
+  const checkpoint=await installationCheckpoint(env.COMMERCE_DB.withSession('first-primary'),env.SOURCE_ISSUER);
+  const mismatches=[...Object.keys(actual).filter(k=>k!=='verified_at' && k!=='activation_status' && record?.[k]!==actual[k]),
+    ...checkpointMismatches(checkpoint,actual)];
+  return {revision:record?.revision??0,status:record && mismatches.length===0 ? record.activation_status : 'mismatch',mismatches};
 }
 
 // Resolve source routing from authenticated account metadata; an operator-supplied

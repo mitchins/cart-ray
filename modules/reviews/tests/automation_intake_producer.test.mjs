@@ -3,7 +3,7 @@ import {schema} from './fixtures/producer-workerd/schema-fixture.mjs';
 import assert from 'node:assert/strict';
 import {webcrypto} from 'node:crypto';
 import producer, {attest, attestPurchase, relay} from '../automation-intake-producer/worker.mjs';
-import {inspectDeployment,inspectInstallation,installationFields,sourceIdentityURL,operatorSQL} from '../automation-intake-producer/operator.mjs';
+import {inspectDeployment,inspectInstallation,installationFields,sourceIdentityURL,operatorSQL,verifyInstallation,doctor} from '../automation-intake-producer/operator.mjs';
 import {deliver} from '../automation-intake-queue/worker.mjs';
 if (!globalThis.crypto) globalThis.crypto=webcrypto;
 const v1='11111111-1111-4111-8111-111111111111',v2='22222222-2222-4222-8222-222222222222',v3='33333333-3333-4333-8333-333333333333',dbid='44444444-4444-4444-8444-444444444444';
@@ -17,7 +17,7 @@ function fixture(){
     consumer:{id:'55555555-5555-4555-8555-555555555555',resources:{bindings:[{name:'CF_VERSION_METADATA',type:'version_metadata'},svc('REVIEWS_API','reviews'),plain('REVIEWS_ENVIRONMENT','test'),plain('REVIEWS_ORDER_SUBSCRIBER','test'),plain('SOURCE_STORE','acorn'),plain('SOURCE_ISSUER','issuer1'),plain('SOURCE_INSTALLATION','install1')]}},
     reviews:{id:v3,resources:{bindings:[d1('CARTRAY_DB'),{name:'CF_VERSION_METADATA',type:'version_metadata'},plain('REVIEWS_ENVIRONMENT','test'),plain('REVIEWS_MODE','verified_acquisition_only'),plain('REVIEWS_AUTOMATION_INTAKE','test'),plain('REVIEWS_STORE_KEY','acorn'),plain('REVIEWS_SUBJECT_MAPS',mapping)]}}};
   let cursor=null;const sent=[];
-  const database={withSession:()=>database,prepare(sql){return {args:[],bind(...args){this.args=args;return this},async run(){if (!cursor) cursor={installation_id:this.args[1],source_database_id:this.args[2],stripe_account_id:this.args[3],catalogue_version:this.args[4],mapping_sha256:this.args[5],activation_watermark:this.args[6],last_outbox_id:this.args[7]};},async first(){if(sql.includes("reviews_verified_deployment")) return installationFields(env,{source_version:v1,producer_version:v2,reviews_version:v3,consumer_version:versions.consumer.id,authority_version:env.AUTHORITY_WORKER ? versions.authority.id : null},1000) && {...installationFields(env,{source_version:v1,producer_version:v2,reviews_version:v3,consumer_version:versions.consumer.id,authority_version:env.AUTHORITY_WORKER ? versions.authority.id : null},1000),revision:1};return {...cursor}},async all(){
+  const database={withSession:()=>database,prepare(sql){return {args:[],bind(...args){this.args=args;return this},async run(){if (!cursor) cursor={installation_id:this.args[1],source_database_id:this.args[2],stripe_account_id:this.args[3],catalogue_version:this.args[4],mapping_sha256:this.args[5],activation_watermark:this.args[6],last_outbox_id:this.args[7]};},async first(){if(sql.includes("reviews_verified_deployment")) return installationFields(env,{source_version:v1,producer_version:v2,reviews_version:v3,consumer_version:versions.consumer.id,authority_version:env.AUTHORITY_WORKER ? versions.authority.id : null},1000) && {...installationFields(env,{source_version:v1,producer_version:v2,reviews_version:v3,consumer_version:versions.consumer.id,authority_version:env.AUTHORITY_WORKER ? versions.authority.id : null},1000),revision:1};return cursor ? {...cursor} : null},async all(){
     if(sql.startsWith('SELECT name,sql FROM sqlite_master')) return {results:schema};
     if(sql.startsWith('SELECT id')) return {results:[9,11,12].filter(x=>x>this.args[0]).map(id=>({id}))};
     if(sql.startsWith('UPDATE')) {if(cursor.last_outbox_id!==this.args[2]) return {results:[]};cursor.last_outbox_id=this.args[0];return {results:[{last_outbox_id:cursor.last_outbox_id}]};} throw Error('unexpected sql');}}}};
@@ -216,4 +216,18 @@ test('operator CLI SQL adapter preserves nulls and quotes without changing SQL m
  assert.equal(operatorSQL('SELECT ?,?,?,?',[null,"O'Brien",42,'null']),"SELECT NULL,'O''Brien',42,'null'");
  assert.throws(()=>operatorSQL('SELECT ?',[undefined]));
  assert.throws(()=>operatorSQL('SELECT ?',[NaN]));
+});
+
+test('operator rejects immutable checkpoint scope changes and doctor reports them without writing',async()=>{
+ for(const field of ['installation_id','source_database_id','stripe_account_id','catalogue_version','mapping_sha256']) {
+  const f=fixture();await relay(f.env);const prepare=f.env.COMMERCE_DB.prepare;let writes=0;
+  f.env.COMMERCE_DB.prepare=function(sql){const statement=prepare.call(this,sql);
+   if(sql.includes('FROM reviews_subscriber_checkpoint'))statement.first=async()=>({...f.cursor,[field]:'different'});
+   if(sql.startsWith('INSERT INTO reviews_verified_deployment'))statement.all=async()=>{writes++;return {results:[{revision:2}]}};
+   return statement;
+  };
+  await assert.rejects(verifyInstallation(f.env,1,stubControl(f)),/existing checkpoint scope differs/);
+  const health=await doctor(f.env,stubControl(f));assert.equal(health.status,'mismatch');
+  assert.deepEqual(health.mismatches,['checkpoint.'+field]);assert.equal(writes,0);
+ }
 });

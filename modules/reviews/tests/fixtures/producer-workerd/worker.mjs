@@ -38,6 +38,15 @@ export default {async fetch(request,bindings) {
   e.CF_VERSION_METADATA.id=a;await reject(()=>relay(e,unavailable));e.CF_VERSION_METADATA.id=b;
   for(const service of ['REVIEWS_API','CONSUMER_API']) {const original=e[service].fetch;e[service].fetch=async()=>Response.json({version_id:a});await reject(()=>relay(e,unavailable));e[service].fetch=original;}
   const first=await relay(e,unavailable),second=await relay(e,unavailable);
+  // A reused issuer cannot certify a different immutable checkpoint scope.
+  e.CF_READ_TOKEN='c'.repeat(32);
+  const installed=await verifyInstallation(e,1,control);if(installed.activation_status!=='active')throw Error('matching checkpoint rejected');
+  const installationBinding=versions.consumer.resources.bindings.find(x=>x.name==='SOURCE_INSTALLATION');
+  installationBinding.text='replacement';
+  await reject(()=>verifyInstallation({...e,SOURCE_INSTALLATION:'replacement'},0,control));
+  const unhealthy=await doctor({...e,SOURCE_INSTALLATION:'replacement'},control);
+  if(!unhealthy.mismatches.includes('checkpoint.installation_id'))throw Error('checkpoint collision not diagnosed');
+  installationBinding.text='install1';
   const receiver={REVIEWS_ENVIRONMENT:'test',REVIEWS_ORDER_SUBSCRIBER:'test',CONSUMER_WORKER:'consumer',EVENT_QUEUE_NAME:'queue1',EVENT_QUEUE_ID:'e'.repeat(32),DEAD_LETTER_QUEUE_NAME:'dlq1',DEAD_LETTER_QUEUE_ID:'d'.repeat(32),SOURCE_STORE:'acorn',SOURCE_ISSUER:'issuer1',SOURCE_INSTALLATION:'install1',SOURCE_EVENT_KEY:e.SOURCE_EVENT_KEY,REVIEWS_AUTOMATION_TOKEN:'r'.repeat(32),REVIEWS_API:{fetch:async()=>Response.json({status:'accepted',due_at:100})}};
   const receipts=[]; for (const m of sent) receipts.push(await deliver(m,receiver));
   return Response.json({first,second,ids:sent.map(x=>x.outbox_id),receipts});
