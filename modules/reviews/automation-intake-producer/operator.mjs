@@ -1,29 +1,10 @@
+import {jsonResponse,bounded} from './evidence.mjs';
 /** Test-only source verifier and bounded outbox producer. No mail or collection. */
 const encoder = new TextEncoder();
 const id = /^[A-Za-z0-9_-]{1,128}$/;
 const uuid = /^[a-f0-9-]{36}$/;
 const hex = /^[0-9a-f]{64}$/;
 const token = value => typeof value === 'string' && value.length >= 32;
-const bytes = value => Uint8Array.from(value.match(/../g), x => parseInt(x,16));
-async function jsonResponse(response, signal) {
-  if (!response.ok || !response.body) throw new Error('evidence unavailable');
-  const reader=response.body.getReader(); let size=0, text=''; const decoder=new TextDecoder();
-  const cancel=()=>{void reader.cancel().catch(()=>{});};
-  if (signal) {
-    if (signal.aborted) cancel();
-    else signal.addEventListener('abort',cancel,{once:true});
-  }
-  try { for (;;) { const x=await reader.read(); if (x.done) break; size+=x.value.byteLength;
-    if (size>65536) throw new Error('evidence too large'); text+=decoder.decode(x.value,{stream:true}); }
-    return JSON.parse(text+decoder.decode());
-  } finally { if (signal) signal.removeEventListener('abort',cancel); cancel(); }
-}
-async function bounded(fn) {
-  const controller=new AbortController(); let timer;
-  try { return await Promise.race([fn(controller.signal), new Promise((_,reject)=>{
-    timer=setTimeout(()=>reject(new Error('evidence timeout')),3000);
-  })]); } finally {clearTimeout(timer);controller.abort();}
-}
 async function cf(env, path, signal, fetchApi) {
   const response=await fetchApi(`https://api.cloudflare.com/client/v4/accounts/${env.CF_ACCOUNT_ID}/workers/scripts/${path}`,
     {headers:{authorization:`Bearer ${env.CF_READ_TOKEN}`},signal});
@@ -194,7 +175,8 @@ export async function sourceIdentityURL(env, fetchApi=fetch) {
     const root=`https://api.cloudflare.com/client/v4/accounts/${env.CF_ACCOUNT_ID}/workers`;
     const read=async path=>{
       const result=await jsonResponse(await fetchApi(root+path,{headers:{authorization:`Bearer ${env.CF_READ_TOKEN}`},signal}),signal);
-      if(result.success!==true)throw new Error('source routing unavailable');return result.result;
+      if(result.success!==true)throw new Error('source routing unavailable');
+      return result.result;
     };
     const [account,worker]=await Promise.all([read('/subdomain'),read(`/scripts/${env.SOURCE_WORKER}/subdomain`)]);
     if(!/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(account?.subdomain||'') || worker?.enabled!==true)

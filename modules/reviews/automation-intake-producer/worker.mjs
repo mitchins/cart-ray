@@ -1,3 +1,4 @@
+import {jsonResponse,bounded} from './evidence.mjs';
 /** Test-only source verifier and bounded outbox producer. No mail or collection. */
 const encoder = new TextEncoder();
 // Normalized sqlite_master fingerprint of the optional module migration.
@@ -8,25 +9,6 @@ const uuid = /^[a-f0-9-]{36}$/;
 const hex = /^[0-9a-f]{64}$/;
 const token = value => typeof value === 'string' && value.length >= 32;
 const bytes = value => Uint8Array.from(value.match(/../g), x => parseInt(x,16));
-async function jsonResponse(response, signal) {
-  if (!response.ok || !response.body) throw new Error('evidence unavailable');
-  const reader=response.body.getReader(); let size=0, text=''; const decoder=new TextDecoder();
-  const cancel=()=>{void reader.cancel().catch(()=>{});};
-  if (signal) {
-    if (signal.aborted) cancel();
-    else signal.addEventListener('abort',cancel,{once:true});
-  }
-  try { for (;;) { const x=await reader.read(); if (x.done) break; size+=x.value.byteLength;
-    if (size>65536) throw new Error('evidence too large'); text+=decoder.decode(x.value,{stream:true}); }
-    return JSON.parse(text+decoder.decode());
-  } finally { if (signal) signal.removeEventListener('abort',cancel); cancel(); }
-}
-async function bounded(fn) {
-  const controller=new AbortController(); let timer;
-  try { return await Promise.race([fn(controller.signal), new Promise((_,reject)=>{
-    timer=setTimeout(()=>reject(new Error('evidence timeout')),3000);
-  })]); } finally {clearTimeout(timer);controller.abort();}
-}
 // Runtime trust is anchored in the operator-verified commerce D1 record.
 // No management credentials or management API calls belong in this module.
 export async function attest(env) {
@@ -77,7 +59,7 @@ async function activate(env) {
   return result.outbox_watermark;
 }
 export async function relay(env, fetchApi=fetch) {
-  await attest(env,fetchApi);
+  await attest(env);
   if (!id.test(env.POLICY_VERSION||'') || !Number.isSafeInteger(env.DELAY_SECONDS) || env.DELAY_SECONDS<0 ||
       !Number.isSafeInteger(env.MAX_LATENESS) || env.MAX_LATENESS<0) throw new Error('policy unavailable');
   const db=env.COMMERCE_DB.withSession('first-primary');
@@ -124,7 +106,7 @@ export async function attestPurchase(env, input, fetchApi=fetch, now=Math.floor(
       !input || Object.keys(input).length!==2 || !Object.hasOwn(input,'authority_version') || !Object.hasOwn(input,'nonce') ||
       !uuid.test(input.authority_version||'') || !hex.test(input.nonce||'') || !Number.isSafeInteger(now))
     throw new Error('purchase attestation unavailable');
-  const source=await attest(env,fetchApi);
+  const source=await attest(env);
   if (source.authority_version!==input.authority_version) throw new Error('authority version mismatch');
   const proof=['cartray-reviews-purchase-attestation-v1',env.SOURCE_STORE,'test',env.SOURCE_INSTALLATION,
     env.SOURCE_DATABASE_ID,env.AUTHORITY_CONTEXT_DB_ID,env.STRIPE_ACCOUNT_ID,env.CATALOGUE_VERSION,
