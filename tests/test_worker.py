@@ -550,7 +550,8 @@ def test_runtime_reviews_identity_is_authenticated_and_does_not_call_stripe(monk
     status, headers, body = TestClient(create_app(), env=env).request(
         "GET", path, headers={"authorization": "Bearer " + "i" * 32}
     )
-    assert status == 200 and json.loads(body) == {"version_id": "version-1", "catalogue_version": "sha256:abc"}
+    assert status == 200
+    assert json.loads(body) == {"version_id": "version-1", "catalogue_version": "sha256:abc"}
     assert headers.get("Cache-Control") == "no-store"
     assert TestClient(create_app(), env=env | {"CF_VERSION_METADATA": None}).request(
         "GET", path, headers={"authorization": "Bearer " + "i" * 32}

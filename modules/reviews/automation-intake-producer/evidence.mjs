@@ -15,7 +15,10 @@ export async function jsonResponse(response, signal) {
       text+=decoder.decode(x.value,{stream:true});
     }
     return JSON.parse(text+decoder.decode());
-  } finally { if (signal) signal.removeEventListener('abort',cancel); cancel(); }
+  } finally {
+    if (signal) signal.removeEventListener('abort',cancel);
+    cancel();
+  }
 }
 export async function bounded(fn) {
   const controller=new AbortController(); let timer;

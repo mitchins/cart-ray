@@ -96,7 +96,8 @@ def test_runtime_identity_requires_authenticated_test_request_and_version(lifecy
     assert asyncio.run(worker.fetch(request)).status == 404
     request.headers = {"authorization": "Bearer " + "a" * 32}
     response = asyncio.run(worker.fetch(request))
-    assert response.body == {"version_id": version} and response.headers["Cache-Control"] == "no-store"
+    assert response.body == {"version_id": version}
+    assert response.headers["Cache-Control"] == "no-store"
     worker.env.CF_VERSION_METADATA = None
     assert asyncio.run(worker.fetch(request)).status == 503
     worker.env.REVIEWS_ENVIRONMENT = "production"
