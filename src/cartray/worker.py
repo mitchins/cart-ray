@@ -92,7 +92,9 @@ def create_app(
             catalogue = COMPILED_CATALOGUE.expected_catalogue_version
             if not isinstance(version, str) or not version or not isinstance(catalogue, str) or not catalogue:
                 raise RuntimeError("unbound version")
-            return Response({"version_id": version, "catalogue_version": catalogue}, headers={"Cache-Control": "no-store"})
+            return Response(
+                {"version_id": version, "catalogue_version": catalogue}, headers={"Cache-Control": "no-store"}
+            )
         except Exception:
             return Response({"error": "source identity unavailable"}, status=503, headers={"Cache-Control": "no-store"})
 

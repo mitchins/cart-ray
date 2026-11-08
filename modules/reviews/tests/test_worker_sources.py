@@ -90,7 +90,9 @@ def test_runtime_identity_requires_authenticated_test_request_and_version(lifecy
     version = "11111111-1111-4111-8111-111111111111"
     worker.env = types.SimpleNamespace(REVIEWS_ENVIRONMENT="test", REVIEWS_AUTOMATION_INTAKE="test",
         REVIEWS_AUTOMATION_ACTIVATION_TOKEN="a" * 32, CF_VERSION_METADATA=types.SimpleNamespace(id=version))
-    request = types.SimpleNamespace(method="GET", url="https://internal/reviews-internal/v1/runtime-identity", headers={})
+    request = types.SimpleNamespace(
+        method="GET", url="https://internal/reviews-internal/v1/runtime-identity", headers={}
+    )
     assert asyncio.run(worker.fetch(request)).status == 404
     request.headers = {"authorization": "Bearer " + "a" * 32}
     response = asyncio.run(worker.fetch(request))

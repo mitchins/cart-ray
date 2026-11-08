@@ -84,7 +84,9 @@ class Default(WorkerEntrypoint):
             if (str(request.method) != "GET" or url.query or
                 str(getattr(self.env, "REVIEWS_ENVIRONMENT", "")) != "test" or
                 str(getattr(self.env, "REVIEWS_AUTOMATION_INTAKE", "")) != "test" or
-                len(token) < 32 or not hmac.compare_digest(str(request.headers.get("authorization") or ""), f"Bearer {token}")):
+                len(token) < 32 or
+                not hmac.compare_digest(str(request.headers.get("authorization") or ""), f"Bearer {token}")
+            ):
                 return Response.json({"error": "not found"}, status=404)
             if not isinstance(version, str) or not re.fullmatch(r"[a-f0-9-]{36}", version):
                 return Response.json({"error": "unavailable"}, status=503)
