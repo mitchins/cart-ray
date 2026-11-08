@@ -138,6 +138,8 @@ simple = {{ limit = 20, period = 60 }}
 {common}main = {q(str(ROOT / "modules/reviews/src/worker.py"))}
 compatibility_flags = ["python_workers", "disable_python_external_sdk"]
 workers_dev = false
+[version_metadata]
+binding = "CF_VERSION_METADATA"
 [vars]
 REVIEWS_MODE = "verified_acquisition_only"
 REVIEWS_AUTOMATION_INTAKE = "test"
@@ -161,6 +163,8 @@ database_id = {q(c["commerce_db_id"])}
     consumer = f"""name = {q(c["consumer_worker"])}
 {common}main = {q(str(ROOT / "modules/reviews/automation-intake-queue/worker.mjs"))}
 workers_dev = false
+[version_metadata]
+binding = "CF_VERSION_METADATA"
 [vars]
 REVIEWS_ENVIRONMENT = "test"
 REVIEWS_ORDER_SUBSCRIBER = "test"
@@ -216,6 +220,9 @@ service = {q(c["source_worker"])}
 [[services]]
 binding = "REVIEWS_API"
 service = {q(c["reviews_worker"])}
+[[services]]
+binding = "CONSUMER_API"
+service = {q(c["consumer_worker"])}
 [[queues.producers]]
 binding = "EVENT_QUEUE"
 queue = {q(c["events_queue_name"])}

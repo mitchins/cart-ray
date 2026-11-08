@@ -76,3 +76,29 @@ def test_single_source_selection_invalidates_on_other_source_activation(lifecycl
     assert asyncio.run(worker.fetch(request)).status == 404
     request.url = "https://example.invalid/reviews/v1/subject-lookup?" + "x" * 6501
     assert asyncio.run(worker.fetch(request)).status == 400
+
+
+def test_runtime_identity_requires_authenticated_test_request_and_version(lifecycle):
+    workers = types.ModuleType("workers")
+    workers.Response = TestResponse
+    workers.WorkerEntrypoint = object
+    spec = importlib.util.spec_from_file_location("tested_reviews_identity", MODULE / "src/worker.py")
+    module = importlib.util.module_from_spec(spec)
+    with patch.dict(sys.modules, {"workers": workers, "native_lifecycle": lifecycle}):
+        spec.loader.exec_module(module)
+    worker = module.Default()
+    version = "11111111-1111-4111-8111-111111111111"
+    worker.env = types.SimpleNamespace(REVIEWS_ENVIRONMENT="test", REVIEWS_AUTOMATION_INTAKE="test",
+        REVIEWS_AUTOMATION_ACTIVATION_TOKEN="a" * 32, CF_VERSION_METADATA=types.SimpleNamespace(id=version))
+    request = types.SimpleNamespace(
+        method="GET", url="https://internal/reviews-internal/v1/runtime-identity", headers={}
+    )
+    assert asyncio.run(worker.fetch(request)).status == 404
+    request.headers = {"authorization": "Bearer " + "a" * 32}
+    response = asyncio.run(worker.fetch(request))
+    assert response.body == {"version_id": version}
+    assert response.headers["Cache-Control"] == "no-store"
+    worker.env.CF_VERSION_METADATA = None
+    assert asyncio.run(worker.fetch(request)).status == 503
+    worker.env.REVIEWS_ENVIRONMENT = "production"
+    assert asyncio.run(worker.fetch(request)).status == 404

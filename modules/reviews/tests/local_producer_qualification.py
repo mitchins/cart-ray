@@ -36,6 +36,10 @@ def run():
             timeout=90,
         )
         subprocess.run(base + ["--file", str(MIGRATION)], cwd=ROOT, check=True, capture_output=True, timeout=90)
+        subprocess.run(
+            base + ["--file", str(MIGRATION.with_name("0002_verified_deployments.sql"))],
+            cwd=ROOT, check=True, capture_output=True, timeout=90,
+        )
         with socket.socket() as listener:
             listener.bind(("127.0.0.1", 0))
             port = listener.getsockname()[1]

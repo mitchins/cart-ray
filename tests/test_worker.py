@@ -532,6 +532,32 @@ def test_source_identity_uses_deployed_credentials_and_is_fail_closed(monkeypatc
         )
 
 
+def test_runtime_reviews_identity_is_authenticated_and_does_not_call_stripe(monkeypatch):
+    from types import SimpleNamespace
+
+    class NoTransport:
+        def __init__(self):
+            raise AssertionError("runtime identity must not call Stripe")
+
+    monkeypatch.setattr(worker_module, "WorkersFetchTransport", NoTransport)
+    monkeypatch.setattr(worker_module, "COMPILED_CATALOGUE", SimpleNamespace(expected_catalogue_version="sha256:abc"))
+    env = {
+        "CARTRAY_ENVIRONMENT": "test", "CARTRAY_REVIEWS_SOURCE": "test",
+        "CARTRAY_REVIEWS_IDENTITY_TOKEN": "i" * 32, "CF_VERSION_METADATA": SimpleNamespace(id="version-1"),
+    }
+    path = "/internal/reviews-runtime-identity"
+    assert TestClient(create_app(), env=env).request("GET", path)[0] == 503
+    status, headers, body = TestClient(create_app(), env=env).request(
+        "GET", path, headers={"authorization": "Bearer " + "i" * 32}
+    )
+    assert status == 200
+    assert json.loads(body) == {"version_id": "version-1", "catalogue_version": "sha256:abc"}
+    assert headers.get("Cache-Control") == "no-store"
+    assert TestClient(create_app(), env=env | {"CF_VERSION_METADATA": None}).request(
+        "GET", path, headers={"authorization": "Bearer " + "i" * 32}
+    )[0] == 503
+
+
 def test_webhook_subscriber_wakeup_does_not_change_checkout_response(monkeypatch):
     from types import SimpleNamespace
 

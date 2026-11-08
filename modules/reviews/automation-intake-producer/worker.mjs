@@ -1,3 +1,4 @@
+import {jsonResponse,bounded} from './evidence.mjs';
 /** Test-only source verifier and bounded outbox producer. No mail or collection. */
 const encoder = new TextEncoder();
 // Normalized sqlite_master fingerprint of the optional module migration.
@@ -8,72 +9,9 @@ const uuid = /^[a-f0-9-]{36}$/;
 const hex = /^[0-9a-f]{64}$/;
 const token = value => typeof value === 'string' && value.length >= 32;
 const bytes = value => Uint8Array.from(value.match(/../g), x => parseInt(x,16));
-async function jsonResponse(response, signal) {
-  if (!response.ok || !response.body) throw new Error('evidence unavailable');
-  const reader=response.body.getReader(); let size=0, text=''; const decoder=new TextDecoder();
-  const cancel=()=>{void reader.cancel().catch(()=>{});};
-  if (signal) {
-    if (signal.aborted) cancel();
-    else signal.addEventListener('abort',cancel,{once:true});
-  }
-  try { for (;;) { const x=await reader.read(); if (x.done) break; size+=x.value.byteLength;
-    if (size>65536) throw new Error('evidence too large'); text+=decoder.decode(x.value,{stream:true}); }
-    return JSON.parse(text+decoder.decode());
-  } finally { if (signal) signal.removeEventListener('abort',cancel); cancel(); }
-}
-async function bounded(fn) {
-  const controller=new AbortController(); let timer;
-  try { return await Promise.race([fn(controller.signal), new Promise((_,reject)=>{
-    timer=setTimeout(()=>reject(new Error('evidence timeout')),3000);
-  })]); } finally {clearTimeout(timer);controller.abort();}
-}
-async function cf(env, path, signal, fetchApi) {
-  const response=await fetchApi(`https://api.cloudflare.com/client/v4/accounts/${env.CF_ACCOUNT_ID}/workers/scripts/${path}`,
-    {headers:{authorization:`Bearer ${env.CF_READ_TOKEN}`},signal});
-  const data=await jsonResponse(response,signal); if (data.success !== true) throw new Error('control plane unavailable');
-  return data.result;
-}
-async function queueInfo(env, queueId, signal, fetchApi) {
-  const response=await fetchApi(`https://api.cloudflare.com/client/v4/accounts/${env.CF_ACCOUNT_ID}/queues/${queueId}`,
-    {headers:{authorization:`Bearer ${env.CF_READ_TOKEN}`},signal});
-  const data=await jsonResponse(response,signal); if (data.success!==true) throw new Error('queue unavailable');
-  return data.result;
-}
-function dbBinding(version, binding, expected) {
-  const found=version?.resources?.bindings?.filter(x=>x.type==='d1' && x.name===binding);
-  return found?.length===1 && found[0].database_id===expected;
-}
-async function activeVersion(env, script, signal, fetchApi) {
-  const data=await cf(env,`${script}/deployments`,signal,fetchApi);
-  const deployments=Array.isArray(data) ? data : data?.deployments;
-  if (!Array.isArray(deployments) || !deployments.length) throw new Error('deployment unavailable');
-  const latest=[...deployments].sort((a,b)=>String(b.created_on).localeCompare(String(a.created_on)))[0];
-  if (latest?.versions?.length!==1 || latest.versions[0].percentage!==100) throw new Error('ambiguous deployment');
-  const version=latest.versions[0].version_id;
-  if (!uuid.test(version)) throw new Error('invalid version');
-  const details=await cf(env,`${script}/versions/${version}`,signal,fetchApi);
-  if (details.id!==version) throw new Error('version mismatch');
-  return details;
-}
-function binding(version, name, type, value) {
-  const found=version?.resources?.bindings?.filter(x=>x.name===name && x.type===type);
-  return found?.length===1 && (value === undefined || found[0].text===value);
-}
-function serviceBinding(version, name, service) {
-  const found=version?.resources?.bindings?.filter(x=>x.name===name && x.type==='service');
-  // Cloudflare reports the default deployment as `production` in version
-  // metadata. Other named environments and entrypoints may route elsewhere.
-  return found?.length===1 && found[0].service===service &&
-    (found[0].environment === undefined || found[0].environment === '' || found[0].environment === 'production') &&
-    (found[0].entrypoint === undefined || found[0].entrypoint === '');
-}
-// Cloudflare has returned both `script_name` (documented) and `script`
-// (observed). If both appear they must agree; unknown or missing values fail.
-function consumerScriptMatches(consumer, expected) {
-  const names=[consumer?.script_name,consumer?.script].filter(value=>value!==undefined);
-  return names.length>0 && names.every(value=>value===expected);
-}
-export async function attest(env, fetchApi=fetch) {
+// Runtime trust is anchored in the operator-verified commerce D1 record.
+// No management credentials or management API calls belong in this module.
+export async function attest(env) {
   if (env.REVIEWS_ENVIRONMENT!=='test' || env.REVIEWS_SOURCE_PRODUCER!=='test' ||
       ![env.SOURCE_WORKER,env.PRODUCER_WORKER,env.REVIEWS_WORKER,env.CONSUMER_WORKER,env.EVENT_QUEUE_NAME,env.DEAD_LETTER_QUEUE_NAME,env.SOURCE_STORE,env.SOURCE_ISSUER,env.SOURCE_INSTALLATION].every(x=>typeof x==='string' && id.test(x)) ||
       new Set([env.SOURCE_WORKER,env.PRODUCER_WORKER,env.REVIEWS_WORKER,env.CONSUMER_WORKER]).size!==4 ||
@@ -83,54 +21,34 @@ export async function attest(env, fetchApi=fetch) {
       env.DEAD_LETTER_QUEUE_NAME===env.EVENT_QUEUE_NAME ||
       !/^acct_[A-Za-z0-9]+$/.test(env.STRIPE_ACCOUNT_ID||'') || !/^sha256:[a-f0-9]{64}$/.test(env.CATALOGUE_VERSION||'') ||
       !hex.test(env.MAPPING_SHA256||'') || !hex.test(env.SOURCE_EVENT_KEY||'') ||
-      !token(env.CF_READ_TOKEN) || !token(env.SOURCE_IDENTITY_TOKEN) || !token(env.REVIEWS_ACTIVATION_TOKEN) || !token(env.TRIGGER_TOKEN) ||
-      new Set([env.CF_READ_TOKEN,env.SOURCE_IDENTITY_TOKEN,env.REVIEWS_ACTIVATION_TOKEN,env.SOURCE_EVENT_KEY,env.TRIGGER_TOKEN]).size!==5 ||
-      !env.SOURCE_API || !env.REVIEWS_API || !env.COMMERCE_DB || !env.EVENT_QUEUE || !uuid.test(env.CF_VERSION_METADATA?.id||'')) throw new Error('source unavailable');
-  return bounded(async signal=>{
-    const [source,producer,reviews,consumer,queue,dlq,identity]=await Promise.all([
-      activeVersion(env,env.SOURCE_WORKER,signal,fetchApi), activeVersion(env,env.PRODUCER_WORKER,signal,fetchApi),
-      activeVersion(env,env.REVIEWS_WORKER,signal,fetchApi),
-      activeVersion(env,env.CONSUMER_WORKER,signal,fetchApi), queueInfo(env,env.EVENT_QUEUE_ID,signal,fetchApi),
-      queueInfo(env,env.DEAD_LETTER_QUEUE_ID,signal,fetchApi),
-      env.SOURCE_API.fetch('https://source.internal/internal/reviews-source-identity',{
-        headers:{authorization:`Bearer ${env.SOURCE_IDENTITY_TOKEN}`}, signal}).then(response=>jsonResponse(response,signal)),
-    ]);
-    if (producer.id!==env.CF_VERSION_METADATA.id || identity.version_id!==source.id ||
-        identity.stripe_account!==env.STRIPE_ACCOUNT_ID || identity.catalogue_version!==env.CATALOGUE_VERSION ||
-        !dbBinding(source,'DB',env.SOURCE_DATABASE_ID) || !dbBinding(producer,'COMMERCE_DB',env.SOURCE_DATABASE_ID) ||
-        !dbBinding(reviews,'CARTRAY_DB',env.SOURCE_DATABASE_ID) ||
-        !serviceBinding(producer,'SOURCE_API',env.SOURCE_WORKER) ||
-        !serviceBinding(producer,'REVIEWS_API',env.REVIEWS_WORKER) ||
-        !serviceBinding(source,'REVIEWS_SOURCE_TRIGGER',env.PRODUCER_WORKER) ||
-        !serviceBinding(consumer,'REVIEWS_API',env.REVIEWS_WORKER) ||
-        !producer.resources.bindings.some(x=>x.type==='queue' && x.name==='EVENT_QUEUE' && x.queue_name===env.EVENT_QUEUE_NAME) ||
-        queue?.queue_id!==env.EVENT_QUEUE_ID || queue?.queue_name!==env.EVENT_QUEUE_NAME ||
-        queue?.consumers_total_count!==1 || queue?.consumers?.length!==1 ||
-        queue.consumers[0].type!=='worker' || !consumerScriptMatches(queue.consumers[0],env.CONSUMER_WORKER) ||
-        queue.consumers[0].dead_letter_queue!==env.DEAD_LETTER_QUEUE_NAME ||
-        !Number.isSafeInteger(queue.consumers[0].settings?.max_retries) ||
-        queue.consumers[0].settings.max_retries<1 || queue.consumers[0].settings.max_retries>10 ||
-        queue.settings?.delivery_paused!==false || dlq?.queue_id!==env.DEAD_LETTER_QUEUE_ID ||
-        dlq?.queue_name!==env.DEAD_LETTER_QUEUE_NAME || dlq.consumers_total_count!==0 ||
-        !binding(source,'CARTRAY_ENVIRONMENT','plain_text','test') ||
-        !binding(source,'CARTRAY_REVIEWS_SOURCE','plain_text','test') ||
-        !binding(source,'CARTRAY_REVIEWS_PRODUCER','plain_text','test') ||
-        !binding(source,'CF_VERSION_METADATA','version_metadata') ||
-        !binding(reviews,'REVIEWS_ENVIRONMENT','plain_text','test') ||
-        !binding(reviews,'REVIEWS_MODE','plain_text','verified_acquisition_only') ||
-        !binding(reviews,'REVIEWS_AUTOMATION_INTAKE','plain_text','test') ||
-        !binding(reviews,'REVIEWS_STORE_KEY','plain_text',env.SOURCE_STORE) ||
-        !binding(consumer,'REVIEWS_ENVIRONMENT','plain_text','test') ||
-        !binding(consumer,'REVIEWS_ORDER_SUBSCRIBER','plain_text','test') ||
-        !binding(consumer,'SOURCE_STORE','plain_text',env.SOURCE_STORE) ||
-        !binding(consumer,'SOURCE_ISSUER','plain_text',env.SOURCE_ISSUER) ||
-        !binding(consumer,'SOURCE_INSTALLATION','plain_text',env.SOURCE_INSTALLATION)) throw new Error('source identity mismatch');
-    const mapping=reviews.resources.bindings.find(x=>x.name==='REVIEWS_SUBJECT_MAPS' && x.type==='plain_text')?.text;
-    if (typeof mapping!=='string') throw new Error('mapping unavailable');
-    const digest=Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256',encoder.encode(mapping))),x=>x.toString(16).padStart(2,'0')).join('');
-    if (digest!==env.MAPPING_SHA256 || !JSON.parse(mapping)?.[env.CATALOGUE_VERSION]) throw new Error('mapping mismatch');
-    return {source_version:source.id,producer_version:producer.id,reviews_version:reviews.id};
-  });
+      !token(env.SOURCE_IDENTITY_TOKEN) || !token(env.REVIEWS_ACTIVATION_TOKEN) || !token(env.TRIGGER_TOKEN) ||
+      new Set([env.SOURCE_IDENTITY_TOKEN,env.REVIEWS_ACTIVATION_TOKEN,env.SOURCE_EVENT_KEY,env.TRIGGER_TOKEN]).size!==4 ||
+      !env.SOURCE_API || !env.REVIEWS_API || !env.CONSUMER_API || !env.COMMERCE_DB || !env.EVENT_QUEUE || !uuid.test(env.CF_VERSION_METADATA?.id||'')) throw new Error('source unavailable');
+  const record=await env.COMMERCE_DB.withSession('first-primary').prepare(
+    'SELECT * FROM reviews_verified_deployment WHERE subscriber_id=? AND installation_id=? ORDER BY revision DESC LIMIT 1')
+    .bind(env.SOURCE_ISSUER,env.SOURCE_INSTALLATION).first();
+  const matches={account_id:env.CF_ACCOUNT_ID,store_key:env.SOURCE_STORE,environment:env.REVIEWS_ENVIRONMENT,
+    source_database_id:env.SOURCE_DATABASE_ID,stripe_account_id:env.STRIPE_ACCOUNT_ID,
+    catalogue_version:env.CATALOGUE_VERSION,mapping_sha256:env.MAPPING_SHA256,
+    producer_version:env.CF_VERSION_METADATA.id,context_database_id:env.AUTHORITY_CONTEXT_DB_ID??null,
+    event_queue_id:env.EVENT_QUEUE_ID,dead_letter_queue_id:env.DEAD_LETTER_QUEUE_ID,
+    source_worker:env.SOURCE_WORKER,producer_worker:env.PRODUCER_WORKER,reviews_worker:env.REVIEWS_WORKER,
+    consumer_worker:env.CONSUMER_WORKER,authority_worker:env.AUTHORITY_WORKER??null,
+    event_queue_name:env.EVENT_QUEUE_NAME,dead_letter_queue_name:env.DEAD_LETTER_QUEUE_NAME};
+  if (!record || !['verified','active'].includes(record.activation_status) || !Number.isSafeInteger(record.revision) || record.revision<1 ||
+      !Number.isSafeInteger(record.verified_at) || record.verified_at<=0 ||
+      !['source_version','producer_version','reviews_version','consumer_version'].every(k=>uuid.test(record[k]||'')) ||
+      (env.AUTHORITY_WORKER!==undefined ? !uuid.test(record.authority_version||'') : record.authority_version!==null) ||
+      Object.entries(matches).some(([k,v])=>(typeof v!=='string' && v!==null) || record[k]!==v)) throw new Error('verification record mismatch');
+  const [identity,reviewsIdentity,consumerIdentity]=await bounded(signal=>Promise.all([
+    env.SOURCE_API.fetch('https://source.internal/internal/reviews-runtime-identity',{headers:{authorization:`Bearer ${env.SOURCE_IDENTITY_TOKEN}`},signal}).then(r=>jsonResponse(r,signal)),
+    env.REVIEWS_API.fetch('https://reviews.internal/reviews-internal/v1/runtime-identity',{headers:{authorization:`Bearer ${env.REVIEWS_ACTIVATION_TOKEN}`},signal}).then(r=>jsonResponse(r,signal)),
+    env.CONSUMER_API.fetch('https://consumer.internal/runtime-identity',{headers:{authorization:`Bearer ${env.SOURCE_EVENT_KEY}`},signal}).then(r=>jsonResponse(r,signal)),
+  ]));
+  if (identity.version_id!==record.source_version || identity.catalogue_version!==record.catalogue_version ||
+      reviewsIdentity.version_id!==record.reviews_version || consumerIdentity.version_id!==record.consumer_version)
+    throw new Error('runtime identity mismatch');
+  return record;
 }
 async function activate(env) {
   const result=await bounded(signal=>env.REVIEWS_API.fetch('https://reviews.internal/reviews-internal/v1/automation-activate',{
@@ -141,7 +59,7 @@ async function activate(env) {
   return result.outbox_watermark;
 }
 export async function relay(env, fetchApi=fetch) {
-  await attest(env,fetchApi);
+  await attest(env);
   if (!id.test(env.POLICY_VERSION||'') || !Number.isSafeInteger(env.DELAY_SECONDS) || env.DELAY_SECONDS<0 ||
       !Number.isSafeInteger(env.MAX_LATENESS) || env.MAX_LATENESS<0) throw new Error('policy unavailable');
   const db=env.COMMERCE_DB.withSession('first-primary');
@@ -175,32 +93,25 @@ export async function relay(env, fetchApi=fetch) {
   }
   return {last_outbox_id:row.last_outbox_id};
 }
-// The caller's version is a hint only. Both the active version and its actual
-// bindings are independently fetched from the authenticated control plane.
+// The caller reports its runtime version; it must match the operator-verified
+// authority version in commerce D1 before a nonce-bound proof is issued.
 export async function attestPurchase(env, input, fetchApi=fetch, now=Math.floor(Date.now()/1000)) {
   if (!id.test(env.AUTHORITY_WORKER||'') || !uuid.test(env.AUTHORITY_CONTEXT_DB_ID||'') ||
       [env.SOURCE_WORKER,env.PRODUCER_WORKER,env.REVIEWS_WORKER,env.CONSUMER_WORKER].includes(env.AUTHORITY_WORKER) ||
       env.AUTHORITY_CONTEXT_DB_ID===env.SOURCE_DATABASE_ID || !hex.test(env.PURCHASE_ATTESTATION_KEY||'') ||
-      [env.SOURCE_EVENT_KEY,env.CF_READ_TOKEN,env.SOURCE_IDENTITY_TOKEN,env.REVIEWS_ACTIVATION_TOKEN,
+      [env.SOURCE_EVENT_KEY,env.SOURCE_IDENTITY_TOKEN,env.REVIEWS_ACTIVATION_TOKEN,
         env.TRIGGER_TOKEN].includes(env.PURCHASE_ATTESTATION_KEY) || !token(env.PURCHASE_ATTESTATION_TOKEN) ||
-      [env.CF_READ_TOKEN,env.SOURCE_IDENTITY_TOKEN,env.REVIEWS_ACTIVATION_TOKEN,env.TRIGGER_TOKEN,
+      [env.SOURCE_IDENTITY_TOKEN,env.REVIEWS_ACTIVATION_TOKEN,env.TRIGGER_TOKEN,
         env.SOURCE_EVENT_KEY,env.PURCHASE_ATTESTATION_KEY].includes(env.PURCHASE_ATTESTATION_TOKEN) ||
       !input || Object.keys(input).length!==2 || !Object.hasOwn(input,'authority_version') || !Object.hasOwn(input,'nonce') ||
       !uuid.test(input.authority_version||'') || !hex.test(input.nonce||'') || !Number.isSafeInteger(now))
     throw new Error('purchase attestation unavailable');
-  const source=await attest(env,fetchApi);
-  const authority=await bounded(signal=>activeVersion(env,env.AUTHORITY_WORKER,signal,fetchApi));
-  if (authority.id!==input.authority_version || !dbBinding(authority,'COMMERCE_DB',env.SOURCE_DATABASE_ID) ||
-      !dbBinding(authority,'CONTEXT_DB',env.AUTHORITY_CONTEXT_DB_ID) ||
-      !serviceBinding(authority,'SOURCE_IDENTITY',env.SOURCE_WORKER) ||
-      !serviceBinding(authority,'CHECKOUT',env.SOURCE_WORKER) ||
-      !serviceBinding(authority,'ATTESTOR',env.PRODUCER_WORKER) ||
-      !serviceBinding(authority,'REVIEWS_API',env.REVIEWS_WORKER) ||
-      !binding(authority,'CF_VERSION_METADATA','version_metadata')) throw new Error('authority binding mismatch');
+  const source=await attest(env);
+  if (source.authority_version!==input.authority_version) throw new Error('authority version mismatch');
   const proof=['cartray-reviews-purchase-attestation-v1',env.SOURCE_STORE,'test',env.SOURCE_INSTALLATION,
     env.SOURCE_DATABASE_ID,env.AUTHORITY_CONTEXT_DB_ID,env.STRIPE_ACCOUNT_ID,env.CATALOGUE_VERSION,
     env.MAPPING_SHA256,source.source_version,source.reviews_version,source.producer_version,
-    authority.id,input.nonce,now,now+30];
+    source.authority_version,input.nonce,now,now+30];
   const key=await crypto.subtle.importKey('raw',bytes(env.PURCHASE_ATTESTATION_KEY),{name:'HMAC',hash:'SHA-256'},false,['sign']);
   const signature=Array.from(new Uint8Array(await crypto.subtle.sign('HMAC',key,encoder.encode(JSON.stringify(proof)))),x=>x.toString(16).padStart(2,'0')).join('');
   return {proof,signature};
