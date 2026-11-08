@@ -1,6 +1,6 @@
 // Local-only qualification fixture: mocked control plane, real Workerd D1.
-import {verifyInstallation,doctor} from '../../../automation-intake-producer/operator.mjs';
-import {relay} from '../../../automation-intake-producer/worker.mjs';
+import {verifyInstallation,doctor,operatorSQL} from '../../../automation-intake-producer/operator.mjs';
+import {relay,attest} from '../../../automation-intake-producer/worker.mjs';
 import {deliver} from '../../../automation-intake-queue/worker.mjs';
 const a='11111111-1111-4111-8111-111111111111',b='22222222-2222-4222-8222-222222222222',c='33333333-3333-4333-8333-333333333333',dbid='44444444-4444-4444-8444-444444444444';
 const catalogue='sha256:'+'b'.repeat(64), mapping=JSON.stringify({[catalogue]:{kit:'subject'}});
@@ -15,6 +15,18 @@ export default {async fetch(request,bindings) {
   e.AUTHORITY_WORKER='authority';e.AUTHORITY_CONTEXT_DB_ID='77777777-7777-4777-8777-777777777777';
   const reject=async fn=>{try{await fn();throw Error('expected failure')}catch(error){if(error.message==='expected failure')throw error}};
   await reject(()=>relay(e,()=>{throw Error('control plane unavailable')}));
+  const originalDB=e.COMMERCE_DB;
+  const cliDB={withSession(){return this},prepare(sql){let values=[];return {bind(...args){values=args;return this},first(){return originalDB.prepare(operatorSQL(sql,values)).first()},all(){return originalDB.prepare(operatorSQL(sql,values)).all()}}}};
+  const relayOnly={...e,COMMERCE_DB:cliDB,SOURCE_ISSUER:'relay-only',AUTHORITY_WORKER:undefined,AUTHORITY_CONTEXT_DB_ID:undefined};
+  // Match the operator-verified consumer configuration for this second installation.
+  const oldIssuer=versions.consumer.resources.bindings.find(x=>x.name==='SOURCE_ISSUER').text;
+  versions.consumer.resources.bindings.find(x=>x.name==='SOURCE_ISSUER').text='relay-only';
+  const four=await verifyInstallation(relayOnly,0,control);
+  if(four.authority_version!==null || four.context_database_id!==null || four.authority_worker!==null)throw Error('four-worker record malformed');
+  const stored=await originalDB.prepare("SELECT authority_version,context_database_id,authority_worker FROM reviews_verified_deployment WHERE subscriber_id='relay-only'").first();
+  if(Object.values(stored).some(x=>x!==null))throw Error('CLI adapter did not preserve SQL NULL');
+  await attest(relayOnly);
+  versions.consumer.resources.bindings.find(x=>x.name==='SOURCE_ISSUER').text=oldIssuer;
   versions.authority={id:'66666666-6666-4666-8666-666666666666',resources:{bindings:[d1('COMMERCE_DB'),{name:'CONTEXT_DB',type:'d1',database_id:e.AUTHORITY_CONTEXT_DB_ID},svc('SOURCE_IDENTITY','source'),svc('CHECKOUT','source'),svc('ATTESTOR','producer'),svc('REVIEWS_API','reviews'),{name:'CF_VERSION_METADATA',type:'version_metadata'}]}};
   const record=await verifyInstallation(e,0,control);
   if(record.activation_status!=='verified' || record.revision!==1)throw Error('bootstrap verification failed');

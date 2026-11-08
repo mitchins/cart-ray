@@ -3,7 +3,7 @@ import {schema} from './fixtures/producer-workerd/schema-fixture.mjs';
 import assert from 'node:assert/strict';
 import {webcrypto} from 'node:crypto';
 import producer, {attest, attestPurchase, relay} from '../automation-intake-producer/worker.mjs';
-import {inspectDeployment,inspectInstallation,installationFields,sourceIdentityURL} from '../automation-intake-producer/operator.mjs';
+import {inspectDeployment,inspectInstallation,installationFields,sourceIdentityURL,operatorSQL} from '../automation-intake-producer/operator.mjs';
 import {deliver} from '../automation-intake-queue/worker.mjs';
 if (!globalThis.crypto) globalThis.crypto=webcrypto;
 const v1='11111111-1111-4111-8111-111111111111',v2='22222222-2222-4222-8222-222222222222',v3='33333333-3333-4333-8333-333333333333',dbid='44444444-4444-4444-8444-444444444444';
@@ -210,4 +210,10 @@ test('consumer runtime identity requires source authentication and actual versio
  assert.equal((await subscriber.fetch(request('forged'),env)).status,404);
  assert.deepEqual(await (await subscriber.fetch(request(env.SOURCE_EVENT_KEY),env)).json(),{version_id:v1});
  delete env.CF_VERSION_METADATA;assert.equal((await subscriber.fetch(request(env.SOURCE_EVENT_KEY),env)).status,503);
+});
+
+test('operator CLI SQL adapter preserves nulls and quotes without changing SQL meaning',()=>{
+ assert.equal(operatorSQL('SELECT ?,?,?,?',[null,"O'Brien",42,'null']),"SELECT NULL,'O''Brien',42,'null'");
+ assert.throws(()=>operatorSQL('SELECT ?',[undefined]));
+ assert.throws(()=>operatorSQL('SELECT ?',[NaN]));
 });

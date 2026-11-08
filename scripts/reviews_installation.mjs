@@ -2,7 +2,7 @@
 // Operator workstation only. Never bundled into a Worker.
 import {readFile} from 'node:fs/promises';
 import {execFileSync} from 'node:child_process';
-import {doctor,verifyInstallation,sourceIdentityURL} from '../modules/reviews/automation-intake-producer/operator.mjs';
+import {doctor,verifyInstallation,sourceIdentityURL,operatorSQL} from '../modules/reviews/automation-intake-producer/operator.mjs';
 const [mode,configPath,revision]=process.argv.slice(2);
 if (!['doctor','verify'].includes(mode) || !configPath) throw Error('usage: node scripts/reviews_installation.mjs doctor|verify operator.json [expected-revision]');
 const config=JSON.parse(await readFile(configPath,'utf8'));
@@ -11,8 +11,7 @@ const env={...config,...Object.fromEntries(['CF_READ_TOKEN','SOURCE_IDENTITY_TOK
 if (!env.CF_READ_TOKEN) throw Error('operator CF_READ_TOKEN required');
 const identityURL=await sourceIdentityURL(env);
 const execute=(sql,args=[])=>{
-  const quote=x=>typeof x==='number' ? String(x) : "'"+String(x).replaceAll("'","''")+"'";
-  let i=0;const query=sql.replaceAll('?',()=>quote(args[i++]));
+  const query=operatorSQL(sql,args);
   const result=JSON.parse(execFileSync('npx',['wrangler','d1','execute',env.SOURCE_DATABASE_ID,'--remote','--json','--command',query],{encoding:'utf8',env:{...process.env,CLOUDFLARE_API_TOKEN:env.CF_READ_TOKEN,CLOUDFLARE_ACCOUNT_ID:env.CF_ACCOUNT_ID}}));
   if (!Array.isArray(result) || result.some(r=>r.success!==true)) throw Error('D1 operator operation failed');
   return result[0];

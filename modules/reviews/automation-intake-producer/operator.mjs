@@ -204,3 +204,19 @@ export async function sourceIdentityURL(env, fetchApi=fetch) {
     return url;
   });
 }
+
+// Wrangler's CLI accepts SQL text rather than bindings. Keep the adapter's
+// value encoding explicit, including nullable relay-only authority fields.
+export function operatorSQL(sql,args=[]) {
+  let index=0;
+  const result=sql.replaceAll('?',()=>{
+    if(index>=args.length)throw new Error('missing SQL argument');
+    const value=args[index++];
+    if(value===null)return 'NULL';
+    if(typeof value==='number' && Number.isSafeInteger(value))return String(value);
+    if(typeof value==='string')return "'"+value.replaceAll("'","''")+"'";
+    throw new Error('unsupported SQL argument');
+  });
+  if(index!==args.length)throw new Error('extra SQL argument');
+  return result;
+}
