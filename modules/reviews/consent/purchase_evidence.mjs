@@ -61,9 +61,19 @@ function normalizeEmail(value) {
   if(typeof value!=='string' || value.length>254 || value!==value.trim() || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value)) throw Error('recipient');
   const at=value.lastIndexOf('@'); return value.slice(0,at)+'@'+value.slice(at+1).toLowerCase();
 }
-async function resolve(session,contextHash,env,fetcher,{automationOutbox=null}={}) {
+async function resolve(session,contextHash,env,fetcher,{automationOutbox=null,historical=null}={}) {
   const automatic=automationOutbox!==null;
   if(automatic ? !Number.isSafeInteger(automationOutbox)||automationOutbox<1 : !sessionPattern.test(session) || !hash.test(contextHash)) throw Error('scope');
+  if(automatic) {
+    // Existing suppression pseudonyms cannot be translated from a new key.
+    // Refuse evidence until an explicitly provisioned, immutable registry row
+    // matches both the key version and a domain-separated key check.
+    if(!id.test(env.RECIPIENT_HASH_KEY_VERSION || '') || env.RECIPIENT_HASH_KEY_VERSION.length>60) throw Error('suppression key unavailable');
+    const pinned=await env.CONTEXT_DB.prepare('SELECT r.key_version,r.key_check FROM review_suppression_key_registry r JOIN review_suppression_key_current c USING(store_key,environment,installation_id,key_version) WHERE r.store_key=? AND r.environment=? AND r.installation_id=?')
+      .bind(env.STORE_KEY,'test',env.INSTALLATION_ID).first();
+    const check=await mac(env.RECIPIENT_HASH_KEY,JSON.stringify(['reviews-suppression-key-check-v1',env.STORE_KEY,'test',env.INSTALLATION_ID,env.RECIPIENT_HASH_KEY_VERSION]));
+    if(!pinned || pinned.key_version!==env.RECIPIENT_HASH_KEY_VERSION || !equal(pinned.key_check,check)) throw Error('suppression key unavailable');
+  }
   const proof=await attest(env);
   const now=Math.floor(Date.now()/1000);
   if(!automatic) {
@@ -113,22 +123,44 @@ async function resolve(session,contextHash,env,fetcher,{automationOutbox=null}={
   if(email!==normalizeEmail(env.APPROVED_TEST_EMAIL)) throw Error('test recipient');
   // v2 has a stable merchant-scoped pseudonym for purpose suppression.
   // Retain v1's order-scoped interpretation for the old, test-only authority.
-  const version=automatic ? 'v2' : 'v1';
-  const recipientHash=await mac(env.RECIPIENT_HASH_KEY,JSON.stringify(automatic
+  let version=automatic ? 'v2_'+env.RECIPIENT_HASH_KEY_VERSION : 'v1';
+  let recipientHash=await mac(env.RECIPIENT_HASH_KEY,JSON.stringify(automatic
     ? ['acorn-recipient-v2',env.STORE_KEY,'test',email]
     : ['acorn-recipient-v1',env.STORE_KEY,'test',row.order_id,version,email]));
+  let priorConsent=null;
+  if(automatic) {
+    if(historical) {
+      if(historical.acquisition_id!==row.order_id) throw Error('historical acquisition');
+      const match=await callBounded(env.REVIEWS_API.fetch.bind(env.REVIEWS_API),'https://reviews.internal/reviews-internal/v1/historical-recipient-match',{
+        method:'POST',headers:{'Content-Type':'application/json','Authorization':'Bearer '+env.REVIEWS_HISTORICAL_RECIPIENT_TOKEN},
+        body:JSON.stringify({...historical,outbox_id:row.outbox_id,candidate:recipientHash})});
+      if(match.status!=='matched') throw Error('historical recipient mismatch');
+      return {email};
+    }
+    const replay=await callBounded(env.REVIEWS_API.fetch.bind(env.REVIEWS_API),'https://reviews.internal/reviews-internal/v1/automation-recipient-replay',{
+      method:'POST',headers:{'Content-Type':'application/json','Authorization':'Bearer '+env.REVIEWS_AUTOMATION_INGRESS_TOKEN},
+      body:JSON.stringify({outbox_id:row.outbox_id,candidate:recipientHash})});
+    if(replay.status==='suppressed') throw Error('suppressed');
+    if(replay.status==='existing') {
+      if(!hash.test(replay.recipient_context_hash||'') || !id.test(replay.binding_version||'') ||
+        replay.verified_at!==row.settled_at || (replay.consent_reference!==null &&
+        (!id.test(replay.consent_reference||'') || replay.granted_at!==grant.granted_at))) throw Error('replay');
+      recipientHash=replay.recipient_context_hash; version=replay.binding_version;
+      priorConsent=replay.consent_reference;
+    } else if(replay.status!=='new') throw Error('replay');
+  }
   const reference='ref_'+await mac(env.RECIPIENT_HASH_KEY,JSON.stringify(['acorn-delivery-v1',automatic ? row.order_id : contextHash,recipientHash]));
   const sourceProvenance=env.INSTALLATION_ID+'_'+proof[9];
   if(!id.test(sourceProvenance)) throw Error('source provenance');
   return {email, store:env.STORE_KEY,environment:'test',session_id:session,context_hash:contextHash,confirmed:true,source_attested:true,
     event_id:eventId,acquisition_id:row.order_id,source_provenance:sourceProvenance,recipient_context_hash:recipientHash,
     binding_version:version,recipient_reference:reference,outbox_id:row.outbox_id,
-    ...(automatic ? {grant,settled_at:row.settled_at} : {})};
+    ...(automatic ? {grant,settled_at:row.settled_at,prior_consent_reference:priorConsent} : {})};
 }
 // Build exactly the payloads accepted by the existing Reviews Worker; this
 // authenticates purchase-contact provenance, never mailbox possession.
 export async function buildAutomationEvidence(result,env) {
-  const ref='checkout_'+await mac(env.RECIPIENT_HASH_KEY,JSON.stringify(['checkout-grant-v1',result.acquisition_id,result.grant.wording_version,result.grant.wording,result.grant.granted_at,result.grant.merchant_default_selected,result.grant.selection_basis]));
+  const ref=result.prior_consent_reference || 'checkout_'+await mac(env.RECIPIENT_HASH_KEY,JSON.stringify(['checkout-grant-v1',result.acquisition_id,result.grant.wording_version,result.grant.wording,result.grant.granted_at,result.grant.merchant_default_selected,result.grant.selection_basis]));
   const recipient={binding_version:result.binding_version,evidence_reference:'purchase_contact_'+result.outbox_id,
     outbox_id:result.outbox_id,recipient_context_hash:result.recipient_context_hash,verified_at:result.settled_at};
   const consent={event_id:result.event_id,evidence_reference:ref,granted_at:result.grant.granted_at,recipient_context_hash:result.recipient_context_hash};
@@ -140,17 +172,33 @@ export async function buildAutomationEvidence(result,env) {
 
 export async function purchaseEvidence(request,env,fetcher=fetch) {
   const path=new URL(request.url).pathname;
-  if(!configured(env) || request.method!=='POST' || !['/confirmed','/delivery-recipient','/automation-record','/automation-recipient'].includes(path) ||
+  if(!configured(env) || request.method!=='POST' || !['/confirmed','/delivery-recipient','/automation-record','/automation-recipient','/historical-recipient'].includes(path) ||
     (request.headers.get('content-type')||'')!=='application/json') return unavailable();
   try {
     const input=await jsonBounded(new Response(request.body,{headers:request.headers}),512);
     if(!input || Array.isArray(input)) return unavailable();
+    if(path==='/historical-recipient') {
+      const token=env.HISTORICAL_RECIPIENT_TOKEN, reviewsToken=env.REVIEWS_HISTORICAL_RECIPIENT_TOKEN;
+      if(Object.keys(input).length!==4 || !['acquisition_id','delivery_identity','generation_id','outbox_id'].every(k=>Object.hasOwn(input,k)) ||
+        !Number.isSafeInteger(input.outbox_id) || input.outbox_id<1 || !id.test(input.acquisition_id||'') ||
+        !hash.test(input.generation_id||'') || !hash.test(input.delivery_identity||'') ||
+        [token,reviewsToken].some(x=>typeof x!=='string'||x.length<32) ||
+        new Set([token,reviewsToken,env.RECIPIENT_HASH_KEY,env.AUTOMATION_RECIPIENT_TOKEN,env.AUTOMATION_EVIDENCE_TOKEN,
+          env.RECIPIENT_RESOLVE_TOKEN,env.PURCHASE_ATTESTATION_TOKEN,env.REVIEWS_AUTOMATION_INGRESS_TOKEN,
+          env.REVIEWS_RECIPIENT_EVIDENCE_SECRET,env.REVIEWS_CONSENT_SECRET]).size!==10 ||
+        !equal(request.headers.get('Authorization')||'', 'Bearer '+token)) return unavailable();
+      const {outbox_id,...historical}=input;
+      const result=await resolve(null,null,env,fetcher,{automationOutbox:outbox_id,historical});
+      return Response.json({email:result.email},{headers:{'Cache-Control':'no-store'}});
+    }
     if(path==='/automation-recipient') {
       const token=env.AUTOMATION_RECIPIENT_TOKEN;
       if(Object.keys(input).join(',')!=='outbox_id' || !Number.isSafeInteger(input.outbox_id) || input.outbox_id<1 ||
         typeof token!=='string' || token.length<32 || [env.RECIPIENT_HASH_KEY,env.AUTOMATION_EVIDENCE_TOKEN,env.RECIPIENT_RESOLVE_TOKEN,env.PURCHASE_ATTESTATION_TOKEN,env.REVIEWS_AUTOMATION_INGRESS_TOKEN,env.REVIEWS_RECIPIENT_EVIDENCE_SECRET,env.REVIEWS_CONSENT_SECRET].includes(token) ||
         !equal(request.headers.get('Authorization')||'', 'Bearer '+token)) return unavailable();
-      const result=await resolve(null,null,env,fetcher,{automationOutbox:input.outbox_id});
+      let result;
+      try { result=await resolve(null,null,env,fetcher,{automationOutbox:input.outbox_id}); }
+      catch(error) { if(error?.message==='suppressed') return Response.json({status:'suppressed'},{headers:{'Cache-Control':'no-store'}}); throw error; }
       return Response.json({email:result.email,recipient_context_hash:result.recipient_context_hash},{headers:{'Cache-Control':'no-store'}});
     }
     if(path==='/automation-record') {
@@ -164,7 +212,7 @@ export async function purchaseEvidence(request,env,fetcher=fetch) {
       let result;
       try { result=await resolve(null,null,env,fetcher,{automationOutbox:input.outbox_id}); }
       catch(error) {
-        if(error?.message==='no checkout grant') return Response.json({status:'not_granted'},{headers:{'Cache-Control':'no-store'}});
+        if(['no checkout grant','suppressed'].includes(error?.message)) return Response.json({status:'not_granted'},{headers:{'Cache-Control':'no-store'}});
         throw error;
       }
       // Contact evidence reflects Stripe's confirmed purchase contact, not proof

@@ -164,15 +164,10 @@ def main():
                 "delivery_identity": prepared["delivery_identity"],
             }
             assert internal("/reviews-internal/v1/automation-initial-claim", claim, AUTOMATION_TOKEN)[0] == 409
-            stop(process)
-            process = start(
-                "wrangler.acquisition.test.toml", directory, "disabled", ADMIN, {"REVIEWS_UNSUBSCRIBE_KEY": "u" * 40}
-            )
-            assert call("/reviews/v1/invitation-unsubscribe", {"token": token})[0] == 200
-            print("Workerd initial due authorization and one-click suppression passed")
-            return
+            # Exercise independently signed withdrawal on the other acquisition;
+            # the first has already received an unsubscribe tombstone above.
             withdrawal = {
-                "event_id": events[0],
+                "event_id": events[1],
                 "recipient_context_hash": recipient,
                 "evidence_reference": "synthetic-withdrawal",
                 "withdrawn_at": int(time.time()),
@@ -194,11 +189,17 @@ def main():
                 with urllib.request.urlopen(request, timeout=10) as response:
                     assert response.status == 201
             try:
-                signed_consent(events[0], recipient)
+                signed_consent(events[1], recipient)
                 raise AssertionError("withdrawn consent was re-granted")
             except urllib.error.HTTPError as exc:
                 assert exc.code == 409
             print("Workerd activation and purpose-bound withdrawal replay passed on two D1 databases")
+            stop(process)
+            process = start(
+                "wrangler.acquisition.test.toml", directory, "disabled", ADMIN, {"REVIEWS_UNSUBSCRIBE_KEY": "u" * 40}
+            )
+            assert call("/reviews/v1/invitation-unsubscribe", {"token": token})[0] == 200
+            print("Workerd initial due authorization and one-click suppression passed")
         finally:
             stop(process)
 

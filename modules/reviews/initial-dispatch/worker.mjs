@@ -28,6 +28,7 @@ export async function dispatchInitial(message,env,fetcher=fetch,now=()=>Math.flo
  const landing=safeUrl(env.REVIEWS_LANDING_URL), unsubscribeBase=safeUrl(env.UNSUBSCRIBE_BASE_URL);
  if(!message || Object.keys(message).join(',')!=='outbox_id' || !Number.isSafeInteger(message.outbox_id) || message.outbox_id<1)return 'discard';
  const recipient=await call(env.PURCHASE_EVIDENCE,'/automation-recipient',message,env.AUTOMATION_RECIPIENT_TOKEN);
+ if(recipient.status==='suppressed') return 'suppressed';
  if(recipient.email!==env.APPROVED_TEST_EMAIL || !hex.test(recipient.recipient_context_hash||''))throw Error('recipient unavailable');
  const draft=await call(env.REVIEWS_API,'/reviews-internal/v1/automation-initial-prepare',message,env.REVIEWS_AUTOMATION_TOKEN);
  if(draft.status==='suppressed' && Object.keys(draft).length===1)return 'done';
@@ -43,15 +44,17 @@ export async function dispatchInitial(message,env,fetcher=fetch,now=()=>Math.flo
  landing.hash='invitation='+draft.token;
  unsubscribeBase.pathname=unsubscribeBase.pathname.replace(/\/$/,'')+'/'+draft.unsubscribe_token;
  const identity={acquisition_id:draft.acquisition_id,generation_id:draft.generation_id,delivery_identity:draft.delivery_identity};
+ let providerEmailId;
  try{
    const result=await bounded(fetcher,'https://api.smtp2go.com/v3/email/send',{method:'POST',headers:{'content-type':'application/json','X-Smtp2go-Api-Key':env.SMTP2GO_API_KEY},body:JSON.stringify({
      sender:env.TEST_SENDER,to:[env.APPROVED_TEST_EMAIL],subject:`Review your purchase from ${env.MERCHANT_NAME}`,
      text_body:`Thank you for your purchase from ${env.MERCHANT_NAME}. If you would like to share your experience, visit:\n\n${landing}\n\nAnyone with this link can use it.\n\nContact: ${env.MERCHANT_CONTACT}\nStop review-request emails: ${unsubscribeBase}`,
      custom_headers:[{header:'List-Unsubscribe',value:`<${unsubscribeBase}>`},{header:'List-Unsubscribe-Post',value:'List-Unsubscribe=One-Click'},{header:'X-Reviews-Delivery-Identity',value:draft.delivery_identity}],fastaccept:false})});
    if(result?.data?.succeeded!==1||result.data.failed!==0||!Array.isArray(result.data.failures)||result.data.failures.length!==0||typeof result.data.email_id!=='string'||!/^[A-Za-z0-9_-]{1,128}$/.test(result.data.email_id))throw Error('unknown provider result');
+   providerEmailId=result.data.email_id;
  }catch(error){try{await call(env.REVIEWS_API,'/reviews-internal/v1/invitations/delivery-outcome',{...identity,outcome:'uncertain'},env.REVIEWS_DELIVERY_TOKEN)}catch{}throw Error('delivery reconciliation required',{cause:error});}
  const accepted_at=now();
- try{await call(env.REVIEWS_API,'/reviews-internal/v1/invitations/delivery-outcome',{...identity,outcome:'accepted',accepted_at},env.REVIEWS_DELIVERY_TOKEN)}catch{throw Error('delivery reconciliation required')}
+ try{await call(env.REVIEWS_API,'/reviews-internal/v1/invitations/delivery-outcome',{...identity,outcome:'accepted',accepted_at,provider_email_id:providerEmailId},env.REVIEWS_DELIVERY_TOKEN)}catch{throw Error('delivery reconciliation required')}
  return 'sent';
 }
 export async function unsubscribeGateway(request,env){

@@ -54,6 +54,46 @@ webhook secret and storefront origin; the repository's existing Wrangler
 configuration points at another deployment and must not be reused unchanged.
 Provisioning those resources and configuring a test webhook are separate steps.
 
+## Reproducible test commerce Worker
+
+Run `scripts/build_acorn_commerce.py` from a clean committed checkout using the
+Node version in `.nvmrc`. Supply the private preflight lock and a test-only
+Wrangler configuration with the intended account, Worker name, D1 ID, service
+bindings and variables. The tool archives the exact commit, synchronizes locked
+dependencies, seeds both Worker vendoring dependencies from `uv.lock`, verifies
+wheel hashes and source bytes, and independently compiles the locked catalogue.
+It retains the deployable Python Worker and configuration in a new private
+output directory. It also reruns a Wrangler `--no-bundle` dry run and refuses a
+different module digest. The `RECORD` files are restored to the locked wheels'
+deterministic contents; generated host-specific executable hashes are not
+relevant to the Worker. Neither the lock nor the control-plane token is copied
+into the output bundle.
+
+```sh
+uv run --locked python scripts/build_acorn_commerce.py \
+  --preflight-lock examples/acorn-store/.private/stripe-test-preflight.lock.json \
+  --wrangler-config /private/path/to/acorn-test-wrangler.toml \
+  --output /private/path/to/new-acorn-worker-artifact
+```
+
+Retain the source commit and bundle and deployment-configuration SHA-256 values
+together in trusted, independent build evidence, separate from `receipt.json`. Before deploying with the pinned Wrangler and `--no-bundle`,
+verify both digests with `--verify-output`, `--expected-bundle-sha256` and
+`--expected-config-sha256`. Never edit the retained bundle or configuration
+between verification and deployment. The builder itself makes no deployment.
+After deployment, run `--attest-output` with those same independent digests,
+`--expected-source-commit`, `--version` and `--control-plane-token-file` (a private, read-only Workers
+Scripts token). This compares every module byte against Cloudflare's active
+100% version and checks the configured non-secret variables, D1/service/rate
+bindings, compatibility settings, and required secret-binding **names**. It
+cannot read or verify secret values. The independently retained commit and digest
+association must come from a trusted clean build; this command cannot prove that
+association from a mutable receipt alone. Secure the artifact, lock and receipt;
+verify the Stripe account, sender/scheduler disabled state and dependent source
+attestation separately. A SHA-256 receipt is not an independently signed
+attestation and does not prove the preflight lock itself was created from the
+correct Stripe account; use the existing read-only Stripe preflight.
+
 After preflight, an explicit `--test-checkout-api https://TEST-WORKER.example` builds the site
 against the separately provisioned CartRay **test-only** checkout Worker. The
 build checks that the local test lock matches the catalogue and reference prices. The URL

@@ -118,3 +118,96 @@ actual test resources separately. The authority requires distinct secrets:
 logs, or public build. In addition, the producer's installation attestation
 must use the same test account, Worker versions, D1 IDs, subject mapping and
 separate attestation secrets. Version changes require re-attestation.
+
+## Suppression-key safety (test only)
+
+Automatic purchase evidence requires an immutable, installation-scoped suppression
+key registry in the purchaser-context D1 database. Apply
+`migrations/0002_suppression_key_registry.sql`, set a stable
+`RECIPIENT_HASH_KEY_VERSION`, and pin the existing high-entropy key once using
+`tools/pin_suppression_key.py`. The tool requires a mode-0600, independently
+verified, quiesced snapshot of the correct Reviews D1 and a mode-0600 key file.
+If any v2 bindings or suppressions already exist, it refuses to proceed without
+a mode-0600 JSON array of authoritative purchase contacts whose hashes cover
+every existing v2 binding and suppression. This also fails closed when history
+contains hashes created under different keys. An empty snapshot is accepted only for a
+verified genuinely empty installation. The operator must verify the snapshot's
+source, scope and freshness and stop concurrent writers; the tool cannot attest
+an arbitrary local file or police a separate deployment. Apply its private SQL
+output only to the verified context database; retain it securely and remove it
+when no longer needed. The tool requires owned, singly linked regular 0600 input
+files and writes a new file in an owned private directory (0700 or stricter).
+It reads the snapshot through an open descriptor. Its parent directory must also
+be owned and private (0700 or stricter). Provide a complete, quiesced,
+checkpointed SQLite snapshot with no WAL, SHM or rollback-journal sidecars.
+A missing row, changed key or changed version fails closed
+before purchase evidence or recipient delivery. The immutable epoch records and
+current pointer are separate: a version cannot be reused with a different key.
+
+### Fenced rotation (test only)
+
+**Deferred experiment; do not use for a pilot.** A mistyped key in the first
+`backfill`, including an empty batch, can pin the wrong proof and leave the
+fence closed. There is currently no supported abort or retarget operation.
+Recovery would require exceptional database intervention and reconciliation;
+do not attempt rotation on an installation that must remain available.
+
+The `suppression-key-rotation` private Reviews service-binding route is disabled
+unless `REVIEWS_SUPPRESSION_ROTATION_MODE=test`, an independent
+`REVIEWS_SUPPRESSION_ROTATION_TOKEN` is configured, and
+`SUPPRESSION_CONTEXT_DB` binds the independently verified context D1. It is not a
+public or production route. Requests and contacts must stay private and must not
+be logged. The operator must independently verify the source Worker, account,
+Reviews and context database bindings, pause old producer deployments, and
+re-attest after deploying any new source version. The route cannot attest its
+own Cloudflare resource identity or ensure older, pre-fence code has stopped.
+Set `REVIEWS_SUPPRESSION_INSTALLATION_ID` to the attested installation identity;
+switch and activate reject a different request identity. This is an additional
+guard, not proof of the bound D1 resource: a clone with the same rows can pass it.
+
+Before switching, compare the actual account and D1 resource IDs and binding names
+in the deployed Reviews Worker and the deployed purchase-evidence producer using
+independent Cloudflare control-plane deployment metadata. Both context bindings
+must resolve to the same intended database, and the producer's attested store,
+environment, installation and source version must match the rotation request.
+Record these checks privately; a request field, registry contents, or operator
+label alone is insufficient. If metadata is unavailable or differs, leave the
+fence closed. Recheck the deployed bindings after updating the producer and
+before activation. This procedure is not hosted-qualified.
+
+If an incorrect binding was already switched or activated, immediately disable
+the evidence producer and dispatch, then freeze Reviews before any recovery.
+Identify the real and mistaken D1 resources using control-plane metadata; retain
+both and their key registry state. Restore the intended binding, reconcile any
+in-flight deliveries and verify alias coverage and suppression records before
+repeating the fenced transition. Do not delete either registry or assume a
+successful activation means the producer can use the new key. Escalate any
+unexplained writes or uncertain deliveries for operator reconciliation.
+
+1. Apply Reviews migration 0030 and context migration 0002, verify the installed
+   old-key pin, and ensure no provider delivery is dispatching or uncertain.
+2. Call `freeze` with old and target key versions. The database fences new
+   recipient evidence and delivery claims; unsubscribe remains available. If
+   unresolved deliveries exist, freezing fails rather than hiding them.
+3. Obtain historical purchase contacts from the authoritative source and call
+   `backfill` with both keys in batches of up to 50. Each contact must reproduce
+   an existing old-key binding or tombstone. The transaction links pseudonyms,
+   propagates existing suppressions and pins both key proofs across all batches.
+   Call with an empty contact list only for a verified empty installation.
+4. Call `switch` to pin and select the new key in context D1. It refuses unless
+   all existing v2 bindings and all suppression records have a target alias;
+   legacy v1 bindings intentionally block cutover pending a separate migration.
+   Deploy and attest the evidence Worker using the new key and version while the
+   Reviews fence remains closed, then call `activate`. Activation rechecks both
+   context key and full alias coverage before reopening writes. A failed or
+   interrupted switch leaves the fence closed; retry with the same versions and
+   keys. Old-link unsubscriptions propagate across all linked key epochs.
+
+The existing v2 binding version is preserved for old records; subsequent source
+bindings use `v2_<key-version>`. Authenticated outbox replays resolve a matching
+new pseudonym back to the old immutable binding and consent without granting
+again. Old-key holders must be removed only after source deployment and
+attestation are verified. Key rotation is not a production feature: the current
+adapter and control route are test-only, operator-driven, and still require
+independent hosted qualification. Never bypass the fence or delete suppression
+records to force an upgrade.

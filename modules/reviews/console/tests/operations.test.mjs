@@ -64,17 +64,17 @@ test('reply editing waits until the current revision is found in paginated histo
   assert.equal(calls, 2);
 });
 
-test('delivery investigation is read-only and permission failure does not disable moderation', async () => {
+test('delivery investigation permission failure does not disable moderation', async () => {
   const names = ['delivery-state', 'delivery-load', 'delivery-more', 'delivery-results', 'delivery-status', 'delivery-error'];
   const nodes = Object.fromEntries(names.map((name) => [name, new Element(name)])); nodes['delivery-state'].value = 'uncertain';
   let calls = 0, denied = true;
-  const client = { async deliveries(state) { calls++; if (denied) throw new ConsoleError('unauthorized', 401); return { records: [{ delivery_identity: 'f'.repeat(64), state, prepared_at: 1 }], next_after: null }; } };
+  const client = { async deliveries(state) { calls++; if (denied) throw new ConsoleError('unauthorized', 401); return { records: [{ acquisition_id: 'order_1', delivery_identity: 'f'.repeat(64), state, prepared_at: 1 }], next_after: null }; } };
   setupDeliveries({ client, document: { querySelector: (selector) => nodes[selector.slice(1)] }, element });
   assert.equal(calls, 0);
   await nodes['delivery-load'].click(); assert.match(nodes['delivery-error'].textContent, /operations permission/);
   denied = false; await nodes['delivery-load'].click();
   assert.match(nodes['delivery-results'].children[0].children[1].textContent, /Delivery reference/);
-  assert.equal(nodes['delivery-results'].children[0].children.length, 3);
+  assert.equal(nodes['delivery-results'].children[0].children.length, 7);
 });
 
 test('reply history preserves edits made while loading and save locks inputs', async () => {
@@ -120,4 +120,29 @@ test('subject-name permission denial preserves input and permits a corrected req
   assert.match(nodes['subject-name-error'].textContent, /Permission/); assert.equal(nodes['subject-name-save'].disabled, false);
   allowed = true; await nodes['subject-name-form'].listeners.submit({ preventDefault() {} });
   assert.match(nodes['subject-name-status'].textContent, /saved/); assert.equal(nodes['subject-name-value'].value, 'Acorn Kit');
+});
+
+test('delivery evidence refresh distinguishes unknown, match, observed and failure, and permits audited acknowledgement', async () => {
+  const names = ['delivery-state', 'delivery-load', 'delivery-more', 'delivery-results', 'delivery-status', 'delivery-error'];
+  const nodes = Object.fromEntries(names.map((name) => [name, new Element(name)])); nodes['delivery-state'].value = 'uncertain';
+  let result = {status: 'unknown', reason: 'history_window'}, acknowledged = [];
+  const client = {
+    async deliveries() { return {records: [{acquisition_id: 'order_1', delivery_identity: 'f'.repeat(64), state: 'uncertain', prepared_at: 1}], next_after: null}; },
+    async refreshDeliveryEvidence() { if (result instanceof Error) throw result; return result; },
+    async deliveryEvidence() { return {provider: {provider_email_id: 'smtp_1'}, activity: [{event_type: 'delivered', event_at: '2026-01-01T00:00:00Z'}], discoveries: [], audit: [], truncated: false}; },
+    async acknowledgeDeliveryEvidence(delivery, evidence) { acknowledged.push({delivery, evidence}); },
+  };
+  setupDeliveries({client, document: {querySelector: (selector) => nodes[selector.slice(1)]}, element});
+  await nodes['delivery-load'].click();
+  const card = nodes['delivery-results'].children[0], inspect = card.children[4], refresh = card.children[5], evidence = card.children[6];
+  await refresh.click(); assert.match(evidence.textContent, /history may have expired.*unknown.*Do not resend/);
+  result = {status: 'matched_needs_operator', events: ['delivered']};
+  await refresh.click(); assert.match(evidence.textContent, /needs operator review/);
+  result = {status: 'observed', events: ['delivered']};
+  await refresh.click(); assert.match(evidence.textContent, /acceptance and mailbox delivery are distinct/);
+  result = new Error('offline'); await refresh.click(); assert.match(evidence.textContent, /incomplete evidence.*unknown/);
+  await inspect.click();
+  await evidence.children[1].children[0].click();
+  assert.equal(acknowledged.length, 1); assert.equal(acknowledged[0].evidence.provider_email_id, 'smtp_1');
+  assert.match(evidence.children[1].children[0].textContent, /state unchanged/);
 });

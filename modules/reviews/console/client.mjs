@@ -26,11 +26,11 @@ async function responseJson(response, mutation = false) {
   try { return await response.json(); } catch { throw new ConsoleError(mutation ? UNCERTAIN : 'The review service returned an invalid response.'); }
 }
 export function createClient(fetcher = fetch, timeoutMs = 8000) {
-  async function request(url, options, mutation = false) {
+  async function request(url, options, mutation = false, requestTimeout = timeoutMs) {
     const controller = new AbortController();
     let timer;
     const timeout = new Promise((_, reject) => {
-      timer = setTimeout(() => { controller.abort(); reject(new ConsoleError(mutation ? UNCERTAIN : 'The review service timed out. Please try again.')); }, timeoutMs);
+      timer = setTimeout(() => { controller.abort(); reject(new ConsoleError(mutation ? UNCERTAIN : 'The review service timed out. Please try again.')); }, requestTimeout);
     });
     try {
       return await Promise.race([(async () => responseJson(await fetcher(url, { ...options, signal: controller.signal }), mutation))(), timeout]);
@@ -91,10 +91,36 @@ export function createClient(fetcher = fetch, timeoutMs = 8000) {
       return { reply_id: data.reply_id, reply_revision_id: data.reply_revision_id, state: data.state };
     },
     async deliveries(state, after = null) {
-      if (!['uncertain', 'dispatching', 'failed'].includes(state) || (after !== null && !ID.test(after))) throw new ConsoleError('Invalid delivery filter.');
+      if (!['uncertain', 'dispatching', 'failed', 'accepted', 'revoked'].includes(state) || (after !== null && !ID.test(after))) throw new ConsoleError('Invalid delivery filter.');
       const data = await request(`/reviews-admin/v1/deliveries?state=${state}` + (after ? `&after=${after}` : ''), { credentials: 'same-origin', cache: 'no-store', headers: { Accept: 'application/json' } });
-      if (!data || data.state !== state || !Array.isArray(data.deliveries) || data.deliveries.length > 50 || !(data.next_after === null || ID.test(data.next_after)) || data.deliveries.some((row) => !row || !ID.test(row.delivery_identity || '') || !ID.test(row.generation_id || '') || row.state !== state || !Number.isSafeInteger(row.prepared_at) || row.prepared_at < 0 || row.prepared_at > 253402300799) || new Set(data.deliveries.map((row) => row.delivery_identity)).size !== data.deliveries.length || (data.next_after && !data.deliveries.some((row) => row.delivery_identity === data.next_after))) throw new ConsoleError('The review service returned an invalid response.');
-      return { records: data.deliveries.map(({ delivery_identity, generation_id, state: rowState, prepared_at }) => ({ delivery_identity, generation_id, state: rowState, prepared_at })), next_after: data.next_after };
+      if (!data || data.state !== state || !Array.isArray(data.deliveries) || data.deliveries.length > 50 || !(data.next_after === null || ID.test(data.next_after)) || data.deliveries.some((row) => !row || !ID.test(row.delivery_identity || '') || !ID.test(row.generation_id || '') || !SUBJECT.test(row.acquisition_id || '') || row.state !== state || !Number.isSafeInteger(row.prepared_at) || row.prepared_at < 0 || row.prepared_at > 253402300799) || new Set(data.deliveries.map((row) => row.delivery_identity)).size !== data.deliveries.length || (data.next_after && !data.deliveries.some((row) => row.delivery_identity === data.next_after))) throw new ConsoleError('The review service returned an invalid response.');
+      return { records: data.deliveries.map(({ acquisition_id, delivery_identity, generation_id, state: rowState, prepared_at }) => ({ acquisition_id, delivery_identity, generation_id, state: rowState, prepared_at })), next_after: data.next_after };
+    },
+    async refreshDeliveryEvidence(deliveryId) {
+      if (!ID.test(deliveryId || '')) throw new ConsoleError('Invalid delivery reference.');
+      const data = await request(`/reviews-admin/v1/deliveries/${deliveryId}/refresh`, { method: 'POST', credentials: 'same-origin', cache: 'no-store', headers: { 'Content-Type': 'application/json' }, body: '{}' }, true, Math.max(timeoutMs, 19000));
+      const knownEvents = ['processed', 'delivered', 'rejected', 'soft-bounced', 'hard-bounced'];
+      if (data?.status === 'unknown' && ['no_provider_identity', 'no_activity', 'history_window', 'ambiguous', 'no_match'].includes(data.reason)) return { status: data.status, reason: data.reason };
+      if (['observed', 'matched_needs_operator'].includes(data?.status) && Array.isArray(data.events) && data.events.length > 0 && data.events.length <= 500 && data.events.every((event) => knownEvents.includes(event))) return { status: data.status, events: data.events };
+      throw new ConsoleError('Provider evidence is unavailable or incomplete. Do not resend.');
+    },
+    async acknowledgeDeliveryEvidence(deliveryId, evidence) {
+      if (!ID.test(deliveryId || '') || !REQUEST_KEY.test(evidence.provider_email_id || '') || !['processed','delivered','rejected','soft-bounced','hard-bounced'].includes(evidence.event_type) || typeof evidence.event_at !== 'string' || evidence.event_at.length > 40) throw new ConsoleError('Invalid provider evidence.');
+      const data = await request(`/reviews-admin/v1/deliveries/${deliveryId}/acknowledge`, { method: 'POST', credentials: 'same-origin', cache: 'no-store', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ provider_email_id: evidence.provider_email_id, event_type: evidence.event_type, event_at: evidence.event_at }) }, true);
+      if (data?.status !== 'acknowledged') throw new ConsoleError('Provider evidence could not be acknowledged.');
+    },
+    async deliveryEvidence(deliveryId) {
+      if (!ID.test(deliveryId || '')) throw new ConsoleError('Invalid delivery reference.');
+      const data = await request(`/reviews-admin/v1/deliveries/${deliveryId}/provider-evidence`, { credentials: 'same-origin', cache: 'no-store', headers: { Accept: 'application/json' } });
+      const validEvent = (row) => row && ['processed', 'delivered', 'rejected', 'soft-bounced', 'hard-bounced'].includes(row.event_type) && typeof row.event_at === 'string' && row.event_at.length <= 40 && Number.isSafeInteger(row.observed_at);
+      if (!data || data.delivery_identity !== deliveryId || !SUBJECT.test(data.acquisition_id || '') || !ID.test(data.generation_id || '') || !Array.isArray(data.activity) || !Array.isArray(data.discoveries) || data.activity.length > 50 || data.discoveries.length > 50 || data.activity.some((row) => !validEvent(row)) || data.discoveries.some((row) => !validEvent(row) || !REQUEST_KEY.test(row.provider_email_id || '')) || (data.provider !== null && (!data.provider || data.provider.provider !== 'smtp2go' || !REQUEST_KEY.test(data.provider.provider_email_id || '') || !Number.isSafeInteger(data.provider.accepted_at))) || typeof data.truncated !== 'boolean') throw new ConsoleError('The review service returned invalid provider evidence.');
+      return {
+        provider: data.provider ? { provider: data.provider.provider, provider_email_id: data.provider.provider_email_id, accepted_at: data.provider.accepted_at } : null,
+        activity: data.activity.map(({event_type, event_at, observed_at}) => ({event_type, event_at, observed_at})),
+        discoveries: data.discoveries.map(({provider_email_id, event_type, event_at, observed_at}) => ({provider_email_id, event_type, event_at, observed_at})),
+        audit: (Array.isArray(data.audit) ? data.audit : []).filter((row) => row && typeof row.actor === 'string' && ['refresh_requested', 'evidence_acknowledged'].includes(row.action) && Number.isSafeInteger(row.occurred_at)).map(({actor, action, occurred_at}) => ({actor, action, occurred_at})),
+        truncated: data.truncated,
+      };
     },
     async setSubjectName(subject, name) {
       if (!SUBJECT.test(subject || '') || typeof name !== 'string' || !name.trim() || [...name.trim()].length > 200) throw new ConsoleError('Enter a valid product reference and a public name of up to 200 characters.', 400);

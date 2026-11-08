@@ -51,10 +51,11 @@ async def accept_recovery_command(db, *, store, environment, token_hash, request
         )
     pending = rows(
         await db.prepare(
-            "SELECT r.acquisition_id,r.request_id,i.source_event_id,i.recipient_context_hash "
+            "SELECT r.acquisition_id,r.request_id,i.source_event_id,i.recipient_context_hash,a.outbox_id "
             "FROM review_recovery_requests r JOIN acquisition_invitations i "
             "USING(store_key,environment,acquisition_id) JOIN review_invitation_consents c "
             "USING(store_key,environment,acquisition_id) "
+            "LEFT JOIN review_automation_intents a USING(store_key,environment,acquisition_id) "
             "WHERE r.store_key=? AND r.environment=? AND r.acquisition_id=? AND r.state='pending' "
             "AND c.revoked_at IS NULL AND c.purpose='review_invitation' "
             "AND c.recipient_context_hash=i.recipient_context_hash LIMIT 1"

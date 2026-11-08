@@ -1,0 +1,9 @@
+# Acorn test commerce build qualification
+
+A clean build of source commit `8f3b0d5753aa22cf0d01be8c27d7c02aea5272a2` was run twice using the same private Stripe test preflight lock and test Worker configuration. Both fresh builds produced the same deployable digest `c43dd53438f3cd262cd51a7aae6d03636b864a916b51f040c73fdd74bd0dbe09` and deployment-configuration digest `f99a8762a558eea9153d36d7baa7debe75de86b385584ac62b3664e30e952f0e`. Wrangler's independent `--no-bundle` dry runs matched those module bytes. Runtime versions were Kinglet 1.8.3 and Workers Runtime SDK 1.8.1; versions and wheel hashes were checked against `uv.lock`. No Stripe key or personal data was placed in the artifact.
+
+The builder script changed after the recorded source commit; this receipt qualifies the identified artifact and deployment, not every later version of the builder.
+
+The retained bundle was deployed only to the existing isolated Acorn test commerce Worker, as version `b2f20df4-8c94-4909-aa82-3c753f7ea576`. Cloudflare's read-only Worker version API returned an active 100% deployment and confirmed **101/101 module bytes**, **13/13 configured non-secret bindings**, and all **six required secret-binding names** against that artifact and its deployment configuration. Secret values are not readable and were not verified by this comparison. A separate nonce-bound signed source attestation passed after the dependent evidence Worker was repinned to the new version. The test invitation sender and scheduler remained disabled. This receipt makes no statement about production deployments, real billing, or email sending.
+
+The two fresh builds were qualified against the existing private test price lock; it is not included here. Stripe account identity and lock freshness must be verified by the existing read-only preflight for each deployment. Independently retain the bundle and configuration digests; the generated JSON receipt is not signed.

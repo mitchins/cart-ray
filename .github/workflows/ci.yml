@@ -31,6 +31,8 @@ jobs:
         run: |
           uv run --locked pytest examples/acorn-store/tests/test_build.py
           node --test examples/acorn-store/tests/reviews.test.mjs
+      - name: Test provider reconciliation on Workerd and D1
+        run: node --test modules/reviews/tests/provider_reconciliation_workerd.mjs
       - name: Test optional Reviews snapshot rehearsal
         run: REVIEWS_QUALIFICATION_BUILD=1 PYTHONPATH=modules/reviews/src uv run pytest modules/reviews/tests
       - name: Test Reviews recovery queue consumer
@@ -63,8 +65,16 @@ jobs:
         run: REVIEWS_TEST_VERBOSE=1 uv run python modules/reviews/tests/native_acquisition_workerd.py
       - name: Exercise Reviews no-backfill activation on Workerd and D1
         run: REVIEWS_TEST_VERBOSE=1 PYTHONPATH=modules/reviews/src uv run --locked python modules/reviews/tests/activation_workerd.py
+      - name: Exercise initial delivery and withdrawal replay on Workerd and D1
+        run: REVIEWS_TEST_VERBOSE=1 PYTHONPATH=modules/reviews/src uv run --locked python modules/reviews/tests/initial_dispatch_workerd.py
+      - name: Exercise fenced suppression-key rotation on Workerd and D1
+        run: REVIEWS_TEST_VERBOSE=1 PYTHONPATH=modules/reviews/src uv run --locked python modules/reviews/tests/suppression_rotation_workerd.py
+      - name: Exercise suppressed historical recipient on Workerd and D1
+        run: REVIEWS_TEST_VERBOSE=1 PYTHONPATH=modules/reviews/src uv run --locked python modules/reviews/tests/historical_recipient_workerd.py
       - name: Exercise authenticated staff moderation on Workerd and D1
         run: REVIEWS_TEST_VERBOSE=1 PYTHONPATH=modules/reviews/src uv run --locked python modules/reviews/tests/staff_workerd.py
+      - name: Exercise staff provider reconciliation on Workerd and D1
+        run: REVIEWS_TEST_VERBOSE=1 PYTHONPATH=modules/reviews/src uv run --locked python modules/reviews/tests/staff_provider_workerd.py
       - run: npm run test:reviews-publication
       - run: PYTHONPATH=modules/reviews/src uv run --locked python modules/reviews/publication/tests/local_qualification.py
       - name: Exercise native publication revision and withdrawal
@@ -129,6 +139,8 @@ jobs:
           node --test --experimental-test-coverage --test-reporter=spec --test-reporter-destination=stdout --test-reporter=lcov --test-reporter-destination=coverage/reviews-automation-queue.lcov modules/reviews/tests/automation_queue.test.mjs
           node --test --experimental-test-coverage --test-reporter=spec --test-reporter-destination=stdout --test-reporter=lcov --test-reporter-destination=coverage/reviews-intake-source.lcov modules/reviews/tests/automation_intake_producer.test.mjs modules/reviews/tests/automation_intake_queue.test.mjs
           node --test --experimental-test-coverage --test-reporter=spec --test-reporter-destination=stdout --test-reporter=lcov --test-reporter-destination=coverage/reviews-initial.lcov modules/reviews/tests/automation_due_producer.test.mjs modules/reviews/tests/initial_dispatch.test.mjs
+          node --test --experimental-test-coverage --test-reporter=spec --test-reporter-destination=stdout --test-reporter=lcov --test-reporter-destination=coverage/reviews-recovery-smtp.lcov modules/reviews/tests/smtp2go_recovery.test.mjs
+          node --test --experimental-test-coverage --test-reporter=spec --test-reporter-destination=stdout --test-reporter=lcov --test-reporter-destination=coverage/reviews-provider.lcov modules/reviews/tests/provider_reconciliation.test.mjs
           node --test --experimental-test-coverage --test-reporter=spec --test-reporter-destination=stdout --test-reporter=lcov --test-reporter-destination=coverage/reviews-consent.lcov modules/reviews/consent/tests/*.test.mjs
           node --test --experimental-test-coverage --test-reporter=spec --test-reporter-destination=stdout --test-reporter=lcov --test-reporter-destination=coverage/reviews-publication.lcov modules/reviews/publication/tests/*.test.mjs
           node --test --experimental-test-coverage --test-reporter=spec --test-reporter-destination=stdout --test-reporter=lcov --test-reporter-destination=coverage/reviews-console.lcov modules/reviews/console/tests/*.test.mjs

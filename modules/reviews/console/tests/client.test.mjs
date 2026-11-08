@@ -86,13 +86,13 @@ test('delivery investigation requires explicit state and paginates by delivery i
   const generation = 'c'.repeat(64), delivery = 'd'.repeat(64), calls = [];
   const client = createClient(async (url, options) => {
     calls.push([url, options]);
-    return response({ state: 'uncertain', deliveries: [{ generation_id: generation, delivery_identity: delivery, state: 'uncertain', prepared_at: 10, private_email: 'discard' }], next_after: delivery });
+    return response({ state: 'uncertain', deliveries: [{ acquisition_id: 'order_1', generation_id: generation, delivery_identity: delivery, state: 'uncertain', prepared_at: 10, private_email: 'discard' }], next_after: delivery });
   });
   const page = await client.deliveries('uncertain');
   assert.equal(page.records[0].private_email, undefined);
   await client.deliveries('uncertain', page.next_after);
   assert.match(calls[1][0], new RegExp(`after=${delivery}$`));
-  await assert.rejects(client.deliveries('accepted'), /filter/);
+  await assert.rejects(client.deliveries('unknown'), /filter/);
   await assert.rejects(createClient(async () => response({}, 401)).deliveries('uncertain'), /permission/);
 });
 
@@ -106,4 +106,25 @@ test('subject naming requires a valid reference and sends only the scoped name',
   await assert.rejects(client.setSubjectName('../bad', 'Name'), /valid product reference/);
   await assert.rejects(client.setSubjectName('acorn-kit', '  '), /valid product reference/);
   await assert.rejects(createClient(async () => response({}, 401)).setSubjectName('acorn-kit', 'Name'), /permission/);
+});
+test('provider evidence is restricted to operations output and excludes unknown fields', async () => {
+ const id='d'.repeat(64), calls=[];
+ const client=createClient(async (url,options)=>{calls.push([url,options]);return response({acquisition_id:'order_1',generation_id:'c'.repeat(64),delivery_identity:id,state:'uncertain',provider:null,activity:[],discoveries:[{provider_email_id:'smtp_1',event_type:'delivered',event_at:'2026-11-07T10:00:00Z',observed_at:10}],truncated:false})});
+ assert.equal((await client.deliveryEvidence(id)).discoveries[0].event_type,'delivered');assert.match(calls[0][0],/provider-evidence$/);
+ await assert.rejects(client.deliveryEvidence('invalid'),/reference/);
+});
+
+test('delivery evidence operations use scoped same-origin POSTs and do not expose resend', async () => {
+  const calls = [];
+  const client = createClient(async (url, options) => {
+    calls.push({url, options});
+    return Response.json(url.endsWith('/refresh') ? {status: 'unknown', reason: 'history_window'} : {status: 'acknowledged'});
+  });
+  const delivery = 'f'.repeat(64);
+  assert.deepEqual(await client.refreshDeliveryEvidence(delivery), {status: 'unknown', reason: 'history_window'});
+  await client.acknowledgeDeliveryEvidence(delivery, {provider_email_id: 'smtp_1', event_type: 'delivered', event_at: '2026-01-01T00:00:00Z', ignored: 'private'});
+  assert.equal(calls[0].options.credentials, 'same-origin');
+  assert.equal(calls[0].url, `/reviews-admin/v1/deliveries/${delivery}/refresh`);
+  assert.deepEqual(JSON.parse(calls[1].options.body), {provider_email_id: 'smtp_1', event_type: 'delivered', event_at: '2026-01-01T00:00:00Z'});
+  assert.equal('resend' in client, false);
 });

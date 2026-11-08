@@ -63,12 +63,13 @@ def test_operations_queue_requires_independent_permission_and_is_bounded(lifecyc
     assert (
         read(lifecycle, settings(REVIEWS_DB=db, REVIEWS_ENVIRONMENT="live"), "state=uncertain", assertion).status == 503
     )
-    for query in ("", "state=accepted", "state=uncertain&state=failed", "state=uncertain&after=bad"):
+    for query in ("", "state=unknown", "state=uncertain&state=failed", "state=uncertain&after=bad"):
         assert read(lifecycle, operator, query, assertion).status == 400
     first = read(lifecycle, operator, "state=uncertain", assertion)
     assert first.status == 200 and first.headers["Cache-Control"] == "no-store"
     assert len(first.body["deliveries"]) == 50 and first.body["next_after"] == f"{1050:064x}"
-    assert "private-order" not in str(first.body) and f"{2001:064x}" not in str(first.body)
+    assert first.body["deliveries"][0]["acquisition_id"].startswith("private-order-")
+    assert f"{2001:064x}" not in str(first.body)
     next_page = read(lifecycle, operator, "state=uncertain&after=" + first.body["next_after"], assertion)
     assert len(next_page.body["deliveries"]) == 3 and next_page.body["next_after"] is None
     failed = read(lifecycle, operator, "state=failed", assertion)
@@ -81,3 +82,98 @@ def test_operations_queue_requires_independent_permission_and_is_bounded(lifecyc
     ] == [f"{100:064x}"]
     assert db.db.execute("SELECT count(*) FROM invitation_generations WHERE state='uncertain'").fetchone()[0] == 54
     assert db.db.total_changes == changes
+
+
+def test_provider_evidence_is_operations_scoped_and_excludes_private_fields(lifecycle):
+    db = Database()
+    generation = add_delivery(db, 1)
+    delivery = f"{1001:064x}"
+    db.db.execute(
+        "INSERT INTO review_provider_deliveries VALUES (?,?,?,?,?,'smtp2go',?,?)",
+        ("store", "test", "private-order-1", generation, delivery, "smtp_1", 101),
+    )
+    db.db.execute(
+        "INSERT INTO review_provider_activity VALUES (?,?,?,?,?,?,?,?)",
+        ("store", "test", "private-order-1", generation, "smtp_1", "delivered", "1970-01-01T00:02:00Z", 120),
+    )
+    db.db.commit()
+    assertion = token(claims())
+    req = types.SimpleNamespace(headers={"Cf-Access-Jwt-Assertion": assertion})
+    moderator = settings(REVIEWS_DB=db)
+    operator = settings(REVIEWS_DB=db, REVIEWS_STAFF_POLICY=json.dumps({"staff-1": ["reviews:operations"]}))
+    assert asyncio.run(lifecycle.provider_evidence_staff_read(req, moderator, "", delivery)).status == 401
+    result = asyncio.run(lifecycle.provider_evidence_staff_read(req, operator, "", delivery))
+    assert result.status == 200 and result.headers["Cache-Control"] == "no-store"
+    assert result.body["acquisition_id"] == "private-order-1"
+    assert result.body["provider"]["provider_email_id"] == "smtp_1"
+    assert result.body["activity"][0]["event_type"] == "delivered"
+    assert "recipient" not in str(result.body) and "token_hash" not in str(result.body)
+    assert asyncio.run(lifecycle.provider_evidence_staff_read(req, operator, "x=1", delivery)).status == 400
+    other = settings(REVIEWS_DB=db, REVIEWS_STORE_KEY="other",
+                     REVIEWS_STAFF_POLICY=json.dumps({"staff-1": ["reviews:operations"]}))
+    assert asyncio.run(lifecycle.provider_evidence_staff_read(req, other, "", delivery)).status == 404
+
+
+def test_operator_acknowledgement_requires_existing_scoped_evidence_and_audits(lifecycle, monkeypatch):
+    db = Database()
+    generation = add_delivery(db, 1)
+    delivery = f"{1001:064x}"
+    db.db.execute(
+        "INSERT INTO review_provider_identity_discoveries VALUES (?,?,?,?,?,?,?,?,?)",
+        ("store", "test", "private-order-1", generation, delivery, "smtp_1", "delivered", "2026-01-01T00:00:00Z", 120),
+    )
+    db.db.commit()
+    env = settings(REVIEWS_DB=db, REVIEWS_STAFF_ORIGIN="https://staff.example")
+    monkeypatch.setattr(lifecycle, "random_token", lambda: "f" * 64)
+    request = types.SimpleNamespace(headers={"Origin": "https://staff.example"})
+    evidence = {"provider_email_id": "smtp_1", "event_type": "delivered", "event_at": "2026-01-01T00:00:00Z"}
+    def action(req, ident, payload):
+        return asyncio.run(lifecycle.provider_operations(req, env, ident, "acknowledge", "staff-1", payload))
+    assert action(types.SimpleNamespace(headers={}), delivery, evidence).status == 403
+    assert action(request, f"{1002:064x}", evidence).status == 404
+    assert action(request, delivery, dict(evidence, event_type="rejected")).status == 409
+    assert action(request, delivery, evidence).status == 200
+    assert tuple(db.db.execute("SELECT actor,action,event_type FROM review_provider_operations_audit").fetchone()) == (
+        "staff-1", "evidence_acknowledged", "delivered"
+    )
+    assert db.db.execute("SELECT state FROM invitation_generations").fetchone()[0] == "uncertain"
+
+
+def test_refresh_is_audited_scoped_and_never_sends_or_mutates(lifecycle, monkeypatch):
+    db = Database()
+    generation = add_delivery(db, 1)
+    delivery = f"{1001:064x}"
+    db.db.commit()
+    env = settings(REVIEWS_DB=db, REVIEWS_STAFF_ORIGIN="https://staff.example",
+                   REVIEWS_RECONCILIATION=object(), RECONCILIATION_TOKEN="z" * 40)
+    monkeypatch.setattr(lifecycle, "random_token", lambda: "f" * 64)
+    calls = []
+
+    async def refresh(service, token_value, target, acquisition, gen, ident):
+        calls.append((target, acquisition, gen, ident))
+        return {"status": "unknown", "reason": "no_match"}
+
+    monkeypatch.setattr(lifecycle, "request_provider_refresh", refresh)
+    request = types.SimpleNamespace(headers={"Origin": "https://staff.example"})
+    response = asyncio.run(lifecycle.provider_operations(request, env, delivery, "refresh", "staff-1", {}))
+    assert response.status == 200 and response.body == {"status": "unknown", "reason": "no_match"}
+    assert calls == [("discover", "private-order-1", generation, delivery)]
+    assert db.db.execute("SELECT action FROM review_provider_operations_audit").fetchone()[0] == "refresh_requested"
+    assert db.db.execute("SELECT state FROM invitation_generations").fetchone()[0] == "uncertain"
+    result = asyncio.run(lifecycle.provider_operations(request, env, delivery, "refresh", "staff-1", {"x": 1}))
+    assert result.status == 400
+
+
+def test_provider_outcomes_preserve_unknown_and_reject_untrusted_shapes(lifecycle):
+    for reason in ("no_provider_identity", "no_activity", "history_window", "ambiguous", "no_match"):
+        assert lifecycle.validate_provider_outcome({"status": "unknown", "reason": reason}) == {
+            "status": "unknown", "reason": reason
+        }
+    for status in ("observed", "matched_needs_operator"):
+        assert lifecycle.validate_provider_outcome({"status": status, "events": ["delivered"]})["status"] == status
+    import pytest
+    for payload in ({"status": "unknown", "reason": "delivered"}, {"status": "observed", "events": []},
+                    {"status": "observed", "events": ["delivered"], "recipient": "private"},
+                    {"status": "observed", "events": ["delivered"] * 501}):
+        with pytest.raises(ValueError):
+            lifecycle.validate_provider_outcome(payload)

@@ -1,6 +1,6 @@
 import { ConsoleError } from './client.mjs';
 
-// Separate permission and read-only API: no resend or delivery outcome mutation.
+// Separate permission; evidence controls never resend or mutate delivery state.
 export function setupDeliveries({ client, document, element }) {
   const filter = document.querySelector('#delivery-state'), load = document.querySelector('#delivery-load');
   const more = document.querySelector('#delivery-more'), output = document.querySelector('#delivery-results');
@@ -22,6 +22,46 @@ export function setupDeliveries({ client, document, element }) {
         card.append(element('h3', `${row.state} delivery`));
         card.append(element('p', `Delivery reference: ${row.delivery_identity}`, 'meta'));
         card.append(element('p', `Prepared ${new Date(row.prepared_at * 1000).toISOString()}`, 'meta'));
+        card.append(element('p', `Purchase reference: ${row.acquisition_id}`, 'meta'));
+        const inspect = element('button', 'View provider evidence');
+        const evidence = element('div', '', 'meta');
+        inspect.addEventListener('click', async () => {
+          inspect.disabled = true;
+          try {
+            const result = await client.deliveryEvidence(row.delivery_identity);
+            evidence.replaceChildren();
+            evidence.append(element('p', result.provider ? `Provider accepted: ${result.provider.provider_email_id}` : 'No provider acceptance identity recorded.'));
+            const showEvent = (event, provider) => {
+              const line = element('p', `${provider}: ${event.event_type} ${event.event_at} `);
+              const acknowledge = element('button', 'Acknowledge evidence');
+              acknowledge.addEventListener('click', async () => {
+                acknowledge.disabled = true;
+                try {
+                  await client.acknowledgeDeliveryEvidence(row.delivery_identity, { ...event, provider_email_id: provider });
+                  acknowledge.textContent = 'Evidence acknowledged; delivery state unchanged';
+                } catch { acknowledge.disabled = false; acknowledge.textContent = 'Acknowledgement unavailable'; }
+              });
+              line.append(acknowledge); evidence.append(line);
+            };
+            for (const event of result.activity) showEvent(event, result.provider.provider_email_id);
+            for (const event of result.discoveries) showEvent(event, event.provider_email_id);
+            for (const event of result.audit) evidence.append(element('p', `${event.action} by ${event.actor} at ${new Date(event.occurred_at * 1000).toISOString()}`));
+            if (result.truncated) evidence.append(element('p', 'Additional evidence exists; contact an operator.'));
+          } catch { evidence.textContent = 'Provider evidence is unavailable. Do not resend without reconciliation.'; }
+          finally { inspect.disabled = false; }
+        });
+        const refresh = element('button', 'Refresh provider evidence');
+        refresh.addEventListener('click', async () => {
+          refresh.disabled = true;
+          try {
+            const result = await client.refreshDeliveryEvidence(row.delivery_identity);
+            const reasons = { no_provider_identity: 'No provider identity is recorded.', no_activity: 'No provider activity was found.', history_window: 'Provider history may have expired.', ambiguous: 'Provider matches are ambiguous.', no_match: 'No matching provider event was found.' };
+            evidence.textContent = result.status === 'unknown' ? `${reasons[result.reason]} The outcome remains unknown. Do not resend.` : result.status === 'matched_needs_operator' ? 'A provider match needs operator review. Select View provider evidence; do not resend.' : 'Provider activity was observed. Select View provider evidence; acceptance and mailbox delivery are distinct.';
+          }
+          catch { evidence.textContent = 'Provider lookup failed or returned incomplete evidence. The outcome remains unknown. Do not resend.'; }
+          finally { refresh.disabled = false; }
+        });
+        card.append(inspect, refresh, evidence);
         output.append(card);
       }
       cursor = page.next_after; loadedState = selected; more.hidden = !cursor;

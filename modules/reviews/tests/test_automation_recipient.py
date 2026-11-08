@@ -211,3 +211,74 @@ def test_withdrawal_is_bound_to_acquisition_recipient_and_time():
     withdraw(checkout, reviews, recipient="b" * 64)
     assert status(reviews)["consent_granted"] is True
     assert reviews.db.execute("SELECT revoked_at FROM review_invitation_consents").fetchone()[0] is None
+
+
+def test_historical_recipient_matching_ignores_suppression_but_audits_and_requires_original_binding():
+    from cartray_reviews.automation_recipient import authorize_historical_recipient
+
+    checkout, reviews = setup()
+    run(checkout, reviews)
+    bind(reviews)
+    db = reviews.db
+    generation, delivery, alias = "a" * 64, "b" * 64, "c" * 64
+    db.execute(
+        "INSERT INTO acquisition_invitations(store_key,environment,acquisition_id,source_event_id,"
+        "recipient_context_hash,subject_set_hash,key_version,token_hash,expires_at) VALUES (?,?,?,?,?,?,?,?,?)",
+        ("store", "test", "order_1", "event_1", RECIPIENT, "d" * 64, "v1", "e" * 64, 1),
+    )
+    db.execute(
+        "INSERT INTO invitation_generations VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        (
+            "store",
+            "test",
+            "order_1",
+            generation,
+            "initial_10",
+            "f" * 64,
+            "v1",
+            "e" * 64,
+            0,
+            0,
+            delivery,
+            "uncertain",
+            100,
+            None,
+            None,
+        ),
+    )
+    db.execute(
+        "INSERT INTO review_recipient_suppressions VALUES (?,?,?,?,?)",
+        ("store", "test", RECIPIENT, "review_invitation", 105),
+    )
+    for value, version in ((RECIPIENT, "v1"), (alias, "v2")):
+        db.execute(
+            "INSERT INTO review_suppression_aliases VALUES (?,?,?,?,?)", ("store", "test", value, RECIPIENT, version)
+        )
+    db.commit()
+    data = {
+        "outbox_id": 10,
+        "acquisition_id": "order_1",
+        "generation_id": generation,
+        "delivery_identity": delivery,
+        "candidate": alias,
+    }
+
+    def call(item, store="store"):
+        return asyncio.run(
+            authorize_historical_recipient(
+                reviews, store=store, environment="test", data=item, now=120, random_token=lambda: "1" * 64
+            )
+        )
+
+    for bad in (
+        data | {"candidate": "2" * 64},
+        data | {"acquisition_id": "other"},
+        data | {"delivery_identity": "3" * 64},
+        data | {"outbox_id": 11},
+    ):
+        with pytest.raises(ValueError):
+            call(bad)
+    assert call(data) == {"status": "matched"}
+    assert db.execute("SELECT count(*) FROM review_historical_recipient_audit").fetchone()[0] == 1
+    assert db.execute("SELECT state FROM invitation_generations").fetchone()[0] == "uncertain"
+    assert db.execute("SELECT count(*) FROM review_recipient_suppressions").fetchone()[0] == 1

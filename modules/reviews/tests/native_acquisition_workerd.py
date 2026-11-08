@@ -424,6 +424,7 @@ def main():
                 "delivery_identity": invitation["delivery_identity"],
                 "outcome": "accepted",
                 "accepted_at": int(time.time()),
+                "provider_email_id": "smtp_test_1",
             }
             with ThreadPoolExecutor(max_workers=2) as pool:
                 outcomes = list(
@@ -435,6 +436,12 @@ def main():
                     )
                 )
             assert outcomes == [(200, {"state": "accepted"}), (200, {"state": "accepted"})], outcomes
+            receipt_result = subprocess.run(
+                [wrangler, "d1", "execute", "cartray-reviews-local-test", *common, "--json", "--command",
+                 "SELECT provider_email_id FROM review_provider_deliveries"],
+                cwd=ROOT, check=True, capture_output=True, text=True,
+            )
+            assert json.loads(receipt_result.stdout)[0]["results"] == [{"provider_email_id": "smtp_test_1"}]
             if os.environ.get("REVIEWS_INVITATION_LIFETIME") == "never":
                 expiry_result = subprocess.run(
                     [wrangler, "d1", "execute", "cartray-reviews-local-test", *common, "--json", "--command",
