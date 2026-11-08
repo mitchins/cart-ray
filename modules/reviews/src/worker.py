@@ -1,5 +1,6 @@
 """Opt-in, read-only Reviews Worker. No write or scheduled entry points."""
 
+import hmac
 import json
 import re
 import time
@@ -77,6 +78,17 @@ class Default(WorkerEntrypoint):
     async def fetch(self, request):
         mode = str(getattr(self.env, "REVIEWS_MODE", "disabled"))
         url = urlparse(str(request.url))
+        if url.path == "/reviews-internal/v1/runtime-identity":
+            token = str(getattr(self.env, "REVIEWS_AUTOMATION_ACTIVATION_TOKEN", ""))
+            version = getattr(getattr(self.env, "CF_VERSION_METADATA", None), "id", None)
+            if (str(request.method) != "GET" or url.query or
+                str(getattr(self.env, "REVIEWS_ENVIRONMENT", "")) != "test" or
+                str(getattr(self.env, "REVIEWS_AUTOMATION_INTAKE", "")) != "test" or
+                len(token) < 32 or not hmac.compare_digest(str(request.headers.get("authorization") or ""), f"Bearer {token}")):
+                return Response.json({"error": "not found"}, status=404)
+            if not isinstance(version, str) or not re.fullmatch(r"[a-f0-9-]{36}", version):
+                return Response.json({"error": "unavailable"}, status=503)
+            return Response.json({"version_id": version}, headers={"Cache-Control": "no-store"})
         if url.path == "/reviews/v1/invitation-unsubscribe":
             if str(request.method) != "POST" or url.query:
                 return Response.json({"error": "method not allowed"}, status=405)

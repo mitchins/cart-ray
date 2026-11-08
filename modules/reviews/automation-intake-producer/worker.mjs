@@ -41,26 +41,31 @@ export async function attest(env) {
       !hex.test(env.MAPPING_SHA256||'') || !hex.test(env.SOURCE_EVENT_KEY||'') ||
       !token(env.SOURCE_IDENTITY_TOKEN) || !token(env.REVIEWS_ACTIVATION_TOKEN) || !token(env.TRIGGER_TOKEN) ||
       new Set([env.SOURCE_IDENTITY_TOKEN,env.REVIEWS_ACTIVATION_TOKEN,env.SOURCE_EVENT_KEY,env.TRIGGER_TOKEN]).size!==4 ||
-      !env.SOURCE_API || !env.REVIEWS_API || !env.COMMERCE_DB || !env.EVENT_QUEUE || !uuid.test(env.CF_VERSION_METADATA?.id||'')) throw new Error('source unavailable');
+      !env.SOURCE_API || !env.REVIEWS_API || !env.CONSUMER_API || !env.COMMERCE_DB || !env.EVENT_QUEUE || !uuid.test(env.CF_VERSION_METADATA?.id||'')) throw new Error('source unavailable');
   const record=await env.COMMERCE_DB.withSession('first-primary').prepare(
     'SELECT * FROM reviews_verified_deployment WHERE subscriber_id=? AND installation_id=? ORDER BY revision DESC LIMIT 1')
     .bind(env.SOURCE_ISSUER,env.SOURCE_INSTALLATION).first();
   const matches={account_id:env.CF_ACCOUNT_ID,store_key:env.SOURCE_STORE,environment:env.REVIEWS_ENVIRONMENT,
     source_database_id:env.SOURCE_DATABASE_ID,stripe_account_id:env.STRIPE_ACCOUNT_ID,
     catalogue_version:env.CATALOGUE_VERSION,mapping_sha256:env.MAPPING_SHA256,
-    producer_version:env.CF_VERSION_METADATA.id,context_database_id:env.AUTHORITY_CONTEXT_DB_ID,
+    producer_version:env.CF_VERSION_METADATA.id,context_database_id:env.AUTHORITY_CONTEXT_DB_ID??null,
     event_queue_id:env.EVENT_QUEUE_ID,dead_letter_queue_id:env.DEAD_LETTER_QUEUE_ID,
     source_worker:env.SOURCE_WORKER,producer_worker:env.PRODUCER_WORKER,reviews_worker:env.REVIEWS_WORKER,
-    consumer_worker:env.CONSUMER_WORKER,authority_worker:env.AUTHORITY_WORKER,
+    consumer_worker:env.CONSUMER_WORKER,authority_worker:env.AUTHORITY_WORKER??null,
     event_queue_name:env.EVENT_QUEUE_NAME,dead_letter_queue_name:env.DEAD_LETTER_QUEUE_NAME};
   if (!record || !['verified','active'].includes(record.activation_status) || !Number.isSafeInteger(record.revision) || record.revision<1 ||
       !Number.isSafeInteger(record.verified_at) || record.verified_at<=0 ||
-      !['source_version','producer_version','reviews_version','consumer_version','authority_version'].every(k=>uuid.test(record[k]||'')) ||
-      Object.entries(matches).some(([k,v])=>typeof v!=='string' || record[k]!==v)) throw new Error('verification record mismatch');
-  const identity=await bounded(signal=>env.SOURCE_API.fetch('https://source.internal/internal/reviews-runtime-identity',{
-    headers:{authorization:`Bearer ${env.SOURCE_IDENTITY_TOKEN}`},signal}).then(r=>jsonResponse(r,signal)));
-  if (identity.version_id!==record.source_version ||
-      identity.catalogue_version!==record.catalogue_version) throw new Error('source identity mismatch');
+      !['source_version','producer_version','reviews_version','consumer_version'].every(k=>uuid.test(record[k]||'')) ||
+      (env.AUTHORITY_WORKER!==undefined ? !uuid.test(record.authority_version||'') : record.authority_version!==null) ||
+      Object.entries(matches).some(([k,v])=>(typeof v!=='string' && v!==null) || record[k]!==v)) throw new Error('verification record mismatch');
+  const [identity,reviewsIdentity,consumerIdentity]=await bounded(signal=>Promise.all([
+    env.SOURCE_API.fetch('https://source.internal/internal/reviews-runtime-identity',{headers:{authorization:`Bearer ${env.SOURCE_IDENTITY_TOKEN}`},signal}).then(r=>jsonResponse(r,signal)),
+    env.REVIEWS_API.fetch('https://reviews.internal/reviews-internal/v1/runtime-identity',{headers:{authorization:`Bearer ${env.REVIEWS_ACTIVATION_TOKEN}`},signal}).then(r=>jsonResponse(r,signal)),
+    env.CONSUMER_API.fetch('https://consumer.internal/runtime-identity',{headers:{authorization:`Bearer ${env.SOURCE_EVENT_KEY}`},signal}).then(r=>jsonResponse(r,signal)),
+  ]));
+  if (identity.version_id!==record.source_version || identity.catalogue_version!==record.catalogue_version ||
+      reviewsIdentity.version_id!==record.reviews_version || consumerIdentity.version_id!==record.consumer_version)
+    throw new Error('runtime identity mismatch');
   return record;
 }
 async function activate(env) {
@@ -106,8 +111,8 @@ export async function relay(env, fetchApi=fetch) {
   }
   return {last_outbox_id:row.last_outbox_id};
 }
-// The caller's version is a hint only. Both the active version and its actual
-// bindings are independently fetched from the authenticated control plane.
+// The caller reports its runtime version; it must match the operator-verified
+// authority version in commerce D1 before a nonce-bound proof is issued.
 export async function attestPurchase(env, input, fetchApi=fetch, now=Math.floor(Date.now()/1000)) {
   if (!id.test(env.AUTHORITY_WORKER||'') || !uuid.test(env.AUTHORITY_CONTEXT_DB_ID||'') ||
       [env.SOURCE_WORKER,env.PRODUCER_WORKER,env.REVIEWS_WORKER,env.CONSUMER_WORKER].includes(env.AUTHORITY_WORKER) ||

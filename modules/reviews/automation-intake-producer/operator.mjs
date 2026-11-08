@@ -97,6 +97,9 @@ export async function inspectDeployment(env, fetchApi=fetch) {
         !dbBinding(source,'DB',env.SOURCE_DATABASE_ID) || !dbBinding(producer,'COMMERCE_DB',env.SOURCE_DATABASE_ID) ||
         !dbBinding(reviews,'CARTRAY_DB',env.SOURCE_DATABASE_ID) ||
         !serviceBinding(producer,'SOURCE_API',env.SOURCE_WORKER) ||
+        !serviceBinding(producer,'CONSUMER_API',env.CONSUMER_WORKER) ||
+        !binding(reviews,'CF_VERSION_METADATA','version_metadata') ||
+        !binding(consumer,'CF_VERSION_METADATA','version_metadata') ||
         !serviceBinding(producer,'REVIEWS_API',env.REVIEWS_WORKER) ||
         !serviceBinding(source,'REVIEWS_SOURCE_TRIGGER',env.PRODUCER_WORKER) ||
         !serviceBinding(consumer,'REVIEWS_API',env.REVIEWS_WORKER) ||
@@ -131,6 +134,7 @@ export async function inspectDeployment(env, fetchApi=fetch) {
 }
 
 export async function inspectInstallation(env, fetchApi=fetch) {
+  if (env.AUTHORITY_WORKER===undefined && env.AUTHORITY_CONTEXT_DB_ID===undefined) return {...await inspectDeployment(env,fetchApi),authority_version:null};
   if (!id.test(env.AUTHORITY_WORKER||'') || !uuid.test(env.AUTHORITY_CONTEXT_DB_ID||'') ||
       env.AUTHORITY_CONTEXT_DB_ID===env.SOURCE_DATABASE_ID ||
       [env.SOURCE_WORKER,env.PRODUCER_WORKER,env.REVIEWS_WORKER,env.CONSUMER_WORKER].includes(env.AUTHORITY_WORKER)) throw new Error('authority configuration mismatch');
@@ -151,10 +155,10 @@ export function installationFields(env, versions, now=Math.floor(Date.now()/1000
     account_id:env.CF_ACCOUNT_ID,store_key:env.SOURCE_STORE,environment:env.REVIEWS_ENVIRONMENT,
     source_database_id:env.SOURCE_DATABASE_ID,stripe_account_id:env.STRIPE_ACCOUNT_ID,
     catalogue_version:env.CATALOGUE_VERSION,mapping_sha256:env.MAPPING_SHA256,...versions,
-    context_database_id:env.AUTHORITY_CONTEXT_DB_ID,event_queue_id:env.EVENT_QUEUE_ID,
+    context_database_id:env.AUTHORITY_CONTEXT_DB_ID??null,event_queue_id:env.EVENT_QUEUE_ID,
     dead_letter_queue_id:env.DEAD_LETTER_QUEUE_ID,source_worker:env.SOURCE_WORKER,
     producer_worker:env.PRODUCER_WORKER,reviews_worker:env.REVIEWS_WORKER,
-    consumer_worker:env.CONSUMER_WORKER,authority_worker:env.AUTHORITY_WORKER,
+    consumer_worker:env.CONSUMER_WORKER,authority_worker:env.AUTHORITY_WORKER??null,
     event_queue_name:env.EVENT_QUEUE_NAME,dead_letter_queue_name:env.DEAD_LETTER_QUEUE_NAME,
     activation_status:'active',verified_at:now};
 }
@@ -179,4 +183,24 @@ export async function doctor(env, fetchApi=fetch) {
     .bind(env.SOURCE_ISSUER,env.SOURCE_INSTALLATION).first();
   return {revision:record?.revision??0,status:record && Object.entries(actual).every(([k,v])=>k==='verified_at' || k==='activation_status' || record[k]===v) ? record.activation_status : 'mismatch',
     mismatches:Object.keys(actual).filter(k=>k!=='verified_at' && k!=='activation_status' && record?.[k]!==actual[k])};
+}
+
+// Resolve source routing from authenticated account metadata; an operator-supplied
+// URL must never be allowed to impersonate the Worker whose version was checked.
+export async function sourceIdentityURL(env, fetchApi=fetch) {
+  if (!/^[a-f0-9]{32}$/.test(env.CF_ACCOUNT_ID||'') || !id.test(env.SOURCE_WORKER||'') || !token(env.CF_READ_TOKEN))
+    throw new Error('source routing configuration unavailable');
+  return bounded(async signal=>{
+    const root=`https://api.cloudflare.com/client/v4/accounts/${env.CF_ACCOUNT_ID}/workers`;
+    const read=async path=>{
+      const result=await jsonResponse(await fetchApi(root+path,{headers:{authorization:`Bearer ${env.CF_READ_TOKEN}`},signal}),signal);
+      if(result.success!==true)throw new Error('source routing unavailable');return result.result;
+    };
+    const [account,worker]=await Promise.all([read('/subdomain'),read(`/scripts/${env.SOURCE_WORKER}/subdomain`)]);
+    if(!/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(account?.subdomain||'') || worker?.enabled!==true)
+      throw new Error('verified source workers.dev route unavailable');
+    const url=`https://${env.SOURCE_WORKER}.${account.subdomain}.workers.dev/internal/reviews-source-identity`;
+    if(env.SOURCE_IDENTITY_URL!==undefined && env.SOURCE_IDENTITY_URL!==url)throw new Error('source identity URL does not match authenticated Worker route');
+    return url;
+  });
 }

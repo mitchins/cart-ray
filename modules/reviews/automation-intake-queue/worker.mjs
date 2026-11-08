@@ -120,6 +120,14 @@ export async function deliver(message, env) {
 }
 
 export default {
+  async fetch(request,env) {
+    if(new URL(request.url).pathname!=='/runtime-identity' || request.method!=='GET' ||
+       env.REVIEWS_ENVIRONMENT!=='test' || env.REVIEWS_ORDER_SUBSCRIBER!=='test' ||
+       !hex.test(env.SOURCE_EVENT_KEY||'') || request.headers.get('authorization')!==`Bearer ${env.SOURCE_EVENT_KEY}`)
+      return new Response(null,{status:404});
+    if(!/^[a-f0-9-]{36}$/.test(env.CF_VERSION_METADATA?.id||''))return new Response(null,{status:503});
+    return Response.json({version_id:env.CF_VERSION_METADATA.id},{headers:{'cache-control':'no-store'}});
+  },
   async queue(batch, env) {
     for (const msg of batch.messages) {
       try { await deliver(msg.body, env); msg.ack(); }
