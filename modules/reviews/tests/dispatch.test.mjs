@@ -100,3 +100,13 @@ test('SMTP2GO recovery requires the authoritative purchase recipient and binding
   await assert.rejects(processCommand(f.command,f.env,()=>101),/recipient/);assert.equal(f.sends(),0);
  }
 });
+
+
+test("SMTP2GO rejects oversized recovery subject before any mutation", async () => {
+  const f=await fixture();f.env.SYNTHETIC_MAIL_PROVIDER="smtp2go";
+  f.env.SMTP2GO_MAIL_TOKEN="x".repeat(40);f.env.SMTP2GO_MAIL={fetch:async()=>{throw new Error("must not send")}};
+  f.env.AUTOMATION_RECIPIENT_TOKEN="r".repeat(40);f.env.PURCHASE_EVIDENCE={fetch:async()=>{throw new Error("must not resolve")}};
+  f.env.REVIEWS_PUBLIC_STORE_NAME="x".repeat(174);
+  await assert.rejects(processCommand(f.command,f.env,()=>101));
+  assert.equal(f.apiCalls(),0);assert.equal(f.sends(),0);
+});

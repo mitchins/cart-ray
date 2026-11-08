@@ -146,6 +146,12 @@ current pointer are separate: a version cannot be reused with a different key.
 
 ### Fenced rotation (test only)
 
+**Deferred experiment; do not use for a pilot.** A mistyped key in the first
+`backfill`, including an empty batch, can pin the wrong proof and leave the
+fence closed. There is currently no supported abort or retarget operation.
+Recovery would require exceptional database intervention and reconciliation;
+do not attempt rotation on an installation that must remain available.
+
 The `suppression-key-rotation` private Reviews service-binding route is disabled
 unless `REVIEWS_SUPPRESSION_ROTATION_MODE=test`, an independent
 `REVIEWS_SUPPRESSION_ROTATION_TOKEN` is configured, and

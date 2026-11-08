@@ -22,6 +22,7 @@ def test_registry_requires_explicit_version_and_is_immutable():
     db.executescript((ROOT / "consent" / "migrations" / "0002_suppression_key_registry.sql").read_text())
     first = pin.statement(key="y" * 40, store="acorn-store", installation="install_test", version="key1")
     assert "y" * 40 not in first
+    assert "BEGIN;" not in first and "COMMIT;" not in first
     db.executescript(first)
     row = db.execute("SELECT key_version,key_check FROM review_suppression_key_registry").fetchone()
     assert row == ("key1", "1b1a79f29dd2adcda1813cf03915cf4136368f231b988d5136fec6998750a6bc")

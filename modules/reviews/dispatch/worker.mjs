@@ -37,7 +37,9 @@ export async function processCommand(command, env, now = () => Math.floor(Date.n
   if (typeof sender !== "string" || sender.length > 254 || sender.split("@").length !== 2 ||
       sender.split("@").some(part => !part) || !sender.split("@")[1].includes(".") ||
       /[^\x21-\x7e]|[<>,;:"\\()[\]]/.test(sender) ||
-      typeof storeName !== "string" || !storeName.trim() || storeName.length > 200 || /[\x00-\x1f\x7f-\x9f]/.test(storeName)) {
+      typeof storeName !== "string" || !storeName.trim() || storeName.length > 200 ||
+      (env.SYNTHETIC_MAIL_PROVIDER === "smtp2go" && `Share your experience with ${storeName}`.length > 200) ||
+      /[\x00-\x1f\x7f-\x9f]/.test(storeName)) {
     throw new Error("test delivery not configured");
   }
   let landing;

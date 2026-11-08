@@ -74,13 +74,12 @@ def statement(*, key: str, store: str, installation: str, version: str) -> str:
     ).encode()
     check = hmac.new(key.encode(), message, hashlib.sha256).hexdigest()
     return (
-        "BEGIN;\n"
         "INSERT INTO review_suppression_key_registry "
         "(store_key,environment,installation_id,key_version,key_check) VALUES "
         f"('{store}','test','{installation}','{version}','{check}');\n"
         "INSERT INTO review_suppression_key_current "
         "(store_key,environment,installation_id,key_version) VALUES "
-        f"('{store}','test','{installation}','{version}');\nCOMMIT;\n"
+        f"('{store}','test','{installation}','{version}');\n"
     )
 
 
