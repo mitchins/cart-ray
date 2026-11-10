@@ -31,7 +31,7 @@ class API:
         self.account = account
         self.token = token
 
-    def request(self, path, method="GET", data=None, raw=False, headers=None):
+    def request(self, path, method="GET", data=None, raw=False, headers=None, envelope=False):
         request_headers = {"Authorization": "Bearer " + self.token, **(headers or {})}
         if data is not None and not isinstance(data, bytes):
             data = json.dumps(data).encode()
@@ -67,12 +67,44 @@ class API:
         if result.get("success") is not True:
             codes = error_codes(result)
             raise CloudError(f"Cloudflare {method} {path}: provider codes {codes}")
-        return result.get("result")
+        return result if envelope else result.get("result")
+
+    def queue_listing(self):
+        """Follow Queues page metadata rather than guessing its page size."""
+        rows, prior = [], None
+        for page in range(1, 101):
+            value = self.request(f"queues?page={page}", envelope=True)
+            if not isinstance(value, dict):
+                raise CloudError("provider queue list has an unexpected shape")
+            batch = value.get("result", value)
+            if isinstance(batch, dict):
+                batch = batch.get("queues", batch.get("items", []))
+            if not isinstance(batch, list) or any(not isinstance(item, dict) for item in batch):
+                raise CloudError("provider queue list has an unexpected shape")
+            info = value.get("result_info", {})
+            if not isinstance(info, dict):
+                raise CloudError("provider queue pagination has an unexpected shape")
+            total = info.get("total_pages")
+            if total is not None and (type(total) is not int or not 0 <= total <= 100):
+                raise CloudError("provider queue page count exceeds operator bound")
+            # Older responses omit metadata. An ignored page parameter repeats
+            # the same full result; valid pagination has disjoint queue identities.
+            if total is None and batch == prior:
+                return rows
+            rows.extend(batch)
+            if total is not None and page < total and not batch:
+                raise CloudError("provider queue pagination has an empty intermediate page")
+            if not batch or (total is not None and page >= total):
+                return rows
+            prior = batch
+        raise CloudError("resource list exceeds operator bound")
 
     def listing(self, path):
+        if path == "queues":
+            return self.queue_listing()
         rows = []
         page_size = 10 if path.startswith("pages/") else 100
-        unpaged = path in ("workers/scripts", "queues")
+        unpaged = path == "workers/scripts"
         for page in range(1, 101):
             request_path = (
                 path if unpaged else path + ("&" if "?" in path else "?") + f"page={page}&per_page={page_size}"
@@ -80,7 +112,7 @@ class API:
             batch = self.request(request_path)
             if isinstance(batch, dict):
                 batch = batch.get("queues", batch.get("items", []))
-            if not isinstance(batch, list):
+            if not isinstance(batch, list) or any(not isinstance(item, dict) for item in batch):
                 raise CloudError("provider list has an unexpected shape")
             rows.extend(batch)
             if unpaged or len(batch) < page_size:

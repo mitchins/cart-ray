@@ -145,7 +145,7 @@ def test_stripe_refuses_live_key_and_preserves_stable_create_idempotency():
             cloud.stripe("sk_test_allowed", "account")
 
 
-@pytest.mark.parametrize("endpoint", ["workers/scripts", "queues"])
+@pytest.mark.parametrize("endpoint", ["workers/scripts"])
 def test_unpaged_provider_lists_do_not_repeat_full_sized_responses(endpoint):
     api = cloud.API("a" * 32, "key")
     values = [{"id": str(index)} for index in range(150)]
@@ -178,3 +178,20 @@ def test_malformed_http_error_entries_never_escape_transport(payload):
     with patch.object(cloud.urllib.request, "build_opener", return_value=Opener(response)):
         with pytest.raises(cloud.CloudError, match="HTTP 403"):
             api.request("d1/database")
+
+
+def test_queue_pagination_uses_provider_total_pages_and_includes_later_queues():
+    api = cloud.API("a" * 32, "key")
+    first = [{"queue_id": str(index)} for index in range(100)]
+    second = [{"queue_id": "later-owned-queue"}]
+    responses = [
+        {"result": first, "result_info": {"total_pages": 2}},
+        {"result": second, "result_info": {"total_pages": 2}},
+    ]
+    with patch.object(api, "request", side_effect=responses) as request:
+        assert api.listing("queues") == first + second
+    assert [call.args[0] for call in request.call_args_list] == ["queues?page=1", "queues?page=2"]
+    assert all(call.kwargs == {"envelope": True} for call in request.call_args_list)
+    with patch.object(api, "request", return_value={"result": first, "result_info": {"total_pages": 1}}) as request:
+        assert api.listing("queues") == first
+    request.assert_called_once_with("queues?page=1", envelope=True)
