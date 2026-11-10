@@ -163,13 +163,16 @@ jobs:
 
   gel-browsers:
     name: GEL connected browsers
-    runs-on: ubuntu-latest
+    # Playwright 1.57 ships browser/dependency builds for Ubuntu 24.04.
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
       - uses: astral-sh/setup-uv@v6
+      - name: Clear reference evidence before qualification
+        run: rm -f examples/gel-theme-pack/evidence/connected-browser-results.json
       - name: Install pinned Playwright engines
         run: uv run --with playwright==1.57.0 python -m playwright install --with-deps chromium firefox webkit
       - name: Build connected storefront
