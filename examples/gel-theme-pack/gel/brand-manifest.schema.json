@@ -1,0 +1,281 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:cartray:gel:1.0",
+  "title": "CartRay GEL v1 brand manifest",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "const": "1.0"
+    },
+    "identity": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 500
+        },
+        "short_name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 500
+        },
+        "tagline": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 500
+        },
+        "description": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 500
+        },
+        "key": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9-]{0,63}$"
+        },
+        "contact_email": {
+          "type": "string",
+          "format": "email"
+        },
+        "locale": {
+          "type": "string",
+          "pattern": "^[a-z]{2}-[A-Z]{2}$"
+        },
+        "currency": {
+          "type": "string",
+          "pattern": "^[A-Z]{3}$"
+        },
+        "wordmark_descriptor": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 40
+        }
+      },
+      "required": [
+        "name",
+        "short_name",
+        "tagline",
+        "description",
+        "key",
+        "contact_email",
+        "locale",
+        "currency",
+        "wordmark_descriptor"
+      ]
+    },
+    "assets": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "logo": {
+          "type": "string",
+          "pattern": "^assets/[A-Za-z0-9_./-]+\\.(svg|png|jpg|jpeg|webp)$"
+        },
+        "logo_inverse": {
+          "type": "string",
+          "pattern": "^assets/[A-Za-z0-9_./-]+\\.(svg|png|jpg|jpeg|webp)$"
+        },
+        "favicon": {
+          "type": "string",
+          "pattern": "^assets/[A-Za-z0-9_./-]+\\.(svg|png|jpg|jpeg|webp)$"
+        },
+        "hero": {
+          "type": "string",
+          "pattern": "^assets/[A-Za-z0-9_./-]+\\.(svg|png|jpg|jpeg|webp)$"
+        },
+        "stripe_icon": {
+          "type": "string",
+          "pattern": "^assets/[A-Za-z0-9_./-]+\\.(svg|png|jpg|jpeg|webp)$"
+        },
+        "stripe_logo": {
+          "type": "string",
+          "pattern": "^assets/[A-Za-z0-9_./-]+\\.(svg|png|jpg|jpeg|webp)$"
+        },
+        "hero_alt": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 500
+        }
+      },
+      "required": [
+        "logo",
+        "logo_inverse",
+        "favicon"
+      ],
+      "dependentRequired": {
+        "hero": [
+          "hero_alt"
+        ],
+        "hero_alt": [
+          "hero"
+        ]
+      }
+    },
+    "colours": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "brand": {
+          "type": "string",
+          "pattern": "^#[0-9a-fA-F]{6}$"
+        },
+        "on_brand": {
+          "type": "string",
+          "pattern": "^#[0-9a-fA-F]{6}$"
+        },
+        "accent": {
+          "type": "string",
+          "pattern": "^#[0-9a-fA-F]{6}$"
+        },
+        "on_accent": {
+          "type": "string",
+          "pattern": "^#[0-9a-fA-F]{6}$"
+        },
+        "background": {
+          "type": "string",
+          "pattern": "^#[0-9a-fA-F]{6}$"
+        },
+        "surface": {
+          "type": "string",
+          "pattern": "^#[0-9a-fA-F]{6}$"
+        },
+        "text": {
+          "type": "string",
+          "pattern": "^#[0-9a-fA-F]{6}$"
+        },
+        "muted": {
+          "type": "string",
+          "pattern": "^#[0-9a-fA-F]{6}$"
+        },
+        "border": {
+          "type": "string",
+          "pattern": "^#[0-9a-fA-F]{6}$"
+        },
+        "focus": {
+          "type": "string",
+          "pattern": "^#[0-9a-fA-F]{6}$"
+        },
+        "danger": {
+          "type": "string",
+          "pattern": "^#[0-9a-fA-F]{6}$"
+        }
+      },
+      "required": [
+        "brand",
+        "on_brand",
+        "accent",
+        "on_accent",
+        "background",
+        "surface",
+        "text",
+        "muted",
+        "border",
+        "focus",
+        "danger"
+      ]
+    },
+    "typography": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "heading": {
+          "enum": [
+            "editorial",
+            "modern",
+            "humanist",
+            "system"
+          ]
+        },
+        "body": {
+          "enum": [
+            "editorial",
+            "modern",
+            "humanist",
+            "system"
+          ]
+        }
+      },
+      "required": [
+        "heading",
+        "body"
+      ]
+    },
+    "shape": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "corners": {
+          "enum": [
+            "square",
+            "soft",
+            "round"
+          ]
+        }
+      },
+      "required": [
+        "corners"
+      ]
+    },
+    "layout": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "density": {
+          "enum": [
+            "compact",
+            "comfortable",
+            "spacious"
+          ]
+        }
+      },
+      "required": [
+        "density"
+      ]
+    },
+    "hero": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "eyebrow": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 500
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 500
+        },
+        "body": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 500
+        },
+        "cta": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 500
+        }
+      },
+      "required": [
+        "eyebrow",
+        "title",
+        "body",
+        "cta"
+      ]
+    }
+  },
+  "required": [
+    "schema_version",
+    "identity",
+    "assets",
+    "colours",
+    "typography",
+    "shape",
+    "layout",
+    "hero"
+  ]
+}

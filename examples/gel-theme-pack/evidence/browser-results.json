@@ -1,0 +1,785 @@
+{
+  "lane": "offline Chromium; real generated DOM/CSS/assets; module loading and navigation harnessed",
+  "browser": "Chromium",
+  "checks": 193,
+  "passed": 193,
+  "results": [
+    {
+      "name": "minimal desktop: 3 products",
+      "passed": true
+    },
+    {
+      "name": "minimal desktop: no horizontal overflow",
+      "passed": true
+    },
+    {
+      "name": "minimal desktop: one h1",
+      "passed": true
+    },
+    {
+      "name": "minimal desktop: all images have alt",
+      "passed": true
+    },
+    {
+      "name": "minimal tablet: 3 products",
+      "passed": true
+    },
+    {
+      "name": "minimal tablet: no horizontal overflow",
+      "passed": true
+    },
+    {
+      "name": "minimal tablet: one h1",
+      "passed": true
+    },
+    {
+      "name": "minimal tablet: all images have alt",
+      "passed": true
+    },
+    {
+      "name": "minimal mobile: 3 products",
+      "passed": true
+    },
+    {
+      "name": "minimal mobile: no horizontal overflow",
+      "passed": true
+    },
+    {
+      "name": "minimal mobile: one h1",
+      "passed": true
+    },
+    {
+      "name": "minimal mobile: all images have alt",
+      "passed": true
+    },
+    {
+      "name": "minimal: 320px reflow",
+      "passed": true
+    },
+    {
+      "name": "minimal: category filter",
+      "passed": true
+    },
+    {
+      "name": "minimal: price sorting",
+      "passed": true
+    },
+    {
+      "name": "minimal: search empty state",
+      "passed": true
+    },
+    {
+      "name": "minimal: clear filter",
+      "passed": true
+    },
+    {
+      "name": "minimal: cart count",
+      "passed": true
+    },
+    {
+      "name": "minimal: persisted two-product cart",
+      "passed": true
+    },
+    {
+      "name": "minimal: preselected permission visible",
+      "passed": true
+    },
+    {
+      "name": "minimal: cart quantity edit",
+      "passed": true
+    },
+    {
+      "name": "minimal: mobile cart reflow",
+      "passed": true
+    },
+    {
+      "name": "minimal: no card fields",
+      "passed": true
+    },
+    {
+      "name": "minimal: simulated confirmation",
+      "passed": true
+    },
+    {
+      "name": "minimal: opt-out suppresses invitation",
+      "passed": true
+    },
+    {
+      "name": "minimal: selected permission shows invitation",
+      "passed": true
+    },
+    {
+      "name": "minimal: two reviewable products",
+      "passed": true
+    },
+    {
+      "name": "minimal: mobile review reflow",
+      "passed": true
+    },
+    {
+      "name": "minimal: validation error takes focus",
+      "passed": true
+    },
+    {
+      "name": "minimal: rating-only submission pending",
+      "passed": true
+    },
+    {
+      "name": "minimal: second product still available",
+      "passed": true
+    },
+    {
+      "name": "minimal: text-only review submitted",
+      "passed": true
+    },
+    {
+      "name": "minimal: edit returns to moderation",
+      "passed": true
+    },
+    {
+      "name": "minimal: withdrawal requires dialog",
+      "passed": true
+    },
+    {
+      "name": "minimal: initial dialog focus on cancel",
+      "passed": true
+    },
+    {
+      "name": "minimal: modal focus remains contained",
+      "passed": true
+    },
+    {
+      "name": "minimal: Escape closes and restores focus",
+      "passed": true
+    },
+    {
+      "name": "minimal: withdrawal completes",
+      "passed": true
+    },
+    {
+      "name": "minimal: GET does not unsubscribe",
+      "passed": true
+    },
+    {
+      "name": "minimal: explicit unsubscribe",
+      "passed": true
+    },
+    {
+      "name": "minimal: later purchase remains suppressed",
+      "passed": true
+    },
+    {
+      "name": "minimal: confirmed return page",
+      "passed": true
+    },
+    {
+      "name": "minimal: pending return page",
+      "passed": true
+    },
+    {
+      "name": "minimal: unavailable return page",
+      "passed": true
+    },
+    {
+      "name": "minimal: cancelled return page",
+      "passed": true
+    },
+    {
+      "name": "minimal: expired return page",
+      "passed": true
+    },
+    {
+      "name": "minimal: keyboard skip link first",
+      "passed": true
+    },
+    {
+      "name": "minimal: reduced motion",
+      "passed": true
+    },
+    {
+      "name": "studio desktop: 3 products",
+      "passed": true
+    },
+    {
+      "name": "studio desktop: no horizontal overflow",
+      "passed": true
+    },
+    {
+      "name": "studio desktop: one h1",
+      "passed": true
+    },
+    {
+      "name": "studio desktop: all images have alt",
+      "passed": true
+    },
+    {
+      "name": "studio tablet: 3 products",
+      "passed": true
+    },
+    {
+      "name": "studio tablet: no horizontal overflow",
+      "passed": true
+    },
+    {
+      "name": "studio tablet: one h1",
+      "passed": true
+    },
+    {
+      "name": "studio tablet: all images have alt",
+      "passed": true
+    },
+    {
+      "name": "studio mobile: 3 products",
+      "passed": true
+    },
+    {
+      "name": "studio mobile: no horizontal overflow",
+      "passed": true
+    },
+    {
+      "name": "studio mobile: one h1",
+      "passed": true
+    },
+    {
+      "name": "studio mobile: all images have alt",
+      "passed": true
+    },
+    {
+      "name": "studio: 320px reflow",
+      "passed": true
+    },
+    {
+      "name": "studio: category filter",
+      "passed": true
+    },
+    {
+      "name": "studio: price sorting",
+      "passed": true
+    },
+    {
+      "name": "studio: search empty state",
+      "passed": true
+    },
+    {
+      "name": "studio: clear filter",
+      "passed": true
+    },
+    {
+      "name": "studio: cart count",
+      "passed": true
+    },
+    {
+      "name": "studio: persisted two-product cart",
+      "passed": true
+    },
+    {
+      "name": "studio: preselected permission visible",
+      "passed": true
+    },
+    {
+      "name": "studio: cart quantity edit",
+      "passed": true
+    },
+    {
+      "name": "studio: mobile cart reflow",
+      "passed": true
+    },
+    {
+      "name": "studio: no card fields",
+      "passed": true
+    },
+    {
+      "name": "studio: simulated confirmation",
+      "passed": true
+    },
+    {
+      "name": "studio: opt-out suppresses invitation",
+      "passed": true
+    },
+    {
+      "name": "studio: selected permission shows invitation",
+      "passed": true
+    },
+    {
+      "name": "studio: two reviewable products",
+      "passed": true
+    },
+    {
+      "name": "studio: mobile review reflow",
+      "passed": true
+    },
+    {
+      "name": "studio: validation error takes focus",
+      "passed": true
+    },
+    {
+      "name": "studio: rating-only submission pending",
+      "passed": true
+    },
+    {
+      "name": "studio: second product still available",
+      "passed": true
+    },
+    {
+      "name": "studio: text-only review submitted",
+      "passed": true
+    },
+    {
+      "name": "studio: edit returns to moderation",
+      "passed": true
+    },
+    {
+      "name": "studio: withdrawal requires dialog",
+      "passed": true
+    },
+    {
+      "name": "studio: initial dialog focus on cancel",
+      "passed": true
+    },
+    {
+      "name": "studio: modal focus remains contained",
+      "passed": true
+    },
+    {
+      "name": "studio: Escape closes and restores focus",
+      "passed": true
+    },
+    {
+      "name": "studio: withdrawal completes",
+      "passed": true
+    },
+    {
+      "name": "studio: GET does not unsubscribe",
+      "passed": true
+    },
+    {
+      "name": "studio: explicit unsubscribe",
+      "passed": true
+    },
+    {
+      "name": "studio: later purchase remains suppressed",
+      "passed": true
+    },
+    {
+      "name": "studio: confirmed return page",
+      "passed": true
+    },
+    {
+      "name": "studio: pending return page",
+      "passed": true
+    },
+    {
+      "name": "studio: unavailable return page",
+      "passed": true
+    },
+    {
+      "name": "studio: cancelled return page",
+      "passed": true
+    },
+    {
+      "name": "studio: expired return page",
+      "passed": true
+    },
+    {
+      "name": "studio: keyboard skip link first",
+      "passed": true
+    },
+    {
+      "name": "studio: reduced motion",
+      "passed": true
+    },
+    {
+      "name": "classic desktop: 3 products",
+      "passed": true
+    },
+    {
+      "name": "classic desktop: no horizontal overflow",
+      "passed": true
+    },
+    {
+      "name": "classic desktop: one h1",
+      "passed": true
+    },
+    {
+      "name": "classic desktop: all images have alt",
+      "passed": true
+    },
+    {
+      "name": "classic tablet: 3 products",
+      "passed": true
+    },
+    {
+      "name": "classic tablet: no horizontal overflow",
+      "passed": true
+    },
+    {
+      "name": "classic tablet: one h1",
+      "passed": true
+    },
+    {
+      "name": "classic tablet: all images have alt",
+      "passed": true
+    },
+    {
+      "name": "classic mobile: 3 products",
+      "passed": true
+    },
+    {
+      "name": "classic mobile: no horizontal overflow",
+      "passed": true
+    },
+    {
+      "name": "classic mobile: one h1",
+      "passed": true
+    },
+    {
+      "name": "classic mobile: all images have alt",
+      "passed": true
+    },
+    {
+      "name": "classic: 320px reflow",
+      "passed": true
+    },
+    {
+      "name": "classic: category filter",
+      "passed": true
+    },
+    {
+      "name": "classic: price sorting",
+      "passed": true
+    },
+    {
+      "name": "classic: search empty state",
+      "passed": true
+    },
+    {
+      "name": "classic: clear filter",
+      "passed": true
+    },
+    {
+      "name": "classic: cart count",
+      "passed": true
+    },
+    {
+      "name": "classic: persisted two-product cart",
+      "passed": true
+    },
+    {
+      "name": "classic: preselected permission visible",
+      "passed": true
+    },
+    {
+      "name": "classic: cart quantity edit",
+      "passed": true
+    },
+    {
+      "name": "classic: mobile cart reflow",
+      "passed": true
+    },
+    {
+      "name": "classic: no card fields",
+      "passed": true
+    },
+    {
+      "name": "classic: simulated confirmation",
+      "passed": true
+    },
+    {
+      "name": "classic: opt-out suppresses invitation",
+      "passed": true
+    },
+    {
+      "name": "classic: selected permission shows invitation",
+      "passed": true
+    },
+    {
+      "name": "classic: two reviewable products",
+      "passed": true
+    },
+    {
+      "name": "classic: mobile review reflow",
+      "passed": true
+    },
+    {
+      "name": "classic: validation error takes focus",
+      "passed": true
+    },
+    {
+      "name": "classic: rating-only submission pending",
+      "passed": true
+    },
+    {
+      "name": "classic: second product still available",
+      "passed": true
+    },
+    {
+      "name": "classic: text-only review submitted",
+      "passed": true
+    },
+    {
+      "name": "classic: edit returns to moderation",
+      "passed": true
+    },
+    {
+      "name": "classic: withdrawal requires dialog",
+      "passed": true
+    },
+    {
+      "name": "classic: initial dialog focus on cancel",
+      "passed": true
+    },
+    {
+      "name": "classic: modal focus remains contained",
+      "passed": true
+    },
+    {
+      "name": "classic: Escape closes and restores focus",
+      "passed": true
+    },
+    {
+      "name": "classic: withdrawal completes",
+      "passed": true
+    },
+    {
+      "name": "classic: GET does not unsubscribe",
+      "passed": true
+    },
+    {
+      "name": "classic: explicit unsubscribe",
+      "passed": true
+    },
+    {
+      "name": "classic: later purchase remains suppressed",
+      "passed": true
+    },
+    {
+      "name": "classic: confirmed return page",
+      "passed": true
+    },
+    {
+      "name": "classic: pending return page",
+      "passed": true
+    },
+    {
+      "name": "classic: unavailable return page",
+      "passed": true
+    },
+    {
+      "name": "classic: cancelled return page",
+      "passed": true
+    },
+    {
+      "name": "classic: expired return page",
+      "passed": true
+    },
+    {
+      "name": "classic: keyboard skip link first",
+      "passed": true
+    },
+    {
+      "name": "classic: reduced motion",
+      "passed": true
+    },
+    {
+      "name": "northline-classic desktop: 3 products",
+      "passed": true
+    },
+    {
+      "name": "northline-classic desktop: no horizontal overflow",
+      "passed": true
+    },
+    {
+      "name": "northline-classic desktop: one h1",
+      "passed": true
+    },
+    {
+      "name": "northline-classic desktop: all images have alt",
+      "passed": true
+    },
+    {
+      "name": "northline-classic tablet: 3 products",
+      "passed": true
+    },
+    {
+      "name": "northline-classic tablet: no horizontal overflow",
+      "passed": true
+    },
+    {
+      "name": "northline-classic tablet: one h1",
+      "passed": true
+    },
+    {
+      "name": "northline-classic tablet: all images have alt",
+      "passed": true
+    },
+    {
+      "name": "northline-classic mobile: 3 products",
+      "passed": true
+    },
+    {
+      "name": "northline-classic mobile: no horizontal overflow",
+      "passed": true
+    },
+    {
+      "name": "northline-classic mobile: one h1",
+      "passed": true
+    },
+    {
+      "name": "northline-classic mobile: all images have alt",
+      "passed": true
+    },
+    {
+      "name": "northline-classic: 320px reflow",
+      "passed": true
+    },
+    {
+      "name": "northline-classic: category filter",
+      "passed": true
+    },
+    {
+      "name": "northline-classic: price sorting",
+      "passed": true
+    },
+    {
+      "name": "northline-classic: search empty state",
+      "passed": true
+    },
+    {
+      "name": "northline-classic: clear filter",
+      "passed": true
+    },
+    {
+      "name": "northline-classic: cart count",
+      "passed": true
+    },
+    {
+      "name": "northline-classic: persisted two-product cart",
+      "passed": true
+    },
+    {
+      "name": "northline-classic: preselected permission visible",
+      "passed": true
+    },
+    {
+      "name": "northline-classic: cart quantity edit",
+      "passed": true
+    },
+    {
+      "name": "northline-classic: mobile cart reflow",
+      "passed": true
+    },
+    {
+      "name": "northline-classic: no card fields",
+      "passed": true
+    },
+    {
+      "name": "northline-classic: simulated confirmation",
+      "passed": true
+    },
+    {
+      "name": "northline-classic: opt-out suppresses invitation",
+      "passed": true
+    },
+    {
+      "name": "northline-classic: selected permission shows invitation",
+      "passed": true
+    },
+    {
+      "name": "northline-classic: two reviewable products",
+      "passed": true
+    },
+    {
+      "name": "northline-classic: mobile review reflow",
+      "passed": true
+    },
+    {
+      "name": "northline-classic: validation error takes focus",
+      "passed": true
+    },
+    {
+      "name": "northline-classic: rating-only submission pending",
+      "passed": true
+    },
+    {
+      "name": "northline-classic: second product still available",
+      "passed": true
+    },
+    {
+      "name": "northline-classic: text-only review submitted",
+      "passed": true
+    },
+    {
+      "name": "northline-classic: edit returns to moderation",
+      "passed": true
+    },
+    {
+      "name": "northline-classic: withdrawal requires dialog",
+      "passed": true
+    },
+    {
+      "name": "northline-classic: initial dialog focus on cancel",
+      "passed": true
+    },
+    {
+      "name": "northline-classic: modal focus remains contained",
+      "passed": true
+    },
+    {
+      "name": "northline-classic: Escape closes and restores focus",
+      "passed": true
+    },
+    {
+      "name": "northline-classic: withdrawal completes",
+      "passed": true
+    },
+    {
+      "name": "northline-classic: GET does not unsubscribe",
+      "passed": true
+    },
+    {
+      "name": "northline-classic: explicit unsubscribe",
+      "passed": true
+    },
+    {
+      "name": "northline-classic: later purchase remains suppressed",
+      "passed": true
+    },
+    {
+      "name": "northline-classic: confirmed return page",
+      "passed": true
+    },
+    {
+      "name": "northline-classic: pending return page",
+      "passed": true
+    },
+    {
+      "name": "northline-classic: unavailable return page",
+      "passed": true
+    },
+    {
+      "name": "northline-classic: cancelled return page",
+      "passed": true
+    },
+    {
+      "name": "northline-classic: expired return page",
+      "passed": true
+    },
+    {
+      "name": "northline-classic: keyboard skip link first",
+      "passed": true
+    },
+    {
+      "name": "northline-classic: reduced motion",
+      "passed": true
+    },
+    {
+      "name": "no application exceptions",
+      "passed": true
+    }
+  ],
+  "limitations": [
+    "No full CartRay repository or hosted Stripe/Workers qualification in this environment.",
+    "No axe-core engine was available; accessibility checks are targeted, not certification.",
+    "Safari, Firefox, VoiceOver and NVDA remain integration checks."
+  ]
+}

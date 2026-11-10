@@ -1,0 +1,14 @@
+{
+  "node_tests": {
+    "passed": 15,
+    "failed": 0
+  },
+  "python_tests": {
+    "passed": 14,
+    "failed": 0
+  },
+  "command": "npm test",
+  "limitations": [
+    "The connected adapter test uses an ABI fixture. The complete CartRay repository test suites were not run."
+  ]
+}

@@ -1,0 +1,230 @@
+{
+  "files": {
+    ".gitignore": {
+      "bytes": 53,
+      "sha256": "2d79fae839c543fbdfe3fc76e8420472abd236f1ccdceb12cb8ee63eba9ab6bc"
+    },
+    "CODEX_HANDOFF.md": {
+      "bytes": 7873,
+      "sha256": "d329a0c2ae2e6f8fa4df2af157ee9749cdd8aacd6a3b28048bfad41eae1e5ba3"
+    },
+    "LICENSE": {
+      "bytes": 1088,
+      "sha256": "8c3ed4e6a4aed21ef9508da5909fffd099200a0f685bbf2c3b711f6a9f7844ba"
+    },
+    "NOTICE.md": {
+      "bytes": 1031,
+      "sha256": "dbbcb399e89e7331732b31c7c47e3784582262b293c7783f05c0eca4e4bee6b5"
+    },
+    "PR_SCOPE.md": {
+      "bytes": 1570,
+      "sha256": "a5edf09ba64461f60218b1798b6ee86d174493fba25ddcfe3706a7fa53fb8adf"
+    },
+    "README.md": {
+      "bytes": 7674,
+      "sha256": "c662a28d26502bad2fed7f75fc14047eee638a57c7ea392fa0c9d500aa4d6710"
+    },
+    "THEMES-OVERVIEW.webp": {
+      "bytes": 108660,
+      "sha256": "6a45b5b8673d6d6fb9f4c41f76127d8bc4321ac21a98855ee8ac509b4c9bf3ba"
+    },
+    "WHITELABEL-OVERVIEW.webp": {
+      "bytes": 74782,
+      "sha256": "dd0fac9823eac8a65a4b4dc045e2aa70f1f635f5dfdec72dea635daf86395067"
+    },
+    "assets/acorn-kit.svg": {
+      "bytes": 4354,
+      "sha256": "4e861f524322e9cc27ac6773e746236d65dfe5416007ec9392cbcadd9e23085b"
+    },
+    "assets/growing-guide.svg": {
+      "bytes": 1978,
+      "sha256": "1a5469761c304b7a4e4ff093e7b279217e4b9d6888e071fbb0bf081fbdd423d3"
+    },
+    "assets/northline-mark-inverse.svg": {
+      "bytes": 183,
+      "sha256": "109f59a93e136a61dac10ffbca15640317a3732fcd7fd7fbaefe89bfef648c31"
+    },
+    "assets/northline-mark.svg": {
+      "bytes": 183,
+      "sha256": "15a038372027e7d496a5cd0ffd4bda23d09129ed3542accf54d129081908f275"
+    },
+    "assets/northline-stripe-icon.png": {
+      "bytes": 12800,
+      "sha256": "5f0efb4ffcc688981982cf2fdcec948ab6c453ab6ac19251e43165dbab2ae41e"
+    },
+    "assets/northline-stripe-logo.png": {
+      "bytes": 11189,
+      "sha256": "9aebc8a5314419d0a5651b0cb17c81027a94d040143b157c960501c1354394bf"
+    },
+    "assets/squirrel-mark-inverse.svg": {
+      "bytes": 402,
+      "sha256": "b9b152474ec3f430f0b4a5ec0b91efbbb31624cca3965ec9f51eefd477a247e8"
+    },
+    "assets/squirrel-mark.svg": {
+      "bytes": 402,
+      "sha256": "21d991825fdc468de7632fff05c2db45fa04d63216a03e32667ed09b06b5565a"
+    },
+    "assets/squirrel-stripe-icon.png": {
+      "bytes": 16299,
+      "sha256": "cc26e5cab730effcb7db451d5951c218d192a1fdd802cb3a38998c547046c47e"
+    },
+    "assets/squirrel-stripe-logo.png": {
+      "bytes": 15258,
+      "sha256": "2189f0fb9d85c64b571e54d74b00807ee0c85b4d99e0cc01bb442933b03194a9"
+    },
+    "assets/tool-roll.svg": {
+      "bytes": 1847,
+      "sha256": "f42cedc5191ad6ca17802c3948c0e8e9cac33b73c9866213931456f36d39bb6f"
+    },
+    "assets/woodland-planter.svg": {
+      "bytes": 3471,
+      "sha256": "a3f950305b1a9704566d411468fc34fd04d084719429cf18b3b6b04cd8d28403"
+    },
+    "assets/woodland-scene.svg": {
+      "bytes": 5181,
+      "sha256": "a3acd9a21a3590eb4f5d651c0c59b614961ece5a2798e97e5981971187b40658"
+    },
+    "assets/workshop-apron.svg": {
+      "bytes": 1440,
+      "sha256": "f657ab6863c6e234cd177961037c753a6fc1c81721c1baff3cb804649aff6f9c"
+    },
+    "assets/workshop-notes.svg": {
+      "bytes": 1773,
+      "sha256": "8a73f855df7664209ac2a835365bfb0f158cccace8780a70db736496eb2c6d68"
+    },
+    "assets/workshop-scene.svg": {
+      "bytes": 2917,
+      "sha256": "b72f1de2459932d34498835d2d057fe8271766dd170ce97850e1de766933870f"
+    },
+    "build.py": {
+      "bytes": 14269,
+      "sha256": "dabca15719bc73b81846778c24b16b8c768ed34bf8af5ccdaf1544b9651289a9"
+    },
+    "connect.py": {
+      "bytes": 6750,
+      "sha256": "0f868870596d09652b258bddcc230a70edce7c3a4297f9529cbf090c08ffef90"
+    },
+    "content/northline.json": {
+      "bytes": 2259,
+      "sha256": "2c9246aef726a1ec4ddaeceaa44b64b6e529a603250e588abc026828c060cd90"
+    },
+    "content/squirrel.json": {
+      "bytes": 2513,
+      "sha256": "320e0c69363377768521a39138bfd25cb22bed57421a32b51159e96c69e1567b"
+    },
+    "docs/ACCESSIBILITY.md": {
+      "bytes": 3284,
+      "sha256": "c6f78348ef849a57481df528a2057f846131494019f587a453cb73706d47a1ba"
+    },
+    "docs/GEL.md": {
+      "bytes": 2761,
+      "sha256": "cf37544df7401229915eec680ac32cf94945104b485ac776f8100ad6cc7800b6"
+    },
+    "evidence/QUALIFICATION.md": {
+      "bytes": 2973,
+      "sha256": "0e81e7509ba67c09bb6c96f331086f51324e38b9ec6c501721010d9efcb71358"
+    },
+    "evidence/browser-results.json": {
+      "bytes": 16966,
+      "sha256": "2bee493c8f43a67ad297eb81c33b4346ad8f45af10e571846bf5fc0ead30cac3"
+    },
+    "evidence/gel-contrast-results.json": {
+      "bytes": 11182,
+      "sha256": "3eae98263170a5bb129a85c3d1f4c4d1ea607180900dbdfa1cd1692de5885a22"
+    },
+    "evidence/source-checksums.json": {
+      "bytes": 805,
+      "sha256": "2f0929e3778748267658d517e6a8efd5ce583dd72a9e4db72ce64f3ce34c071f"
+    },
+    "evidence/static-link-check.json": {
+      "bytes": 84,
+      "sha256": "486fc86da9b6f71b9bee8165a11e6e427439f0b96b7374f1c61fc9f7cfd5f58e"
+    },
+    "evidence/unit-results.json": {
+      "bytes": 280,
+      "sha256": "348044e2151b43aeb499b21a251a449a256632c509db2ed123c0241f19fa2ff1"
+    },
+    "evidence/unit-test-output.txt": {
+      "bytes": 3054,
+      "sha256": "1ecbc26326494b028c2fcdda95bd09b423238623048275ab330cdc54bbf620d5"
+    },
+    "gel/brand-manifest.schema.json": {
+      "bytes": 6154,
+      "sha256": "03059346bc6fa33829a4e911af173b9a6749cf7ffac4a537b9f09f6f787126f1"
+    },
+    "gel/northline.json": {
+      "bytes": 1506,
+      "sha256": "8ca891d958490af69963681468b82036efb97d4720f66622cfbca3d0e23c09e4"
+    },
+    "gel/squirrel.json": {
+      "bytes": 1602,
+      "sha256": "5ebe3ab178bc3efd691623f98f3a074c2fc1b67bc1494c5b99fb149b60e80e61"
+    },
+    "package.json": {
+      "bytes": 469,
+      "sha256": "265602cff64b0be4ef95a0bac6d52121d58c8235f3bd110a855df6836d2678cd"
+    },
+    "requirements-dev.txt": {
+      "bytes": 114,
+      "sha256": "a87d1785507a5d1e0a728b91e81e12c16f50d987b52a03b9b281e97323169e94"
+    },
+    "serve.py": {
+      "bytes": 1197,
+      "sha256": "9a301ea2f2d36ab08833cd1a01bfb9f753a223b513ddc37df7b3fcf0aa77b6cd"
+    },
+    "src/app.mjs": {
+      "bytes": 25676,
+      "sha256": "d134b8a2bf860f93ec5dc2c53bd79e71d980bb146ec58fe4e9416163b89378ae"
+    },
+    "src/base.css": {
+      "bytes": 25332,
+      "sha256": "0a7cb258b472210367e321cb1ee05e9ed9d384178b059832a581a2ec8779f2e6"
+    },
+    "src/cartray-adapter.mjs": {
+      "bytes": 4268,
+      "sha256": "d2940e3d20a49c29c72a659a32780fedb71c5baa145d678287722a7f40ded003"
+    },
+    "src/classic.css": {
+      "bytes": 5180,
+      "sha256": "8f54359b5bc5b6567545f9bfc3d822b6fa122a031ee6cb4c906effc83e679df0"
+    },
+    "src/demo-adapter.mjs": {
+      "bytes": 3774,
+      "sha256": "2e5dd0ec6ec389a2852c83d83273d67633a473d6f59b6826960ed687ebd72d30"
+    },
+    "src/gel.py": {
+      "bytes": 7824,
+      "sha256": "5d1429195637813159259c80e5a5fb4ef4d844bfd41853d0b46ef1115841caee"
+    },
+    "src/minimal.css": {
+      "bytes": 910,
+      "sha256": "c09f9c7a50ae617ceb1d1c144f1da6a11bc40759520af6911cc2702c88c2ab10"
+    },
+    "src/studio.css": {
+      "bytes": 3694,
+      "sha256": "0d7f6b871faf0a05f1e1699106b21e4b0247b1a1004eb6b739f77a5dd57f90f3"
+    },
+    "src/templates.py": {
+      "bytes": 14926,
+      "sha256": "31fa1257273db2a80bde24e0d94004ca80374f2e3d20ab2747bc0054848fe8ed"
+    },
+    "tests/browser_test.py": {
+      "bytes": 11408,
+      "sha256": "7b43f31b560ae782e0077634b5e29fe23e4ec3fcbdb4751f14778e5921705a3b"
+    },
+    "tests/demo.test.mjs": {
+      "bytes": 4513,
+      "sha256": "b8d4380a7af1155f874b733f376d27e68b5bf4bad98748fee42e771c9d9decf6"
+    },
+    "tests/offline_browser.py": {
+      "bytes": 4757,
+      "sha256": "2ade8421e38e996dfbb1d6fbb2596608d78be9cbd49641ffc0b6819f37d0eda7"
+    },
+    "tests/test_gel_theme_build.py": {
+      "bytes": 5440,
+      "sha256": "d91e52d9fe2c7db19fef371b0cefc7a771decd7a9bdab7733c5a99289f6824c5"
+    }
+  },
+  "origin": "CartRay-GEL-Three-Themes-v1.zip",
+  "stage": "source-only Github PR"
+}

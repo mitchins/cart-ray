@@ -1,0 +1,2 @@
+# Optional, only for browser tests/screenshots. Build and unit tests use the standard library.
+playwright==1.57.0
