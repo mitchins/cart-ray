@@ -164,3 +164,32 @@ The isolated Squirrel Reviews Worker can use the configuration fragment
 `reviews-test-vars.example.toml` to make newly delivered invitation links
 non-expiring. Revocation and replacement still invalidate links; invitations
 already issued with an expiration keep their existing expiry.
+
+## GEL themes
+
+The existing builder can apply Minimal, Studio or Classic to the same validated
+catalogue, checkout flags and Reviews gateway:
+
+```sh
+uv run --locked python examples/acorn-store/build.py \
+  --gel examples/gel-theme-pack/gel/squirrel.json --theme minimal \
+  --output /tmp/acorn-minimal
+```
+
+Use `--theme-content` for a presentation JSON whose product keys, routes and
+review subjects match the merchant store configuration, and `--gel-assets` for
+its local asset root. The default asset root is the manifest's grandparent.
+A GEL contains merchant identity once; all three themes use that same manifest.
+Northline in `examples/gel-theme-pack` demonstrates a different brand without
+changing a theme. Installer plans retain the selected GEL and assets in their
+inventory; the same build flags remain available for standalone builds.
+
+This path always uses `cartray-adapter.mjs`, including checkout-disabled builds.
+It imports the original CartRay helpers through a declarative presenter guard;
+no checkout or settlement function is rewritten. Runtime catalogue prices and
+quantity limits override presentation values. Enabling Reviews or test checkout
+still requires the existing explicit options and approved preflight lock.
+Native customer clients own requests, capabilities, drafts and stable retry
+keys. A DOM presenter supplies stars, product selection and a withdrawal dialog.
+No preview payment, invitation persistence or illustrative reviews are included
+in the connected output.
