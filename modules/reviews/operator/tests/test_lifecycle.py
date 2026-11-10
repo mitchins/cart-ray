@@ -231,3 +231,54 @@ def test_empty_hosted_receipt_and_upgrade_keep_fence_and_keys(tmp_path):
     saved = (install.directory / "receipt.json").read_text()
     for secret in keys.values():
         assert secret not in saved
+
+
+def test_interrupted_public_route_configuration_is_reconciled_on_resume(tmp_path):
+    install, provider, _, _, _ = lifecycle(tmp_path)
+    build_at(install, "a" * 40)
+    original = provider.request
+    attempts = []
+
+    def interrupted(path, method="GET", data=None):
+        if path == "workers/scripts/" + install.name("source") + "/subdomain":
+            attempts.append(data)
+            if len(attempts) == 1:
+                raise operations.CloudError("simulated route configuration outage")
+        return original(path, method, data)
+
+    provider.request = interrupted
+    with pytest.raises(operations.CloudError, match="route"):
+        install.deploy()
+    source_version = install.state["deployment"]["versions"]["source"]
+    install.deploy()
+    assert install.state["deployment"]["versions"]["source"] == source_version
+    assert len(attempts) == 2
+    assert attempts[-1] == {"enabled": True, "previews_enabled": False}
+
+
+def test_due_delivery_remains_paused_through_upgrade_until_sender_and_record_are_ready(tmp_path):
+    install, provider, _, _, _ = lifecycle(tmp_path)
+    build_at(install, "a" * 40)
+    install.deploy()
+    due = install.state["resources"]["queue:due"]["id"]
+    assert provider.queue_settings[due]["delivery_paused"] is True
+    install.activate(True)
+    assert provider.queue_settings[due]["delivery_paused"] is False
+    build_at(install, "b" * 40)
+    original = provider.upload
+
+    def observe_sender(name, modules, metadata):
+        if name == install.name("sender"):
+            assert provider.queue_settings[due]["delivery_paused"] is True
+        return original(name, modules, metadata)
+
+    provider.upload = observe_sender
+    install.deploy()
+    assert provider.queue_settings[due]["delivery_paused"] is True
+    # Simulate an operator interruption after deployment: repeated deploy keeps it paused.
+    install.deploy()
+    assert provider.queue_settings[due]["delivery_paused"] is True
+    install.activate(True)
+    assert provider.queue_settings[due]["delivery_paused"] is False
+    install.rollback(0)
+    assert provider.queue_settings[due]["delivery_paused"] is False

@@ -278,11 +278,13 @@ class Installation:
         self.save()
         return self.state["resources"]
 
-    def configure_queues(self):
+    def configure_queues(self, pause_due=False):
         # The verifier requires explicit false; the API omits its implicit default.
         for role in QUEUES:
             resource = self.state["resources"]["queue:" + role]
-            self.api.request("queues/" + resource["id"], "PATCH", {"settings": {"delivery_paused": False}})
+            self.api.request(
+                "queues/" + resource["id"], "PATCH", {"settings": {"delivery_paused": pause_due and role == "due"}}
+            )
 
     def provision_workers(self):
         existing = {item["id"] for item in self.api.listing("workers/scripts")}
@@ -563,10 +565,20 @@ class Installation:
                 raise ValueError("finish or roll back the interrupted deployment before another release")
             progress = {"commit": build["commit"], "versions": {}, "complete": False}
             self.state["deployment"] = progress
+        # Validate every retained artifact before any runtime mutation.
+        for role in ROLES:
+            self.artifact_modules(role, build)
+        # A disabled/stale sender must never consume and exhaust durable due hints.
+        self.configure_queues(pause_due=True)
         self.state["phase"] = "deploying"
         self.save()
         for role in ("source", "reviews", "producer", "evidence", "scheduler", "consumer", "sender"):
             if role in progress["versions"]:
+                self.api.request(
+                    f"workers/scripts/{self.name(role)}/subdomain",
+                    "POST",
+                    {"enabled": role in ("source", "sender"), "previews_enabled": False},
+                )
                 continue
             nodes, _ = graph(self, progress["versions"], sending=False)
             node = nodes[role]
@@ -617,7 +629,7 @@ class Installation:
                 )
             self.state["resources"][key] = {"id": identifier, "name": self.name(role)}
             self.save()
-        self.configure_queues()
+        self.configure_queues(pause_due=True)
         self.api.request(f"workers/scripts/{self.name('source')}/schedules", "PUT", [{"cron": "0 * * * *"}])
         self.render(progress["versions"])
         self.seed_subjects()
@@ -813,6 +825,7 @@ class Installation:
             # The first relay creates the immutable checkpoint. Reflect its actual
             # active state without changing its original activation watermark.
             record = self.verifier("record")
+        self.configure_queues()
         self.state["phase"] = "active"
         self.save()
         release = {
@@ -945,12 +958,14 @@ class Installation:
             or release["suppression_key_fingerprint"] != self.state["secret_fingerprints"]["recipient_hash"]
         ):
             raise ValueError("rollback schema/key contract is incompatible; databases are never rewound")
+        self.configure_queues(pause_due=True)
         for role, version in release["versions"].items():
             self.api.publish(self.name(role), version)
         self.state["build"] = release["commit"]
         self.state["deployment"] = {"commit": release["commit"], "versions": release["versions"], "complete": True}
         self.save()
         record = self.verifier("record")
+        self.configure_queues()
         self.state["phase"] = "active"
         self.save()
         return {
