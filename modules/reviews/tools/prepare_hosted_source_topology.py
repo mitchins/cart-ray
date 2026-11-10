@@ -77,7 +77,7 @@ def build(config):
         raise ValueError("invalid account or database identifier")
     if any(not HEX32.fullmatch(config[k]) for k in ("events_queue_id", "dlq_id")):
         raise ValueError("invalid queue identifier")
-    if config["commerce_db_id"] == config["reviews_db_id"] or config["events_queue_id"] == config["dlq_id"]:
+    if config["events_queue_id"] == config["dlq_id"]:
         raise ValueError("resources must be distinct")
     if not re.fullmatch(r"acct_[A-Za-z0-9]+", config["stripe_account_id"]):
         raise ValueError("invalid Stripe account")

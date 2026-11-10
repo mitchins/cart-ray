@@ -20,7 +20,7 @@ from topology import graph, secret_bindings, wrangler_config
 
 ROOT = Path(__file__).resolve().parents[3]
 ROLES = ("source", "reviews", "consumer", "producer", "evidence", "scheduler", "sender")
-DATABASES = ("commerce", "reviews", "context")
+DATABASES = ("commerce",)
 QUEUES = ("events", "schedule", "due", "dlq")
 SECRET_NAMES = (
     "source_identity",
@@ -76,7 +76,7 @@ def atomic_json(path, value):
 
 def validate_config(config):
     required = {"namespace", "account_id", "stripe_account_id", "preflight_lock"}
-    optional = {"merchant_name", "merchant_contact", "delay_seconds", "max_lateness"}
+    optional = {"merchant_name", "merchant_contact", "delay_seconds", "max_lateness", "reviews_enabled"}
     if not isinstance(config, dict) or set(config) - required - optional or required - set(config):
         raise ValueError("installation config has missing or unknown fields")
     if not re.fullmatch(r"[a-z][a-z0-9-]{2,31}", config["namespace"]) or not config["namespace"].endswith("-test"):
@@ -97,7 +97,10 @@ def validate_config(config):
             or re.search(r"[\x00-\x1f\x7f]", config[name])
         ):
             raise ValueError(f"invalid public {name}")
+    if type(config.get("reviews_enabled", True)) is not bool:
+        raise ValueError("reviews_enabled must be a boolean")
     return {
+        "reviews_enabled": True,
         "merchant_name": "Squirrel’s Acorn Store",
         "merchant_contact": "Contact the test merchant",
         "delay_seconds": 0,
@@ -114,7 +117,7 @@ class Installation:
         self.state = json.loads(self.state_path.read_text())
         self.config = validate_config(self.state["config"])
         if (
-            self.state.get("format") != 1
+            self.state.get("format") != 2
             or self.state.get("environment") != "test"
             or self.state.get("installation") != self.config["namespace"]
         ):
@@ -130,15 +133,17 @@ class Installation:
                 "approved_test_email",
                 "test_sender",
             }
+            if not self.config["reviews_enabled"]:
+                required -= {"smtp2go_api_key", "approved_test_email", "test_sender"}
             if not required.issubset(credentials) or any(
                 not isinstance(credentials[key], str) or not credentials[key] for key in required
             ):
                 raise ValueError("credential handoff is incomplete; use the documented private JSON schema")
             if not credentials["stripe_test_key"].startswith(("sk_test_", "rk_test_")):
                 raise ValueError("only a Stripe test credential is accepted")
-            if not credentials["smtp2go_api_key"].startswith("api-"):
+            if self.config["reviews_enabled"] and not credentials["smtp2go_api_key"].startswith("api-"):
                 raise ValueError("invalid test SMTP2GO credential")
-            for field in ("approved_test_email", "test_sender"):
+            for field in ("approved_test_email", "test_sender") if self.config["reviews_enabled"] else ():
                 if not re.fullmatch(r"[^\s@<>]+@[^\s@<>]+\.[A-Za-z]{2,}", credentials[field]):
                     raise ValueError(f"invalid approved test mailbox field {field}")
         self.api = api or (API(self.config["account_id"], credentials["cloudflare_api_token"]) if credentials else None)
@@ -159,7 +164,7 @@ class Installation:
         atomic_json(
             directory / "inventory.json",
             {
-                "format": 1,
+                "format": 2,
                 "installation": config["namespace"],
                 "environment": "test",
                 "config": config,
@@ -172,6 +177,14 @@ class Installation:
             },
         )
         return cls(directory)
+
+    @property
+    def roles(self):
+        return ROLES if self.config["reviews_enabled"] else ("source",)
+
+    @property
+    def queues(self):
+        return QUEUES if self.config["reviews_enabled"] else ()
 
     def save(self):
         atomic_json(self.state_path, self.state)
@@ -251,7 +264,7 @@ class Installation:
         self.save()
         for kind, roles, endpoint, name_field, identity in [
             ("database", DATABASES, "d1/database", "name", "uuid"),
-            ("queue", QUEUES, "queues", "queue_name", "queue_id"),
+            ("queue", self.queues, "queues", "queue_name", "queue_id"),
         ]:
             for role in roles:
                 key = kind + ":" + role
@@ -281,7 +294,7 @@ class Installation:
 
     def configure_queues(self, pause_processing=False):
         # The verifier requires explicit false; the API omits its implicit default.
-        for role in QUEUES:
+        for role in self.queues:
             resource = self.state["resources"]["queue:" + role]
             self.api.request(
                 "queues/" + resource["id"],
@@ -296,7 +309,7 @@ class Installation:
 
     def provision_workers(self):
         existing = {item["id"] for item in self.api.listing("workers/scripts")}
-        for role in ROLES:
+        for role in self.roles:
             key = "worker:" + role
             if key in self.state["resources"]:
                 continue
@@ -452,14 +465,19 @@ class Installation:
 
     def check_schema(self):
         self.assert_resources()
+        namespaces = self.api.query(self.db("commerce"), "SELECT DISTINCT namespace FROM cartray_operator_migrations")
+        if {row["namespace"] for row in namespaces} != set(self.migrations()):
+            raise ValueError("unknown or missing migration namespace")
         for role, expected in self.state.get("migration_ledgers", {}).items():
             actual = self.api.query(
-                self.db(role), "SELECT position,path,checksum FROM cartray_operator_migrations ORDER BY position"
+                self.db(role),
+                "SELECT position,path,checksum FROM cartray_operator_migrations WHERE namespace=? ORDER BY position",
+                [role],
             )
             if actual != expected:
                 raise ValueError(f"{role}: live migration ledger differs; no application rollback/deploy is permitted")
-        if set(self.state.get("migration_ledgers", {})) != set(DATABASES):
-            raise ValueError("all three migration ledgers are required")
+        if set(self.state.get("migration_ledgers", {})) != set(self.migrations()):
+            raise ValueError("all configured migration ledgers are required")
 
     def upgrade(self):
         current = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip()
@@ -477,7 +495,7 @@ class Installation:
             self.verifier("record")
             self.state["phase"] = "paused"
             self.save()
-            return {"phase": "paused", "activation_watermark": self.state["activation_watermark"]}
+            return {"phase": "paused", "activation_watermark": self.state.get("activation_watermark")}
         return result
 
     def render(self, versions=None, sending=False):
@@ -524,7 +542,7 @@ class Installation:
                 ],
             )
         reviews = release / "reviews"
-        if not (reviews / "receipt.json").exists():
+        if self.config["reviews_enabled"] and not (reviews / "receipt.json").exists():
             if reviews.exists():
                 shutil.rmtree(reviews)
             self.run(
@@ -606,7 +624,7 @@ class Installation:
             progress = {"commit": build["commit"], "versions": {}, "complete": False}
             self.state["deployment"] = progress
         # Validate every retained artifact before any runtime mutation.
-        for role in ROLES:
+        for role in self.roles:
             self.artifact_modules(role, build)
         # A disabled/stale sender must never consume and exhaust durable due hints.
         self.state["queue_recovery_required"] = True
@@ -616,7 +634,11 @@ class Installation:
             progress["sending"] = False
         self.state["phase"] = "deploying"
         self.save()
-        for role in ("source", "reviews", "producer", "evidence", "scheduler", "consumer", "sender"):
+        for role in (
+            role
+            for role in ("source", "reviews", "producer", "evidence", "scheduler", "consumer", "sender")
+            if role in self.roles
+        ):
             if role in progress["versions"]:
                 self.api.request(
                     f"workers/scripts/{self.name(role)}/subdomain",
@@ -647,7 +669,7 @@ class Installation:
                 "POST",
                 {"enabled": node.get("public", False), "previews_enabled": False},
             )
-        for role in ("consumer", "scheduler", "sender"):
+        for role in ("consumer", "scheduler", "sender") if self.config["reviews_enabled"] else ():
             nodes, _ = graph(self, progress["versions"])
             queue_role = nodes[role]["consumes"]
             key = "consumer:" + queue_role
@@ -684,6 +706,8 @@ class Installation:
         return {"commit": build["commit"], "versions": progress["versions"], "activated": False}
 
     def seed_subjects(self):
+        if not self.config["reviews_enabled"]:
+            return
         subjects = [
             ("acorn-growing-kit", "/products/acorn-growing-kit/", "Acorn growing kit"),
             ("woodland-planter", "/products/woodland-planter/", "Woodland planter"),
@@ -727,8 +751,7 @@ class Installation:
                     str(staging),
                     "--test-checkout-api",
                     self.state["urls"]["source"],
-                    "--reviews",
-                    "--test-review-gateway",
+                    *(["--reviews", "--test-review-gateway"] if self.config["reviews_enabled"] else []),
                     "--preflight-lock",
                     self.config["preflight_lock"],
                 ],
@@ -747,6 +770,8 @@ class Installation:
                 for name in ("REVIEWS_API", "REVIEWS_PUBLIC")
             },
         }
+        if not self.config["reviews_enabled"]:
+            deployment = {"env_vars": {}, "services": {}}
         self.api.request(
             "pages/projects/" + self.name("store"), "PATCH", {"deployment_configs": {"production": deployment}}
         )
@@ -770,6 +795,9 @@ class Installation:
         )
 
     def verifier(self, mode):
+        if not self.config["reviews_enabled"]:
+            self.check_schema()
+            return {"status": "active", "revision": 0}
         self.ensure_pages_subdomain()
         self.vault()
         nodes, _ = graph(self, self.state["deployment"]["versions"])
@@ -816,6 +844,10 @@ class Installation:
         return json.loads([line for line in value.stdout.splitlines() if line.startswith("{")][-1])
 
     def verify(self):
+        if not self.config["reviews_enabled"]:
+            health = self.doctor()
+            if not health["healthy"]:
+                raise ValueError("commerce deployment differs; resolve doctor findings")
         self.pin_suppression()
         result = self.verifier("inspect")
         if self.state["phase"] != "active":
@@ -828,6 +860,17 @@ class Installation:
         }
 
     def activate(self, enable_test_delivery=False):
+        if not self.config["reviews_enabled"]:
+            if not self.state.get("deployment", {}).get("complete"):
+                raise ValueError("finish the interrupted deploy before activation")
+            self.verify()
+            self.state.update(phase="active", activation_authorized=True, automation_paused=False)
+            build = json.loads((self.directory / "releases" / self.state["build"] / "build.json").read_text())
+            release = {**build, "versions": dict(self.state["deployment"]["versions"]), "record_revision": 0}
+            if not self.state["releases"] or self.state["releases"][-1] != release:
+                self.state["releases"].append(release)
+            self.save()
+            return {"phase": "active", "reviews_enabled": False}
         if not enable_test_delivery:
             raise ValueError(
                 "activation requires explicit --enable-test-delivery for the documented approved test mailbox"
@@ -905,6 +948,8 @@ class Installation:
         }
 
     def recover_paused_hints(self):
+        if not self.config["reviews_enabled"]:
+            return
         """Reconstruct expirable hints from durable post-fence facts before resume."""
         if not self.state.get("automation_paused") and not self.state.get("queue_recovery_required"):
             return
@@ -1009,6 +1054,8 @@ class Installation:
         errors = []
         for role, expected in nodes.items():
             actual = self.api.version(self.name(role))
+            if actual["id"] != self.state.get("deployment", {}).get("versions", {}).get(role):
+                errors.append(f"{role}: active version differs from inventory")
             observed = {item["name"]: item for item in actual["resources"]["bindings"]}
             for binding in expected["bindings"]:
                 name, kind = binding["name"], binding["type"]
@@ -1047,6 +1094,16 @@ class Installation:
 
     def receipt(self):
         health = self.doctor()
+        if not self.config["reviews_enabled"]:
+            result = {
+                "format": 2,
+                "namespace": self.config["namespace"],
+                "doctor": health,
+                "resources": self.state["resources"],
+                "migration_ledgers": self.state["migration_ledgers"],
+            }
+            atomic_json(self.directory / "receipt.json", result)
+            return result
         choices = self.api.query(
             self.db("commerce"),
             "SELECT b.id AS outbox_id,c.selected,c.merchant_default_selected,g.selection_basis,"
@@ -1144,20 +1201,19 @@ class Installation:
         }
 
     def db(self, role):
-        return self.state["resources"]["database:" + role]["id"]
+        return self.state["resources"]["database:commerce"]["id"]
 
     def migrations(self):
-        return {
-            "commerce": [
-                *sorted((ROOT / "migrations").glob("*.sql")),
-                *sorted((ROOT / "modules/reviews/automation-intake-producer/migrations").glob("*.sql")),
-            ],
+        chains = {
+            "commerce": sorted((ROOT / "migrations").glob("*.sql")),
+            "subscriber": sorted((ROOT / "modules/reviews/automation-intake-producer/migrations").glob("*.sql")),
             "reviews": [
                 ROOT / "modules/reviews" / item
                 for item in json.loads((ROOT / "modules/reviews/module.json").read_text())["migrations"]
             ],
             "context": sorted((ROOT / "modules/reviews/consent/migrations").glob("*.sql")),
         }
+        return chains if self.config["reviews_enabled"] else {"commerce": chains["commerce"]}
 
     def migrate(self):
         self.assert_resources()
@@ -1167,10 +1223,16 @@ class Installation:
             self.api.query(
                 db,
                 "CREATE TABLE IF NOT EXISTS cartray_operator_migrations "
-                "(position INTEGER PRIMARY KEY, path TEXT UNIQUE NOT NULL, checksum TEXT NOT NULL)",
+                "(namespace TEXT NOT NULL, position INTEGER NOT NULL, path TEXT UNIQUE NOT NULL, "
+                "checksum TEXT NOT NULL, PRIMARY KEY(namespace,position))",
             )
+            namespaces = self.api.query(db, "SELECT DISTINCT namespace FROM cartray_operator_migrations")
+            if {row["namespace"] for row in namespaces} - set(self.migrations()):
+                raise ValueError("unknown migration namespace")
             rows = self.api.query(
-                db, "SELECT position,path,checksum FROM cartray_operator_migrations ORDER BY position"
+                db,
+                "SELECT position,path,checksum FROM cartray_operator_migrations WHERE namespace=? ORDER BY position",
+                [role],
             )
             expected = [
                 {"position": i + 1, "path": str(path.relative_to(ROOT)), "checksum": digest(path.read_bytes())}
@@ -1184,7 +1246,7 @@ class Installation:
                 sql = (
                     path.read_text()
                     + "\nINSERT INTO cartray_operator_migrations VALUES "
-                    + (f"({item['position']},'{item['path']}','{item['checksum']}');\n")
+                    + (f"('{role}',{item['position']},'{item['path']}','{item['checksum']}');\n")
                 )
                 self.execute_file(db, sql)
             self.state.setdefault("migration_ledgers", {})[role] = expected
@@ -1204,7 +1266,7 @@ class Installation:
         with tempfile.NamedTemporaryFile(mode="w", suffix=".sql", dir=self.directory) as stream:
             stream.write(sql)
             stream.flush()
-            subprocess.run(
+            result = subprocess.run(
                 [
                     str(ROOT / "node_modules/.bin/wrangler"),
                     "d1",
@@ -1218,12 +1280,24 @@ class Installation:
                     stream.name,
                 ],
                 cwd=ROOT,
-                check=True,
+                check=False,
                 capture_output=True,
                 env={**os.environ, "CLOUDFLARE_API_TOKEN": self.credentials["cloudflare_api_token"]},
             )
 
+            if result.returncode:
+                log = self.directory / "migration-error.log"
+                fd = os.open(log, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600)
+                with os.fdopen(fd, "wb") as output:
+                    os.fchmod(output.fileno(), 0o600)
+                    output.write(result.stdout + result.stderr)
+                raise CloudError(
+                    f"D1 migration failed; inspect protected {log}, then retry migrate; no ledger repair is automatic"
+                )
+
     def pin_suppression(self, allow_create=False):
+        if not self.config["reviews_enabled"]:
+            return
         self.assert_resources()
         vault = self.vault()
         params = ["acorn-store", "test", self.config["namespace"]]
@@ -1243,9 +1317,14 @@ class Installation:
         if current:
             if current != [{"key_version": "key1", "key_check": check}]:
                 raise ValueError("suppression key identity mismatch; restore original key, no rotation is performed")
+            if not self.state.get("suppression_pinned"):
+                self.state["suppression_pinned"] = True
+                self.save()
             return
-        if not allow_create:
-            raise ValueError("suppression registry is missing; run the explicit migration step")
+        if not allow_create or self.state.get("suppression_pinned"):
+            raise ValueError(
+                "suppression registry is missing; restore original registry; no identity repair is automatic"
+            )
         registered = self.api.query(
             self.db("context"),
             "SELECT key_check FROM review_suppression_key_registry WHERE store_key=? AND environment=? "
@@ -1262,6 +1341,8 @@ class Installation:
         self.api.query(
             self.db("context"), "INSERT INTO review_suppression_key_current VALUES (?,?,?,?)", [*params, "key1"]
         )
+        self.state["suppression_pinned"] = True
+        self.save()
 
 
 def main():
@@ -1298,9 +1379,9 @@ def main():
                 installation = Installation.plan(args.directory, config)
                 result = {
                     "phase": "planned",
-                    "workers": {role: installation.name(role) for role in ROLES},
+                    "workers": {role: installation.name(role) for role in installation.roles},
                     "databases": {role: installation.name(role) for role in DATABASES},
-                    "queues": {role: installation.name(role) for role in QUEUES},
+                    "queues": {role: installation.name(role) for role in installation.queues},
                     "pages": installation.name("store"),
                 }
             else:

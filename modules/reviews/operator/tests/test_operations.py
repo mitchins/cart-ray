@@ -136,10 +136,10 @@ def migrated(tmp_path):
     return installation, cloud
 
 
-def test_all_three_real_sqlite_migration_chains_resume_without_reapplication(tmp_path):
+def test_shared_real_sqlite_migration_chains_resume_without_reapplication(tmp_path):
     installation, cloud = migrated(tmp_path)
     first = installation.migrate()
-    assert first == {"commerce": 7, "reviews": 33, "context": 2}
+    assert first == {"commerce": 5, "subscriber": 2, "reviews": 33, "context": 2}
     counts = {
         role: len(cloud.query(installation.db(role), "SELECT * FROM cartray_operator_migrations"))
         for role in operations.DATABASES
@@ -203,3 +203,70 @@ def test_rollback_rejects_schema_drift_and_absent_release_without_mutation(tmp_p
     with pytest.raises(ValueError, match="not in this installation"):
         installation.rollback(-2)
     assert cloud.writes == writes
+
+
+def test_shared_bindings_and_namespace_tampering_fail_closed(tmp_path):
+    installation, cloud = migrated(tmp_path)
+    installation.migrate()
+    assert len(cloud.databases) == 1
+    assert {installation.db(role) for role in ("commerce", "reviews", "context")} == {"commerce-id"}
+    assert len(cloud.query("commerce-id", "SELECT * FROM cartray_operator_migrations")) == 42
+    cloud.query("commerce-id", "INSERT INTO cartray_operator_migrations VALUES ('unknown',1,'unknown','bad')")
+    with pytest.raises(ValueError, match="namespace"):
+        installation.migrate()
+    with pytest.raises(ValueError, match="namespace"):
+        installation.check_schema()
+
+
+def test_commerce_only_migration_and_graph_need_no_review_resources(tmp_path):
+    installation, cloud = migrated(tmp_path)
+    installation.config["reviews_enabled"] = False
+    installation.migrate()
+    assert installation.migrations().keys() == {"commerce"}
+    names = {row["name"] for row in cloud.query("commerce-id", "SELECT name FROM sqlite_master WHERE type='table'")}
+    assert "review_subjects" not in names
+    assert "reviews_subscriber_checkpoint" not in names
+    assert "purchaser_context" not in names
+    installation.state["workers_subdomain"] = "test-account"
+    installation.state["pages_subdomain"] = "test-store.pages.dev"
+    nodes, _ = operations.graph(installation)
+    assert set(nodes) == {"source"}
+    assert not any(binding["type"] == "service" for binding in nodes["source"]["bindings"])
+    assert "CARTRAY_REVIEWS_SOURCE" not in nodes["source"]["vars"]
+    installation.check_schema()
+
+
+def test_failed_migration_writes_private_actionable_log(tmp_path):
+    from types import SimpleNamespace
+
+    installation = planned(tmp_path)
+    installation.credentials = {"cloudflare_api_token": "private-token"}
+    log = installation.directory / "migration-error.log"
+    log.write_text("old log")
+    log.chmod(0o644)
+    with patch.object(
+        operations.subprocess,
+        "run",
+        return_value=SimpleNamespace(returncode=1, stdout=b"provider diagnostic\n", stderr=b"failure\n"),
+    ):
+        with pytest.raises(operations.CloudError, match="protected.*migration-error.log.*retry migrate"):
+            installation.execute_file("merchant-db", "SELECT 1;")
+    assert log.stat().st_mode & 0o777 == 0o600
+    assert "provider diagnostic" in log.read_text()
+
+
+def test_missing_pinned_registry_is_not_recreated_by_migrate(tmp_path):
+    installation, cloud = migrated(tmp_path)
+    installation.migrate()
+    original = cloud.query
+
+    def query(database, sql, params=()):
+        if "SELECT c.key_version,r.key_check" in sql:
+            return []
+        return original(database, sql, params)
+
+    cloud.query = query
+    keys = installation.vault()
+    with pytest.raises(ValueError, match="restore original registry"):
+        installation.migrate()
+    assert installation.vault() == keys
