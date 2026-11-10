@@ -163,6 +163,27 @@ before resuming queues and preserves the original no-backfill fence. Retained
 post-fence work, including eligible purchases made while paused, can then be
 processed; resume only when further test delivery is intended.
 
+Queue messages are expirable hints, not the durable purchase record. The source
+relay may continue advancing its checkpoint while queues are paused. The CLI
+sets a one-day queue retention period, but pausing may last longer than that:
+before any explicit resume it reconstructs signed post-fence event hints from
+the durable commerce outbox up to a checkpoint snapshot. Existing subscriber,
+scheduler and provider-claim idempotency reconstruct missing schedule/due hints
+without resending accepted or uncertain deliveries. Permission, suppression and
+maximum-lateness rules still apply; pausing does not extend a customer's policy
+window or authorize old pre-fence purchases.
+
+Recovery never rewinds a checkpoint or resets a permission/delivery claim. Each
+attempt handles at most twenty pages of twenty hints; if it reaches that budget,
+repeat explicit activation within five minutes. Progress is journalled. An old
+partial replay is restarted from the original immutable fence, so expired replay
+messages cannot authorize resume. Queues remain paused until the whole bounded
+snapshot is freshly reconstructed. This also protects interrupted deployments
+and rollbacks that outlast queue retention. Preserve the source databases and
+private operator inventory for this recovery; deleting them is retirement, not
+pause. The operator Queue batch format follows the
+[Cloudflare Queue API](https://developers.cloudflare.com/api/resources/queues/subresources/messages/methods/bulk_push/).
+
 ## Diagnose, upgrade and application-only rollback
 
 `doctor` reads live bindings, the migration ledgers, suppression identity and

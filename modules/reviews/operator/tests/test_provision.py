@@ -27,6 +27,8 @@ class Catalog:
             self.items[path].append(value)
             return value
         if method == "PATCH":
+            item = next(value for value in self.items["queues"] if value["queue_id"] == path.split("/")[-1])
+            item["settings"] = data["settings"]
             return {}
         if path.startswith("d1/database/"):
             return next(item for item in self.items["d1/database"] if item["uuid"] == path.split("/")[-1])
@@ -67,10 +69,17 @@ def test_provision_repeat_and_unknown_create_outcome_preserve_keys_and_resources
         assert install.vault() == keys
         assert provider.creates == count
         assert sum(call.args[1] == "webhook_endpoints" for call in calls.call_args_list) == 1
+        install.state["phase"] = "paused"
+        install.state["automation_paused"] = True
+        install.save()
+        install.provision()
+        assert provider.creates == count
+        for queue in provider.items["queues"]:
+            assert queue["settings"]["delivery_paused"] is (queue["queue_name"] != install.name("dlq"))
     assert len(first) == 15
     assert install.state["pending"] == []
     assert first["database:commerce"]["id"] == "recovered-commerce"
-    assert install.state["phase"] == "provisioned"
+    assert install.state["phase"] == "paused"
 
 
 def test_initial_key_and_webhook_receipts_recover_after_inventory_write_interruption(tmp_path):

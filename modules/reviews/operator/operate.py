@@ -272,7 +272,7 @@ class Installation:
         self.provision_workers()
         self.provision_webhook()
         self.provision_pages()
-        self.configure_queues()
+        self.configure_queues(pause_processing=self.state["phase"] not in ("planned", "provisioned", "active"))
         if self.state["phase"] == "planned":
             self.state["phase"] = "provisioned"
         self.save()
@@ -285,7 +285,12 @@ class Installation:
             self.api.request(
                 "queues/" + resource["id"],
                 "PATCH",
-                {"settings": {"delivery_paused": pause_processing and role != "dlq"}},
+                {
+                    "settings": {
+                        "delivery_paused": pause_processing and role != "dlq",
+                        "message_retention_period": 86400,
+                    }
+                },
             )
 
     def provision_workers(self):
@@ -580,6 +585,8 @@ class Installation:
         for role in ROLES:
             self.artifact_modules(role, build)
         # A disabled/stale sender must never consume and exhaust durable due hints.
+        self.state["queue_recovery_required"] = True
+        self.save()
         self.configure_queues(pause_processing=True)
         if "sender" not in progress["versions"]:
             progress["sending"] = False
@@ -843,8 +850,10 @@ class Installation:
             # The first relay creates the immutable checkpoint. Reflect its actual
             # active state without changing its original activation watermark.
             record = self.verifier("record")
+        self.recover_paused_hints()
         self.configure_queues()
         self.state["automation_paused"] = False
+        self.state["queue_recovery_required"] = False
         self.state["phase"] = "active"
         self.save()
         release = {
@@ -861,11 +870,86 @@ class Installation:
             "activation_watermark": result["outbox_watermark"],
         }
 
+    def recover_paused_hints(self):
+        """Reconstruct expirable hints from durable post-fence facts before resume."""
+        if not self.state.get("automation_paused") and not self.state.get("queue_recovery_required"):
+            return
+        row = self.api.query(
+            self.db("commerce"),
+            "SELECT activation_watermark,last_outbox_id FROM reviews_subscriber_checkpoint WHERE subscriber_id=?",
+            [self.config["namespace"]],
+        )
+        if not row:
+            return
+        fence, upper = row[0]["activation_watermark"], row[0]["last_outbox_id"]
+        if fence != self.state["activation_watermark"] or upper < fence:
+            raise ValueError("pause recovery checkpoint/fence differs; no queue is resumed")
+        now = int(time.time())
+        recovery = self.state.get("pause_recovery")
+        # Cloudflare hints are expirable. Never resume from an old partial replay:
+        # all reconstructed pages must be fresh within this conservative deadline.
+        if not recovery or not 0 <= now - recovery["started_at"] < 300:
+            recovery = {"started_at": now, "fence": fence, "upper": upper, "last_id": fence, "complete": False}
+            self.state["pause_recovery"] = recovery
+            self.save()
+        if recovery["fence"] != fence:
+            raise ValueError("pause recovery fence changed; no queue is resumed")
+        key = bytes.fromhex(self.vault()["event_key"])
+        for _ in range(20):
+            rows = self.api.query(
+                self.db("commerce"),
+                "SELECT id FROM outbox WHERE id>? AND id<=? AND event_type='OrderConfirmed' ORDER BY id LIMIT 20",
+                [recovery["last_id"], recovery["upper"]],
+            )
+            if not rows:
+                if int(time.time()) - recovery["started_at"] >= 300:
+                    raise ValueError("pause recovery freshness window elapsed; repeat explicit activation")
+                recovery["complete"] = True
+                self.save()
+                return
+            messages = []
+            for row in rows:
+                identity = row["id"]
+                payload = [
+                    "cartray-reviews-order-confirmed-v1",
+                    self.config["namespace"],
+                    self.config["namespace"],
+                    "acorn-store",
+                    "test",
+                    identity,
+                ]
+                signature = hmac.new(key, json.dumps(payload, separators=(",", ":")).encode(), "sha256").hexdigest()
+                messages.append(
+                    {
+                        "content_type": "json",
+                        "body": {
+                            "version": 1,
+                            "issuer": self.config["namespace"],
+                            "installation": self.config["namespace"],
+                            "store": "acorn-store",
+                            "environment": "test",
+                            "outbox_id": identity,
+                            "signature": signature,
+                        },
+                    }
+                )
+            self.api.request(
+                "queues/" + self.state["resources"]["queue:events"]["id"] + "/messages/batch",
+                "POST",
+                {"messages": messages},
+            )
+            recovery["last_id"] = rows[-1]["id"]
+            self.save()
+        raise ValueError("pause recovery page budget reached; repeat explicit activation within five minutes")
+
     def pause(self):
         """Stop new automation deliveries without changing checkout or unsubscribe."""
         self.assert_resources()
         self.vault()
+        if not self.state.get("automation_paused"):
+            self.state.pop("pause_recovery", None)
         self.state["automation_paused"] = True
+        self.state["queue_recovery_required"] = True
         self.state["phase"] = "pausing"
         self.save()
         self.configure_queues(pause_processing=True)
@@ -994,6 +1078,8 @@ class Installation:
             or release["suppression_key_fingerprint"] != self.state["secret_fingerprints"]["recipient_hash"]
         ):
             raise ValueError("rollback schema/key contract is incompatible; databases are never rewound")
+        self.state["queue_recovery_required"] = True
+        self.save()
         self.configure_queues(pause_processing=True)
         self.state["phase"] = "rolling-back"
         self.save()
@@ -1009,7 +1095,10 @@ class Installation:
         self.save()
         record = self.verifier("record")
         paused = self.state.get("automation_paused", False)
+        if not paused:
+            self.recover_paused_hints()
         self.configure_queues(pause_processing=paused)
+        self.state["queue_recovery_required"] = paused
         self.state["phase"] = "paused" if paused else "active"
         self.save()
         return {
