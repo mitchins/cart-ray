@@ -1,16 +1,19 @@
-# Example only: copy outside source control and replace every value. The output
-# directory must be generated with --review-consent and its matching test lock.
+# Example only. The operator CLI generates these bindings for its namespace.
+# Build with --reviews --test-review-gateway --test-checkout-api SOURCE_ORIGIN
+# and --preflight-lock /private/stripe-test-preflight.lock.json.
 name = "REPLACE-acorn-test-pages"
 pages_build_output_dir = "REPLACE-output-directory"
 compatibility_date = "2026-08-31"
 
 [vars]
-ACORN_STOREFRONT_ORIGIN = "https://REPLACE.example"
+ACORN_STOREFRONT_ORIGIN = "https://REPLACE-acorn-test-pages.pages.dev"
+ACORN_REVIEWS_GATEWAY = "test"
+ACORN_REVIEWS_READ_MODE = "test"
 
 [[services]]
-binding = "CHECKOUT"
-service = "REPLACE-source-worker"
+binding = "REVIEWS_API"
+service = "REPLACE-reviews-worker"
 
 [[services]]
-binding = "CONSENT_GATEWAY"
-service = "REPLACE-authority-worker"
+binding = "REVIEWS_PUBLIC"
+service = "REPLACE-reviews-worker"

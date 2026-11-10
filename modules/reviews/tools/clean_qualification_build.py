@@ -1,5 +1,6 @@
 """Build a disposable, source-verified Reviews Worker bundle from a Git commit."""
 
+import argparse
 import hashlib
 import io
 import json
@@ -95,6 +96,11 @@ def exercise_worker(project):
 
 def main():
     """Archive HEAD, recreate generated artifacts, and compare every runtime module."""
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--output", type=Path, help="retain the verified bundle and receipt in a new directory")
+    args = parser.parse_args()
+    if args.output and args.output.exists():
+        raise ValueError("output already exists; retain it or choose a new release directory")
     run(["git", "diff", "--quiet", "HEAD", "--", "modules/reviews/src"], ROOT)
     commit = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip()
     with tempfile.TemporaryDirectory(prefix="cartray-reviews-build-") as name:
@@ -242,20 +248,20 @@ def main():
         wrangler = subprocess.check_output(
             [str(project / "node_modules/.bin/wrangler"), "--version"], cwd=project, text=True
         ).strip()
-        print(
-            json.dumps(
-                {
-                    "source_commit": commit,
-                    "wrangler": wrangler,
-                    "workerd": workerd,
-                    "vendored_versions": versions,
-                    "runtime_source_sha256": hashes,
-                    "bundle_content_sha256": bundle_hash.hexdigest(),
-                    "deployable_content_sha256": deployable_hash.hexdigest(),
-                },
-                indent=2,
-            )
-        )
+        receipt = {
+            "source_commit": commit,
+            "wrangler": wrangler,
+            "workerd": workerd,
+            "vendored_versions": versions,
+            "runtime_source_sha256": hashes,
+            "bundle_content_sha256": bundle_hash.hexdigest(),
+            "deployable_content_sha256": deployable_hash.hexdigest(),
+        }
+        if args.output:
+            args.output.mkdir(parents=True, mode=0o700)
+            shutil.copytree(project / "bundle", args.output / "bundle")
+            (args.output / "receipt.json").write_text(json.dumps(receipt, indent=2) + "\n")
+        print(json.dumps(receipt, indent=2))
 
 
 if __name__ == "__main__":

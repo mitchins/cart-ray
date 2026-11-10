@@ -165,6 +165,7 @@ def main() -> None:
     parser.add_argument("--output", type=Path, required=True, help="new directory for static output")
     parser.add_argument("--config", type=Path, default=HERE / "store.json")
     parser.add_argument("--test-checkout-api", help="explicit HTTPS CartRay TEST Worker origin")
+    parser.add_argument("--preflight-lock", type=Path, default=PREFLIGHT_LOCK)
     parser.add_argument("--reviews", action="store_true", help="enable same-origin test Reviews reads")
     parser.add_argument(
         "--test-review-gateway", action="store_true", help="enable test-only same-origin invitation routes"
@@ -176,6 +177,7 @@ def main() -> None:
         checkout_api=args.test_checkout_api,
         reviews=args.reviews,
         test_review_gateway=args.test_review_gateway,
+        preflight_lock=args.preflight_lock,
     )
 
 
