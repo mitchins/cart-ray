@@ -17,8 +17,13 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--origin", default="http://127.0.0.1:4174")
     parser.add_argument("--engines", default="chromium,webkit,firefox")
+    parser.add_argument("--label", choices=("minimal", "studio", "classic", "northline-classic"))
     args = parser.parse_args()
     checks = []
+    prefix = f"{args.label}-" if args.label else ""
+    results = ROOT / (
+        f"evidence/connected-browser-{args.label}.json" if args.label else "evidence/connected-browser-results.json"
+    )
     shots = ROOT / "screenshots"
     shots.mkdir(exist_ok=True)
 
@@ -42,7 +47,7 @@ def main():
                     engine + " connected " + label + " reflow",
                     page.evaluate("document.documentElement.scrollWidth<=innerWidth+1"),
                 )
-                page.screenshot(path=str(shots / f"connected-{engine}-home-{label}.png"), full_page=True)
+                page.screenshot(path=str(shots / f"connected-{prefix}{engine}-home-{label}.png"), full_page=True)
             check(
                 engine + " real adapter has no demo module",
                 not page.evaluate("performance.getEntriesByType('resource').some(x=>x.name.includes('demo-adapter'))"),
@@ -52,8 +57,10 @@ def main():
                 engine + " reduced motion",
                 page.evaluate("getComputedStyle(document.documentElement).scrollBehavior") == "auto",
             )
-            page.locator('[data-add="ACORN-KIT"]').click()
-            page.locator('[data-add="ACORN-PLANTER"]').click()
+            keys = page.evaluate("Object.keys(window.CARTRAY_STOREFRONT.productPaths)")[:2]
+            names = [page.locator(f'[data-key="{key}"] h3').inner_text() for key in keys]
+            for key in keys:
+                page.locator(f'[data-add="{key}"]').click()
             page.goto(args.origin + "/cart/")
             page.wait_for_selector(".cart-line")
             check(
@@ -68,7 +75,7 @@ def main():
                 engine + " subtotal uses authoritative currency",
                 "USD" not in page.locator(".order-summary").inner_text(),
             )
-            page.screenshot(path=str(shots / f"connected-{engine}-cart-mobile.png"), full_page=True)
+            page.screenshot(path=str(shots / f"connected-{prefix}{engine}-cart-mobile.png"), full_page=True)
             check(engine + " checkout disabled by merchant config", page.locator("#checkout").is_disabled())
             check(
                 engine + " reviews invitation disabled by merchant config",
@@ -87,8 +94,8 @@ def main():
                             "store_name": "Test store",
                             "draft_scope": "test-scope",
                             "subjects": [
-                                {"subject_id": "kit", "public_name": "Acorn kit", "progress": "available"},
-                                {"subject_id": "planter", "public_name": "Woodland planter", "progress": "available"},
+                                {"subject_id": "kit", "public_name": names[0], "progress": "available"},
+                                {"subject_id": "planter", "public_name": names[1], "progress": "available"},
                             ],
                         }
                     )
@@ -112,7 +119,7 @@ def main():
             token = "a" * 64
             page.goto(args.origin + "/review/#invitation=" + token)
             page.wait_for_selector("[data-product-chooser]")
-            page.screenshot(path=str(shots / f"connected-{engine}-review-mobile.png"), full_page=True)
+            page.screenshot(path=str(shots / f"connected-{prefix}{engine}-review-mobile.png"), full_page=True)
             check(engine + " two-product native choice", page.locator("[data-product-chooser] button").count() == 2)
             form = page.locator("#content > form:visible")
             form.locator('input[name="rating-stars"][value="5"]').check()
@@ -135,7 +142,7 @@ def main():
             page.locator("[data-product-chooser] button").nth(1).click()
             check(
                 engine + " second purchased product chosen",
-                "Woodland planter" in page.locator("#content > form:visible").inner_text(),
+                names[1] in page.locator("#content > form:visible").inner_text(),
             )
             form = page.locator("#content > form:visible")
             form.locator("textarea").fill("Lovely planter")
@@ -165,10 +172,11 @@ def main():
             check(engine + " no script errors", not errors)
             context.close()
             browser.close()
-            (ROOT / "evidence/connected-browser-results.json").write_text(
+            results.write_text(
                 json.dumps(
                     {
                         "lane": "HTTP real adapter/native clients; API fixture responses only; no hosted claims",
+                        "composition": args.label or "classic",
                         "checks": checks,
                     },
                     indent=2,
@@ -176,10 +184,11 @@ def main():
                 + "\n"
             )
             print(engine + " passed", flush=True)
-    (ROOT / "evidence/connected-browser-results.json").write_text(
+    results.write_text(
         json.dumps(
             {
                 "lane": "HTTP real adapter/native clients; API fixture responses only; no hosted claims",
+                "composition": args.label or "classic",
                 "checks": checks,
             },
             indent=2,

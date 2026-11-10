@@ -172,21 +172,32 @@ jobs:
           persist-credentials: false
       - uses: astral-sh/setup-uv@v6
       - name: Clear reference evidence before qualification
-        run: rm -f examples/gel-theme-pack/evidence/connected-browser-results.json
+        run: rm -f examples/gel-theme-pack/evidence/connected-browser-*.json
       - name: Install pinned Playwright engines
         run: uv run --with playwright==1.57.0 python -m playwright install --with-deps chromium firefox webkit
-      - name: Build connected storefront
+      - name: Build connected themes and Northline contract fixture
         run: |
-          uv run python examples/acorn-store/build.py --gel examples/gel-theme-pack/gel/squirrel.json --theme classic --output /tmp/gel-connected
-          python3 -m http.server 4174 --directory /tmp/gel-connected > /tmp/gel-http.log 2>&1 &
-      - name: Exercise connected Chromium, Firefox and WebKit
-        run: uv run --with playwright==1.57.0 python examples/gel-theme-pack/tests/connected_browser.py --engines chromium,firefox,webkit
+          port=4174
+          for theme in minimal studio classic; do
+            uv run python examples/acorn-store/build.py --gel examples/gel-theme-pack/gel/squirrel.json --theme "$theme" --output "/tmp/gel-connected-$theme"
+            python3 -m http.server "$port" --directory "/tmp/gel-connected-$theme" > "/tmp/gel-http-$theme.log" 2>&1 &
+            port=$((port + 1))
+          done
+          uv run python examples/gel-theme-pack/tests/build_northline_connected.py --output /tmp/gel-connected-northline-classic
+          python3 -m http.server 4177 --directory /tmp/gel-connected-northline-classic > /tmp/gel-http-northline-classic.log 2>&1 &
+      - name: Exercise every connected composition in Chromium, Firefox and WebKit
+        run: |
+          port=4174
+          for theme in minimal studio classic northline-classic; do
+            uv run --with playwright==1.57.0 python examples/gel-theme-pack/tests/connected_browser.py --origin "http://127.0.0.1:$port" --label "$theme" --engines chromium,firefox,webkit
+            port=$((port + 1))
+          done
       - name: Retain browser evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: gel-connected-browser-evidence
           path: |
-            examples/gel-theme-pack/evidence/connected-browser-results.json
-            /tmp/gel-http.log
+            examples/gel-theme-pack/evidence/connected-browser-*.json
+            /tmp/gel-http-*.log
             examples/gel-theme-pack/screenshots/connected-*.png
