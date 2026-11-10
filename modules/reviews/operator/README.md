@@ -66,7 +66,7 @@ products. The installation copies it into its inputs so subsequent commands do
 not depend on the handoff file's original location.
 
 The chosen account needs capacity for **three D1 databases, four queues, seven
-Workers and one Pages project**. A quota error is a failed provider operation,
+Workers, two cron triggers and one Pages project**. A quota error is a failed provider operation,
 not permission to delete other applications. Resume after capacity is supplied.
 Existing resources with the same names but without this inventory's creation
 journal are rejected.

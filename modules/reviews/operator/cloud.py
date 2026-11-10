@@ -42,7 +42,11 @@ class API:
                 codes = [item.get("code") for item in json.loads(error.read(65536)).get("errors", [])]
             except (ValueError, TypeError):
                 codes = []
-            remedy = "; account resource limit: supply approved capacity then resume" if 7406 in codes else ""
+            remedy = (
+                "; account resource limit: supply approved capacity then resume"
+                if any(code in (7406, 10072) for code in codes)
+                else ""
+            )
             raise CloudError(f"Cloudflare {method} {path}: HTTP {error.code}, provider codes {codes}{remedy}") from None
         except (urllib.error.URLError, TimeoutError):
             raise CloudError(f"Cloudflare {method} {path}: unavailable; retry the same command") from None

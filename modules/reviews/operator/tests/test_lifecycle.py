@@ -202,3 +202,32 @@ def test_wrong_live_binding_is_diagnosed_without_provider_mutation(tmp_path):
     assert "producer.bindings.COMMERCE_DB: wrong database" in result["errors"]
     assert [call for call in provider.calls if call[1] != "GET"] == [call for call in calls if call[1] != "GET"]
     assert database.writes == writes
+
+
+def test_empty_hosted_receipt_and_upgrade_keep_fence_and_keys(tmp_path):
+    install, provider, _, _, _ = lifecycle(tmp_path)
+    with (
+        patch.object(operations.subprocess, "check_output", return_value="a" * 40 + "\n"),
+        patch.object(operations.subprocess, "run", return_value=SimpleNamespace(returncode=0)),
+    ):
+        staged = install.upgrade()
+        assert staged["phase"] == "verified"
+        assert install.state["activation_authorized"] is False
+        install.activate(True)
+        keys = install.vault()
+        versions = copy.deepcopy(provider.active)
+        assert install.upgrade()["healthy"] is True
+        assert provider.active == versions
+        with patch.object(operations.subprocess, "check_output", return_value="b" * 40 + "\n"):
+            result = install.upgrade()
+        assert result["phase"] == "active"
+        assert install.state["activation_watermark"] == 42
+        assert install.vault() == keys
+    receipt = install.receipt()
+    assert receipt["doctor"]["healthy"] is True
+    assert receipt["checkout_choices"] == []
+    assert receipt["provider_acceptances"] == []
+    assert receipt["recipient_suppression_count"] == 0
+    saved = (install.directory / "receipt.json").read_text()
+    for secret in keys.values():
+        assert secret not in saved
