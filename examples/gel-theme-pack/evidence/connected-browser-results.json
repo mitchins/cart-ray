@@ -1,0 +1,293 @@
+{
+  "lane": "Historical Classic/Squirrel reference: 72 checks from CI run 42771171192, not current qualification; see INTEGRATION.md. HTTP real adapter/native clients; API fixture responses only; no hosted claims",
+  "checks": [
+    {
+      "name": "chromium connected desktop reflow",
+      "passed": true
+    },
+    {
+      "name": "chromium connected tablet reflow",
+      "passed": true
+    },
+    {
+      "name": "chromium connected mobile reflow",
+      "passed": true
+    },
+    {
+      "name": "chromium real adapter has no demo module",
+      "passed": true
+    },
+    {
+      "name": "chromium mobile reflow",
+      "passed": true
+    },
+    {
+      "name": "chromium reduced motion",
+      "passed": true
+    },
+    {
+      "name": "chromium authoritative quantity maximum",
+      "passed": true
+    },
+    {
+      "name": "chromium quantity removal",
+      "passed": true
+    },
+    {
+      "name": "chromium subtotal uses authoritative currency",
+      "passed": true
+    },
+    {
+      "name": "chromium checkout disabled by merchant config",
+      "passed": true
+    },
+    {
+      "name": "chromium reviews invitation disabled by merchant config",
+      "passed": true
+    },
+    {
+      "name": "chromium two-product native choice",
+      "passed": true
+    },
+    {
+      "name": "chromium stars update native select",
+      "passed": true
+    },
+    {
+      "name": "chromium lost acknowledgement stable retry key",
+      "passed": true
+    },
+    {
+      "name": "chromium rating-only native payload",
+      "passed": true
+    },
+    {
+      "name": "chromium capability absent from theme storage",
+      "passed": true
+    },
+    {
+      "name": "chromium second purchased product chosen",
+      "passed": true
+    },
+    {
+      "name": "chromium comment-only native payload",
+      "passed": true
+    },
+    {
+      "name": "chromium review independent of catalogue",
+      "passed": true
+    },
+    {
+      "name": "chromium native dialog visible",
+      "passed": true
+    },
+    {
+      "name": "chromium dialog escape restores focus",
+      "passed": true
+    },
+    {
+      "name": "chromium native withdrawal",
+      "passed": true
+    },
+    {
+      "name": "chromium invalid invitation rejected",
+      "passed": true
+    },
+    {
+      "name": "chromium no script errors",
+      "passed": true
+    },
+    {
+      "name": "firefox connected desktop reflow",
+      "passed": true
+    },
+    {
+      "name": "firefox connected tablet reflow",
+      "passed": true
+    },
+    {
+      "name": "firefox connected mobile reflow",
+      "passed": true
+    },
+    {
+      "name": "firefox real adapter has no demo module",
+      "passed": true
+    },
+    {
+      "name": "firefox mobile reflow",
+      "passed": true
+    },
+    {
+      "name": "firefox reduced motion",
+      "passed": true
+    },
+    {
+      "name": "firefox authoritative quantity maximum",
+      "passed": true
+    },
+    {
+      "name": "firefox quantity removal",
+      "passed": true
+    },
+    {
+      "name": "firefox subtotal uses authoritative currency",
+      "passed": true
+    },
+    {
+      "name": "firefox checkout disabled by merchant config",
+      "passed": true
+    },
+    {
+      "name": "firefox reviews invitation disabled by merchant config",
+      "passed": true
+    },
+    {
+      "name": "firefox two-product native choice",
+      "passed": true
+    },
+    {
+      "name": "firefox stars update native select",
+      "passed": true
+    },
+    {
+      "name": "firefox lost acknowledgement stable retry key",
+      "passed": true
+    },
+    {
+      "name": "firefox rating-only native payload",
+      "passed": true
+    },
+    {
+      "name": "firefox capability absent from theme storage",
+      "passed": true
+    },
+    {
+      "name": "firefox second purchased product chosen",
+      "passed": true
+    },
+    {
+      "name": "firefox comment-only native payload",
+      "passed": true
+    },
+    {
+      "name": "firefox review independent of catalogue",
+      "passed": true
+    },
+    {
+      "name": "firefox native dialog visible",
+      "passed": true
+    },
+    {
+      "name": "firefox dialog escape restores focus",
+      "passed": true
+    },
+    {
+      "name": "firefox native withdrawal",
+      "passed": true
+    },
+    {
+      "name": "firefox invalid invitation rejected",
+      "passed": true
+    },
+    {
+      "name": "firefox no script errors",
+      "passed": true
+    },
+    {
+      "name": "webkit connected desktop reflow",
+      "passed": true
+    },
+    {
+      "name": "webkit connected tablet reflow",
+      "passed": true
+    },
+    {
+      "name": "webkit connected mobile reflow",
+      "passed": true
+    },
+    {
+      "name": "webkit real adapter has no demo module",
+      "passed": true
+    },
+    {
+      "name": "webkit mobile reflow",
+      "passed": true
+    },
+    {
+      "name": "webkit reduced motion",
+      "passed": true
+    },
+    {
+      "name": "webkit authoritative quantity maximum",
+      "passed": true
+    },
+    {
+      "name": "webkit quantity removal",
+      "passed": true
+    },
+    {
+      "name": "webkit subtotal uses authoritative currency",
+      "passed": true
+    },
+    {
+      "name": "webkit checkout disabled by merchant config",
+      "passed": true
+    },
+    {
+      "name": "webkit reviews invitation disabled by merchant config",
+      "passed": true
+    },
+    {
+      "name": "webkit two-product native choice",
+      "passed": true
+    },
+    {
+      "name": "webkit stars update native select",
+      "passed": true
+    },
+    {
+      "name": "webkit lost acknowledgement stable retry key",
+      "passed": true
+    },
+    {
+      "name": "webkit rating-only native payload",
+      "passed": true
+    },
+    {
+      "name": "webkit capability absent from theme storage",
+      "passed": true
+    },
+    {
+      "name": "webkit second purchased product chosen",
+      "passed": true
+    },
+    {
+      "name": "webkit comment-only native payload",
+      "passed": true
+    },
+    {
+      "name": "webkit review independent of catalogue",
+      "passed": true
+    },
+    {
+      "name": "webkit native dialog visible",
+      "passed": true
+    },
+    {
+      "name": "webkit dialog escape restores focus",
+      "passed": true
+    },
+    {
+      "name": "webkit native withdrawal",
+      "passed": true
+    },
+    {
+      "name": "webkit invalid invitation rejected",
+      "passed": true
+    },
+    {
+      "name": "webkit no script errors",
+      "passed": true
+    }
+  ]
+}

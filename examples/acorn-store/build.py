@@ -5,9 +5,13 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import importlib
+import importlib.util
 import json
 import re
 import shutil
+import sys
+import tempfile
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -113,9 +117,47 @@ def build(
     reviews: bool = False,
     test_review_gateway: bool = False,
     preflight_lock: Path = PREFLIGHT_LOCK,
+    gel: Path | None = None,
+    theme: str = "minimal",
+    theme_content: Path | None = None,
+    gel_assets: Path | None = None,
 ) -> None:
     if output.exists():
         raise ValueError("output directory already exists; choose a new directory")
+    if gel is not None:
+        # Build the approved storefront first, then apply presentation only. Both
+        # paths share catalogue validation, gateways and merchant configuration.
+        pack = ROOT / "examples/gel-theme-pack"
+        if "cartray_gel" not in sys.modules:
+            spec = importlib.util.spec_from_file_location(
+                "cartray_gel", pack / "__init__.py", submodule_search_locations=[str(pack)]
+            )
+            module = importlib.util.module_from_spec(spec)
+            sys.modules[spec.name] = module
+            spec.loader.exec_module(module)
+        connect = importlib.import_module("cartray_gel.connect").connect
+        with tempfile.TemporaryDirectory(prefix="cartray-source-") as temporary:
+            source = Path(temporary) / "store"
+            build(
+                source,
+                config,
+                checkout_api=checkout_api,
+                reviews=reviews,
+                test_review_gateway=test_review_gateway,
+                preflight_lock=preflight_lock,
+            )
+            connect(
+                source,
+                ROOT,
+                output,
+                gel,
+                theme_content or pack / "content/squirrel.json",
+                theme,
+                assets_root=gel_assets or gel.resolve().parent.parent,
+            )
+        return
+    if theme_content is not None or gel_assets is not None or theme != "minimal":
+        raise ValueError("theme options require --gel")
     api = test_api(checkout_api)
     if test_review_gateway and not api:
         raise ValueError("test review gateway requires explicit test checkout")
@@ -170,6 +212,10 @@ def main() -> None:
     parser.add_argument(
         "--test-review-gateway", action="store_true", help="enable test-only same-origin invitation routes"
     )
+    parser.add_argument("--gel", type=Path, help="merchant GEL manifest; applies the connected presenter")
+    parser.add_argument("--theme", choices=("minimal", "studio", "classic"), default="minimal")
+    parser.add_argument("--theme-content", type=Path, help="presentation content matching configured product routes")
+    parser.add_argument("--gel-assets", type=Path, help="local GEL asset root (default: manifest grandparent)")
     args = parser.parse_args()
     build(
         args.output,
@@ -178,6 +224,10 @@ def main() -> None:
         reviews=args.reviews,
         test_review_gateway=args.test_review_gateway,
         preflight_lock=args.preflight_lock,
+        gel=args.gel,
+        theme=args.theme,
+        theme_content=args.theme_content,
+        gel_assets=args.gel_assets,
     )
 
 

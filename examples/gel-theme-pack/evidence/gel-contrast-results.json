@@ -1,0 +1,402 @@
+{
+  "minimal": {
+    "manifest_sha256": "c77878077dde3f7228783ff5f3e22597359b4ccb453b94ae8bc39dfb1dbb99cc",
+    "asset_sha256": {
+      "logo": "21d991825fdc468de7632fff05c2db45fa04d63216a03e32667ed09b06b5565a",
+      "logo_inverse": "b9b152474ec3f430f0b4a5ec0b91efbbb31624cca3965ec9f51eefd477a247e8",
+      "favicon": "21d991825fdc468de7632fff05c2db45fa04d63216a03e32667ed09b06b5565a",
+      "hero": "a3acd9a21a3590eb4f5d651c0c59b614961ece5a2798e97e5981971187b40658",
+      "stripe_icon": "cc26e5cab730effcb7db451d5951c218d192a1fdd802cb3a38998c547046c47e",
+      "stripe_logo": "2189f0fb9d85c64b571e54d74b00807ee0c85b4d99e0cc01bb442933b03194a9",
+      "assets/acorn-kit.svg": "4e861f524322e9cc27ac6773e746236d65dfe5416007ec9392cbcadd9e23085b",
+      "assets/woodland-planter.svg": "a3f950305b1a9704566d411468fc34fd04d084719429cf18b3b6b04cd8d28403",
+      "assets/growing-guide.svg": "1a5469761c304b7a4e4ff093e7b279217e4b9d6888e071fbb0bf081fbdd423d3"
+    },
+    "contrast": [
+      {
+        "foreground": "brand",
+        "background": "on_brand",
+        "ratio": 9.519,
+        "minimum": 4.5
+      },
+      {
+        "foreground": "accent",
+        "background": "on_accent",
+        "ratio": 7.116,
+        "minimum": 4.5
+      },
+      {
+        "foreground": "text",
+        "background": "background",
+        "ratio": 11.417,
+        "minimum": 4.5
+      },
+      {
+        "foreground": "muted",
+        "background": "background",
+        "ratio": 5.601,
+        "minimum": 4.5
+      },
+      {
+        "foreground": "brand",
+        "background": "background",
+        "ratio": 8.963,
+        "minimum": 4.5
+      },
+      {
+        "foreground": "danger",
+        "background": "background",
+        "ratio": 6.838,
+        "minimum": 4.5
+      },
+      {
+        "foreground": "border",
+        "background": "background",
+        "ratio": 3.522,
+        "minimum": 3
+      },
+      {
+        "foreground": "focus",
+        "background": "background",
+        "ratio": 6.63,
+        "minimum": 3
+      },
+      {
+        "foreground": "text",
+        "background": "surface",
+        "ratio": 12.125,
+        "minimum": 4.5
+      },
+      {
+        "foreground": "muted",
+        "background": "surface",
+        "ratio": 5.949,
+        "minimum": 4.5
+      },
+      {
+        "foreground": "brand",
+        "background": "surface",
+        "ratio": 9.519,
+        "minimum": 4.5
+      },
+      {
+        "foreground": "danger",
+        "background": "surface",
+        "ratio": 7.262,
+        "minimum": 4.5
+      },
+      {
+        "foreground": "border",
+        "background": "surface",
+        "ratio": 3.74,
+        "minimum": 3
+      },
+      {
+        "foreground": "focus",
+        "background": "surface",
+        "ratio": 7.041,
+        "minimum": 3
+      }
+    ]
+  },
+  "studio": {
+    "manifest_sha256": "c77878077dde3f7228783ff5f3e22597359b4ccb453b94ae8bc39dfb1dbb99cc",
+    "asset_sha256": {
+      "logo": "21d991825fdc468de7632fff05c2db45fa04d63216a03e32667ed09b06b5565a",
+      "logo_inverse": "b9b152474ec3f430f0b4a5ec0b91efbbb31624cca3965ec9f51eefd477a247e8",
+      "favicon": "21d991825fdc468de7632fff05c2db45fa04d63216a03e32667ed09b06b5565a",
+      "hero": "a3acd9a21a3590eb4f5d651c0c59b614961ece5a2798e97e5981971187b40658",
+      "stripe_icon": "cc26e5cab730effcb7db451d5951c218d192a1fdd802cb3a38998c547046c47e",
+      "stripe_logo": "2189f0fb9d85c64b571e54d74b00807ee0c85b4d99e0cc01bb442933b03194a9",
+      "assets/acorn-kit.svg": "4e861f524322e9cc27ac6773e746236d65dfe5416007ec9392cbcadd9e23085b",
+      "assets/woodland-planter.svg": "a3f950305b1a9704566d411468fc34fd04d084719429cf18b3b6b04cd8d28403",
+      "assets/growing-guide.svg": "1a5469761c304b7a4e4ff093e7b279217e4b9d6888e071fbb0bf081fbdd423d3"
+    },
+    "contrast": [
+      {
+        "foreground": "brand",
+        "background": "on_brand",
+        "ratio": 9.519,
+        "minimum": 4.5
+      },
+      {
+        "foreground": "accent",
+        "background": "on_accent",
+        "ratio": 7.116,
+        "minimum": 4.5
+      },
+      {
+        "foreground": "text",
+        "background": "background",
+        "ratio": 11.417,
+        "minimum": 4.5
+      },
+      {
+        "foreground": "muted",
+        "background": "background",
+        "ratio": 5.601,
+        "minimum": 4.5
+      },
+      {
+        "foreground": "brand",
+        "background": "background",
+        "ratio": 8.963,
+        "minimum": 4.5
+      },
+      {
+        "foreground": "danger",
+        "background": "background",
+        "ratio": 6.838,
+        "minimum": 4.5
+      },
+      {
+        "foreground": "border",
+        "background": "background",
+        "ratio": 3.522,
+        "minimum": 3
+      },
+      {
+        "foreground": "focus",
+        "background": "background",
+        "ratio": 6.63,
+        "minimum": 3
+      },
+      {
+        "foreground": "text",
+        "background": "surface",
+        "ratio": 12.125,
+        "minimum": 4.5
+      },
+      {
+        "foreground": "muted",
+        "background": "surface",
+        "ratio": 5.949,
+        "minimum": 4.5
+      },
+      {
+        "foreground": "brand",
+        "background": "surface",
+        "ratio": 9.519,
+        "minimum": 4.5
+      },
+      {
+        "foreground": "danger",
+        "background": "surface",
+        "ratio": 7.262,
+        "minimum": 4.5
+      },
+      {
+        "foreground": "border",
+        "background": "surface",
+        "ratio": 3.74,
+        "minimum": 3
+      },
+      {
+        "foreground": "focus",
+        "background": "surface",
+        "ratio": 7.041,
+        "minimum": 3
+      }
+    ]
+  },
+  "classic": {
+    "manifest_sha256": "c77878077dde3f7228783ff5f3e22597359b4ccb453b94ae8bc39dfb1dbb99cc",
+    "asset_sha256": {
+      "logo": "21d991825fdc468de7632fff05c2db45fa04d63216a03e32667ed09b06b5565a",
+      "logo_inverse": "b9b152474ec3f430f0b4a5ec0b91efbbb31624cca3965ec9f51eefd477a247e8",
+      "favicon": "21d991825fdc468de7632fff05c2db45fa04d63216a03e32667ed09b06b5565a",
+      "hero": "a3acd9a21a3590eb4f5d651c0c59b614961ece5a2798e97e5981971187b40658",
+      "stripe_icon": "cc26e5cab730effcb7db451d5951c218d192a1fdd802cb3a38998c547046c47e",
+      "stripe_logo": "2189f0fb9d85c64b571e54d74b00807ee0c85b4d99e0cc01bb442933b03194a9",
+      "assets/acorn-kit.svg": "4e861f524322e9cc27ac6773e746236d65dfe5416007ec9392cbcadd9e23085b",
+      "assets/woodland-planter.svg": "a3f950305b1a9704566d411468fc34fd04d084719429cf18b3b6b04cd8d28403",
+      "assets/growing-guide.svg": "1a5469761c304b7a4e4ff093e7b279217e4b9d6888e071fbb0bf081fbdd423d3"
+    },
+    "contrast": [
+      {
+        "foreground": "brand",
+        "background": "on_brand",
+        "ratio": 9.519,
+        "minimum": 4.5
+      },
+      {
+        "foreground": "accent",
+        "background": "on_accent",
+        "ratio": 7.116,
+        "minimum": 4.5
+      },
+      {
+        "foreground": "text",
+        "background": "background",
+        "ratio": 11.417,
+        "minimum": 4.5
+      },
+      {
+        "foreground": "muted",
+        "background": "background",
+        "ratio": 5.601,
+        "minimum": 4.5
+      },
+      {
+        "foreground": "brand",
+        "background": "background",
+        "ratio": 8.963,
+        "minimum": 4.5
+      },
+      {
+        "foreground": "danger",
+        "background": "background",
+        "ratio": 6.838,
+        "minimum": 4.5
+      },
+      {
+        "foreground": "border",
+        "background": "background",
+        "ratio": 3.522,
+        "minimum": 3
+      },
+      {
+        "foreground": "focus",
+        "background": "background",
+        "ratio": 6.63,
+        "minimum": 3
+      },
+      {
+        "foreground": "text",
+        "background": "surface",
+        "ratio": 12.125,
+        "minimum": 4.5
+      },
+      {
+        "foreground": "muted",
+        "background": "surface",
+        "ratio": 5.949,
+        "minimum": 4.5
+      },
+      {
+        "foreground": "brand",
+        "background": "surface",
+        "ratio": 9.519,
+        "minimum": 4.5
+      },
+      {
+        "foreground": "danger",
+        "background": "surface",
+        "ratio": 7.262,
+        "minimum": 4.5
+      },
+      {
+        "foreground": "border",
+        "background": "surface",
+        "ratio": 3.74,
+        "minimum": 3
+      },
+      {
+        "foreground": "focus",
+        "background": "surface",
+        "ratio": 7.041,
+        "minimum": 3
+      }
+    ]
+  },
+  "northline-classic": {
+    "manifest_sha256": "4890b8b5fa8a19ee34d04d8511f755e5c4adf17a443221d766a4061cf6c76380",
+    "asset_sha256": {
+      "logo": "15a038372027e7d496a5cd0ffd4bda23d09129ed3542accf54d129081908f275",
+      "logo_inverse": "109f59a93e136a61dac10ffbca15640317a3732fcd7fd7fbaefe89bfef648c31",
+      "favicon": "15a038372027e7d496a5cd0ffd4bda23d09129ed3542accf54d129081908f275",
+      "hero": "b72f1de2459932d34498835d2d057fe8271766dd170ce97850e1de766933870f",
+      "stripe_icon": "5f0efb4ffcc688981982cf2fdcec948ab6c453ab6ac19251e43165dbab2ae41e",
+      "stripe_logo": "9aebc8a5314419d0a5651b0cb17c81027a94d040143b157c960501c1354394bf",
+      "assets/tool-roll.svg": "f42cedc5191ad6ca17802c3948c0e8e9cac33b73c9866213931456f36d39bb6f",
+      "assets/workshop-apron.svg": "f657ab6863c6e234cd177961037c753a6fc1c81721c1baff3cb804649aff6f9c",
+      "assets/workshop-notes.svg": "8a73f855df7664209ac2a835365bfb0f158cccace8780a70db736496eb2c6d68"
+    },
+    "contrast": [
+      {
+        "foreground": "brand",
+        "background": "on_brand",
+        "ratio": 11.208,
+        "minimum": 4.5
+      },
+      {
+        "foreground": "accent",
+        "background": "on_accent",
+        "ratio": 7.47,
+        "minimum": 4.5
+      },
+      {
+        "foreground": "text",
+        "background": "background",
+        "ratio": 12.584,
+        "minimum": 4.5
+      },
+      {
+        "foreground": "muted",
+        "background": "background",
+        "ratio": 5.486,
+        "minimum": 4.5
+      },
+      {
+        "foreground": "brand",
+        "background": "background",
+        "ratio": 10.178,
+        "minimum": 4.5
+      },
+      {
+        "foreground": "danger",
+        "background": "background",
+        "ratio": 6.595,
+        "minimum": 4.5
+      },
+      {
+        "foreground": "border",
+        "background": "background",
+        "ratio": 3.332,
+        "minimum": 3
+      },
+      {
+        "foreground": "focus",
+        "background": "background",
+        "ratio": 5.632,
+        "minimum": 3
+      },
+      {
+        "foreground": "text",
+        "background": "surface",
+        "ratio": 13.858,
+        "minimum": 4.5
+      },
+      {
+        "foreground": "muted",
+        "background": "surface",
+        "ratio": 6.041,
+        "minimum": 4.5
+      },
+      {
+        "foreground": "brand",
+        "background": "surface",
+        "ratio": 11.208,
+        "minimum": 4.5
+      },
+      {
+        "foreground": "danger",
+        "background": "surface",
+        "ratio": 7.262,
+        "minimum": 4.5
+      },
+      {
+        "foreground": "border",
+        "background": "surface",
+        "ratio": 3.67,
+        "minimum": 3
+      },
+      {
+        "foreground": "focus",
+        "background": "surface",
+        "ratio": 6.202,
+        "minimum": 3
+      }
+    ]
+  }
+}

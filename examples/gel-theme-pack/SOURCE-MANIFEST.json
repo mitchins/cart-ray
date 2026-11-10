@@ -1,0 +1,259 @@
+{
+  "files": {
+    ".gitignore": {
+      "bytes": 67,
+      "sha256": "72c8ee9c746a848eb22129b9551856f74dd7c1a87b2a8f30c572e9da912ed4d2"
+    },
+    "CODEX_HANDOFF.md": {
+      "bytes": 8367,
+      "sha256": "5e48b584accaadbc918d43a440224ce39d0c440500c56c4b37b5766b6af615f4"
+    },
+    "LICENSE": {
+      "bytes": 1088,
+      "sha256": "8c3ed4e6a4aed21ef9508da5909fffd099200a0f685bbf2c3b711f6a9f7844ba"
+    },
+    "NOTICE.md": {
+      "bytes": 1031,
+      "sha256": "dbbcb399e89e7331732b31c7c47e3784582262b293c7783f05c0eca4e4bee6b5"
+    },
+    "PR_SCOPE.md": {
+      "bytes": 1570,
+      "sha256": "a5edf09ba64461f60218b1798b6ee86d174493fba25ddcfe3706a7fa53fb8adf"
+    },
+    "README.md": {
+      "bytes": 8207,
+      "sha256": "7809aecee26acfc057b8f9145139efa2838788bbdbb482937b0e0ed7902a2f1d"
+    },
+    "THEMES-OVERVIEW.webp": {
+      "bytes": 108660,
+      "sha256": "6a45b5b8673d6d6fb9f4c41f76127d8bc4321ac21a98855ee8ac509b4c9bf3ba"
+    },
+    "WHITELABEL-OVERVIEW.webp": {
+      "bytes": 74782,
+      "sha256": "dd0fac9823eac8a65a4b4dc045e2aa70f1f635f5dfdec72dea635daf86395067"
+    },
+    "__init__.py": {
+      "bytes": 70,
+      "sha256": "d8b965ecb774a9c942d41dfdfecf24be190b2f5134b90e985225ddd12b2ca1be"
+    },
+    "assets/acorn-kit.svg": {
+      "bytes": 4354,
+      "sha256": "4e861f524322e9cc27ac6773e746236d65dfe5416007ec9392cbcadd9e23085b"
+    },
+    "assets/growing-guide.svg": {
+      "bytes": 1978,
+      "sha256": "1a5469761c304b7a4e4ff093e7b279217e4b9d6888e071fbb0bf081fbdd423d3"
+    },
+    "assets/northline-mark-inverse.svg": {
+      "bytes": 183,
+      "sha256": "109f59a93e136a61dac10ffbca15640317a3732fcd7fd7fbaefe89bfef648c31"
+    },
+    "assets/northline-mark.svg": {
+      "bytes": 183,
+      "sha256": "15a038372027e7d496a5cd0ffd4bda23d09129ed3542accf54d129081908f275"
+    },
+    "assets/northline-stripe-icon.png": {
+      "bytes": 12800,
+      "sha256": "5f0efb4ffcc688981982cf2fdcec948ab6c453ab6ac19251e43165dbab2ae41e"
+    },
+    "assets/northline-stripe-logo.png": {
+      "bytes": 11189,
+      "sha256": "9aebc8a5314419d0a5651b0cb17c81027a94d040143b157c960501c1354394bf"
+    },
+    "assets/squirrel-mark-inverse.svg": {
+      "bytes": 402,
+      "sha256": "b9b152474ec3f430f0b4a5ec0b91efbbb31624cca3965ec9f51eefd477a247e8"
+    },
+    "assets/squirrel-mark.svg": {
+      "bytes": 402,
+      "sha256": "21d991825fdc468de7632fff05c2db45fa04d63216a03e32667ed09b06b5565a"
+    },
+    "assets/squirrel-stripe-icon.png": {
+      "bytes": 16299,
+      "sha256": "cc26e5cab730effcb7db451d5951c218d192a1fdd802cb3a38998c547046c47e"
+    },
+    "assets/squirrel-stripe-logo.png": {
+      "bytes": 15258,
+      "sha256": "2189f0fb9d85c64b571e54d74b00807ee0c85b4d99e0cc01bb442933b03194a9"
+    },
+    "assets/tool-roll.svg": {
+      "bytes": 1847,
+      "sha256": "f42cedc5191ad6ca17802c3948c0e8e9cac33b73c9866213931456f36d39bb6f"
+    },
+    "assets/woodland-planter.svg": {
+      "bytes": 3471,
+      "sha256": "a3f950305b1a9704566d411468fc34fd04d084719429cf18b3b6b04cd8d28403"
+    },
+    "assets/woodland-scene.svg": {
+      "bytes": 5181,
+      "sha256": "a3acd9a21a3590eb4f5d651c0c59b614961ece5a2798e97e5981971187b40658"
+    },
+    "assets/workshop-apron.svg": {
+      "bytes": 1440,
+      "sha256": "f657ab6863c6e234cd177961037c753a6fc1c81721c1baff3cb804649aff6f9c"
+    },
+    "assets/workshop-notes.svg": {
+      "bytes": 1773,
+      "sha256": "8a73f855df7664209ac2a835365bfb0f158cccace8780a70db736496eb2c6d68"
+    },
+    "assets/workshop-scene.svg": {
+      "bytes": 2917,
+      "sha256": "b72f1de2459932d34498835d2d057fe8271766dd170ce97850e1de766933870f"
+    },
+    "build.py": {
+      "bytes": 16856,
+      "sha256": "f8ea223c2b3ed38867f50c28be44bd04b8236a85ca65ea344542968c846d185b"
+    },
+    "connect.py": {
+      "bytes": 7685,
+      "sha256": "74009e48585fb5fa0986080dc9fc038b25826e1c22c4a8048f6ae707ecf5497d"
+    },
+    "content/northline.json": {
+      "bytes": 2259,
+      "sha256": "2c9246aef726a1ec4ddaeceaa44b64b6e529a603250e588abc026828c060cd90"
+    },
+    "content/squirrel.json": {
+      "bytes": 2513,
+      "sha256": "320e0c69363377768521a39138bfd25cb22bed57421a32b51159e96c69e1567b"
+    },
+    "docs/ACCESSIBILITY.md": {
+      "bytes": 2569,
+      "sha256": "c559ed7f444101d863e3ef36049499b5464e45d7a0920f317ef4aae2bc93391c"
+    },
+    "docs/GEL.md": {
+      "bytes": 2761,
+      "sha256": "cf37544df7401229915eec680ac32cf94945104b485ac776f8100ad6cc7800b6"
+    },
+    "evidence/INTEGRATION.md": {
+      "bytes": 6314,
+      "sha256": "f7b4fab9e160efc8545a33eb04fcb7073a8d12fe93780b3f10f4e48fbcd743d0"
+    },
+    "evidence/QUALIFICATION.md": {
+      "bytes": 2934,
+      "sha256": "9b760a00213be8e4a11bd04dc079fbac7f17535140595c6ca8f7bf1c176e9b3f"
+    },
+    "evidence/browser-results.json": {
+      "bytes": 16891,
+      "sha256": "41246e0af3f59390daf97ea818cc31a1e7aa58329aa0765e78985f1299fb7795"
+    },
+    "evidence/connected-browser-results.json": {
+      "bytes": 6474,
+      "sha256": "72062399afb2c6dda7de54313f36accc639eb33655185db86566dced92102dd3"
+    },
+    "evidence/gel-contrast-results.json": {
+      "bytes": 11182,
+      "sha256": "3eae98263170a5bb129a85c3d1f4c4d1ea607180900dbdfa1cd1692de5885a22"
+    },
+    "evidence/hosted-test-summary.json": {
+      "bytes": 2866,
+      "sha256": "a0af9015ad6ff88fa381106bf965b07e23e000223dcd05995965db9b200a0a60"
+    },
+    "evidence/source-checksums.json": {
+      "bytes": 805,
+      "sha256": "2f0929e3778748267658d517e6a8efd5ce583dd72a9e4db72ce64f3ce34c071f"
+    },
+    "evidence/static-link-check.json": {
+      "bytes": 84,
+      "sha256": "486fc86da9b6f71b9bee8165a11e6e427439f0b96b7374f1c61fc9f7cfd5f58e"
+    },
+    "evidence/unit-results.json": {
+      "bytes": 280,
+      "sha256": "348044e2151b43aeb499b21a251a449a256632c509db2ed123c0241f19fa2ff1"
+    },
+    "evidence/unit-test-output.txt": {
+      "bytes": 3054,
+      "sha256": "1ecbc26326494b028c2fcdda95bd09b423238623048275ab330cdc54bbf620d5"
+    },
+    "gel/brand-manifest.schema.json": {
+      "bytes": 6154,
+      "sha256": "03059346bc6fa33829a4e911af173b9a6749cf7ffac4a537b9f09f6f787126f1"
+    },
+    "gel/northline.json": {
+      "bytes": 1506,
+      "sha256": "8ca891d958490af69963681468b82036efb97d4720f66622cfbca3d0e23c09e4"
+    },
+    "gel/squirrel.json": {
+      "bytes": 1602,
+      "sha256": "5ebe3ab178bc3efd691623f98f3a074c2fc1b67bc1494c5b99fb149b60e80e61"
+    },
+    "package.json": {
+      "bytes": 469,
+      "sha256": "265602cff64b0be4ef95a0bac6d52121d58c8235f3bd110a855df6836d2678cd"
+    },
+    "requirements-dev.txt": {
+      "bytes": 114,
+      "sha256": "a87d1785507a5d1e0a728b91e81e12c16f50d987b52a03b9b281e97323169e94"
+    },
+    "serve.py": {
+      "bytes": 1255,
+      "sha256": "df12a2e3b14f46791246115832fcd273ede50e455357cb3772f42c5313b1d03f"
+    },
+    "src/app.mjs": {
+      "bytes": 25879,
+      "sha256": "34f37f24e0e697466e3207b64f5d7cb8a78aa04b693128264ef41e6bc90dd967"
+    },
+    "src/base.css": {
+      "bytes": 25819,
+      "sha256": "3125bd90a8b854f35abe21922696446a7236e6cdfb6195fa602ab1e58b42f156"
+    },
+    "src/cartray-adapter.mjs": {
+      "bytes": 4467,
+      "sha256": "5ff3ea7bf8e6dfb896bd2c972d52b643418e0ac78aa2eae6195192b7d3788907"
+    },
+    "src/classic.css": {
+      "bytes": 5180,
+      "sha256": "8f54359b5bc5b6567545f9bfc3d822b6fa122a031ee6cb4c906effc83e679df0"
+    },
+    "src/demo-adapter.mjs": {
+      "bytes": 3774,
+      "sha256": "2e5dd0ec6ec389a2852c83d83273d67633a473d6f59b6826960ed687ebd72d30"
+    },
+    "src/gel.py": {
+      "bytes": 9115,
+      "sha256": "284d465fc5c7e8a844ac120f04a6846512456338dbe09bf0ffb8ecb96b672740"
+    },
+    "src/minimal.css": {
+      "bytes": 909,
+      "sha256": "831fffee0d0dd43b119d167ecac92d83e1c1bb4bc349cec8d39991f8f41d2568"
+    },
+    "src/native-presenter.mjs": {
+      "bytes": 4210,
+      "sha256": "0183ad45d7c1aa8f3dc5aadc245ce0e7e286ad8c9df8ad701f4526b8dcb6d1c5"
+    },
+    "src/studio.css": {
+      "bytes": 3694,
+      "sha256": "0d7f6b871faf0a05f1e1699106b21e4b0247b1a1004eb6b739f77a5dd57f90f3"
+    },
+    "src/templates.py": {
+      "bytes": 16027,
+      "sha256": "5c376a857407d4d0a1164754a4296613b5b629877e13ba521d04ad11e60921ef"
+    },
+    "tests/browser_test.py": {
+      "bytes": 13180,
+      "sha256": "bf49bd2ce5c5cef4b887c4d2af60e2de9deac6be0128d0ef4b670e3c5daf11ae"
+    },
+    "tests/build_northline_connected.py": {
+      "bytes": 2293,
+      "sha256": "33b41b43a41c35292064dfd088f9f6cf45f99c6db451c5489fcb240ede388b6d"
+    },
+    "tests/connected_browser.py": {
+      "bytes": 11673,
+      "sha256": "a6f048103c1200860a2ec15419a7adcd7b1cc540ab73157a3bdc29a493752ec8"
+    },
+    "tests/demo.test.mjs": {
+      "bytes": 4513,
+      "sha256": "b8d4380a7af1155f874b733f376d27e68b5bf4bad98748fee42e771c9d9decf6"
+    },
+    "tests/offline_browser.py": {
+      "bytes": 5472,
+      "sha256": "826d25ef17f61a492a07c80440f6b22248b4ea6fed1ff338cb17c1bd5fc6aa48"
+    },
+    "tests/test_gel_theme_build.py": {
+      "bytes": 7158,
+      "sha256": "2783d3bc36523cdaff95680927af44b09620e22f4f353899e6c4ebed7dcd303e"
+    }
+  },
+  "origin": "CartRay-GEL-Three-Themes-v1.zip; integrated from handoff/gel-three-themes-v1",
+  "self_excluded": "SOURCE-MANIFEST.json",
+  "stage": "integrated source-only GitHub PR"
+}

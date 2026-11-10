@@ -1,0 +1,64 @@
+{
+  "mission": "UX-01",
+  "environment": "existing approved Squirrel test installation",
+  "storefront": "https://squirrel-one-d1-test-store.pages.dev",
+  "runtime_source_commit": "e151f7946e6ac15c731fef5c05c6ed38a485c97d",
+  "requested_review_head": "823bac11637c64ace21acf1bd4fb186962ff95b6",
+  "source_attribution_note": "Shared checkout advanced during upgrade to e151f79; its only difference from823bac1 is CI Ubuntu runner configuration. Deployed runtime receipt records e151f79.",
+  "theme": "Squirrel Minimal connected GEL",
+  "new_installation_created": false,
+  "physical_d1_count": 1,
+  "data_preservation": {
+    "resources_unchanged": true,
+    "keys_and_suppression_identity_retained": true,
+    "prior_four_orders_retained": true,
+    "prior_provider_identity_retained": true,
+    "suppression_preserved": true
+  },
+  "hosted_checks_passed": [
+    "existing-store documented upgrade retained paused state",
+    "real themed two-product declined Stripe test purchase and authoritative return",
+    "old delivered invitation retained kit progress and offered planter",
+    "planter4star submitted through themed customer UI",
+    "documented exact-revision moderation and mapped public display",
+    "customer correction saved as new revision then latest revision approved/public",
+    "themed declined checkout settled while scoped existing Reviews service returned503",
+    "recorded Reviews version restored and doctor healthy",
+    "normal source checkpoint recovered to18 without reset"
+  ],
+  "new_settled_choices": [
+    {
+      "outbox_id": 15,
+      "selected": 0,
+      "granted": 0,
+      "paid_item_count": 2
+    },
+    {
+      "outbox_id": 18,
+      "selected": 0,
+      "granted": 0,
+      "paid_item_count": 1
+    }
+  ],
+  "final": {
+    "phase": "paused",
+    "healthy": true,
+    "record_revision": 6,
+    "activation_fence": 0,
+    "checkpoint": 18,
+    "provider_acceptance_count": 1,
+    "suppression_count": 1,
+    "kit_review_count": 1,
+    "planter_review_count": 1,
+    "planter_public_revision_version": 3
+  },
+  "not_claimed": [
+    "No new invitation email was generated during UX01; existing delivered capability was reused because recipient suppression is preserved",
+    "Customer withdrawal was not performed in hosted UX journey; correction was performed. Native withdrawal is covered separately by CI",
+    "No new permission-selected purchase in UX01; hosted purchases explicitly declined permission",
+    "No VoiceOver/NVDA or cross-engine pass claimed by this operator evidence",
+    "Runtime was deployed from e151f79, not later docs commits"
+  ],
+  "qualification_harness": "Temporary503 version of same existing Reviews Worker; original recorded version restored. No new Worker/DB/shop or customer reset.",
+  "private_details": "Full resource/provider IDs, credentials, capabilities and vault stay outside Git."
+}

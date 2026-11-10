@@ -50,6 +50,74 @@ def test_plan_is_nonsecret_offline_and_test_only(tmp_path):
             operations.validate_config(installation.config | {"namespace": namespace})
 
 
+def test_theme_selection_and_gel_inputs_survive_original_handoff(tmp_path):
+    lock = tmp_path / "lock.json"
+    lock.write_text(json.dumps({"stripe_mode": "test", "catalogue_version": "sha256:" + "b" * 64}))
+    source = tmp_path / "brand"
+    (source / "assets").mkdir(parents=True)
+    (source / "assets/mark.svg").write_text("<svg/>")
+    (source / "assets/product.svg").write_text("<svg/>")
+    (source / "credentials.json").write_text("private")
+    (source / "assets/unreferenced.svg").write_text("private")
+    manifest = source / "gel.json"
+    manifest.write_text(json.dumps({"assets": {"logo": "assets/mark.svg"}}))
+    content = tmp_path / "content.json"
+    content.write_text(json.dumps({"title": "Sample", "products": [{"image": "assets/product.svg"}]}))
+    installation = operations.Installation.plan(
+        tmp_path / "installation",
+        {
+            "namespace": "acorn-operator-test",
+            "account_id": "a" * 32,
+            "stripe_account_id": "acct_Test",
+            "preflight_lock": str(lock),
+            "theme": "classic",
+            "gel": str(manifest),
+            "gel_assets": str(source),
+            "theme_content": str(content),
+        },
+    )
+    copied = installation.directory / "inputs/gel-assets"
+    assert sorted(str(path.relative_to(copied)) for path in copied.rglob("*") if path.is_file()) == [
+        "assets/mark.svg",
+        "assets/product.svg",
+    ]
+    manifest.unlink()
+    content.unlink()
+    (source / "assets/mark.svg").unlink()
+    resumed = operations.Installation(installation.directory)
+    assert resumed.config["theme"] == "classic"
+    assert json.loads(Path(resumed.config["gel"]).read_text())["assets"]["logo"] == "assets/mark.svg"
+    assert (Path(resumed.config["gel_assets"]) / "assets/mark.svg").read_text() == "<svg/>"
+    assert json.loads(Path(resumed.config["theme_content"]).read_text())["title"] == "Sample"
+
+
+def test_invalid_theme_is_rejected(tmp_path):
+    installation = planned(tmp_path)
+    with pytest.raises(ValueError, match="theme must be"):
+        operations.validate_config(installation.config | {"theme": "unknown"})
+
+
+def test_plan_rejects_overlapping_asset_root_before_writing_inputs(tmp_path):
+    lock = tmp_path / "lock.json"
+    lock.write_text(json.dumps({"stripe_mode": "test", "catalogue_version": "sha256:" + "b" * 64}))
+    manifest = tmp_path / "gel.json"
+    manifest.write_text("{}")
+    directory = tmp_path / "installation"
+    with pytest.raises(ValueError, match="must not overlap"):
+        operations.Installation.plan(
+            directory,
+            {
+                "namespace": "acorn-operator-test",
+                "account_id": "a" * 32,
+                "stripe_account_id": "acct_Test",
+                "preflight_lock": str(lock),
+                "gel": str(manifest),
+                "gel_assets": str(tmp_path),
+            },
+        )
+    assert not directory.exists()
+
+
 def test_generated_keys_are_stable_and_loss_never_regenerates(tmp_path):
     installation = planned(tmp_path)
     value = installation.vault(create=True)
@@ -270,3 +338,39 @@ def test_missing_pinned_registry_is_not_recreated_by_migrate(tmp_path):
     with pytest.raises(ValueError, match="restore original registry"):
         installation.migrate()
     assert installation.vault() == keys
+
+
+@pytest.mark.parametrize("kind", ["file-symlink", "directory-symlink", "missing", "traversal"])
+def test_plan_rejects_unsafe_referenced_gel_assets_before_writing(tmp_path, kind):
+    lock = tmp_path / "lock.json"
+    lock.write_text(json.dumps({"stripe_mode": "test", "catalogue_version": "sha256:" + "b" * 64}))
+    source = tmp_path / "brand"
+    (source / "assets").mkdir(parents=True)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "secret.svg").write_text("private")
+    reference = "assets/missing.svg"
+    if kind == "file-symlink":
+        (source / "assets/linked.svg").symlink_to(outside / "secret.svg")
+        reference = "assets/linked.svg"
+    elif kind == "directory-symlink":
+        (source / "assets/linked").symlink_to(outside, target_is_directory=True)
+        reference = "assets/linked/secret.svg"
+    elif kind == "traversal":
+        reference = "assets/../../outside/secret.svg"
+    manifest = source / "gel.json"
+    manifest.write_text(json.dumps({"assets": {"logo": reference}}))
+    directory = tmp_path / "installation"
+    with pytest.raises(ValueError, match="GEL image reference"):
+        operations.Installation.plan(
+            directory,
+            {
+                "namespace": "acorn-operator-test",
+                "account_id": "a" * 32,
+                "stripe_account_id": "acct_Test",
+                "preflight_lock": str(lock),
+                "gel": str(manifest),
+                "gel_assets": str(source),
+            },
+        )
+    assert not directory.exists()

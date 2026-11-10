@@ -1,0 +1,13 @@
+{
+  "name": "cartray-first-party-themes",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Build-time GEL and three first-party CartRay storefront presentations",
+  "scripts": {
+    "build": "python3 build.py --all --output dist",
+    "serve": "python3 serve.py --directory dist",
+    "test": "node --test tests/*.test.mjs && python3 -m unittest discover -s tests -p 'test_*.py'",
+    "test:browser": "python3 tests/browser_test.py"
+  }
+}

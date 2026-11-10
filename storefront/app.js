@@ -431,4 +431,4 @@ async function boot() {
   }
 }
 
-if (typeof document !== "undefined") boot();
+if (typeof document !== "undefined" && !document.querySelector('[data-cartray-presenter="gel"]')) boot();

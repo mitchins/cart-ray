@@ -1,0 +1,52 @@
+{
+  "schema_version": "1.0",
+  "identity": {
+    "key": "acorn-store",
+    "name": "Squirrel’s Acorn Store",
+    "short_name": "Squirrel",
+    "tagline": "Little beginnings. Lovely things.",
+    "description": "A small collection for the joy of growing. Thoughtful kits, considered planters and a little know-how.",
+    "contact_email": "hello@squirrel.example",
+    "locale": "en-AU",
+    "currency": "AUD",
+    "wordmark_descriptor": "ACORN STORE"
+  },
+  "assets": {
+    "logo": "assets/squirrel-mark.svg",
+    "logo_inverse": "assets/squirrel-mark-inverse.svg",
+    "favicon": "assets/squirrel-mark.svg",
+    "hero": "assets/woodland-scene.svg",
+    "hero_alt": "An illustrated oak seedling in a terracotta planter with acorns and a growing guide.",
+    "stripe_icon": "assets/squirrel-stripe-icon.png",
+    "stripe_logo": "assets/squirrel-stripe-logo.png"
+  },
+  "colours": {
+    "brand": "#244D3E",
+    "on_brand": "#FFFFFF",
+    "accent": "#D8A96A",
+    "on_accent": "#29251E",
+    "background": "#FAF8F2",
+    "surface": "#FFFFFF",
+    "text": "#263A31",
+    "muted": "#59675F",
+    "border": "#7B877F",
+    "focus": "#795021",
+    "danger": "#A12B28"
+  },
+  "typography": {
+    "heading": "editorial",
+    "body": "humanist"
+  },
+  "shape": {
+    "corners": "soft"
+  },
+  "layout": {
+    "density": "comfortable"
+  },
+  "hero": {
+    "eyebrow": "FOR THE JOY OF GROWING",
+    "title": "Small beginnings.\nSomething wonderful.",
+    "body": "A little soil. A little patience. Discover simple, thoughtful things to help your next good thing grow.",
+    "cta": "Find your little beginning"
+  }
+}

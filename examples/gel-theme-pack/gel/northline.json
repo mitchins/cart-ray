@@ -1,0 +1,52 @@
+{
+  "schema_version": "1.0",
+  "identity": {
+    "key": "northline-supply",
+    "name": "Northline Supply",
+    "short_name": "Northline",
+    "tagline": "Useful by design.",
+    "description": "Practical essentials for the workshop, the garden and whatever comes next.",
+    "contact_email": "help@northline.example",
+    "locale": "en-AU",
+    "currency": "AUD",
+    "wordmark_descriptor": "SUPPLY CO."
+  },
+  "assets": {
+    "logo": "assets/northline-mark.svg",
+    "logo_inverse": "assets/northline-mark-inverse.svg",
+    "favicon": "assets/northline-mark.svg",
+    "hero": "assets/workshop-scene.svg",
+    "hero_alt": "An illustrated canvas tool roll, notebook and hand tools on a workshop bench.",
+    "stripe_icon": "assets/northline-stripe-icon.png",
+    "stripe_logo": "assets/northline-stripe-logo.png"
+  },
+  "colours": {
+    "brand": "#243D55",
+    "on_brand": "#FFFFFF",
+    "accent": "#E5AC78",
+    "on_accent": "#30251B",
+    "background": "#F3F4F5",
+    "surface": "#FFFFFF",
+    "text": "#202E3B",
+    "muted": "#586471",
+    "border": "#7B8792",
+    "focus": "#9A4B0D",
+    "danger": "#A12B28"
+  },
+  "typography": {
+    "heading": "modern",
+    "body": "humanist"
+  },
+  "shape": {
+    "corners": "square"
+  },
+  "layout": {
+    "density": "compact"
+  },
+  "hero": {
+    "eyebrow": "THE EVERYDAY WORKSHOP",
+    "title": "Good tools.\nLess fuss.",
+    "body": "Straightforward essentials that earn their place. Make room for your next project.",
+    "cta": "Explore the essentials"
+  }
+}
