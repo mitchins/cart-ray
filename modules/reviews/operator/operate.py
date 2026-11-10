@@ -440,13 +440,22 @@ class Installation:
 
     def upgrade(self):
         current = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip()
-        if self.state["phase"] == "active" and self.state["deployment"]["commit"] == current:
+        if self.state["phase"] in ("active", "paused") and self.state["deployment"]["commit"] == current:
             return self.doctor()
         was_active = self.state["activation_authorized"]
+        stay_paused = self.state.get("automation_paused", False)
         self.migrate()
         self.build()
         self.deploy()
-        return self.activate(True) if was_active else self.verify()
+        if was_active and not stay_paused:
+            return self.activate(True)
+        result = self.verify()
+        if was_active and stay_paused:
+            self.verifier("record")
+            self.state["phase"] = "paused"
+            self.save()
+            return {"phase": "paused", "activation_watermark": self.state["activation_watermark"]}
+        return result
 
     def render(self, versions=None, sending=False):
         nodes, urls = graph(self, versions, sending)
@@ -572,6 +581,8 @@ class Installation:
             self.artifact_modules(role, build)
         # A disabled/stale sender must never consume and exhaust durable due hints.
         self.configure_queues(pause_processing=True)
+        if "sender" not in progress["versions"]:
+            progress["sending"] = False
         self.state["phase"] = "deploying"
         self.save()
         for role in ("source", "reviews", "producer", "evidence", "scheduler", "consumer", "sender"):
@@ -825,6 +836,7 @@ class Installation:
         )
         self.api.publish(self.name("sender"), version["id"])
         self.state["deployment"]["versions"]["sender"] = version["id"]
+        self.state["deployment"]["sending"] = True
         self.api.request(f"workers/scripts/{self.name('producer')}/schedules", "PUT", [{"cron": "* * * * *"}])
         self.private("PRODUCER", "/run", token=vault["trigger"])
         if record.get("activation_status") != "active":
@@ -832,6 +844,7 @@ class Installation:
             # active state without changing its original activation watermark.
             record = self.verifier("record")
         self.configure_queues()
+        self.state["automation_paused"] = False
         self.state["phase"] = "active"
         self.save()
         release = {
@@ -848,6 +861,23 @@ class Installation:
             "activation_watermark": result["outbox_watermark"],
         }
 
+    def pause(self):
+        """Stop new automation deliveries without changing checkout or unsubscribe."""
+        self.assert_resources()
+        self.vault()
+        self.state["automation_paused"] = True
+        self.state["phase"] = "pausing"
+        self.save()
+        self.configure_queues(pause_processing=True)
+        self.state["phase"] = "paused"
+        self.save()
+        return {
+            "phase": "paused",
+            "activation_authorized": self.state["activation_authorized"],
+            "activation_watermark": self.state.get("activation_watermark"),
+            "queued_work_retained": True,
+        }
+
     def doctor(self):
         self.check_schema()
         self.vault()
@@ -855,7 +885,7 @@ class Installation:
         nodes, _ = graph(
             self,
             self.state.get("deployment", {}).get("versions"),
-            sending=self.state.get("activation_authorized", False),
+            sending=self.state.get("deployment", {}).get("sending", self.state.get("activation_authorized", False)),
         )
         errors = []
         for role, expected in nodes.items():
@@ -970,14 +1000,20 @@ class Installation:
         for role, version in release["versions"].items():
             self.api.publish(self.name(role), version)
         self.state["build"] = release["commit"]
-        self.state["deployment"] = {"commit": release["commit"], "versions": release["versions"], "complete": True}
+        self.state["deployment"] = {
+            "commit": release["commit"],
+            "versions": release["versions"],
+            "complete": True,
+            "sending": True,
+        }
         self.save()
         record = self.verifier("record")
-        self.configure_queues()
-        self.state["phase"] = "active"
+        paused = self.state.get("automation_paused", False)
+        self.configure_queues(pause_processing=paused)
+        self.state["phase"] = "paused" if paused else "active"
         self.save()
         return {
-            "phase": "active",
+            "phase": self.state["phase"],
             "rollback_commit": release["commit"],
             "record_revision": record["revision"],
             "database_rewind": False,
@@ -1111,7 +1147,7 @@ def main():
     commands = parser.add_subparsers(dest="command", required=True)
     plan = commands.add_parser("plan", help="write a non-secret plan; creates no cloud resources or keys")
     plan.add_argument("--config", type=Path, required=True)
-    for name in ("provision", "migrate", "build", "deploy", "verify", "doctor", "upgrade", "receipt"):
+    for name in ("provision", "migrate", "build", "deploy", "verify", "doctor", "upgrade", "receipt", "pause"):
         commands.add_parser(name)
     activation = commands.add_parser(
         "activate", help="explicitly authorize the fixed no-backfill fence and test delivery"

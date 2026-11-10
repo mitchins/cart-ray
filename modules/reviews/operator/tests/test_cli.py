@@ -23,6 +23,7 @@ from test_operations import operations, planned
         "activate",
         "rollback",
         "request",
+        "pause",
     ],
 )
 def test_cli_dispatches_documented_commands(tmp_path, capsys, command):

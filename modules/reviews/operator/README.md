@@ -139,6 +139,30 @@ versions; it contains no secret values. Back up the **entire directory**, keepin
 requires restoring its backup. The CLI refuses to generate replacement keys
 for retained data or to overwrite a different server-side suppression identity.
 
+## Pause invitation automation after qualification
+
+Stop further automation queue delivery when the approved test is complete:
+
+```sh
+uv run --locked python modules/reviews/operator/operate.py --directory /private/acorn-install --credentials /private/credentials.json pause
+uv run --locked python modules/reviews/operator/operate.py --directory /private/acorn-install --credentials /private/credentials.json doctor
+```
+
+This pauses this installation's events, schedule and due queues. An already
+in-flight provider submission may complete; wait for its acceptance receipt
+before concluding the test. Checkout and the public unsubscribe route remain
+available. Pausing neither cancels an accepted message nor deletes queued hints,
+permission/suppression data, provider receipts, keys or the activation fence.
+Repeating `pause` is safe. Upgrades and compatible rollbacks retain the paused
+intent; only explicit activation resumes it. Keep the installation paused after
+qualification.
+
+To intentionally resume, repeat the documented explicit
+`activate --enable-test-delivery` command. It verifies the retained installation
+before resuming queues and preserves the original no-backfill fence. Retained
+post-fence work, including eligible purchases made while paused, can then be
+processed; resume only when further test delivery is intended.
+
 ## Diagnose, upgrade and application-only rollback
 
 `doctor` reads live bindings, the migration ledgers, suppression identity and

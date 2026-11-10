@@ -325,3 +325,56 @@ def test_active_reverification_preserves_phase_and_interrupted_queue_resume_retr
     assert install.activate(True)["phase"] == "active"
     assert provider.queue_settings[events]["delivery_paused"] is False
     assert install.state["activation_watermark"] == 42
+
+
+def test_pause_retains_checkout_unsubscribe_fence_and_queued_work_until_explicit_resume(tmp_path):
+    install, provider, database, _, _ = lifecycle(tmp_path)
+    build_at(install, "a" * 40)
+    install.deploy()
+    install.activate(True)
+    versions, keys = copy.deepcopy(provider.active), install.vault()
+    source_binding = copy.deepcopy(provider.version(install.name("source")))
+    sender_binding = copy.deepcopy(provider.version(install.name("sender")))
+    writes = database.writes
+    assert install.pause()["queued_work_retained"] is True
+    assert install.pause()["phase"] == "paused"
+    assert provider.active == versions
+    assert provider.version(install.name("source")) == source_binding
+    assert provider.version(install.name("sender")) == sender_binding
+    assert database.writes == writes
+    assert install.vault() == keys
+    assert install.state["activation_watermark"] == 42
+    for role in ("events", "schedule", "due"):
+        identifier = install.state["resources"]["queue:" + role]["id"]
+        assert provider.queue_settings[identifier]["delivery_paused"] is True
+    assert install.doctor()["healthy"] is True
+    with pytest.raises(ValueError, match="explicit"):
+        install.activate()
+    assert install.activate(True)["phase"] == "active"
+    assert install.state["activation_watermark"] == 42
+    assert install.vault() == keys
+    for role in ("events", "schedule", "due"):
+        identifier = install.state["resources"]["queue:" + role]["id"]
+        assert provider.queue_settings[identifier]["delivery_paused"] is False
+
+
+def test_paused_intent_survives_upgrade_and_worker_rollback_without_implicit_delivery(tmp_path):
+    install, provider, _, _, _ = lifecycle(tmp_path)
+    build_at(install, "a" * 40)
+    install.deploy()
+    install.activate(True)
+    install.pause()
+    with (
+        patch.object(operations.subprocess, "check_output", return_value="b" * 40 + "\n"),
+        patch.object(operations.subprocess, "run", return_value=SimpleNamespace(returncode=0)),
+    ):
+        assert install.upgrade()["phase"] == "paused"
+        assert install.doctor()["healthy"] is True
+        assert install.upgrade()["healthy"] is True
+    assert install.rollback(0)["phase"] == "paused"
+    assert install.doctor()["healthy"] is True
+    for role in ("events", "schedule", "due"):
+        identifier = install.state["resources"]["queue:" + role]["id"]
+        assert provider.queue_settings[identifier]["delivery_paused"] is True
+    assert install.state["activation_watermark"] == 42
+    assert install.activate(True)["phase"] == "active"
