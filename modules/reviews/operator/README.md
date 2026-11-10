@@ -296,3 +296,19 @@ This installer accepts only new format-2 inventories. It does not move or merge
 existing three-database installations, rewrite their schema history, or offer an
 automatic upgrade of old operator inventories. Preserve existing inventories,
 keys and databases and use a fresh namespace for this topology.
+
+The [independent INFRA-01 hosted qualification](qualification/infra-01-2026-11-10.json)
+used clean, frozen runtime source `4fd56d7a3a79de2b9c2b82ccd95c3e23ade2e8aa`
+with no implementation or credential intervention during installation. Physical
+D1 count fell from three to one; seven Workers, four queues and one Pages project
+were unchanged. Live inspection confirmed all seven D1 binding aliases targeted
+the same physical database. The final installation was healthy and paused after
+checkout, delivery, browser submission, moderation, suppression, Reviews outage,
+drift diagnosis, recovery and compatible same-source rollback checks.
+
+Measured doctor time was 47.293 seconds on the prior topology and 15.942 seconds
+on the shared topology. Median public summary time was 1.133 versus 0.223 seconds
+and storefront time was 0.171 versus 0.168 seconds (three samples each). These
+are observations with network, cache and warm-state differences, not evidence
+that D1 consolidation alone caused the change. Commerce-only mode was qualified
+locally, not hosted; the evidence records the remaining scope limitations.
