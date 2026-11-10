@@ -8,7 +8,7 @@ let adapter;let toastTimer;let selectedProduct;let busy=false;
 const base=config?.base;
 const url=path=>base+path;
 const image=p=>p.image?.startsWith('/')?p.image:base+p.image;
-const amount=(value,currency=config.gel.identity.currency)=>new Intl.NumberFormat(config.gel.identity.locale,{style:'currency',currency}).format(value/100);
+const amount=(value,currency=adapter?.currency||config.gel.identity.currency)=>new Intl.NumberFormat(config.gel.identity.locale,{style:'currency',currency}).format(value/100);
 const price=p=>p.amount_minor===0?'Free':amount(p.amount_minor,p.currency);
 function announce(text){$('#toast').textContent=text;clearTimeout(toastTimer);toastTimer=setTimeout(()=>{$('#toast').textContent='';},5000);}
 function message(text,error=false){const e=$('#message');if(e){e.textContent=text;e.classList.toggle('error',error);}}
@@ -131,6 +131,7 @@ async function nativeReview(page){
   s.onerror=()=>message('The review service is temporarily unavailable. Please try again.',true);
   document.body.append(s);
 }
+document.addEventListener('keydown',e=>{if(e.key==='Escape')$$('.mobile-nav[open]').forEach(d=>{d.open=false;$('summary',d).focus();});});
 async function boot(){
   if(!config)throw new Error('Missing theme build configuration.');
   let page=document.body.dataset.page;
@@ -165,7 +166,6 @@ async function boot(){
     const review=e.target.closest('[data-review-product]');if(review){renderReview(review.dataset.reviewProduct);const chosen=$$('[data-review-product]').find(x=>x.dataset.reviewProduct===review.dataset.reviewProduct);chosen?.focus();}
     if(e.target.closest('[data-reset-demo]')&&adapter.preview){adapter.reset();try{for(const key of Object.keys(sessionStorage))if(key.startsWith(`cartray.theme-demo.draft:${config.gel.identity.key}:`))sessionStorage.removeItem(key);}catch{}location.assign(base);}
   });
-  document.addEventListener('keydown',e=>{if(e.key==='Escape')$$('.mobile-nav[open]').forEach(d=>{d.open=false;$('summary',d).focus();});});
 }
 boot().catch(()=>{
   const content=$('#content');if(content)content.innerHTML='<section class="panel"><h2>The store is temporarily unavailable.</h2><p>Please reload or contact the store. No payment has been started by this page.</p></section>';

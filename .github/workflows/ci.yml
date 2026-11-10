@@ -160,3 +160,30 @@ jobs:
           args: -Dsonar.host.url=https://sonarcloud.io
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+
+  gel-browsers:
+    name: GEL connected browsers
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@v6
+      - name: Install pinned Playwright engines
+        run: uv run --with playwright==1.57.0 python -m playwright install --with-deps chromium firefox webkit
+      - name: Build connected storefront
+        run: |
+          uv run python examples/acorn-store/build.py --gel examples/gel-theme-pack/gel/squirrel.json --theme classic --output /tmp/gel-connected
+          python3 -m http.server 4174 --directory /tmp/gel-connected > /tmp/gel-http.log 2>&1 &
+      - name: Exercise connected Chromium, Firefox and WebKit
+        run: uv run --with playwright==1.57.0 python examples/gel-theme-pack/tests/connected_browser.py --engines chromium,firefox,webkit
+      - name: Retain browser evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gel-connected-browser-evidence
+          path: |
+            examples/gel-theme-pack/evidence/connected-browser-results.json
+            /tmp/gel-http.log
+            examples/gel-theme-pack/screenshots/connected-*.png

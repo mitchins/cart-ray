@@ -10,6 +10,8 @@ export async function createAdapter(config) {
   const source=window.CARTRAY_STOREFRONT;
   if (!source) throw new Error('CartRay storefront configuration is missing.');
   const catalogue=await loadCatalogue(source);
+  const currencies=new Set(catalogue.products.map(product=>product.currency));
+  if(currencies.size!==1)throw new Error('The catalogue must use one checkout currency.');
   let storage; try {storage=window.localStorage;} catch {storage=null;}
   const restored=loadPersistedCart(storage,catalogue);
   const cart=restored.cart; let revision=restored.revision;
@@ -24,7 +26,7 @@ export async function createAdapter(config) {
   let returnResult=null;
   const params=new URLSearchParams(location.search);
   const adapter={
-    preview:false, products, state:{permission:source.reviewInvitationDefaultChecked===true},
+    preview:false, products, currency:[...currencies][0], state:{permission:source.reviewInvitationDefaultChecked===true},
     permissionEnabled:source.reviewInvitationsEnabled===true,
     checkoutEnabled:source.checkoutEnabled===true,
     checkoutLocked:params.get('checkout')==='complete',

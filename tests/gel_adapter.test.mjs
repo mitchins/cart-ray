@@ -9,7 +9,7 @@ await copyFile(new URL('../examples/gel-theme-pack/src/cartray-adapter.mjs',impo
 await copyFile(new URL('../storefront/app.js',import.meta.url),`${dir}/core-storefront.js`);
 const {createAdapter}=await import(pathToFileURL(`${dir}/adapter.mjs`));
 const catalogue={version:'test-v1',products:[{product_key:'ACORN-KIT',title:'Authoritative title',amount_minor:2400,currency:'AUD',max_quantity:3}]};
-const presentation={preview:false,catalogue:{products:[{product_key:'ACORN-KIT',title:'Fake title',amount_minor:1,slug:'acorn-growing-kit'}]}};
+const presentation={preview:false,gel:{identity:{currency:'USD'}},catalogue:{products:[{product_key:'ACORN-KIT',title:'Fake title',amount_minor:1,slug:'acorn-growing-kit'}]}};
 function setup(search='',denied=false){
   const data=new Map();const storage={getItem:k=>data.get(k)||null,setItem:(k,v)=>data.set(k,v),removeItem:k=>data.delete(k)};
   globalThis.window={CARTRAY_STOREFRONT:{checkoutEnabled:true,apiBaseUrl:'https://api.test.invalid',reviewInvitationsEnabled:true,reviewInvitationDefaultChecked:false},get localStorage(){if(denied)throw Error('denied');return storage;}};
@@ -18,7 +18,7 @@ function setup(search='',denied=false){
   return {storage,data};
 }
 test('connected quantity, configured permission and runtime price authority',async()=>{
-  setup();const adapter=await createAdapter(presentation);assert.equal(adapter.state.permission,false);
+  setup();const adapter=await createAdapter(presentation);assert.equal(adapter.state.permission,false);assert.equal(adapter.currency,'AUD');
   assert.equal(adapter.products[0].amount_minor,2400);assert.equal(adapter.products[0].title,'Authoritative title');
   adapter.add('ACORN-KIT');adapter.quantity('ACORN-KIT',99);assert.equal(adapter.count(),3);
   assert.equal(adapter.quantity('ACORN-KIT',NaN),false);adapter.quantity('ACORN-KIT',0);assert.equal(adapter.count(),0);

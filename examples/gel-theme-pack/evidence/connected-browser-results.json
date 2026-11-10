@@ -1,0 +1,101 @@
+{
+  "lane": "HTTP real adapter/native clients; API fixture responses only; no hosted claims",
+  "checks": [
+    {
+      "name": "chromium connected desktop reflow",
+      "passed": true
+    },
+    {
+      "name": "chromium connected tablet reflow",
+      "passed": true
+    },
+    {
+      "name": "chromium connected mobile reflow",
+      "passed": true
+    },
+    {
+      "name": "chromium real adapter has no demo module",
+      "passed": true
+    },
+    {
+      "name": "chromium mobile reflow",
+      "passed": true
+    },
+    {
+      "name": "chromium reduced motion",
+      "passed": true
+    },
+    {
+      "name": "chromium authoritative quantity maximum",
+      "passed": true
+    },
+    {
+      "name": "chromium quantity removal",
+      "passed": true
+    },
+    {
+      "name": "chromium subtotal uses authoritative currency",
+      "passed": true
+    },
+    {
+      "name": "chromium checkout disabled by merchant config",
+      "passed": true
+    },
+    {
+      "name": "chromium reviews invitation disabled by merchant config",
+      "passed": true
+    },
+    {
+      "name": "chromium two-product native choice",
+      "passed": true
+    },
+    {
+      "name": "chromium stars update native select",
+      "passed": true
+    },
+    {
+      "name": "chromium lost acknowledgement stable retry key",
+      "passed": true
+    },
+    {
+      "name": "chromium rating-only native payload",
+      "passed": true
+    },
+    {
+      "name": "chromium capability absent from theme storage",
+      "passed": true
+    },
+    {
+      "name": "chromium second purchased product chosen",
+      "passed": true
+    },
+    {
+      "name": "chromium comment-only native payload",
+      "passed": true
+    },
+    {
+      "name": "chromium review independent of catalogue",
+      "passed": true
+    },
+    {
+      "name": "chromium native dialog visible",
+      "passed": true
+    },
+    {
+      "name": "chromium dialog escape restores focus",
+      "passed": true
+    },
+    {
+      "name": "chromium native withdrawal",
+      "passed": true
+    },
+    {
+      "name": "chromium invalid invitation rejected",
+      "passed": true
+    },
+    {
+      "name": "chromium no script errors",
+      "passed": true
+    }
+  ]
+}

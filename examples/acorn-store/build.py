@@ -5,13 +5,13 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-import json
 import importlib
 import importlib.util
-import sys
-import tempfile
+import json
 import re
 import shutil
+import sys
+import tempfile
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -138,11 +138,23 @@ def build(
         connect = importlib.import_module("cartray_gel.connect").connect
         with tempfile.TemporaryDirectory(prefix="cartray-source-") as temporary:
             source = Path(temporary) / "store"
-            build(source, config, checkout_api=checkout_api, reviews=reviews,
-                  test_review_gateway=test_review_gateway, preflight_lock=preflight_lock)
-            connect(source, ROOT, output, gel,
-                    theme_content or pack / "content/squirrel.json", theme,
-                    assets_root=gel_assets or gel.resolve().parent.parent)
+            build(
+                source,
+                config,
+                checkout_api=checkout_api,
+                reviews=reviews,
+                test_review_gateway=test_review_gateway,
+                preflight_lock=preflight_lock,
+            )
+            connect(
+                source,
+                ROOT,
+                output,
+                gel,
+                theme_content or pack / "content/squirrel.json",
+                theme,
+                assets_root=gel_assets or gel.resolve().parent.parent,
+            )
         return
     if theme_content is not None or gel_assets is not None or theme != "minimal":
         raise ValueError("theme options require --gel")
@@ -212,7 +224,10 @@ def main() -> None:
         reviews=args.reviews,
         test_review_gateway=args.test_review_gateway,
         preflight_lock=args.preflight_lock,
-        gel=args.gel, theme=args.theme, theme_content=args.theme_content, gel_assets=args.gel_assets,
+        gel=args.gel,
+        theme=args.theme,
+        theme_content=args.theme_content,
+        gel_assets=args.gel_assets,
     )
 
 

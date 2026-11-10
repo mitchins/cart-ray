@@ -141,16 +141,27 @@ def test_review_gateway_requires_explicit_test_checkout(tmp_path):
     with pytest.raises(ValueError, match="requires explicit test checkout"):
         module.build(tmp_path / "disabled", config, test_review_gateway=True)
     out = tmp_path / "enabled"
-    module.build(out, config, checkout_api="https://example.workers.dev", test_review_gateway=True,
-                 preflight_lock=fixture_preflight(tmp_path))
+    module.build(
+        out,
+        config,
+        checkout_api="https://example.workers.dev",
+        test_review_gateway=True,
+        preflight_lock=fixture_preflight(tmp_path),
+    )
     assert (out / "_worker.js").read_bytes() == (HERE / "reviews_gateway.mjs").read_bytes()
 
 
 def test_public_reads_and_invitation_gateway_can_be_built_together(tmp_path):
     config = module.configuration(HERE / "store.json")
     out = tmp_path / "combined"
-    module.build(out, config, checkout_api="https://example.workers.dev", reviews=True,
-                 test_review_gateway=True, preflight_lock=fixture_preflight(tmp_path))
+    module.build(
+        out,
+        config,
+        checkout_api="https://example.workers.dev",
+        reviews=True,
+        test_review_gateway=True,
+        preflight_lock=fixture_preflight(tmp_path),
+    )
     assert '"reviewsEnabled": true' in (out / "storefront-config.js").read_text()
     assert (out / "_worker.js").read_bytes() == (HERE / "reviews_gateway.mjs").read_bytes()
     assert (out / "review/index.html").exists()
@@ -167,7 +178,9 @@ def test_connected_themes_share_brand_and_preserve_native_contracts(tmp_path):
         hashes.add(receipt["validation"]["manifest_sha256"])
         assert (output / "theme/core-storefront.js").read_bytes() == (module.ROOT / "storefront/app.js").read_bytes()
         for name in ("reviews", "manage"):
-            assert (output / f"theme/native-{name}.js").read_bytes() == (module.ROOT / f"modules/reviews/ui/{name}.js").read_bytes()
+            assert (output / f"theme/native-{name}.js").read_bytes() == (
+                module.ROOT / f"modules/reviews/ui/{name}.js"
+            ).read_bytes()
         assert not (output / "theme/demo-adapter.mjs").exists()
         assert not (output / "checkout-preview").exists()
         assert not (output / "_worker.js").exists()
@@ -183,9 +196,16 @@ def test_connected_theme_preserves_approved_checkout_and_review_gateway(tmp_path
     config["review_invitations_default_checked"] = False
     pack = module.ROOT / "examples/gel-theme-pack"
     output = tmp_path / "connected"
-    module.build(output, config, gel=pack / "gel/squirrel.json", theme="studio",
-                 checkout_api="https://example.workers.dev", reviews=True,
-                 test_review_gateway=True, preflight_lock=fixture_preflight(tmp_path))
+    module.build(
+        output,
+        config,
+        gel=pack / "gel/squirrel.json",
+        theme="studio",
+        checkout_api="https://example.workers.dev",
+        reviews=True,
+        test_review_gateway=True,
+        preflight_lock=fixture_preflight(tmp_path),
+    )
     assert (output / "_worker.js").read_bytes() == (HERE / "reviews_gateway.mjs").read_bytes()
     text = (output / "storefront-config.js").read_text()
     assert '"checkoutEnabled": true' in text and '"reviewsEnabled": true' in text
