@@ -16,12 +16,13 @@ This file records checks rerun against the integrated CartRay tree.
 - Existing storefront Node suite: 15 pass. Existing Acorn public review,
   consent and gateway Node suites: 7 pass. Existing build/artifact Python: 13 pass.
 - `connected-browser-results.json` records completed real-adapter HTTP Chromium
-  checks, using explicit test responses for native review API requests. These
+  checks (24 in the latest Chromium run), using explicit test responses for native review API requests. These
   exercise mobile reflow, reduced motion, quantity limits, product selection,
   stars synchronized to native fields, rating-only/comment-only payloads, stable
   retry keys after a 503 response, no bearer capability in storage, native
   management withdrawal and Escape focus restoration, invalid invitation and
-  script error checks. This is integration testing, not hosted service evidence.
+  script error checks. Responsive actual connected screenshots are retained by the
+  Linux CI browser job. This is integration testing, not hosted service evidence.
 
 ## Remaining qualification
 

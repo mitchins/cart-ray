@@ -186,7 +186,7 @@ def main():
         )
         + "\n"
     )
-    print(f"{len(checks)} connected checks passed across Chromium, Firefox and WebKit")
+    print(f"{len(checks)} connected checks passed: {args.engines}")
 
 
 if __name__ == "__main__":
