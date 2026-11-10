@@ -82,6 +82,21 @@ def test_invalid_theme_is_rejected(tmp_path):
         operations.validate_config(installation.config | {"theme": "unknown"})
 
 
+def test_plan_rejects_overlapping_asset_root_before_writing_inputs(tmp_path):
+    lock = tmp_path / "lock.json"
+    lock.write_text(json.dumps({"stripe_mode": "test", "catalogue_version": "sha256:" + "b" * 64}))
+    manifest = tmp_path / "gel.json"
+    manifest.write_text("{}")
+    directory = tmp_path / "installation"
+    with pytest.raises(ValueError, match="must not overlap"):
+        operations.Installation.plan(directory, {
+            "namespace": "acorn-operator-test", "account_id": "a" * 32,
+            "stripe_account_id": "acct_Test", "preflight_lock": str(lock),
+            "gel": str(manifest), "gel_assets": str(tmp_path),
+        })
+    assert not directory.exists()
+
+
 def test_generated_keys_are_stable_and_loss_never_regenerates(tmp_path):
     installation = planned(tmp_path)
     value = installation.vault(create=True)

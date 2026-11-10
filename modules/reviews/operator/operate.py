@@ -171,13 +171,16 @@ class Installation:
             r"sha256:[a-f0-9]{64}", lock.get("catalogue_version", "")
         ):
             raise ValueError("a compiled Stripe test preflight lock is required")
-        atomic_json(directory / "inputs/preflight-lock.json", lock)
-        config["preflight_lock"] = "inputs/preflight-lock.json"
         if "gel" in config:
             manifest = Path(config["gel"]).resolve(strict=True)
             assets = Path(config.get("gel_assets", manifest.parent.parent)).resolve(strict=True)
             if not manifest.is_file() or not assets.is_dir():
                 raise ValueError("GEL manifest must be a file and asset root must be a directory")
+            if directory.is_relative_to(assets) or assets.is_relative_to(directory):
+                raise ValueError("installation directory and GEL asset root must not overlap")
+        atomic_json(directory / "inputs/preflight-lock.json", lock)
+        config["preflight_lock"] = "inputs/preflight-lock.json"
+        if "gel" in config:
             destination = directory / "inputs/gel-assets"
             shutil.copytree(assets, destination, symlinks=False)
             atomic_json(directory / "inputs/gel.json", json.loads(manifest.read_text()))
