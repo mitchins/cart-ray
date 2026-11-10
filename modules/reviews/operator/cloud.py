@@ -6,6 +6,13 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
+MAX_RESPONSE = 40 * 1024 * 1024
+
+
+class NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, *_args):
+        raise CloudError("provider redirect refused; credentials are not forwarded")
+
 
 class CloudError(RuntimeError):
     """A bounded provider operation failed without exposing request credentials."""
@@ -24,14 +31,19 @@ class API:
         url = "https://api.cloudflare.com/client/v4/accounts/" + self.account + "/" + path
         request = urllib.request.Request(url, method=method, headers=request_headers, data=data)
         try:
-            with urllib.request.urlopen(request, timeout=60) as response:
-                body = response.read(40 * 1024 * 1024 + 1)
-                if len(body) > 40 * 1024 * 1024:
+            with urllib.request.build_opener(NoRedirect()).open(request, timeout=60) as response:
+                body = response.read(MAX_RESPONSE + 1)
+                if len(body) > MAX_RESPONSE:
                     raise CloudError("provider response exceeds operator bound")
                 if raw:
                     return response.headers.get("Content-Type"), body
         except urllib.error.HTTPError as error:
-            raise CloudError(f"Cloudflare {method} {path}: HTTP {error.code}") from None
+            try:
+                codes = [item.get("code") for item in json.loads(error.read(65536)).get("errors", [])]
+            except (ValueError, TypeError):
+                codes = []
+            remedy = "; account resource limit: supply approved capacity then resume" if 7406 in codes else ""
+            raise CloudError(f"Cloudflare {method} {path}: HTTP {error.code}, provider codes {codes}{remedy}") from None
         except (urllib.error.URLError, TimeoutError):
             raise CloudError(f"Cloudflare {method} {path}: unavailable; retry the same command") from None
         result = json.loads(body)
@@ -106,7 +118,7 @@ def stripe(key, path, form=None, idempotency=None):
         headers["Idempotency-Key"] = idempotency
     data = urllib.parse.urlencode(form).encode() if form is not None else None
     try:
-        with urllib.request.urlopen(
+        with urllib.request.build_opener(NoRedirect()).open(
             urllib.request.Request("https://api.stripe.com/v1/" + path, headers=headers, data=data), timeout=30
         ) as response:
             return json.load(response)

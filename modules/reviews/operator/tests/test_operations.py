@@ -15,6 +15,18 @@ operations = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(operations)
 
 
+_clouds = []
+
+
+@pytest.fixture(autouse=True)
+def close_test_databases():
+    yield
+    while _clouds:
+        cloud = _clouds.pop()
+        for _, connection in cloud.databases.values():
+            connection.close()
+
+
 def planned(tmp_path):
     lock = tmp_path / "lock.json"
     lock.write_text(json.dumps({"stripe_mode": "test", "catalogue_version": "sha256:" + "b" * 64}))
@@ -84,6 +96,7 @@ class SQLiteCloud:
         self.sqlite3 = sqlite3
         self.databases = {}
         self.writes = 0
+        _clouds.append(self)
 
     def add_database(self, identifier, name):
         connection = self.sqlite3.connect(":memory:")

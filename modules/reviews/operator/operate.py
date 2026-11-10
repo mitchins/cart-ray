@@ -88,6 +88,14 @@ def validate_config(config):
         value = config.get(field, default)
         if type(value) is not int or not 0 <= value <= maximum:
             raise ValueError(f"invalid {field}")
+    for name, limit in [("merchant_name", 100), ("merchant_contact", 200)]:
+        if name in config and (
+            not isinstance(config[name], str)
+            or not config[name].strip()
+            or len(config[name]) > limit
+            or re.search(r"[\x00-\x1f\x7f]", config[name])
+        ):
+            raise ValueError(f"invalid public {name}")
     return {
         "merchant_name": "Squirrel’s Acorn Store",
         "merchant_contact": "Contact the test merchant",
@@ -113,6 +121,25 @@ class Installation:
         if not Path(self.config["preflight_lock"]).is_absolute():
             self.config["preflight_lock"] = str(self.directory / self.config["preflight_lock"])
         self.credentials = credentials
+        if credentials is not None:
+            required = {
+                "cloudflare_api_token",
+                "stripe_test_key",
+                "smtp2go_api_key",
+                "approved_test_email",
+                "test_sender",
+            }
+            if not required.issubset(credentials) or any(
+                not isinstance(credentials[key], str) or not credentials[key] for key in required
+            ):
+                raise ValueError("credential handoff is incomplete; use the documented private JSON schema")
+            if not credentials["stripe_test_key"].startswith(("sk_test_", "rk_test_")):
+                raise ValueError("only a Stripe test credential is accepted")
+            if not credentials["smtp2go_api_key"].startswith("api-"):
+                raise ValueError("invalid test SMTP2GO credential")
+            for field in ("approved_test_email", "test_sender"):
+                if not re.fullmatch(r"[^\s@<>]+@[^\s@<>]+\.[A-Za-z]{2,}", credentials[field]):
+                    raise ValueError(f"invalid approved test mailbox field {field}")
         self.api = api or (API(self.config["account_id"], credentials["cloudflare_api_token"]) if credentials else None)
 
     @classmethod
@@ -236,9 +263,17 @@ class Installation:
         self.provision_workers()
         self.provision_webhook()
         self.provision_pages()
-        self.state["phase"] = "provisioned"
+        self.configure_queues()
+        if self.state["phase"] == "planned":
+            self.state["phase"] = "provisioned"
         self.save()
         return self.state["resources"]
+
+    def configure_queues(self):
+        # The verifier requires explicit false; the API omits its implicit default.
+        for role in QUEUES:
+            resource = self.state["resources"]["queue:" + role]
+            self.api.request("queues/" + resource["id"], "PATCH", {"settings": {"delivery_paused": False}})
 
     def provision_workers(self):
         existing = {item["id"] for item in self.api.listing("workers/scripts")}
@@ -355,13 +390,18 @@ class Installation:
             capture_output=True,
             text=True,
             cwd=ROOT,
-            check=True,
+            check=False,
             env={
                 **os.environ,
                 "CLOUDFLARE_API_TOKEN": self.credentials["cloudflare_api_token"],
                 "WRANGLER_LOG": "error",
             },
         )
+        if result.returncode:
+            log = self.directory / "private-service-error.log"
+            log.write_text(result.stdout + result.stderr)
+            log.chmod(0o600)
+            raise CloudError(f"private service operation failed; inspect protected {log}, then retry")
         payload = json.loads([line for line in result.stdout.splitlines() if line.startswith("{")][-1])
         if payload["status"] >= 400:
             raise CloudError(f"private {service} {method} {path}: HTTP {payload['status']}")
@@ -400,6 +440,7 @@ class Installation:
 
     def build(self):
         self.vault()
+        self.check_schema()
         commit = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip()
         subprocess.run(["git", "diff", "--quiet", "HEAD"], cwd=ROOT, check=True)
         release = self.directory / "releases" / commit
@@ -560,6 +601,8 @@ class Installation:
                 )
             self.state["resources"][key] = {"id": identifier, "name": self.name(role)}
             self.save()
+        self.configure_queues()
+        self.api.request(f"workers/scripts/{self.name('source')}/schedules", "PUT", [{"cron": "0 * * * *"}])
         self.render(progress["versions"])
         self.seed_subjects()
         self.deploy_storefront(build)
@@ -677,13 +720,18 @@ class Installation:
             input=json.dumps({"mode": mode, "env": env, "expectedRevision": rows[0]["revision"]}),
             capture_output=True,
             text=True,
-            check=True,
+            check=False,
             env={
                 **os.environ,
                 "CLOUDFLARE_API_TOKEN": self.credentials["cloudflare_api_token"],
                 "WRANGLER_LOG": "error",
             },
         )
+        if value.returncode:
+            log = self.directory / "verification-error.log"
+            log.write_text(value.stdout + value.stderr)
+            log.chmod(0o600)
+            raise CloudError(f"private verification failed; inspect protected {log}, then retry")
         return json.loads([line for line in value.stdout.splitlines() if line.startswith("{")][-1])
 
     def verify(self):
@@ -745,6 +793,10 @@ class Installation:
         self.state["deployment"]["versions"]["sender"] = version["id"]
         self.api.request(f"workers/scripts/{self.name('producer')}/schedules", "PUT", [{"cron": "* * * * *"}])
         self.private("PRODUCER", "/run", token=vault["trigger"])
+        if record.get("activation_status") != "active":
+            # The first relay creates the immutable checkpoint. Reflect its actual
+            # active state without changing its original activation watermark.
+            record = self.verifier("record")
         self.state["phase"] = "active"
         self.save()
         release = {
@@ -808,6 +860,63 @@ class Installation:
             "activation_watermark": self.state.get("activation_watermark"),
             "urls": self.state.get("urls"),
         }
+
+    def receipt(self):
+        health = self.doctor()
+        choices = self.api.query(
+            self.db("commerce"),
+            "SELECT b.id AS outbox_id,c.selected,c.merchant_default_selected,g.selection_basis,"
+            "CASE WHEN g.order_id IS NULL THEN 0 ELSE 1 END AS granted,"
+            "(SELECT COUNT(*) FROM order_items i WHERE i.order_id=b.order_id "
+            "AND i.unit_amount_minor>0) AS paid_item_count "
+            "FROM outbox b LEFT JOIN review_invitation_checkout_choices c ON c.order_id=b.order_id "
+            "LEFT JOIN review_invitation_checkout_grants g ON g.order_id=b.order_id "
+            "WHERE b.event_type='OrderConfirmed' ORDER BY b.id",
+        )
+        checkpoint = self.api.query(
+            self.db("commerce"),
+            "SELECT activation_watermark,last_outbox_id FROM reviews_subscriber_checkpoint WHERE subscriber_id=?",
+            [self.config["namespace"]],
+        )
+        deliveries = self.api.query(
+            self.db("reviews"),
+            "SELECT delivery_identity,provider_email_id,accepted_at FROM review_provider_deliveries "
+            "WHERE store_key='acorn-store' AND environment='test' ORDER BY accepted_at",
+        )
+        states = self.api.query(
+            self.db("reviews"),
+            "SELECT state,COUNT(*) AS count FROM invitation_generations "
+            "WHERE store_key='acorn-store' AND environment='test' GROUP BY state",
+        )
+        public = self.api.query(
+            self.db("reviews"),
+            "SELECT subject_id,contribution_count,rated_count,version FROM native_publication_versions "
+            "WHERE store_key='acorn-store' AND environment='test' ORDER BY subject_id",
+        )
+        suppressed = self.api.query(
+            self.db("reviews"),
+            "SELECT COUNT(*) AS count FROM review_recipient_suppressions "
+            "WHERE store_key='acorn-store' AND environment='test'",
+        )
+        result = {
+            "format": 1,
+            "namespace": self.config["namespace"],
+            "environment": "test",
+            "doctor": health,
+            "commit": self.state.get("build"),
+            "resources": self.state["resources"],
+            "worker_versions": self.state.get("deployment", {}).get("versions"),
+            "migration_ledgers": self.state.get("migration_ledgers"),
+            "suppression_key_fingerprint": self.state["secret_fingerprints"]["recipient_hash"],
+            "checkout_choices": choices,
+            "checkpoint": checkpoint,
+            "provider_acceptances": deliveries,
+            "generation_states": states,
+            "public_subjects": public,
+            "recipient_suppression_count": suppressed[0]["count"],
+        }
+        atomic_json(self.directory / "receipt.json", result)
+        return result
 
     def rollback(self, index):
         self.check_schema()
@@ -963,7 +1072,7 @@ def main():
     commands = parser.add_subparsers(dest="command", required=True)
     plan = commands.add_parser("plan", help="write a non-secret plan; creates no cloud resources or keys")
     plan.add_argument("--config", type=Path, required=True)
-    for name in ("provision", "migrate", "build", "deploy", "verify", "doctor", "upgrade"):
+    for name in ("provision", "migrate", "build", "deploy", "verify", "doctor", "upgrade", "receipt"):
         commands.add_parser(name)
     activation = commands.add_parser(
         "activate", help="explicitly authorize the fixed no-backfill fence and test delivery"

@@ -198,7 +198,7 @@ resend the earlier accepted delivery. Keep provider acceptance evidence and
 assert the single delivery identity, rather than inferring delivery from UI
 state alone.
 
-The final receipt must record the clean source commit, deployed versions,
+Run the same operator command with `receipt` to save non-secret `receipt.json` in the installation directory. It reads actual paid item counts, accepted/declined checkout choices, the checkpoint, provider acceptance identities, generation states, public counters and suppression counts; it contains no mailbox or invitation capability. Record the clean source commit, deployed versions,
 migration/key identity, resource inventory, activation fence, accepted/declined
 choice evidence, provider receipt counts, moderation/public presentation,
 unsubscribe/later-purchase result, repeat/resume and compatible rollback. Test
