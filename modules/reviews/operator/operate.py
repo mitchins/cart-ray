@@ -278,12 +278,14 @@ class Installation:
         self.save()
         return self.state["resources"]
 
-    def configure_queues(self, pause_due=False):
+    def configure_queues(self, pause_processing=False):
         # The verifier requires explicit false; the API omits its implicit default.
         for role in QUEUES:
             resource = self.state["resources"]["queue:" + role]
             self.api.request(
-                "queues/" + resource["id"], "PATCH", {"settings": {"delivery_paused": pause_due and role == "due"}}
+                "queues/" + resource["id"],
+                "PATCH",
+                {"settings": {"delivery_paused": pause_processing and role != "dlq"}},
             )
 
     def provision_workers(self):
@@ -569,7 +571,7 @@ class Installation:
         for role in ROLES:
             self.artifact_modules(role, build)
         # A disabled/stale sender must never consume and exhaust durable due hints.
-        self.configure_queues(pause_due=True)
+        self.configure_queues(pause_processing=True)
         self.state["phase"] = "deploying"
         self.save()
         for role in ("source", "reviews", "producer", "evidence", "scheduler", "consumer", "sender"):
@@ -629,7 +631,7 @@ class Installation:
                 )
             self.state["resources"][key] = {"id": identifier, "name": self.name(role)}
             self.save()
-        self.configure_queues(pause_due=True)
+        self.configure_queues(pause_processing=True)
         self.api.request(f"workers/scripts/{self.name('source')}/schedules", "PUT", [{"cron": "0 * * * *"}])
         self.render(progress["versions"])
         self.seed_subjects()
@@ -726,6 +728,7 @@ class Installation:
             "CF_VERSION_METADATA": {"id": self.state["deployment"]["versions"]["producer"]},
             **{item["name"]: item["text"] for item in secret_bindings(self, "producer")},
             "CF_READ_TOKEN": self.credentials["cloudflare_api_token"],
+            "OPERATOR_EXPECT_EVENT_QUEUE_PAUSED": self.state["phase"] != "active",
         }
         config = self.directory / "verifier-bindings.toml"
         lines = [
@@ -958,7 +961,9 @@ class Installation:
             or release["suppression_key_fingerprint"] != self.state["secret_fingerprints"]["recipient_hash"]
         ):
             raise ValueError("rollback schema/key contract is incompatible; databases are never rewound")
-        self.configure_queues(pause_due=True)
+        self.configure_queues(pause_processing=True)
+        self.state["phase"] = "rolling-back"
+        self.save()
         for role, version in release["versions"].items():
             self.api.publish(self.name(role), version)
         self.state["build"] = release["commit"]

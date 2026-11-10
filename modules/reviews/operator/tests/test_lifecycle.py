@@ -262,6 +262,9 @@ def test_due_delivery_remains_paused_through_upgrade_until_sender_and_record_are
     install.deploy()
     due = install.state["resources"]["queue:due"]["id"]
     assert provider.queue_settings[due]["delivery_paused"] is True
+    for role in ("events", "schedule"):
+        identifier = install.state["resources"]["queue:" + role]["id"]
+        assert provider.queue_settings[identifier]["delivery_paused"] is True
     install.activate(True)
     assert provider.queue_settings[due]["delivery_paused"] is False
     build_at(install, "b" * 40)
@@ -278,6 +281,9 @@ def test_due_delivery_remains_paused_through_upgrade_until_sender_and_record_are
     # Simulate an operator interruption after deployment: repeated deploy keeps it paused.
     install.deploy()
     assert provider.queue_settings[due]["delivery_paused"] is True
+    for role in ("events", "schedule"):
+        identifier = install.state["resources"]["queue:" + role]["id"]
+        assert provider.queue_settings[identifier]["delivery_paused"] is True
     install.activate(True)
     assert provider.queue_settings[due]["delivery_paused"] is False
     install.rollback(0)

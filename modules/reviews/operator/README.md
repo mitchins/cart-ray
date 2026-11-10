@@ -68,6 +68,13 @@ not depend on the handoff file's original location.
 The chosen account needs capacity for **three D1 databases, four queues, seven
 Workers, two cron triggers and one Pages project**. A quota error is a failed provider operation,
 not permission to delete other applications. Resume after capacity is supplied.
+
+Use a scoped durable Cloudflare operator API token for sustained qualification.
+A short-lived Wrangler OAuth access-token snapshot expires independently of the
+installation: HTTP 401/code 10000 means stop, refresh the authorized operator
+session or supply a valid scoped operator token in the protected credential
+handoff, then repeat the same command. Never recreate resources or keys to
+resolve an expired operator credential.
 Existing resources with the same names but without this inventory's creation
 journal are rejected.
 
@@ -104,8 +111,8 @@ directly to the separately bound test source origin.
 
 **Verification does not activate the store.** There is no verified runtime
 record before explicit activation, so a source wakeup cannot create the
-activation fence or backfill earlier purchases. The initial sender is disabled and its due queue is paused until activation;
-a staged doctor therefore reports that queue pause.
+activation fence or backfill earlier purchases. The initial sender is disabled and its processing queues are paused until activation;
+the verifier explicitly checks the staged pause.
 The `doctor` output distinguishes the staged phase from an activated record.
 Private calls use Wrangler's operator-side authenticated remote bindings; no
 control Worker or public activation route is deployed.
@@ -151,10 +158,10 @@ An already activated installation retains its recorded activation authorization
 and watermark. Upgrade retains its original keys and databases, validates the
 migration prefix, deploys a complete release and refreshes operator verification.
 An unactivated installation stays unactivated. Re-run an interrupted operation
-from the recorded commit; do not replace its inventory or key vault. The due
-queue remains paused across deployment interruptions so an unavailable sender
+from the recorded commit; do not replace its inventory or key vault. The events, schedule and due
+queues remain paused across deployment interruptions so an unavailable sender
 cannot exhaust delivery retries. Activation or a compatible rollback restores
-the sender and verified record before resuming that queue.
+the sender and verified record before resuming those queues.
 
 ```sh
 uv run --locked python modules/reviews/operator/operate.py --directory /private/acorn-install --credentials /private/credentials.json rollback --release 0
