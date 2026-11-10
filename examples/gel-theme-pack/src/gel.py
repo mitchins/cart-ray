@@ -142,7 +142,7 @@ def validate(gel, root):
         "identity",
     )
     for k, v in identity.items():
-        text(v, "identity." + k, 500)
+        text(v, "identity." + k, 40 if k == "wordmark_descriptor" else 500)
     if not re.fullmatch(r"[a-z][a-z0-9-]{0,63}", identity["key"]):
         raise ValueError("invalid merchant key")
     if not re.fullmatch(r"[a-z]{2}-[A-Z]{2}", identity["locale"]):

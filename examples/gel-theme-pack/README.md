@@ -67,7 +67,7 @@ python3 connect.py \
 
 The connected adapter imports the existing CartRay client exports for catalogue loading, cart persistence, checkout creation and purchase-return reconciliation. It does **not** implement its own settlement protocol. It uses the server catalogue for current prices and product limits; initial static price labels are neutral until that catalogue is loaded. Review access, submission, management capability handling and revision/idempotency rules remain in the original standalone clients, copied byte-for-byte.
 
-Only the copied cart module's final auto-boot statement is removed, so the new presenter can call its unchanged exports. The original repository and source build are not modified. An unexpected export/boot pattern, product route or review subject fails the integration build with a diagnostic. `integration-receipt.json` records source hashes and the exact edit.
+The connector requires the guarded auto-boot statement and copies the cart module unchanged. Generated pages set `data-cartray-presenter="gel"` so the presenter can call its exports without invoking the default boot. An unexpected export/boot pattern, product route or review subject fails the integration build with a diagnostic. `integration-receipt.json` records source hashes and `core_edit: none`.
 
 Connected builds omit the demo adapter, sample inbox, simulated payment and unsubscribe pages. Existing same-origin gateways and flags are retained; **no test/live flag is enabled**. The existing server unsubscribe endpoint remains authoritative. GEL does not grant purchase, review or email permission.
 

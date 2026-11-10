@@ -21,8 +21,8 @@
       "sha256": "a5edf09ba64461f60218b1798b6ee86d174493fba25ddcfe3706a7fa53fb8adf"
     },
     "README.md": {
-      "bytes": 8167,
-      "sha256": "c129601e933f0fc29d91d24cc8d4e79db5f1cc9ae7707316fc988b7104ff2567"
+      "bytes": 8207,
+      "sha256": "7809aecee26acfc057b8f9145139efa2838788bbdbb482937b0e0ed7902a2f1d"
     },
     "THEMES-OVERVIEW.webp": {
       "bytes": 108660,
@@ -117,16 +117,16 @@
       "sha256": "320e0c69363377768521a39138bfd25cb22bed57421a32b51159e96c69e1567b"
     },
     "docs/ACCESSIBILITY.md": {
-      "bytes": 2554,
-      "sha256": "061ef4f770b0bda375f01238f44609d3cf43b988c01ab093d15c3e5b8ed4625b"
+      "bytes": 2569,
+      "sha256": "c559ed7f444101d863e3ef36049499b5464e45d7a0920f317ef4aae2bc93391c"
     },
     "docs/GEL.md": {
       "bytes": 2761,
       "sha256": "cf37544df7401229915eec680ac32cf94945104b485ac776f8100ad6cc7800b6"
     },
     "evidence/INTEGRATION.md": {
-      "bytes": 5915,
-      "sha256": "d624f384f38b76109991a5838fba5770ce07f8b4a359f075daa236cacf9e5a19"
+      "bytes": 6314,
+      "sha256": "f7b4fab9e160efc8545a33eb04fcb7073a8d12fe93780b3f10f4e48fbcd743d0"
     },
     "evidence/QUALIFICATION.md": {
       "bytes": 2934,
@@ -137,8 +137,8 @@
       "sha256": "41246e0af3f59390daf97ea818cc31a1e7aa58329aa0765e78985f1299fb7795"
     },
     "evidence/connected-browser-results.json": {
-      "bytes": 6353,
-      "sha256": "7a6e017e900b544ba6e522b85220a7ae2c79531ec5cc0623ecd8d35a0dedceba"
+      "bytes": 6474,
+      "sha256": "72062399afb2c6dda7de54313f36accc639eb33655185db86566dced92102dd3"
     },
     "evidence/gel-contrast-results.json": {
       "bytes": 11182,
@@ -209,8 +209,8 @@
       "sha256": "2e5dd0ec6ec389a2852c83d83273d67633a473d6f59b6826960ed687ebd72d30"
     },
     "src/gel.py": {
-      "bytes": 9077,
-      "sha256": "f81017645602f17737ab6933728445d4ea5d502224a624bf4140ce3a32fb0470"
+      "bytes": 9115,
+      "sha256": "284d465fc5c7e8a844ac120f04a6846512456338dbe09bf0ffb8ecb96b672740"
     },
     "src/minimal.css": {
       "bytes": 909,
@@ -249,8 +249,8 @@
       "sha256": "826d25ef17f61a492a07c80440f6b22248b4ea6fed1ff338cb17c1bd5fc6aa48"
     },
     "tests/test_gel_theme_build.py": {
-      "bytes": 6832,
-      "sha256": "f9c9bdb1f9c55e8333bf28f9bd64463ebbdb9366922a53d333b3eefddc4132de"
+      "bytes": 7158,
+      "sha256": "2783d3bc36523cdaff95680927af44b09620e22f4f353899e6c4ebed7dcd303e"
     }
   },
   "origin": "CartRay-GEL-Three-Themes-v1.zip; integrated from handoff/gel-three-themes-v1",

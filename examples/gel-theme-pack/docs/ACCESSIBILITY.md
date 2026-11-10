@@ -23,8 +23,8 @@ for individual behaviours, not a full conformance certification.
 
 ## Executed
 
-The [connected browser CI](https://github.com/mitchins/cart-ray/actions/runs/42771171192/job/129679062232)
-passed 72 checks across Chromium, Firefox and WebKit on Classic/Squirrel.
+The [connected browser CI](https://github.com/mitchins/cart-ray/actions/runs/42775210696)
+passed 300 checks across Chromium, Firefox and WebKit on all three Squirrel themes and Northline Classic.
 Desktop/tablet/mobile overflow, reduced motion, labelled review controls, native
 withdrawal and Escape focus restoration are included. Review API responses in
 this lane are explicit fixtures. The independent HTTP Chromium preview harness

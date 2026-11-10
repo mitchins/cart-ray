@@ -21,6 +21,13 @@ class GelTests(unittest.TestCase):
     def test_defaults_validate(self):
         self.assertGreater(len(validate(self.gel, ROOT)["contrast"]), 10)
 
+    def test_wordmark_descriptor_matches_schema_limit(self):
+        self.gel["identity"]["wordmark_descriptor"] = "x" * 40
+        validate(self.gel, ROOT)
+        self.gel["identity"]["wordmark_descriptor"] += "x"
+        with self.assertRaisesRegex(ValueError, "wordmark_descriptor"):
+            validate(self.gel, ROOT)
+
     def test_reject_unknown(self):
         self.gel["arbitrary_css"] = "body{}"
         with self.assertRaises(ValueError):

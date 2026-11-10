@@ -1,5 +1,5 @@
 {
-  "lane": "HTTP real adapter/native clients; API fixture responses only; no hosted claims",
+  "lane": "Historical Classic/Squirrel reference: 72 checks from CI run 42771171192, not current qualification; see INTEGRATION.md. HTTP real adapter/native clients; API fixture responses only; no hosted claims",
   "checks": [
     {
       "name": "chromium connected desktop reflow",

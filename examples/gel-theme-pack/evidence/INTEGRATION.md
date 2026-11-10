@@ -1,10 +1,16 @@
 # Repository integration qualification
 
-Qualified source: `e151f7946e6ac15c731fef5c05c6ed38a485c97d`.
+Earlier hosted source: `e151f7946e6ac15c731fef5c05c6ed38a485c97d`.
 The supplied design-pack evidence is reference evidence from its source branch;
 this file records checks rerun against integrated CartRay.
 
 ## Automated browser evidence
+
+The latest recorded [CI run](https://github.com/mitchins/cart-ray/actions/runs/42775210696)
+passed **300/300** connected checks across all four compositions and three engines.
+Its [artifact](https://github.com/mitchins/cart-ray/actions/runs/42775210696/artifacts/13744445081)
+contains 60 screenshots, result JSON and logs. The checked-in 72-check JSON below is
+historical, not the result of this later run.
 
 [CI browser job](https://github.com/mitchins/cart-ray/actions/runs/42771171192/job/129679062232)
 passed **72/72 connected checks**: 24 each in Chromium, Firefox and WebKit, using
@@ -86,15 +92,14 @@ An actual VoiceOver/NVDA session has **not** been completed or claimed. Text
 resize/spacing, 400% zoom, forced colours and spoken announcements/rotor order
 still need an assistive-technology pass on real content.
 
-At this recording, hosted withdrawal and a complete newly delivered invitation
-journey remain unclaimed. No production payment or email claim follows from the
-fixture-based browser results.
+The PR records a subsequent new sandbox purchase, delivered invitation and review
+journey on `b7127f8`. Hosted withdrawal remains unclaimed. No production payment
+or email claim follows from fixture-based browser results.
 
 ## Follow-up changes after hosted qualification
 
-The hosted test deployment remains at `e151f79`. Subsequent review fixes retain
+The first hosted test deployment used `e151f79`. Subsequent review fixes retain
 page-specific titles, correct static preview currency and the Minimal shop
 selector, selectively retain only declared merchant image assets, and strengthen
-browser synchronization/evidence. These follow-ups require fresh exact-head CI
-and review; they were not silently applied to the hosted shop. Actual screen
-reader verification remains unperformed.
+browser synchronization/evidence. A later hosted journey used `b7127f8`, as
+recorded in the PR. Actual screen reader verification remains unperformed.
