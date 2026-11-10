@@ -288,3 +288,40 @@ def test_due_delivery_remains_paused_through_upgrade_until_sender_and_record_are
     assert provider.queue_settings[due]["delivery_paused"] is False
     install.rollback(0)
     assert provider.queue_settings[due]["delivery_paused"] is False
+
+
+def test_active_reverification_preserves_phase_and_interrupted_queue_resume_retries(tmp_path):
+    install, provider, _, _, _ = lifecycle(tmp_path)
+    build_at(install, "a" * 40)
+    install.deploy()
+    install.activate(True)
+    assert install.verify()["phase"] == "active"
+    assert install.doctor()["healthy"] is True
+    assert install.activate(True)["already_active"] is True
+    build_at(install, "b" * 40)
+    install.deploy()
+    original = provider.request
+    due = install.state["resources"]["queue:due"]["id"]
+    failed = []
+
+    def interruption(path, method="GET", data=None):
+        if path == "queues/" + due and method == "PATCH" and not data["settings"]["delivery_paused"] and not failed:
+            failed.append(True)
+            raise operations.CloudError("simulated partial queue resume")
+        return original(path, method, data)
+
+    provider.request = interruption
+    with pytest.raises(operations.CloudError, match="partial queue resume"):
+        install.activate(True)
+    events = install.state["resources"]["queue:events"]["id"]
+    assert provider.queue_settings[events]["delivery_paused"] is False
+    verifier = install.verifier
+
+    def inspect_paused(mode):
+        assert provider.queue_settings[events]["delivery_paused"] is True
+        return verifier(mode)
+
+    install.verifier = inspect_paused
+    assert install.activate(True)["phase"] == "active"
+    assert provider.queue_settings[events]["delivery_paused"] is False
+    assert install.state["activation_watermark"] == 42

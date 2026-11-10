@@ -768,10 +768,11 @@ class Installation:
     def verify(self):
         self.pin_suppression()
         result = self.verifier("inspect")
-        self.state["phase"] = "verified"
-        self.save()
+        if self.state["phase"] != "active":
+            self.state["phase"] = "verified"
+            self.save()
         return {
-            "phase": "verified",
+            "phase": self.state["phase"],
             "activation_authorized": self.state["activation_authorized"],
             "versions": {key: value for key, value in result.items() if key.endswith("_version")},
         }
@@ -790,6 +791,8 @@ class Installation:
                 "already_active": True,
                 "activation_watermark": self.state["activation_watermark"],
             }
+        # Reconcile a partially completed queue resume before staged inspection.
+        self.configure_queues(pause_processing=True)
         self.verify()
         vault = self.vault()
         # This is the sole initial activation authorization. Inspect/verify never
