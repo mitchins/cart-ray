@@ -102,6 +102,10 @@ Verify its test-environment and test-key guards and the reviewed price preflight
 and that its build used the same lock before enabling it. No remote Worker, Stripe object or D1 database is created by
 this build.
 
+## Test installation
+
+The checked-in [operator workflow](../../modules/reviews/operator/README.md) provisions a fresh namespaced test installation, applies all three schema families, deploys the current `reviews_gateway.mjs`, verifies private bindings, and requires explicit activation. It uses automatic checkout invitation permission, not the older `pages_gateway.mjs` consent experiment.
+
 ## Optional Reviews
 
 `--reviews` enables public read-only rendering on the two mapped product pages.

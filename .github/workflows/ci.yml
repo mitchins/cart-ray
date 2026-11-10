@@ -39,6 +39,10 @@ jobs:
         run: node --test modules/reviews/tests/dispatch.test.mjs
       - name: Test Reviews synthetic due queue
         run: node --test modules/reviews/tests/automation_queue.test.mjs
+      - name: Test resumable test-only installation operator
+        run: |
+          uv run --locked pytest modules/reviews/operator/tests
+          node --test modules/reviews/operator/tests/*.test.mjs
       - name: Test signed Reviews intake subscriber
         run: node --test modules/reviews/tests/automation_intake_queue.test.mjs modules/reviews/tests/automation_intake_producer.test.mjs
       - name: Exercise Reviews outbox producer on Workerd and D1
@@ -133,6 +137,7 @@ jobs:
           uv sync --all-groups --locked
           uv run --locked pytest --cov=. --cov-report=xml:coverage/python.xml
           REVIEWS_QUALIFICATION_BUILD=1 PYTHONPATH=modules/reviews/src uv run --locked pytest modules/reviews/tests --cov=. --cov-append --cov-report=xml:coverage/python.xml
+          uv run --locked pytest modules/reviews/operator/tests --cov=. --cov-append --cov-report=xml:coverage/python.xml
           uv run python -c "import xml.etree.ElementTree as E; r=E.parse('coverage/python.xml'); assert any(c.get('filename', '').startswith('modules/reviews/src/') and float(c.get('line-rate', '0')) > 0 for c in r.iter('class')), 'Reviews coverage missing from report'"
           node --test --experimental-test-coverage --test-reporter=spec --test-reporter-destination=stdout --test-reporter=lcov --test-reporter-destination=coverage/m11a.lcov tests/m11a_projection.test.mjs
           node --test --experimental-test-coverage --test-reporter=spec --test-reporter-destination=stdout --test-reporter=lcov --test-reporter-destination=coverage/reviews-dispatch.lcov modules/reviews/tests/dispatch.test.mjs
@@ -144,6 +149,7 @@ jobs:
           node --test --experimental-test-coverage --test-reporter=spec --test-reporter-destination=stdout --test-reporter=lcov --test-reporter-destination=coverage/reviews-consent.lcov modules/reviews/consent/tests/*.test.mjs
           node --test --experimental-test-coverage --test-reporter=spec --test-reporter-destination=stdout --test-reporter=lcov --test-reporter-destination=coverage/reviews-publication.lcov modules/reviews/publication/tests/*.test.mjs
           node --test --experimental-test-coverage --test-reporter=spec --test-reporter-destination=stdout --test-reporter=lcov --test-reporter-destination=coverage/reviews-console.lcov modules/reviews/console/tests/*.test.mjs
+          node --test --experimental-test-coverage --test-reporter=spec --test-reporter-destination=stdout --test-reporter=lcov --test-reporter-destination=coverage/reviews-operator.lcov modules/reviews/operator/tests/*.test.mjs
       - name: Scan and await quality gate
         uses: SonarSource/sonarqube-scan-action@7006c4492b2e0ee0f816d36501671557c97f5995 # v8.1.0
         with:

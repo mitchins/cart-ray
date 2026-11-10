@@ -231,3 +231,19 @@ test('operator rejects immutable checkpoint scope changes and doctor reports the
   assert.deepEqual(health.mismatches,['checkpoint.'+field]);assert.equal(writes,0);
  }
 });
+
+test('operator staged verification requires the exact explicitly requested event queue pause',async()=>{
+  const f=fixture();
+  const control=async url=>{
+    const response=await stubControl(f)(url);
+    const value=await response.json();
+    if(value.result.queue_id==='e'.repeat(32))value.result.settings.delivery_paused=true;
+    return Response.json(value);
+  };
+  await assert.rejects(inspectDeployment(f.env,control));
+  f.env.OPERATOR_EXPECT_EVENT_QUEUE_PAUSED=true;
+  assert.equal((await inspectDeployment(f.env,control)).source_version,v1);
+  await assert.rejects(inspectDeployment(f.env,stubControl(f)));
+  assert.equal(f.cursor,null);
+  assert.equal(f.sent.length,0);
+});

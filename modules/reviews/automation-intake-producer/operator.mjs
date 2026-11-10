@@ -91,7 +91,7 @@ export async function inspectDeployment(env, fetchApi=fetch) {
         queue.consumers[0].dead_letter_queue!==env.DEAD_LETTER_QUEUE_NAME ||
         !Number.isSafeInteger(queue.consumers[0].settings?.max_retries) ||
         queue.consumers[0].settings.max_retries<1 || queue.consumers[0].settings.max_retries>10 ||
-        queue.settings?.delivery_paused!==false || dlq?.queue_id!==env.DEAD_LETTER_QUEUE_ID ||
+        queue.settings?.delivery_paused!==(env.OPERATOR_EXPECT_EVENT_QUEUE_PAUSED===true) || dlq?.queue_id!==env.DEAD_LETTER_QUEUE_ID ||
         dlq?.queue_name!==env.DEAD_LETTER_QUEUE_NAME || dlq.consumers_total_count!==0 ||
         !binding(source,'CARTRAY_ENVIRONMENT','plain_text','test') ||
         !binding(source,'CARTRAY_REVIEWS_SOURCE','plain_text','test') ||
