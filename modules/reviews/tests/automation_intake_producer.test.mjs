@@ -247,3 +247,18 @@ test('operator staged verification requires the exact explicitly requested event
   assert.equal(f.cursor,null);
   assert.equal(f.sent.length,0);
 });
+
+test('shared merchant D1 preserves scoped authority attestation and rejects wrong bindings',async()=>{
+ const f=fixture();
+ f.env.AUTHORITY_CONTEXT_DB_ID=f.env.SOURCE_DATABASE_ID;
+ f.versions.authority.resources.bindings[1].database_id=f.env.SOURCE_DATABASE_ID;
+ const original=globalThis.fetch;globalThis.fetch=stubControl(f);
+ try {
+  await inspectInstallation(f.env,globalThis.fetch);
+  const result=await attestPurchase(f.env,{authority_version:f.versions.authority.id,nonce:'a'.repeat(64)},globalThis.fetch,1000);
+  assert.equal(result.proof[4],f.env.SOURCE_DATABASE_ID);
+  assert.equal(result.proof[5],f.env.SOURCE_DATABASE_ID);
+  f.versions.authority.resources.bindings[1].database_id=v1;
+  await assert.rejects(inspectInstallation(f.env,stubControl(f)));
+ } finally {globalThis.fetch=original;}
+});

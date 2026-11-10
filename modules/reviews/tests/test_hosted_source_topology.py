@@ -1,4 +1,4 @@
-"""Verify generated hosted configurations never select live or shared review storage."""
+"""Verify generated hosted configurations retain explicit test resource identities."""
 
 import importlib.util
 import tomllib
@@ -58,7 +58,6 @@ def test_generated_configs_bind_distinct_resources_and_never_embed_secrets():
 @pytest.mark.parametrize(
     "changes",
     [
-        {"reviews_db_id": "11111111-1111-4111-8111-111111111111"},
         {"events_queue_id": "c" * 32},
         {"events_queue_name": "dlq-test"},
         {"producer_worker": "source-test"},
@@ -98,3 +97,9 @@ def test_subscriber_checkpoint_identity_is_immutable():
         "install",
         11,
     )
+
+
+def test_shared_merchant_database_is_valid():
+    value = config()
+    value["reviews_db_id"] = value["commerce_db_id"]
+    module.build(value)

@@ -80,7 +80,7 @@ def test_provision_repeat_and_unknown_create_outcome_preserve_keys_and_resources
         assert provider.creates == count
         for queue in provider.items["queues"]:
             assert queue["settings"]["delivery_paused"] is (queue["queue_name"] != install.name("dlq"))
-    assert len(first) == 15
+    assert len(first) == 13
     assert install.state["pending"] == []
     assert first["database:commerce"]["id"] == "recovered-commerce"
     assert install.state["phase"] == "paused"
@@ -100,3 +100,26 @@ def test_initial_key_and_webhook_receipts_recover_after_inventory_write_interrup
         install.provision_webhook()
     provider.assert_not_called()
     assert install.state["webhook"] == original["webhook_endpoint"]
+
+
+def test_commerce_only_provisions_exactly_one_database_and_no_review_workers_or_queues(tmp_path):
+    install = planned(tmp_path)
+    install.config["reviews_enabled"] = False
+    install.credentials = {"stripe_test_key": "sk_test_only"}
+    provider = Catalog()
+    install.api = provider
+
+    def stripe(key, path, data=None, idempotency=None):
+        if path == "account":
+            return {"id": "acct_Test"}
+        return {"id": "we_test", "secret": "whsec_test"}
+
+    with patch.object(operations, "stripe", side_effect=stripe):
+        install.provision()
+        count = provider.creates
+        install.provision()
+    assert provider.creates == count
+    assert len(provider.items["d1/database"]) == 1
+    assert provider.items["queues"] == []
+    assert provider.items["workers/scripts"] == [{"id": install.name("source")}]
+    assert set(install.state["resources"]) == {"database:commerce", "worker:source", "pages:store"}

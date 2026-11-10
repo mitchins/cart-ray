@@ -98,7 +98,7 @@ export async function relay(env, fetchApi=fetch) {
 export async function attestPurchase(env, input, fetchApi=fetch, now=Math.floor(Date.now()/1000)) {
   if (!id.test(env.AUTHORITY_WORKER||'') || !uuid.test(env.AUTHORITY_CONTEXT_DB_ID||'') ||
       [env.SOURCE_WORKER,env.PRODUCER_WORKER,env.REVIEWS_WORKER,env.CONSUMER_WORKER].includes(env.AUTHORITY_WORKER) ||
-      env.AUTHORITY_CONTEXT_DB_ID===env.SOURCE_DATABASE_ID || !hex.test(env.PURCHASE_ATTESTATION_KEY||'') ||
+      !hex.test(env.PURCHASE_ATTESTATION_KEY||'') ||
       [env.SOURCE_EVENT_KEY,env.SOURCE_IDENTITY_TOKEN,env.REVIEWS_ACTIVATION_TOKEN,
         env.TRIGGER_TOKEN].includes(env.PURCHASE_ATTESTATION_KEY) || !token(env.PURCHASE_ATTESTATION_TOKEN) ||
       [env.SOURCE_IDENTITY_TOKEN,env.REVIEWS_ACTIVATION_TOKEN,env.TRIGGER_TOKEN,

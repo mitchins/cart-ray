@@ -1,0 +1,82 @@
+{
+  "format": 1,
+  "qualified_at": "2026-11-10",
+  "mission": "INFRA-01",
+  "scope": "Independent fresh Acorn hosted test installation; no production",
+  "hosted_source_commit": "4fd56d7a3a79de2b9c2b82ccd95c3e23ade2e8aa",
+  "source_clean_and_frozen_throughout": true,
+  "implementation_interventions": [],
+  "credential_interventions_during_install": [],
+  "resource_comparison": {
+    "before": {
+      "physical_d1": 3,
+      "workers": 7,
+      "queues": 4,
+      "pages": 1
+    },
+    "after": {
+      "physical_d1": 1,
+      "workers": 7,
+      "queues": 4,
+      "pages": 1
+    },
+    "all_d1_binding_aliases_reference_same_physical_id": true
+  },
+  "migration_namespaces": {
+    "commerce": 5,
+    "subscriber": 2,
+    "reviews": 33,
+    "context": 2
+  },
+  "hosted_validation": [
+    "Documented plan/provision, all 42 migrations, locked build and deployment",
+    "Healthy staged verification without activation; explicit activation retained fence 0",
+    "Live resource inspection proved one physical D1 and all seven D1 binding aliases targeting it",
+    "Selected two-product paid checkout settled; one invitation delivered and both products offered",
+    "Browser submission, stale moderation revision rejected with 409, exact revision published",
+    "Published product summary showed one 5-star review; the other product remained empty",
+    "Declined checkout produced no invitation; unsubscribe suppressed a later selected purchase",
+    "Checkout settled while Reviews returned 503; restore resumed normal checkpoint processing",
+    "Missing producer D1 binding and version drift diagnosed; recorded producer version restored",
+    "Same-source upgrade, controlled interrupted deployment and documented upgrade resume",
+    "Same-source rollback without database rewind",
+    "Healthy pause, explicit reactivation replay and final healthy pause; unsubscribe still available"
+  ],
+  "final_state": {
+    "phase": "paused",
+    "healthy": true,
+    "record_revision": 5,
+    "activation_fence": 0,
+    "checkpoint": 12,
+    "provider_acceptance_count": 1,
+    "generation_accepted_count": 1,
+    "suppression_count": 1,
+    "kit_review_count": 1,
+    "planter_review_count": 0
+  },
+  "latency_observations_seconds": {
+    "old_three_d1_doctor": 47.293,
+    "new_shared_d1_doctor": 15.942,
+    "old_d1_read_medians": [
+      0.56,
+      0.597,
+      0.393
+    ],
+    "new_d1_read_median": 0.181,
+    "old_summary_median": 1.132995,
+    "new_summary_median": 0.223356,
+    "old_storefront_median": 0.171456,
+    "new_storefront_median": 0.167606,
+    "public_and_read_samples_each": 3
+  },
+  "limitations": [
+    "Timings are observations, not an isolated causal benchmark; network, cache and warm-state differences apply.",
+    "Final frozen-head upgrade/rollback used the same source commit, not a second compatible application revision.",
+    "Commerce-only topology was tested locally but was not hosted in this run.",
+    "Node 24.21.0 was used; the guide requires Node 24 and .nvmrc pins 24.20.0.",
+    "Four pre-existing high npm tooling advisories remain; locked dependencies were unchanged.",
+    "Fault injection used an external qualification harness, not a documented merchant command.",
+    "No pre-activation purchase was made; staged state and absence of an activation record were verified."
+  ],
+  "privacy": "Resource identifiers, provider identities, mailboxes, capabilities, keys and private paths omitted. Detailed evidence remains private."
+}

@@ -68,8 +68,9 @@ class Provider:
         return {"id": value["id"], "resources": {"bindings": bindings}}
 
 
-def lifecycle(tmp_path):
+def lifecycle(tmp_path, reviews_enabled=True):
     install, database = migrated(tmp_path)
+    install.config["reviews_enabled"] = reviews_enabled
     install.migrate()
     install.credentials = {
         "cloudflare_api_token": "operator-token",
@@ -82,12 +83,12 @@ def lifecycle(tmp_path):
     vault = install.vault()
     vault["webhook_secret"] = "whsec_test"
     operations.atomic_json(install.vault_path, vault)
-    for role in operations.QUEUES:
+    for role in install.queues:
         install.state["resources"]["queue:" + role] = {
             "name": install.name(role),
             "id": hashlib.md5(role.encode(), usedforsecurity=False).hexdigest(),
         }
-    for role in operations.ROLES:
+    for role in install.roles:
         install.state["resources"]["worker:" + role] = {"name": install.name(role), "id": install.name(role)}
     install.state["resources"]["pages:store"] = {"name": install.name("store"), "id": install.name("store")}
     provider = Provider(database)
@@ -449,3 +450,27 @@ def test_incomplete_deployment_cannot_activate_even_if_inspection_would_pass(tmp
             install.activate(True)
     verifier.assert_not_called()
     assert provider.calls == before
+
+
+def test_commerce_only_connected_lifecycle_has_no_review_runtime_dependency(tmp_path):
+    install, provider, database, calls, _ = lifecycle(tmp_path, reviews_enabled=False)
+    # Exercise the real commerce verifier rather than the Reviews test bridge.
+    install.verifier = operations.Installation.verifier.__get__(install)
+    build_at(install, "a" * 40)
+    install.deploy()
+    assert set(provider.active) == {install.name("source")}
+    install.verify()
+    install.activate()
+    assert install.doctor()["healthy"] is True
+    install.pause()
+    keys = install.vault()
+    with (
+        patch.object(operations.subprocess, "check_output", return_value="b" * 40 + "\n"),
+        patch.object(operations.subprocess, "run", return_value=SimpleNamespace(returncode=0)),
+    ):
+        assert install.upgrade()["phase"] == "paused"
+    assert install.rollback(0)["phase"] == "paused"
+    assert install.vault() == keys
+    assert calls == []
+    assert install.receipt()["doctor"]["healthy"] is True
+    assert not any(path.startswith("queues/") for path, _ in provider.calls)

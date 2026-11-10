@@ -4,7 +4,7 @@ This workflow installs **one** isolated Squirrel/Acorn test store. It uses the
 current automatic checkout invitation permission and `reviews_gateway.mjs`.
 It does not deploy the older `/review-consent/` bridge, import historical data,
 change a theme, rotate suppression keys, or support production. Upgrades and
-compatible Worker rollbacks keep the same three databases and installation
+compatible Worker rollbacks keep the same merchant database and installation
 identity. A fresh namespace is for a new installation, not a second version of
 an existing store.
 
@@ -65,7 +65,7 @@ A namespace must end in `-test`. The lock is produced by the existing
 products. The installation copies it into its inputs so subsequent commands do
 not depend on the handoff file's original location.
 
-The chosen account needs capacity for **three D1 databases, four queues, seven
+The chosen account needs capacity for **one D1 database, four queues, seven
 Workers, two cron triggers and one Pages project**. A quota error is a failed provider operation,
 not permission to delete other applications. Resume after capacity is supplied.
 
@@ -264,3 +264,51 @@ must not change its successful test checkout response.
 The [recorded independent qualification](qualification/2026-11-10.json) distinguishes
 the deployed source head from subsequent operator fixes and records the remaining
 validation limitations. Detailed resource/provider receipts stay private.
+
+## Shared merchant D1 and optional Reviews
+
+Fresh format-2 installations provision one physical D1 named `<namespace>-commerce`.
+The existing `DB`, `CARTRAY_DB`, `COMMERCE_DB`, `REVIEWS_DB` and `CONTEXT_DB`
+binding names all reference that database. The deterministic migration order is
+commerce, subscriber, Reviews, then purchaser context. The ledger keys each
+checksum and position by namespace; paths remain globally unique. A changed,
+unknown, missing or reordered ledger fails closed. Repeat `migrate` to resume;
+never edit the ledger to bypass a failure. Failed Wrangler migration output is
+retained in `migration-error.log` with mode 0600 in the private installation
+directory; the error identifies that file and the retry command.
+
+Set `"reviews_enabled": false` in the initial installation JSON for commerce
+only. This provisions one source Worker, one D1 and one Pages project, applies
+only commerce migrations, and omits Reviews services, queues, builds, storefront
+gateways and mail credentials. The default remains Reviews enabled. This choice
+is fixed by the retained inventory; create a fresh installation to change it.
+Commerce activation requires a completed deployment but no delivery opt-in.
+Pause and resume retain checkout availability; there are no delivery queues.
+
+D1 bindings grant access to the whole database: separate binding names are not
+table-level isolation. Reviews and purchaser-authority Workers therefore have
+wider database access in this topology. Service authentication, independent
+installation identity, signed attestation scope, pinned versions, activation
+fences and suppression key checks remain mandatory. A D1 outage affects both
+checkout and Reviews; neither is an independent database failover boundary.
+
+This installer accepts only new format-2 inventories. It does not move or merge
+existing three-database installations, rewrite their schema history, or offer an
+automatic upgrade of old operator inventories. Preserve existing inventories,
+keys and databases and use a fresh namespace for this topology.
+
+The [independent INFRA-01 hosted qualification](qualification/infra-01-2026-11-10.json)
+used clean, frozen runtime source `4fd56d7a3a79de2b9c2b82ccd95c3e23ade2e8aa`
+with no implementation or credential intervention during installation. Physical
+D1 count fell from three to one; seven Workers, four queues and one Pages project
+were unchanged. Live inspection confirmed all seven D1 binding aliases targeted
+the same physical database. The final installation was healthy and paused after
+checkout, delivery, browser submission, moderation, suppression, Reviews outage,
+drift diagnosis, recovery and compatible same-source rollback checks.
+
+Measured doctor time was 47.293 seconds on the prior topology and 15.942 seconds
+on the shared topology. Median public summary time was 1.133 versus 0.223 seconds
+and storefront time was 0.171 versus 0.168 seconds (three samples each). These
+are observations with network, cache and warm-state differences, not evidence
+that D1 consolidation alone caused the change. Commerce-only mode was qualified
+locally, not hosted; the evidence records the remaining scope limitations.

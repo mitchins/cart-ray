@@ -117,7 +117,6 @@ export async function inspectDeployment(env, fetchApi=fetch) {
 export async function inspectInstallation(env, fetchApi=fetch) {
   if (env.AUTHORITY_WORKER===undefined && env.AUTHORITY_CONTEXT_DB_ID===undefined) return {...await inspectDeployment(env,fetchApi),authority_version:null};
   if (!id.test(env.AUTHORITY_WORKER||'') || !uuid.test(env.AUTHORITY_CONTEXT_DB_ID||'') ||
-      env.AUTHORITY_CONTEXT_DB_ID===env.SOURCE_DATABASE_ID ||
       [env.SOURCE_WORKER,env.PRODUCER_WORKER,env.REVIEWS_WORKER,env.CONSUMER_WORKER].includes(env.AUTHORITY_WORKER)) throw new Error('authority configuration mismatch');
   const source=await inspectDeployment(env,fetchApi);
   const authority=await bounded(signal=>activeVersion(env,env.AUTHORITY_WORKER,signal,fetchApi));

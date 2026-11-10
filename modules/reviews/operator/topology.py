@@ -13,7 +13,7 @@ def graph(installation, versions=None, sending=False):
     worker = installation.name
 
     def queue(role):
-        return state["resources"]["queue:" + role]["id"]
+        return state["resources"]["queue:" + role]["id"] if config["reviews_enabled"] else "disabled"
 
     source_origin = f"https://{worker('source')}.{state['workers_subdomain']}.workers.dev"
     sender_origin = f"https://{worker('sender')}.{state['workers_subdomain']}.workers.dev"
@@ -22,6 +22,22 @@ def graph(installation, versions=None, sending=False):
     mapping = json.dumps({catalogue: SUBJECTS}, separators=(",", ":"))
     mapping_hash = hashlib.sha256(mapping.encode()).hexdigest()
     common = {"REVIEWS_ENVIRONMENT": "test"}
+    if not config["reviews_enabled"]:
+        source = {
+            "main": "src/cartray/worker.py",
+            "public": True,
+            "python": True,
+            "vars": {
+                "CARTRAY_ENVIRONMENT": "test",
+                "CARTRAY_SIGNING_KEY_ID": config["namespace"],
+                "CARTRAY_STOREFRONT_ORIGIN": storefront,
+                "CARTRAY_SUCCESS_URL": storefront + "/?checkout=complete",
+                "CARTRAY_CANCEL_URL": storefront + "/?checkout=cancelled",
+            },
+            "db": {"DB": "commerce"},
+            "ratelimits": {"CHECKOUT_RATE_LIMITER": ("20261110", 20)},
+        }
+        nodes = {"source": source}
     producer = {
         **common,
         "REVIEWS_SOURCE_PRODUCER": "test",
@@ -47,7 +63,7 @@ def graph(installation, versions=None, sending=False):
         "DELAY_SECONDS": config["delay_seconds"],
         "MAX_LATENESS": config["max_lateness"],
     }
-    nodes = {
+    review_nodes = {
         "source": {
             "main": "src/cartray/worker.py",
             "public": True,
@@ -153,6 +169,8 @@ def graph(installation, versions=None, sending=False):
             "consumes": "due",
         },
     }
+    if config["reviews_enabled"]:
+        nodes = review_nodes
     for node in nodes.values():
         bindings = [
             {
@@ -234,6 +252,8 @@ def secret_bindings(installation, role):
             "AUTOMATION_RECIPIENT_TOKEN": "automation_recipient",
         },
     }
+    if role == "source" and not installation.config["reviews_enabled"]:
+        names[role] = {}
     result = {name: vault[key] for name, key in names[role].items()}
     if role == "source":
         result.update(
