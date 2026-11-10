@@ -94,7 +94,7 @@ def test_pagination_handles_pages_limit_and_queue_shapes():
             api.listing("queues")
     with patch.object(api, "request", return_value=[{}] * 100):
         with pytest.raises(cloud.CloudError, match="bound"):
-            api.listing("queues")
+            api.listing("d1/database")
 
 
 def test_query_upload_and_deployment_request_shapes():
@@ -143,3 +143,38 @@ def test_stripe_refuses_live_key_and_preserves_stable_create_idempotency():
     with patch.object(cloud.urllib.request, "build_opener", return_value=opener):
         with pytest.raises(cloud.CloudError, match="retry without changing"):
             cloud.stripe("sk_test_allowed", "account")
+
+
+@pytest.mark.parametrize("endpoint", ["workers/scripts", "queues"])
+def test_unpaged_provider_lists_do_not_repeat_full_sized_responses(endpoint):
+    api = cloud.API("a" * 32, "key")
+    values = [{"id": str(index)} for index in range(150)]
+    with patch.object(api, "request", return_value=values) as request:
+        assert api.listing(endpoint) == values
+    request.assert_called_once_with(endpoint)
+
+
+@pytest.mark.parametrize("body", [b"not json", [], None, {"success": False, "errors": [None, 1, {"code": 10000}]}])
+def test_malformed_provider_responses_stay_bounded_cloud_errors(body):
+    api = cloud.API("a" * 32, "private-key")
+    with patch.object(cloud.urllib.request, "build_opener", return_value=Opener(Reply(body))):
+        with pytest.raises(cloud.CloudError) as error:
+            api.request("d1/database")
+    assert "private-key" not in str(error.value)
+
+
+@pytest.mark.parametrize("result", [[], [None], [3], [{"success": True, "results": [None]}]])
+def test_malformed_d1_rows_report_cloud_error(result):
+    api = cloud.API("a" * 32, "key")
+    with patch.object(api, "request", return_value=result):
+        with pytest.raises(cloud.CloudError, match="D1"):
+            api.query("database", "SELECT 1")
+
+
+@pytest.mark.parametrize("payload", [[], {"errors": [None, 1, {"code": 10000}]}])
+def test_malformed_http_error_entries_never_escape_transport(payload):
+    response = urllib.error.HTTPError("https://provider", 403, "Denied", {}, io.BytesIO(json.dumps(payload).encode()))
+    api = cloud.API("a" * 32, "private-key")
+    with patch.object(cloud.urllib.request, "build_opener", return_value=Opener(response)):
+        with pytest.raises(cloud.CloudError, match="HTTP 403"):
+            api.request("d1/database")

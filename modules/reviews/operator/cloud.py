@@ -18,6 +18,14 @@ class CloudError(RuntimeError):
     """A bounded provider operation failed without exposing request credentials."""
 
 
+def error_codes(value):
+    """Extract bounded numeric provider codes without trusting response shapes."""
+    errors = value.get("errors", []) if isinstance(value, dict) else []
+    if not isinstance(errors, list):
+        return []
+    return [item["code"] for item in errors if isinstance(item, dict) and type(item.get("code")) is int]
+
+
 class API:
     def __init__(self, account, token):
         self.account = account
@@ -39,7 +47,7 @@ class API:
                     return response.headers.get("Content-Type"), body
         except urllib.error.HTTPError as error:
             try:
-                codes = [item.get("code") for item in json.loads(error.read(65536)).get("errors", [])]
+                codes = error_codes(json.loads(error.read(65536)))
             except (ValueError, TypeError):
                 codes = []
             remedy = (
@@ -50,31 +58,47 @@ class API:
             raise CloudError(f"Cloudflare {method} {path}: HTTP {error.code}, provider codes {codes}{remedy}") from None
         except (urllib.error.URLError, TimeoutError):
             raise CloudError(f"Cloudflare {method} {path}: unavailable; retry the same command") from None
-        result = json.loads(body)
+        try:
+            result = json.loads(body)
+        except ValueError:
+            raise CloudError(f"Cloudflare {method} {path}: malformed provider response") from None
+        if not isinstance(result, dict):
+            raise CloudError(f"Cloudflare {method} {path}: malformed provider response")
         if result.get("success") is not True:
-            codes = [item.get("code") for item in result.get("errors", [])]
+            codes = error_codes(result)
             raise CloudError(f"Cloudflare {method} {path}: provider codes {codes}")
         return result.get("result")
 
     def listing(self, path):
         rows = []
         page_size = 10 if path.startswith("pages/") else 100
+        unpaged = path in ("workers/scripts", "queues")
         for page in range(1, 101):
-            batch = self.request(path + ("&" if "?" in path else "?") + f"page={page}&per_page={page_size}")
+            request_path = (
+                path if unpaged else path + ("&" if "?" in path else "?") + f"page={page}&per_page={page_size}"
+            )
+            batch = self.request(request_path)
             if isinstance(batch, dict):
                 batch = batch.get("queues", batch.get("items", []))
             if not isinstance(batch, list):
                 raise CloudError("provider list has an unexpected shape")
             rows.extend(batch)
-            if len(batch) < page_size:
+            if unpaged or len(batch) < page_size:
                 return rows
         raise CloudError("resource list exceeds operator bound")
 
     def query(self, database, sql, params=()):
         result = self.request(f"d1/database/{database}/query", "POST", {"sql": sql, "params": list(params)})
-        if not isinstance(result, list) or any(row.get("success") is not True for row in result):
+        if (
+            not isinstance(result, list)
+            or not result
+            or any(not isinstance(row, dict) or row.get("success") is not True for row in result)
+        ):
             raise CloudError("D1 operator query did not succeed")
-        return result[0].get("results", [])
+        rows = result[0].get("results", [])
+        if not isinstance(rows, list) or any(not isinstance(row, dict) for row in rows):
+            raise CloudError("D1 operator query returned malformed rows")
+        return rows
 
     def upload(self, name, modules, metadata, create=False):
         boundary = "----cartray-operator-" + secrets.token_hex(16)

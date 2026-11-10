@@ -24,12 +24,16 @@ class Catalog:
                 value["uuid"] = f"database-{self.creates}"
             elif path == "queues":
                 value["queue_id"] = f"queue-{self.creates}"
+            elif path == "pages/projects":
+                value["subdomain"] = value["name"] + "-assigned.pages.dev"
             self.items[path].append(value)
             return value
         if method == "PATCH":
             item = next(value for value in self.items["queues"] if value["queue_id"] == path.split("/")[-1])
             item["settings"] = data["settings"]
             return {}
+        if path.startswith("pages/projects/"):
+            return next(item for item in self.items["pages/projects"] if item["name"] == path.rsplit("/", 1)[1])
         if path.startswith("d1/database/"):
             return next(item for item in self.items["d1/database"] if item["uuid"] == path.split("/")[-1])
         if path.startswith("queues/"):

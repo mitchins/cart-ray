@@ -17,7 +17,7 @@ def graph(installation, versions=None, sending=False):
 
     source_origin = f"https://{worker('source')}.{state['workers_subdomain']}.workers.dev"
     sender_origin = f"https://{worker('sender')}.{state['workers_subdomain']}.workers.dev"
-    storefront = f"https://{worker('store')}.pages.dev"
+    storefront = "https://" + state["pages_subdomain"]
     catalogue = json.loads(open(config["preflight_lock"]).read())["catalogue_version"]
     mapping = json.dumps({catalogue: SUBJECTS}, separators=(",", ":"))
     mapping_hash = hashlib.sha256(mapping.encode()).hexdigest()

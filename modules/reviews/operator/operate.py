@@ -8,6 +8,7 @@ import json
 import os
 import re
 import secrets
+import shutil
 import stat
 import subprocess
 import tempfile
@@ -364,6 +365,7 @@ class Installation:
     def provision_pages(self):
         key, name = "pages:store", self.name("store")
         if key in self.state["resources"]:
+            self.ensure_pages_subdomain()
             return
         matches = [item for item in self.api.listing("pages/projects") if item["name"] == name]
         if matches and key not in self.state["pending"]:
@@ -372,9 +374,25 @@ class Installation:
             if key not in self.state["pending"]:
                 self.state["pending"].append(key)
                 self.save()
-            self.api.request("pages/projects", "POST", {"name": name, "production_branch": "main"})
+            project = self.api.request("pages/projects", "POST", {"name": name, "production_branch": "main"})
+        else:
+            project = matches[0]
         self.state["resources"][key] = {"name": name, "id": name}
         self.state["pending"].remove(key)
+        self.save()
+        self.ensure_pages_subdomain(project)
+
+    def ensure_pages_subdomain(self, project=None):
+        """Retain the provider-assigned origin, including collision suffixes."""
+        if self.state.get("pages_subdomain"):
+            return
+        project = project or {}
+        if not project.get("subdomain"):
+            project = self.api.request("pages/projects/" + self.name("store"))
+        domain = project.get("subdomain")
+        if not isinstance(domain, str) or not re.fullmatch(r"[a-z0-9][a-z0-9-]{0,62}\.pages\.dev", domain):
+            raise CloudError("Pages project has no valid assigned pages.dev subdomain; retry provision")
+        self.state["pages_subdomain"] = domain
         self.save()
 
     def run(self, step, command, environment=None):
@@ -463,6 +481,7 @@ class Installation:
         return result
 
     def render(self, versions=None, sending=False):
+        self.ensure_pages_subdomain()
         nodes, urls = graph(self, versions, sending)
         configs = self.directory / "configs"
         configs.mkdir(exist_ok=True)
@@ -486,6 +505,8 @@ class Installation:
         self.render()
         source = release / "source"
         if not (source / "receipt.json").exists():
+            if source.exists():
+                shutil.rmtree(source)
             self.run(
                 "build-source",
                 [
@@ -504,6 +525,8 @@ class Installation:
             )
         reviews = release / "reviews"
         if not (reviews / "receipt.json").exists():
+            if reviews.exists():
+                shutil.rmtree(reviews)
             self.run(
                 "build-reviews",
                 [
@@ -568,6 +591,7 @@ class Installation:
         return modules
 
     def deploy(self):
+        self.ensure_pages_subdomain()
         self.check_schema()
         self.pin_suppression()
         if "build" not in self.state:
@@ -685,7 +709,12 @@ class Installation:
 
     def deploy_storefront(self, build):
         output = self.directory / "releases" / build["commit"] / "storefront"
-        if not output.exists():
+        if not (output / ".operator-build-complete").exists():
+            staging = output.with_name("storefront.partial")
+            if staging.exists():
+                shutil.rmtree(staging)
+            if output.exists():
+                shutil.rmtree(output)
             self.run(
                 "build-storefront",
                 [
@@ -695,7 +724,7 @@ class Installation:
                     "python",
                     "examples/acorn-store/build.py",
                     "--output",
-                    str(output),
+                    str(staging),
                     "--test-checkout-api",
                     self.state["urls"]["source"],
                     "--reviews",
@@ -704,6 +733,8 @@ class Installation:
                     self.config["preflight_lock"],
                 ],
             )
+            (staging / ".operator-build-complete").write_text(build["commit"] + "\n")
+            os.replace(staging, output)
         origin = self.state["urls"]["storefront"]
         deployment = {
             "env_vars": {
@@ -739,6 +770,7 @@ class Installation:
         )
 
     def verifier(self, mode):
+        self.ensure_pages_subdomain()
         self.vault()
         nodes, _ = graph(self, self.state["deployment"]["versions"])
         env = {
@@ -809,6 +841,8 @@ class Installation:
                 "already_active": True,
                 "activation_watermark": self.state["activation_watermark"],
             }
+        if not self.state.get("deployment", {}).get("complete"):
+            raise ValueError("finish the interrupted deploy before explicit activation")
         # Reconcile a partially completed queue resume before staged inspection.
         self.configure_queues(pause_processing=True)
         self.verify()
@@ -963,6 +997,7 @@ class Installation:
         }
 
     def doctor(self):
+        self.ensure_pages_subdomain()
         self.check_schema()
         self.vault()
         self.pin_suppression()

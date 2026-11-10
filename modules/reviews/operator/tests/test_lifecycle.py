@@ -39,7 +39,9 @@ class Provider:
         if path.startswith("queues/") and method == "POST":
             self.consumers[path.split("/")[1]] = [data]
             return {"consumer_id": "test-consumer"}
-        if path.startswith(("workers/scripts/", "pages/projects/")):
+        if path.startswith("pages/projects/"):
+            return {"subdomain": path.rsplit("/", 1)[1] + ".pages.dev"}
+        if path.startswith("workers/scripts/"):
             return {}
         raise AssertionError(path)
 
@@ -378,3 +380,72 @@ def test_paused_intent_survives_upgrade_and_worker_rollback_without_implicit_del
         assert provider.queue_settings[identifier]["delivery_paused"] is True
     assert install.state["activation_watermark"] == 42
     assert install.activate(True)["phase"] == "active"
+
+
+def test_assigned_pages_origin_is_hydrated_before_rendering_existing_inventory(tmp_path):
+    install, provider, _, _, _ = lifecycle(tmp_path)
+    original = provider.request
+
+    def assigned(path, method="GET", data=None):
+        if path == "pages/projects/" + install.name("store"):
+            return {"subdomain": "actual-assigned-suffix.pages.dev"}
+        return original(path, method, data)
+
+    provider.request = assigned
+    nodes = install.render()
+    assert install.state["pages_subdomain"] == "actual-assigned-suffix.pages.dev"
+    assert install.state["urls"]["storefront"] == "https://actual-assigned-suffix.pages.dev"
+    assert nodes["sender"]["vars"]["REVIEWS_LANDING_URL"].startswith("https://actual-assigned-suffix.pages.dev/")
+    install.provision_pages()
+    assert install.state["pages_subdomain"] == "actual-assigned-suffix.pages.dev"
+
+
+@pytest.mark.parametrize("role", ["source", "reviews"])
+def test_incomplete_retained_python_build_restarts_without_manual_cleanup(tmp_path, role):
+    install, _, _, _, _ = lifecycle(tmp_path)
+    partial = install.directory / "releases" / ("a" * 40) / role
+    partial.mkdir(parents=True)
+    (partial / "incomplete").write_text("interrupted output")
+    build_at(install, "a" * 40)
+    assert not (partial / "incomplete").exists()
+    assert (partial / "receipt.json").exists()
+
+
+def test_interrupted_storefront_build_is_never_published_and_can_resume(tmp_path):
+    install, provider, _, _, _ = lifecycle(tmp_path)
+    build_at(install, "a" * 40)
+    original = install.run
+    failed = []
+
+    def interrupted(step, command, environment=None):
+        if step == "build-storefront" and not failed:
+            failed.append(True)
+            output = Path(command[command.index("--output") + 1])
+            output.mkdir(parents=True)
+            (output / "incomplete").write_text("partial")
+            raise operations.CloudError("interrupted storefront build")
+        return original(step, command, environment)
+
+    install.run = interrupted
+    with pytest.raises(operations.CloudError, match="storefront"):
+        install.deploy()
+    output = install.directory / "releases" / ("a" * 40) / "storefront"
+    assert not output.exists()
+    assert not any(path.endswith(install.name("store")) and method == "PATCH" for path, method in provider.calls)
+    install.deploy()
+    assert (output / "index.html").exists()
+    assert not (output / "incomplete").exists()
+    assert (output / ".operator-build-complete").exists()
+
+
+def test_incomplete_deployment_cannot_activate_even_if_inspection_would_pass(tmp_path):
+    install, provider, _, _, _ = lifecycle(tmp_path)
+    build_at(install, "a" * 40)
+    install.deploy()
+    install.state["deployment"]["complete"] = False
+    before = list(provider.calls)
+    with patch.object(install, "verifier") as verifier:
+        with pytest.raises(ValueError, match="interrupted deploy"):
+            install.activate(True)
+    verifier.assert_not_called()
+    assert provider.calls == before
