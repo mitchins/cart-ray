@@ -11,6 +11,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from build import ROOT, build_site
 from connect import BOOT, EXPORTS, connect
 from src.gel import contrast, tokens, validate, validate_asset
+from src.templates import money
 
 
 class GelTests(unittest.TestCase):
@@ -138,6 +139,15 @@ class GelTests(unittest.TestCase):
             self.assertFalse((output / "inbox").exists())
             self.assertIn("/storefront-config.js", (output / "index.html").read_text())
             self.assertIn("Price loading", (output / "products/acorn-growing-kit/index.html").read_text())
+
+
+
+class CurrencyTests(unittest.TestCase):
+    def test_static_preview_prices_identify_the_actual_currency(self):
+        self.assertEqual(money({"amount_minor": 2400, "currency": "EUR"}), "€24.00")
+        self.assertEqual(money({"amount_minor": 2400, "currency": "GBP"}), "£24.00")
+        self.assertEqual(money({"amount_minor": 0, "currency": "EUR"}), "Free")
+        self.assertEqual(money({"amount_minor": 2400, "currency": "CHF"}), "CHF 24.00")
 
 
 if __name__ == "__main__":

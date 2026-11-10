@@ -2,7 +2,7 @@
 .theme-minimal .hero-art{border-radius:calc(var(--gel-radius) * 1.4)}
 .theme-minimal .collection{border-top:1px solid color-mix(in srgb,var(--color-rule) 25%,transparent);padding-top:42px}
 .theme-minimal .catalogue-tools{border-bottom:1px solid color-mix(in srgb,var(--color-rule) 25%,transparent);padding-bottom:18px}
-.theme-minimal .page-shop .collection{border-top:0}
+.theme-minimal.page-shop .collection{border-top:0}
 .theme-minimal .product-card .product-art{aspect-ratio:1.1}
 .theme-minimal .hero-art figcaption{background:transparent;border-top:1px solid color-mix(in srgb,var(--color-rule) 25%,transparent)}
 .theme-minimal .flow-page{max-width:1160px}

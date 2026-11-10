@@ -31,8 +31,8 @@ class OfflineSite:
     def open(self, path):
         try:
             self.storage = self.page.evaluate("window.__snapshot ? window.__snapshot() : ({local:{},session:{}})")
-        except Exception:
-            pass
+        except Exception as error:
+            raise RuntimeError("Could not snapshot offline browser storage") from error
         self.page.goto("about:blank")
         parts = urlsplit(path)
         relative = unquote(parts.path).lstrip("/")

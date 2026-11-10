@@ -28,11 +28,14 @@ class HttpSite:
 
     def open(self, path):
         self.page.goto(self.origin + path)
-        self.page.wait_for_timeout(100)
+        self.page.wait_for_load_state("networkidle")
+        self.last_url = self.page.url
         return self.page
 
     def follow(self):
-        self.page.wait_for_timeout(100)
+        self.page.wait_for_url(lambda url: str(url) != self.last_url)
+        self.page.wait_for_load_state("networkidle")
+        self.last_url = self.page.url
         return self.page
 
     def reset(self):

@@ -101,3 +101,12 @@ The retained original-package browser evidence used `--offline` because URL navi
 - `CODEX_HANDOFF.md`: integration boundaries and the remaining repository-specific acceptance.
 
 This is a presentation deliverable, independent of OPERABILITY-01, hosted key rotation, Effective Policy/Woo migration and receipt-only review delivery.
+
+## Test lanes
+
+`npm test` in this directory runs the standalone preview JavaScript tests and
+Python compiler tests. Repository CI separately runs `tests/gel_adapter.test.mjs`
+and the connected HTTP browser harness. That harness runs all three Squirrel
+themes and an explicit Northline synthetic contract fixture in Chromium, Firefox
+and WebKit. API fixture responses are labelled separately from hosted evidence;
+see `evidence/INTEGRATION.md` for completed runs, screenshots and limitations.

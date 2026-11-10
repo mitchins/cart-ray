@@ -324,3 +324,8 @@ and storefront time was 0.171 versus 0.168 seconds (three samples each). These
 are observations with network, cache and warm-state differences, not evidence
 that D1 consolidation alone caused the change. Commerce-only mode was qualified
 locally, not hosted; the evidence records the remaining scope limitations.
+
+GEL planning copies only image paths referenced by the manifest and product
+presentation content into the private inventory. Unrelated files are excluded;
+missing paths, traversal and symlink components are rejected before inputs are
+written. Asset selection does not authorize reading other operator files.

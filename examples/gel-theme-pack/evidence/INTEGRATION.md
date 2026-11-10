@@ -16,16 +16,18 @@ The artifact contains 15 actual connected screenshots: desktop/tablet/mobile
 home plus mobile cart/review in each engine. GitHub currently retains it until
 8 February 2027; generated screenshots are excluded from the source deliverable.
 
-This completed connected browser lane uses **Classic with Squirrel**.
-The expanded CI now builds all three Squirrel compositions and an explicit
-Northline Classic synthetic catalogue contract fixture, then runs the same three
-engines against each. Theme-labelled result JSON and screenshots keep their
-coverage separate. At this recording the expanded run is pending; its setup is
-not counted as an executed qualification result. The Northline fixture uses the
-real core/adapter/native clients, has checkout disabled, and is never installed
-as merchant catalogue data.
+The expanded [CI job](https://github.com/mitchins/cart-ray/actions/runs/42772776530/job/129684213589)
+completed **288/288** checks: all three Squirrel compositions and the Northline
+Classic contract fixture, each in Chromium, Firefox and WebKit.
+[Download 60 screenshots, four result JSON files and HTTP logs](https://github.com/mitchins/cart-ray/actions/runs/42772776530/artifacts/13743345137).
+The results were independently downloaded and counted as four sets of 72 passing
+checks. Northline uses an explicit synthetic, checkout-disabled catalogue with
+matching routes and the real core/adapter/native clients; it is never installed
+as merchant catalogue data. `connected-browser-results.json` remains the one-off
+72-check reference from the earlier Classic/Squirrel run, not current harness
+output. Current results carry a composition and live in the expanded artifact.
 
-The completed lane It exercises the
+The connected lane exercises the
 real adapter and unchanged native review clients against explicit review API
 fixtures. Checks cover responsive reflow, reduced motion, authoritative quantity
 limits and currency, merchant checkout/permission flags, product selection,
@@ -43,7 +45,7 @@ provides the completed cross-engine evidence.
 
 ## Regression evidence
 
-- GEL Python: 14 pass. Actual Acorn builder: 11 pass, including one identical GEL
+- GEL Python: 15 pass. Actual Acorn builder: 11 pass, including one identical GEL
   hash across the three Squirrel themes, unchanged core/native clients, retained
   approved checkout/gateway and disabled checkout/Reviews configuration.
 - Connected adapter Node: 5 pass, covering runtime price/quantity/currency,
@@ -87,3 +89,12 @@ still need an assistive-technology pass on real content.
 At this recording, hosted withdrawal and a complete newly delivered invitation
 journey remain unclaimed. No production payment or email claim follows from the
 fixture-based browser results.
+
+## Follow-up changes after hosted qualification
+
+The hosted test deployment remains at `e151f79`. Subsequent review fixes retain
+page-specific titles, correct static preview currency and the Minimal shop
+selector, selectively retain only declared merchant image assets, and strengthen
+browser synchronization/evidence. These follow-ups require fresh exact-head CI
+and review; they were not silently applied to the hosted shop. Actual screen
+reader verification remains unperformed.

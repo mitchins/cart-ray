@@ -76,8 +76,17 @@ def atomic_json(path, value):
 
 def validate_config(config):
     required = {"namespace", "account_id", "stripe_account_id", "preflight_lock"}
-    optional = {"merchant_name", "merchant_contact", "delay_seconds", "max_lateness", "reviews_enabled",
-                "theme", "gel", "theme_content", "gel_assets"}
+    optional = {
+        "merchant_name",
+        "merchant_contact",
+        "delay_seconds",
+        "max_lateness",
+        "reviews_enabled",
+        "theme",
+        "gel",
+        "theme_content",
+        "gel_assets",
+    }
     if not isinstance(config, dict) or set(config) - required - optional or required - set(config):
         raise ValueError("installation config has missing or unknown fields")
     if not re.fullmatch(r"[a-z][a-z0-9-]{2,31}", config["namespace"]) or not config["namespace"].endswith("-test"):
@@ -160,6 +169,28 @@ class Installation:
                     raise ValueError(f"invalid approved test mailbox field {field}")
         self.api = api or (API(self.config["account_id"], credentials["cloudflare_api_token"]) if credentials else None)
 
+    @staticmethod
+    def gel_inputs(manifest, assets, content_path):
+        """Read only declared local images; reject escapes before creating inventory."""
+        gel = json.loads(manifest.read_text())
+        content = json.loads(content_path.read_text())
+        references = [value for role, value in gel.get("assets", {}).items() if role != "hero_alt"]
+        references.extend(product["image"] for product in content.get("products", []))
+        for name in references:
+            if not isinstance(name, str) or not re.fullmatch(r"assets/[A-Za-z0-9_./-]+\.(svg|png|jpg|jpeg|webp)", name):
+                raise ValueError("GEL image references must be local assets/ paths")
+            relative = Path(name)
+            if ".." in relative.parts:
+                raise ValueError("GEL image references must not traverse directories")
+            path = assets
+            for component in relative.parts:
+                path = path / component
+                if path.is_symlink():
+                    raise ValueError("GEL image references must not use symlinks")
+            if not path.is_file() or not path.resolve().is_relative_to(assets):
+                raise ValueError(f"GEL image reference is missing or unsafe: {name}")
+        return gel, content, set(references)
+
     @classmethod
     def plan(cls, directory, config):
         directory = Path(directory).resolve()
@@ -178,18 +209,21 @@ class Installation:
                 raise ValueError("GEL manifest must be a file and asset root must be a directory")
             if directory.is_relative_to(assets) or assets.is_relative_to(directory):
                 raise ValueError("installation directory and GEL asset root must not overlap")
+            content_path = Path(config.get("theme_content", ROOT / "examples/gel-theme-pack/content/squirrel.json"))
+            gel, content, references = cls.gel_inputs(manifest, assets, content_path)
         atomic_json(directory / "inputs/preflight-lock.json", lock)
         config["preflight_lock"] = "inputs/preflight-lock.json"
         if "gel" in config:
             destination = directory / "inputs/gel-assets"
-            shutil.copytree(assets, destination, symlinks=False)
-            atomic_json(directory / "inputs/gel.json", json.loads(manifest.read_text()))
+            for name in sorted(references):
+                target = destination / name
+                target.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copyfile(assets / name, target)
+            atomic_json(directory / "inputs/gel.json", gel)
             config["gel"] = "inputs/gel.json"
             config["gel_assets"] = "inputs/gel-assets"
             if "theme_content" in config:
-                atomic_json(
-                    directory / "inputs/theme-content.json", json.loads(Path(config["theme_content"]).read_text())
-                )
+                atomic_json(directory / "inputs/theme-content.json", content)
                 config["theme_content"] = "inputs/theme-content.json"
         atomic_json(
             directory / "inventory.json",

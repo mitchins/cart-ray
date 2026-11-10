@@ -20,7 +20,11 @@ def icon(name, size=22):
 
 
 def money(p):
-    return "Free" if p["amount_minor"] == 0 else f"${p['amount_minor'] / 100:.2f}"
+    if p["amount_minor"] == 0:
+        return "Free"
+    symbols = {"AUD": "$", "USD": "$", "CAD": "$", "NZD": "$", "GBP": "£", "EUR": "€"}
+    prefix = symbols.get(p["currency"], esc(p["currency"]) + " ")
+    return f"{prefix}{p['amount_minor'] / 100:.2f}"
 
 
 def card(p, base):
@@ -108,7 +112,7 @@ def page_shell(gel, theme, base, page, title, content, preview=True, product_key
         if preview
         else ""
     )
-    return f'''<!doctype html><html lang="{esc(gel["identity"]["locale"])}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="referrer" content="no-referrer">{('<meta name="robots" content="noindex,nofollow">') if preview or page in ("review", "manage", "purchase-return", "cart", "unsubscribe") else ""}<title>{esc(title)} · {esc(name)}</title><meta name="description" content="{esc(gel["identity"]["description"])}"><link rel="icon" href="{base + gel["assets"]["favicon"]}" type="image/svg+xml"><link rel="stylesheet" href="{base}theme/tokens.css"><link rel="stylesheet" href="{base}theme/base.css"><link rel="stylesheet" href="{base}theme/theme.css"><script src="{base}site-config.js" defer></script><script type="module" src="{base}theme/app.mjs"></script></head><body class="theme-{theme} page-{page}" data-page="{page}" data-product-key="{esc(product_key)}">{header(gel, theme, base, preview)}<main id="main" tabindex="-1">{content}</main><div id="toast" class="toast" role="status" aria-live="polite" aria-atomic="true"></div>{preview_tools}{footer}<noscript><p class="noscript">You can browse the collection without JavaScript. Cart, checkout and review forms require JavaScript.</p></noscript><dialog id="confirm-dialog" aria-labelledby="dialog-title"><h2 id="dialog-title">Withdraw this review?</h2><p>Your review will no longer be displayed. This does not change your order.</p><div class="button-row"><button type="button" data-dialog-cancel autofocus>Keep my review</button><button type="button" class="danger" data-dialog-confirm>Withdraw review</button></div></dialog></body></html>'''
+    return f'''<!doctype html><html lang="{esc(gel["identity"]["locale"])}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="referrer" content="no-referrer">{('<meta name="robots" content="noindex,nofollow">') if preview or page in ("review", "manage", "purchase-return", "cart", "unsubscribe") else ""}<title>{esc(title)} · {esc(name)}</title><meta name="description" content="{esc(gel["identity"]["description"])}"><link rel="icon" href="{base + gel["assets"]["favicon"]}" type="image/svg+xml"><link rel="stylesheet" href="{base}theme/tokens.css"><link rel="stylesheet" href="{base}theme/base.css"><link rel="stylesheet" href="{base}theme/theme.css"><script src="{base}site-config.js" defer></script><script type="module" src="{base}theme/app.mjs"></script></head><body class="theme-{theme} page-{page}" data-page="{page}" data-product-key="{esc(product_key)}" data-page-title="{esc(title)} · {esc(name)}">{header(gel, theme, base, preview)}<main id="main" tabindex="-1">{content}</main><div id="toast" class="toast" role="status" aria-live="polite" aria-atomic="true"></div>{preview_tools}{footer}<noscript><p class="noscript">You can browse the collection without JavaScript. Cart, checkout and review forms require JavaScript.</p></noscript><dialog id="confirm-dialog" aria-labelledby="dialog-title"><h2 id="dialog-title">Withdraw this review?</h2><p>Your review will no longer be displayed. This does not change your order.</p><div class="button-row"><button type="button" data-dialog-cancel autofocus>Keep my review</button><button type="button" class="danger" data-dialog-confirm>Withdraw review</button></div></dialog></body></html>'''
 
 
 def simple_page(page, gel, base):

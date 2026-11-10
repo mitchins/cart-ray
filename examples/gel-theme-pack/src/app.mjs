@@ -134,6 +134,7 @@ async function nativeReview(page){
 document.addEventListener('keydown',e=>{if(e.key==='Escape')$$('.mobile-nav[open]').forEach(d=>{d.open=false;$('summary',d).focus();});});
 async function boot(){
   if(!config)throw new Error('Missing theme build configuration.');
+  if(document.body.dataset.pageTitle)document.title=document.body.dataset.pageTitle;
   let page=document.body.dataset.page;
   // Review capabilities use the existing standalone client; a catalogue outage must not block them.
   if(config.preview===false && (page==='review'||page==='manage')){await nativeReview(page);return;}

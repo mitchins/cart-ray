@@ -185,6 +185,9 @@ jobs:
           done
           uv run python examples/gel-theme-pack/tests/build_northline_connected.py --output /tmp/gel-connected-northline-classic
           python3 -m http.server 4177 --directory /tmp/gel-connected-northline-classic > /tmp/gel-http-northline-classic.log 2>&1 &
+          for port in 4174 4175 4176 4177; do
+            curl --fail --silent --retry 20 --retry-delay 1 --retry-connrefused "http://127.0.0.1:$port/" > /dev/null
+          done
       - name: Exercise every connected composition in Chromium, Firefox and WebKit
         run: |
           port=4174

@@ -24,7 +24,11 @@ Chromium rendered the actual generated documents, styles and original artwork. T
 
 The same lane checks narrow reflow, image alternative attributes, page heading counts, error focus, keyboard focus, dialog containment/Escape/restoration and reduced-motion behaviour. No application JavaScript exceptions were observed.
 
-The authoring environment blocks Chromium URL navigation. The executed lane therefore uses `tests/offline_browser.py` to supply local resources and module loading in memory, with simulated navigation/storage backing. This is not evidence of a deployed HTTP site. A normal HTTP Playwright lane is included for execution on the developer's machine.
+The original source-pack authoring evidence used an offline Chromium loader.
+The `browser-results.json` in this integrated tree has since been replaced by the
+HTTP Chromium harness run against a local server. Its HTTP label is intentional.
+That preview run remains separate from connected cross-engine and hosted service
+evidence recorded in `INTEGRATION.md`.
 
 ## Explicitly not claimed
 
@@ -34,4 +38,7 @@ The authoring environment blocks Chromium URL navigation. The executed lane ther
 - No axe-core, Safari, Firefox, VoiceOver or NVDA audit was performed.
 - This is not a WCAG conformance certificate or production activation approval.
 
-The integration boundary is explicit: `connect.py` imports the existing cart/checkout/return client exports and copies the native review/management clients unchanged. Codex should run the existing repository regression suites and the focused hosted sandbox flow before merging the presentation integration. No broader backend redesign is requested.
+The connected implementation and current repository/hosted qualification are
+recorded in `INTEGRATION.md`. Historical source-pack limitations above describe
+the original deliverable; they do not replace the current evidence or expand it
+into unperformed assistive-technology or production checks.
