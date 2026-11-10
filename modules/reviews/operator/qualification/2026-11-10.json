@@ -1,0 +1,66 @@
+{
+  "format": 1,
+  "qualified_at": "2026-11-10",
+  "scope": "independent isolated Acorn test installation; no production",
+  "hosted_source_commit": "3b52cbc331e560ce0a70f290ffe1dc8da689eb1f",
+  "hosted_checkout_clean_throughout": true,
+  "implementation_or_credential_interventions": [],
+  "hosted_validation": [
+    "Fresh documented plan/provision, all 42 migrations, locked build and deployment",
+    "Staged verification did not activate; operator explicitly activated",
+    "Accepted two-product paid order produced one provider-accepted and delivered invitation",
+    "Browser review submission, exact-revision moderation and public display on one product only",
+    "Declined checkout permission produced no invitation",
+    "Unsubscribe persisted suppression; a later accepted purchase produced no further invitation",
+    "Same-commit upgrade and rollback, interrupted deploy/resume, wrong owned database binding diagnosis/restoration",
+    "Pause, explicit reactivation with retained fence/checkpoint and no additional provider acceptance, final pause"
+  ],
+  "migration_counts": {
+    "commerce": 7,
+    "reviews": 33,
+    "context": 2
+  },
+  "final_state": {
+    "phase": "paused",
+    "doctor_healthy": true,
+    "record_revision": 5,
+    "activation_watermark": 0,
+    "last_outbox_id": 9,
+    "provider_acceptances": 1,
+    "recipient_suppressions": 1,
+    "accepted_generations": 1,
+    "public_contributions_by_test_product": [
+      1,
+      0
+    ]
+  },
+  "post_hosted_operator_delta": {
+    "reviewed_tree_commit": "1aa73ea9da565f956dc10a07933fb8b12cf3e524",
+    "deployed_worker_and_storefront_source_changed": false,
+    "changes": [
+      "Workers unpaged listing and metadata-driven Queues pagination",
+      "Bounded malformed provider/D1 errors",
+      "Provider-assigned Pages origin hydration",
+      "Incomplete Python builds and atomic storefront build recovery",
+      "Reject activation before complete deployment"
+    ],
+    "validation": "62 focused operator tests and Ruff; exact integrated head receives CI and independent review",
+    "limitation": "These operator failure/collision paths were validated locally after the hosted run; no claim of a fresh hosted install using this later operator delta."
+  },
+  "limitations": [
+    "Compatible upgrade/rollback in final frozen run use same source commit; distinct-commit upgrade/rollback proved in archived earlier run",
+    "Reviews503 checkout availability proved in archived earlier run; final frozen run did not repeat that fault checkout",
+    "No pre-activation purchase in final run per root direction; no-backfill covered by earlier PR-A/tests",
+    "Node24.21.0 used; .nvmrc pins24.20.0 and guide requires Node24",
+    "npm audit reports4high Wrangler/miniflare/sharp/undici advisories; lock unchanged"
+  ],
+  "provider_delivery_evidence": "Approved-mailbox delivery was additionally confirmed by read-only provider activity lookup; no resend. Provider identifiers remain private.",
+  "npm_audit": {
+    "high": 4,
+    "critical": 0,
+    "production_dependencies_with_omit_dev": 0,
+    "classification": "Pre-existing Wrangler/Miniflare development and operator toolchain advisories in sharp and undici; not bundled Worker dependencies.",
+    "available_remediation": "Wrangler 4.159.0 requires separate locked-toolchain qualification; lock unchanged here."
+  },
+  "privacy": "Mailbox, capability tokens, provider IDs, key fingerprints, raw resource IDs and private paths omitted; detailed receipts retained privately."
+}

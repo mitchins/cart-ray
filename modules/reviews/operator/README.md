@@ -260,3 +260,7 @@ choice evidence, provider receipt counts, moderation/public presentation,
 unsubscribe/later-purchase result, repeat/resume and compatible rollback. Test
 checkout independently during a failed Reviews dependency; Reviews unavailability
 must not change its successful test checkout response.
+
+The [recorded independent qualification](qualification/2026-11-10.json) distinguishes
+the deployed source head from subsequent operator fixes and records the remaining
+validation limitations. Detailed resource/provider receipts stay private.
