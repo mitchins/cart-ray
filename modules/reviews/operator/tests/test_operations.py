@@ -50,6 +50,38 @@ def test_plan_is_nonsecret_offline_and_test_only(tmp_path):
             operations.validate_config(installation.config | {"namespace": namespace})
 
 
+def test_theme_selection_and_gel_inputs_survive_original_handoff(tmp_path):
+    lock = tmp_path / "lock.json"
+    lock.write_text(json.dumps({"stripe_mode": "test", "catalogue_version": "sha256:" + "b" * 64}))
+    source = tmp_path / "brand"
+    (source / "assets").mkdir(parents=True)
+    (source / "assets/mark.svg").write_text("<svg/>")
+    manifest = source / "gel.json"
+    manifest.write_text(json.dumps({"assets": {"logo": "assets/mark.svg"}}))
+    content = tmp_path / "content.json"
+    content.write_text(json.dumps({"title": "Sample"}))
+    installation = operations.Installation.plan(tmp_path / "installation", {
+        "namespace": "acorn-operator-test", "account_id": "a" * 32,
+        "stripe_account_id": "acct_Test", "preflight_lock": str(lock),
+        "theme": "classic", "gel": str(manifest), "gel_assets": str(source),
+        "theme_content": str(content),
+    })
+    manifest.unlink()
+    content.unlink()
+    (source / "assets/mark.svg").unlink()
+    resumed = operations.Installation(installation.directory)
+    assert resumed.config["theme"] == "classic"
+    assert json.loads(Path(resumed.config["gel"]).read_text())["assets"]["logo"] == "assets/mark.svg"
+    assert (Path(resumed.config["gel_assets"]) / "assets/mark.svg").read_text() == "<svg/>"
+    assert json.loads(Path(resumed.config["theme_content"]).read_text())["title"] == "Sample"
+
+
+def test_invalid_theme_is_rejected(tmp_path):
+    installation = planned(tmp_path)
+    with pytest.raises(ValueError, match="theme must be"):
+        operations.validate_config(installation.config | {"theme": "unknown"})
+
+
 def test_generated_keys_are_stable_and_loss_never_regenerates(tmp_path):
     installation = planned(tmp_path)
     value = installation.vault(create=True)

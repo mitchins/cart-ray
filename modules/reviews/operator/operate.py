@@ -76,7 +76,8 @@ def atomic_json(path, value):
 
 def validate_config(config):
     required = {"namespace", "account_id", "stripe_account_id", "preflight_lock"}
-    optional = {"merchant_name", "merchant_contact", "delay_seconds", "max_lateness", "reviews_enabled"}
+    optional = {"merchant_name", "merchant_contact", "delay_seconds", "max_lateness", "reviews_enabled",
+                "theme", "gel", "theme_content", "gel_assets"}
     if not isinstance(config, dict) or set(config) - required - optional or required - set(config):
         raise ValueError("installation config has missing or unknown fields")
     if not re.fullmatch(r"[a-z][a-z0-9-]{2,31}", config["namespace"]) or not config["namespace"].endswith("-test"):
@@ -99,12 +100,20 @@ def validate_config(config):
             raise ValueError(f"invalid public {name}")
     if type(config.get("reviews_enabled", True)) is not bool:
         raise ValueError("reviews_enabled must be a boolean")
+    if config.get("theme", "minimal") not in ("minimal", "studio", "classic"):
+        raise ValueError("theme must be minimal, studio or classic")
+    for field in ("gel", "theme_content", "gel_assets"):
+        if field in config and (not isinstance(config[field], str) or not config[field].strip()):
+            raise ValueError(f"invalid {field} path")
+    if any(field in config for field in ("theme_content", "gel_assets")) and "gel" not in config:
+        raise ValueError("custom theme_content or gel_assets requires a GEL manifest")
     return {
         "reviews_enabled": True,
         "merchant_name": "Squirrel’s Acorn Store",
         "merchant_contact": "Contact the test merchant",
         "delay_seconds": 0,
         "max_lateness": 86400,
+        "theme": "minimal",
         **config,
     }
 
@@ -124,6 +133,9 @@ class Installation:
             raise ValueError("inventory scope/format mismatch; no resource operation is permitted")
         if not Path(self.config["preflight_lock"]).is_absolute():
             self.config["preflight_lock"] = str(self.directory / self.config["preflight_lock"])
+        for field in ("gel", "theme_content", "gel_assets"):
+            if field in self.config and not Path(self.config[field]).is_absolute():
+                self.config[field] = str(self.directory / self.config[field])
         self.credentials = credentials
         if credentials is not None:
             required = {
@@ -161,6 +173,21 @@ class Installation:
             raise ValueError("a compiled Stripe test preflight lock is required")
         atomic_json(directory / "inputs/preflight-lock.json", lock)
         config["preflight_lock"] = "inputs/preflight-lock.json"
+        if "gel" in config:
+            manifest = Path(config["gel"]).resolve(strict=True)
+            assets = Path(config.get("gel_assets", manifest.parent.parent)).resolve(strict=True)
+            if not manifest.is_file() or not assets.is_dir():
+                raise ValueError("GEL manifest must be a file and asset root must be a directory")
+            destination = directory / "inputs/gel-assets"
+            shutil.copytree(assets, destination, symlinks=False)
+            atomic_json(directory / "inputs/gel.json", json.loads(manifest.read_text()))
+            config["gel"] = "inputs/gel.json"
+            config["gel_assets"] = "inputs/gel-assets"
+            if "theme_content" in config:
+                atomic_json(
+                    directory / "inputs/theme-content.json", json.loads(Path(config["theme_content"]).read_text())
+                )
+                config["theme_content"] = "inputs/theme-content.json"
         atomic_json(
             directory / "inventory.json",
             {
@@ -751,6 +778,12 @@ class Installation:
                     str(staging),
                     "--test-checkout-api",
                     self.state["urls"]["source"],
+                    "--theme",
+                    self.config["theme"],
+                    "--gel",
+                    self.config.get("gel", str(ROOT / "examples/gel-theme-pack/gel/squirrel.json")),
+                    *(["--gel-assets", self.config["gel_assets"]] if "gel_assets" in self.config else []),
+                    *(["--theme-content", self.config["theme_content"]] if "theme_content" in self.config else []),
                     *(["--reviews", "--test-review-gateway"] if self.config["reviews_enabled"] else []),
                     "--preflight-lock",
                     self.config["preflight_lock"],

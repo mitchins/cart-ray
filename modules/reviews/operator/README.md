@@ -3,7 +3,7 @@
 This workflow installs **one** isolated Squirrel/Acorn test store. It uses the
 current automatic checkout invitation permission and `reviews_gateway.mjs`.
 It does not deploy the older `/review-consent/` bridge, import historical data,
-change a theme, rotate suppression keys, or support production. Upgrades and
+rotate suppression keys, or support production. Upgrades and
 compatible Worker rollbacks keep the same merchant database and installation
 identity. A fresh namespace is for a new installation, not a second version of
 an existing store.
@@ -54,10 +54,22 @@ lock** named by `preflight_lock`:
   "preflight_lock": "/absolute/path/to/stripe-test-preflight.lock.json",
   "merchant_name": "Squirrel test store",
   "merchant_contact": "Squirrel test operations",
+  "theme": "minimal",
   "delay_seconds": 0,
   "max_lateness": 86400
 }
 ```
+
+Set `theme` to `minimal`, `studio`, or `classic`. The default is the supplied
+Squirrel GEL. For a different brand, provide `gel` as an absolute path to its
+manifest, and optionally `gel_assets` as the asset-root directory and
+`theme_content` as an absolute path to its product presentation JSON. When
+omitted, the asset root is the manifest's grandparent and the supplied Squirrel
+content is used. Planning copies custom GEL inputs into the private installation
+directory so subsequent builds do not depend on the original handoff. Keep this
+directory with the installation inventory. The connected build uses CartRay's
+real checkout and Reviews APIs; the theme preview's simulated adapter is not
+deployed.
 
 A namespace must end in `-test`. The lock is produced by the existing
 `scripts/preflight_catalogue.py` for `examples/acorn-store/catalogue.csv` and

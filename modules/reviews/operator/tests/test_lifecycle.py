@@ -439,6 +439,28 @@ def test_interrupted_storefront_build_is_never_published_and_can_resume(tmp_path
     assert (output / ".operator-build-complete").exists()
 
 
+def test_storefront_builder_receives_configured_theme_and_brand_inputs(tmp_path):
+    install, _, _, _, _ = lifecycle(tmp_path)
+    install.config.update({"theme": "classic", "gel": "/brand/gel.json", "gel_assets": "/brand",
+                           "theme_content": "/brand/content.json"})
+    build_at(install, "a" * 40)
+    original = install.run
+    observed = []
+
+    def record(step, command, environment=None):
+        if step == "build-storefront":
+            observed.append(command)
+        return original(step, command, environment)
+
+    install.run = record
+    install.deploy()
+    command = observed[0]
+    for name, expected in (("--theme", "classic"), ("--gel", "/brand/gel.json"),
+                           ("--gel-assets", "/brand"), ("--theme-content", "/brand/content.json")):
+        assert command[command.index(name) + 1] == expected
+    assert "--reviews" in command
+
+
 def test_incomplete_deployment_cannot_activate_even_if_inspection_would_pass(tmp_path):
     install, provider, _, _, _ = lifecycle(tmp_path)
     build_at(install, "a" * 40)
