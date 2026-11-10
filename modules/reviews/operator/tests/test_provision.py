@@ -71,3 +71,19 @@ def test_provision_repeat_and_unknown_create_outcome_preserve_keys_and_resources
     assert install.state["pending"] == []
     assert first["database:commerce"]["id"] == "recovered-commerce"
     assert install.state["phase"] == "provisioned"
+
+
+def test_initial_key_and_webhook_receipts_recover_after_inventory_write_interruption(tmp_path):
+    install = planned(tmp_path)
+    original = install.vault(create=True)
+    install.state["secret_fingerprints"] = {}
+    install.save()
+    assert install.vault(create=True) == original
+    assert install.state["secret_fingerprints"]
+    original["webhook_secret"] = "whsec_retained"
+    original["webhook_endpoint"] = {"id": "we_retained", "url": "https://source.example.test/stripe/webhook"}
+    operations.atomic_json(install.vault_path, original)
+    with patch.object(operations, "stripe") as provider:
+        install.provision_webhook()
+    provider.assert_not_called()
+    assert install.state["webhook"] == original["webhook_endpoint"]

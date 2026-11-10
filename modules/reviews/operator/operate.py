@@ -182,6 +182,15 @@ class Installation:
         if self.vault_path.exists():
             value = read_private(self.vault_path)
             expected = self.state["secret_fingerprints"]
+            if not expected and create and not self.state["resources"] and self.state["phase"] == "planned":
+                # A crash may occur after the private vault rename and before its
+                # public fingerprints are saved. No resources can yet use these keys.
+                required = {*SECRET_NAMES, "signing_private", "signing_public"}
+                if set(value) != required or any(not isinstance(item, str) or not item for item in value.values()):
+                    raise ValueError("incomplete initial vault; restore its original backup")
+                self.state["secret_fingerprints"] = {key: digest(item.encode()) for key, item in value.items()}
+                self.save()
+                expected = self.state["secret_fingerprints"]
             if not expected or any(
                 digest(value.get(key, "").encode()) != checksum for key, checksum in expected.items()
             ):
@@ -307,6 +316,12 @@ class Installation:
     def provision_webhook(self):
         vault = self.vault()
         if "webhook_secret" in vault:
+            if "webhook" not in self.state:
+                endpoint = vault.get("webhook_endpoint")
+                if not endpoint:
+                    raise ValueError("webhook endpoint receipt missing; restore inventory before continuing")
+                self.state["webhook"] = endpoint
+                self.save()
             return
         if "webhook" in self.state:
             raise ValueError("webhook secret is missing; restore the vault, never recreate the endpoint")
@@ -330,6 +345,7 @@ class Installation:
             idempotency=self.name("webhook-v1"),
         )
         vault["webhook_secret"] = result["secret"]
+        vault["webhook_endpoint"] = {"id": result["id"], "url": url}
         atomic_json(self.vault_path, vault)
         # Only the non-regenerable installation keys are fingerprinted; provider webhook
         # creation uses a stable Stripe idempotency key and is journalled separately.
