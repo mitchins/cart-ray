@@ -95,6 +95,16 @@ def connect(source_site, cartray_root, output, gel, catalogue, theme, assets_roo
                 hashlib.sha256(dest.read_bytes()).digest() != hashlib.sha256(file.read_bytes()).digest()
             ):
                 raise ValueError(f"catalogue image copy mismatch: {relative}")
+    # The theme report was generated before catalogue precedence was applied.
+    # Make its asset hashes describe the actual connected output as well.
+    resolved_path = output / "gel.resolved.json"
+    resolved = json.loads(resolved_path.read_text())
+    assets = resolved["manifest"]["assets"]
+    for key in resolved["validation"]["asset_sha256"]:
+        path = assets.get(key, key)
+        if path.startswith("assets/products/"):
+            resolved["validation"]["asset_sha256"][key] = hashlib.sha256((output / path).read_bytes()).hexdigest()
+    write(resolved_path, json.dumps(resolved, indent=2, sort_keys=True) + "\n")
     preserved = {}
     for destination, path in files.items():
         raw = path.read_bytes()

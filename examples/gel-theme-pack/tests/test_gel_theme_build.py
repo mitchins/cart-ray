@@ -200,6 +200,12 @@ class GelTests(unittest.TestCase):
                 hashlib.sha256((output / "assets/products/acorn-kit-primary.webp").read_bytes()).hexdigest(),
                 expected_hash,
             )
+            resolved = json.loads((output / "gel.resolved.json").read_text())
+            self.assertEqual(
+                resolved["validation"]["asset_sha256"]["assets/products/acorn-kit-primary.webp"], expected_hash
+            )
+            receipt = json.loads((output / "build-receipt.json").read_text())
+            self.assertEqual(receipt["files"]["assets/products/acorn-kit-primary.webp"], expected_hash)
             self.assertEqual(core, (output / "theme/core-storefront.js").read_text())
             self.assertIn('data-cartray-presenter="gel"', (output / "index.html").read_text())
             self.assertEqual((site / "app.js").read_text(), core)
