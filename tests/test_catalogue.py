@@ -13,15 +13,16 @@ from cartray.catalogue import (
 )
 from cartray.compiled_catalogue import COMPILED_CATALOGUE
 from cartray.errors import CatalogueValidationError, CheckoutValidationError
-from cartray.presentation import CsvPresentationSourceAdapter
+from cartray.presentation import CsvPresentationSourceAdapter, fingerprint_presentation_assets
 
 
 def test_compiled_worker_and_preview_bundle_matches_the_synthetic_source_inputs():
     root = Path(__file__).parents[1] / "fixtures"
     assert COMPILED_CATALOGUE.catalogue_sources == asyncio.run(CsvCatalogueSourceAdapter(root / "catalogue.csv").load())
     assert COMPILED_CATALOGUE.catalogue_sources == asyncio.run(COMPILED_CATALOGUE.catalogue_source_adapter.load())
-    assert COMPILED_CATALOGUE.presentation_sources == asyncio.run(
-        CsvPresentationSourceAdapter(root / "catalogue-presentation.csv").load()
+    assert COMPILED_CATALOGUE.presentation_sources == fingerprint_presentation_assets(
+        asyncio.run(CsvPresentationSourceAdapter(root / "catalogue-presentation.csv").load()),
+        root.parent / "storefront" / "assets" / "products",
     )
     assert COMPILED_CATALOGUE.presentation_sources == asyncio.run(COMPILED_CATALOGUE.presentation_source_adapter.load())
     assert COMPILED_CATALOGUE.fulfilment_expansions == {

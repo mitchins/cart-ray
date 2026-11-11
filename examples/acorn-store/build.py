@@ -18,7 +18,12 @@ from urllib.parse import urlsplit
 from cartray.catalogue import CsvCatalogueSourceAdapter, FixturePriceResolver
 from cartray.catalogue_bundle import build_runtime_presented_catalogue, compile_catalogue_bundle
 from cartray.preflight import PreflightLock
-from cartray.presentation import CsvPresentationSourceAdapter, validate_presentation_assets
+from cartray.presentation import (
+    CsvPresentationSourceAdapter,
+    image_url,
+    presentation_images,
+    validate_presentation_assets,
+)
 
 ROOT = Path(__file__).resolve().parents[2]
 HERE = Path(__file__).resolve().parent
@@ -81,6 +86,7 @@ async def preview_manifest(config: dict, lock_path: Path | None = None) -> dict:
         expansions,
         presentation,
         expected_catalogue_version=prices.catalogue_version if lock_path is not None else None,
+        product_assets=HERE / "assets/products",
     )
     result = (await build_runtime_presented_catalogue(bundle, prices)).public_manifest()
     mapped = {item["product_key"]: item for item in config["products"]}
@@ -107,6 +113,28 @@ def test_api(value: str | None) -> str | None:
     ):
         raise ValueError("test checkout API must be an HTTPS origin")
     return value.rstrip("/")
+
+
+def copy_declared_assets(output: Path) -> None:
+    """Copies product images exclusively from validated presentation declarations."""
+
+    sources = asyncio.run(CsvPresentationSourceAdapter(HERE / "catalogue-presentation.csv").load())
+    assets = HERE / "assets"
+    validate_presentation_assets(sources, assets / "products")
+    destination = output / "assets"
+    destination.mkdir(parents=True, exist_ok=True)
+    for item in assets.iterdir():
+        if item.name == "products":
+            continue
+        if item.is_dir():
+            shutil.copytree(item, destination / item.name)
+        else:
+            shutil.copy2(item, destination / item.name)
+    products = destination / "products"
+    products.mkdir()
+    filenames = {image_url(key).rsplit("/", 1)[1] for source in sources for key, _alt in presentation_images(source)}
+    for filename in sorted(filenames):
+        shutil.copy2(assets / "products" / filename, products / filename)
 
 
 def build(
@@ -169,7 +197,7 @@ def build(
     shutil.copy2(HERE / "reviews.mjs", output / "reviews.mjs")
     if test_review_gateway:
         shutil.copy2(HERE / "reviews_gateway.mjs", output / "_worker.js")
-    shutil.copytree(HERE / "assets", output / "assets")
+    copy_declared_assets(output)
     shutil.copytree(ROOT / "modules/reviews/ui", output / "review")
     paths = {item["product_key"]: item["path"] for item in config["products"]}
     subjects = {item["product_key"]: item["review_subject"] for item in config["products"] if item["review_subject"]}

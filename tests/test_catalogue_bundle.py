@@ -32,6 +32,7 @@ def test_compiled_bundle_is_the_current_deterministic_rendering_of_the_source_fi
             FixturePriceResolver.from_json(root / "price-resolutions.json"),
             {key: tuple(value) for key, value in json.loads((root / "fulfilment-expansions.json").read_text()).items()},
             CsvPresentationSourceAdapter(root / "catalogue-presentation.csv"),
+            product_assets=ROOT / "storefront" / "assets" / "products",
         )
     )
 

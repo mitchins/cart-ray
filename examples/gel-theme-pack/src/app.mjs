@@ -1,3 +1,4 @@
+import {mountGallery} from './gallery.mjs';
 /** Shared presentation only. No theme switching, inline merchant CSS or authority derived from browser inputs. */
 const config=window.CARTRAY_THEME;
 const h=value=>String(value??'').replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;').replaceAll('"','&quot;').replaceAll("'",'&#39;');
@@ -144,6 +145,10 @@ async function boot(){
     await renderReturn(await adapter.returnState());counts();return;
   }
   if(page==='home'||page==='shop')catalogueControls();
+  if(page==='product'){
+    const p=adapter.products.find(x=>x.product_key===document.body.dataset.productKey);
+    if(p)mountGallery($('[data-product-gallery]'),p,base);
+  }
   if(page==='product'&&!adapter.preview){
     const p=adapter.products.find(x=>x.product_key===document.body.dataset.productKey);
     if(p){$('.detail-price').textContent=price(p);$('.detail-copy h1').textContent=p.title;$$('[data-add]').forEach(b=>b.disabled=adapter.checkoutLocked);}

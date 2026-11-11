@@ -19,7 +19,7 @@ export async function createAdapter(config) {
   // Theme content contributes presentation only, never a price, product identity or review entitlement.
   const products=catalogue.products.map(p=>{
     const presentation=local.get(p.product_key) || {};
-    return {...presentation,...p,image:p.image_url || presentation.image,image_alt:p.image_alt || presentation.image_alt || '',
+    return {...presentation,...p,images:Array.isArray(p.images)?p.images:[],image:p.image_url || presentation.image,image_alt:p.image_alt || presentation.image_alt || '',
       slug:presentation.slug,category:presentation.category || 'Products',
       review_subject:source.reviewSubjects?.[p.product_key] || null};
   });

@@ -4,6 +4,7 @@ import json
 from collections.abc import Mapping
 from dataclasses import dataclass
 from hashlib import sha256
+from pathlib import Path
 
 from .catalogue import (
     Catalogue,
@@ -19,6 +20,8 @@ from .presentation import (
     PresentedCatalogue,
     StaticPresentationSourceAdapter,
     build_presented_catalogue,
+    fingerprint_presentation_assets,
+    presentation_source_payload,
 )
 
 
@@ -49,11 +52,14 @@ async def compile_catalogue_bundle(
     presentation_source: PresentationSourceAdapter,
     *,
     expected_catalogue_version: str | None = None,
+    product_assets: Path | None = None,
 ) -> CompiledCatalogueBundle:
     """Builds a deployment bundle only after all source and presentation validations pass."""
 
     catalogue_sources = await catalogue_source.load()
     presentation_sources = await presentation_source.load()
+    if product_assets is not None:
+        presentation_sources = fingerprint_presentation_assets(presentation_sources, product_assets)
     catalogue = await build_catalogue_from_source(
         StaticCatalogueSourceAdapter(catalogue_sources), price_resolver, fulfilment_expansions
     )
@@ -102,7 +108,7 @@ def render_compiled_catalogue_module(bundle: CompiledCatalogueBundle) -> str:
         "expected_catalogue_version": bundle.expected_catalogue_version,
         "expected_presentation_version": bundle.expected_presentation_version,
         "fulfilment_expansions": {key: list(value) for key, value in bundle.fulfilment_expansions.items()},
-        "presentation_sources": [source.__dict__ for source in bundle.presentation_sources],
+        "presentation_sources": [presentation_source_payload(source) for source in bundle.presentation_sources],
     }
     encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
     return f"""# ruff: noqa: E501
@@ -138,7 +144,7 @@ def _bundle_version(
     payload = {
         "catalogue_sources": [source.__dict__ for source in catalogue_sources],
         "fulfilment_expansions": {key: list(value) for key, value in sorted(fulfilment_expansions.items())},
-        "presentation_sources": [source.__dict__ for source in presentation_sources],
+        "presentation_sources": [presentation_source_payload(source) for source in presentation_sources],
     }
     encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
     return "sha256:" + sha256(encoded.encode("utf-8")).hexdigest()

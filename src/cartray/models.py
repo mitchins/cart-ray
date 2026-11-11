@@ -27,6 +27,9 @@ class PresentationSource:
     product_key: str
     short_description: str
     image_key: str
+    image_alt: str = ""
+    images_json: str = "[]"
+    asset_hashes_json: str = "{}"
 
 
 @dataclass(frozen=True)

@@ -176,6 +176,25 @@ class Installation:
         content = json.loads(content_path.read_text())
         references = [value for role, value in gel.get("assets", {}).items() if role != "hero_alt"]
         references.extend(product["image"] for product in content.get("products", []))
+        for product in content.get("products", []):
+            if "images" not in product:
+                continue
+            images = product["images"]
+            if not isinstance(images, list) or not 1 <= len(images) <= 8:
+                raise ValueError("product images must contain 1 to 8 images")
+            seen = set()
+            for image in images:
+                if not isinstance(image, dict) or set(image) != {"url", "alt"}:
+                    raise ValueError("invalid product image fields")
+                if not isinstance(image["alt"], str) or not image["alt"].strip() or len(image["alt"]) > 2000:
+                    raise ValueError("invalid product image alt")
+                name = image["url"]
+                if not isinstance(name, str) or name in seen:
+                    raise ValueError("invalid or duplicate product image")
+                seen.add(name)
+                references.append(name)
+            if images[0]["url"] != product["image"]:
+                raise ValueError("product images must start with the primary image")
         for name in references:
             if not isinstance(name, str) or not re.fullmatch(r"assets/[A-Za-z0-9_./-]+\.(svg|png|jpg|jpeg|webp)", name):
                 raise ValueError("GEL image references must be local assets/ paths")

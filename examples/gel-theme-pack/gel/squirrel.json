@@ -15,8 +15,8 @@
     "logo": "assets/squirrel-mark.svg",
     "logo_inverse": "assets/squirrel-mark-inverse.svg",
     "favicon": "assets/squirrel-mark.svg",
-    "hero": "assets/woodland-scene.svg",
-    "hero_alt": "An illustrated oak seedling in a terracotta planter with acorns and a growing guide.",
+    "hero": "assets/products/acorn-hero.webp",
+    "hero_alt": "Illustrative scene of fictional growing products on a table",
     "stripe_icon": "assets/squirrel-stripe-icon.png",
     "stripe_logo": "assets/squirrel-stripe-logo.png"
   },
