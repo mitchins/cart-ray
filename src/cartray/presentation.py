@@ -101,6 +101,9 @@ def parse_presentation_csv(contents: str) -> tuple[PresentationSource, ...]:
 
     sources: list[PresentationSource] = []
     for row in rows:
+        for header in _OPTIONAL_HEADERS:
+            if header in row and row[header] is None:
+                row[header] = ""
         if None in row or any(
             not isinstance(row.get(header), str) or (header in _PRESENTATION_HEADERS and not row[header].strip())
             for header in headers

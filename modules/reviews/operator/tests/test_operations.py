@@ -401,6 +401,8 @@ def test_plan_rejects_unsafe_referenced_gel_assets_before_writing(tmp_path, kind
         [{"url": "assets/product.svg", "alt": "Primary"}] * 2,
         [{"url": "assets/../private.svg", "alt": "Unsafe"}],
         [{"url": "assets/product.svg", "alt": ""}],
+        [{"url": "https://example.com/product.svg", "alt": "Remote"}],
+        [{"url": "assets/other.svg", "alt": "Wrong primary"}],
     ],
 )
 def test_gel_gallery_snapshot_rejects_invalid_images(tmp_path, images):

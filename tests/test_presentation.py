@@ -12,8 +12,20 @@ from cartray.presentation import (
     CsvPresentationSourceAdapter,
     build_presented_catalogue,
     image_url,
+    parse_presentation_csv,
     validate_presentation_assets,
 )
+
+
+def test_csv_missing_trailing_optional_cells_are_empty_but_bad_rows_rejected():
+    header = "product_key,short_description,image_key,image_alt,images_json\n"
+    for row in ("TEST-ITEM,Description,image\n", "TEST-ITEM,Description,image,Alternative\n"):
+        result = parse_presentation_csv(header + row)
+        assert result[0].images_json == "[]"
+    with pytest.raises(CatalogueValidationError):
+        parse_presentation_csv(header + "TEST-ITEM,Description\n")
+    with pytest.raises(CatalogueValidationError):
+        parse_presentation_csv(header + "TEST-ITEM,Description,image,Alt,[],extra\n")
 
 
 def fixture_presentation_sources() -> tuple[PresentationSource, ...]:

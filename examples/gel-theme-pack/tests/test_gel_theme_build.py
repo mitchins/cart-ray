@@ -8,10 +8,14 @@ import unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "src"))
 from build import ROOT, build_site, load_inputs
 from connect import BOOT, EXPORTS, connect
 from src.gel import contrast, tokens, validate, validate_asset
 from src.templates import money
+
+from cartray.models import PresentationSource
+from cartray.presentation import fingerprint_presentation_assets
 
 
 class GelTests(unittest.TestCase):
@@ -58,6 +62,14 @@ class GelTests(unittest.TestCase):
         del self.gel["assets"]["hero"]
         del self.gel["assets"]["hero_alt"]
         validate(self.gel, ROOT)
+
+    def test_hero_caption_is_merchant_supplied(self):
+        from src.templates import hero
+
+        self.assertIn("Illustrative imagery.", hero(self.gel, "minimal", "/"))
+        self.gel["hero"].pop("image_caption")
+        validate(self.gel, ROOT)
+        self.assertNotIn("Illustrative imagery.", hero(self.gel, "minimal", "/"))
 
     def test_contrast_known_values(self):
         self.assertEqual(contrast("#000000", "#FFFFFF"), 21)
@@ -171,9 +183,23 @@ class GelTests(unittest.TestCase):
             core = "\n".join(f"export function {name}() {{}}" for name in EXPORTS) + "\nfunction boot() {}\n" + BOOT
             (site / "app.js").write_text(core)
             (site / "reviews.mjs").write_text("// public reader fixture\n")
+            product_assets = site / "assets/products"
+            product_assets.mkdir(parents=True)
+            collision = product_assets / "acorn-kit-primary.webp"
+            authoritative = (ROOT / "assets/products/acorn-planter-primary.webp").read_bytes()
+            collision.write_bytes(authoritative)
+            fingerprint = fingerprint_presentation_assets(
+                (PresentationSource("ACORN-KIT", "Description", "acorn-kit-primary"),), product_assets
+            )[0]
+            expected_hash = json.loads(fingerprint.asset_hashes_json)["acorn-kit-primary"]
+            self.assertNotEqual(authoritative, (ROOT / "assets/products/acorn-kit-primary.webp").read_bytes())
             for name in ("reviews.js", "manage.js"):
                 (repo / "modules/reviews/ui" / name).write_text("// native fixture " + name + "\n")
             connect(site, repo, output, ROOT / "gel/squirrel.json", ROOT / "content/squirrel.json", "classic")
+            self.assertEqual(
+                hashlib.sha256((output / "assets/products/acorn-kit-primary.webp").read_bytes()).hexdigest(),
+                expected_hash,
+            )
             self.assertEqual(core, (output / "theme/core-storefront.js").read_text())
             self.assertIn('data-cartray-presenter="gel"', (output / "index.html").read_text())
             self.assertEqual((site / "app.js").read_text(), core)

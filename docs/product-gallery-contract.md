@@ -36,3 +36,8 @@ The deployment compiler fingerprints the bytes of every referenced primary and e
 presentation source, so changing bytes at the same filename changes `presentation_version` without
 changing the commerce version. They are never exposed as checkout input. Historical bundles without
 fingerprints continue to load; new deployable builds should always supply their product asset folder.
+
+Connected themes retain the catalogue build's product images when a theme supplies a file at the
+same path. Merchant-authored product descriptions should disclose illustrative mock-ups when needed;
+the optional GEL `hero.image_caption` provides a visible disclosure for hero artwork. Image alt text
+describes meaningful images, while decorative product-card images retain empty alternatives.

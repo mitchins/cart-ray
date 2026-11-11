@@ -2,7 +2,7 @@
   "schema_version": "1.0",
   "identity": {
     "key": "acorn-store",
-    "name": "Squirrel’s Acorn Store",
+    "name": "Squirrel\u2019s Acorn Store",
     "short_name": "Squirrel",
     "tagline": "Little beginnings. Lovely things.",
     "description": "A small collection for the joy of growing. Thoughtful kits, considered planters and a little know-how.",
@@ -47,6 +47,7 @@
     "eyebrow": "FOR THE JOY OF GROWING",
     "title": "Small beginnings.\nSomething wonderful.",
     "body": "A little soil. A little patience. Discover simple, thoughtful things to help your next good thing grow.",
-    "cta": "Find your little beginning"
+    "cta": "Find your little beginning",
+    "image_caption": "Illustrative imagery."
   }
 }

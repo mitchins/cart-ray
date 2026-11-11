@@ -85,9 +85,16 @@ def connect(source_site, cartray_root, output, gel, catalogue, theme, assets_roo
             raise ValueError("source build must not contain symlinks")
         relative = file.relative_to(source_site)
         dest = output / relative
-        if file.is_file() and not dest.exists():
+        # The source storefront was built from the validated catalogue. Product
+        # images must win over same-named theme files, including on upgrades.
+        authoritative_product = relative.parts[:2] == ("assets", "products")
+        if file.is_file() and (authoritative_product or not dest.exists()):
             dest.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(file, dest)
+            if authoritative_product and (
+                hashlib.sha256(dest.read_bytes()).digest() != hashlib.sha256(file.read_bytes()).digest()
+            ):
+                raise ValueError(f"catalogue image copy mismatch: {relative}")
     preserved = {}
     for destination, path in files.items():
         raw = path.read_bytes()

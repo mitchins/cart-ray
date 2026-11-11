@@ -62,8 +62,9 @@ def hero(gel, theme, base):
     a = gel["assets"]
     title = esc(h["title"]).replace("\n", "<br>")
     text = f'''<div class="hero-copy"><p class="eyebrow">{esc(h["eyebrow"])}</p><h1>{title}</h1><p class="hero-description">{esc(h["body"])}</p><a class="button" href="{base}shop/">{esc(h["cta"])}{icon("arrow")}</a><p class="hero-note">{icon("leaf", 18)} {esc(gel["identity"]["tagline"])}</p></div>'''
+    caption = f'<span>{esc(h["image_caption"])}</span>' if h.get("image_caption") else ""
     art = (
-        f'''<figure class="hero-art"><img src="{base + a["hero"]}" alt="{esc(a["hero_alt"])}" width="800" height="720" fetchpriority="high"><figcaption><span>01 / THE EVERYDAY COLLECTION</span><span>Illustrative imagery.</span></figcaption></figure>'''
+        f'''<figure class="hero-art"><img src="{base + a["hero"]}" alt="{esc(a["hero_alt"])}" width="800" height="720" fetchpriority="high"><figcaption><span>01 / THE EVERYDAY COLLECTION</span>{caption}</figcaption></figure>'''
         if "hero" in a
         else ""
     )
