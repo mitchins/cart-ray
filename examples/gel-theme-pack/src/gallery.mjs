@@ -21,7 +21,7 @@ export function mountGallery(root,product,base='') {
   const buttons=[];
   const unavailable=()=>{image.hidden=true;fallback.hidden=false;status.textContent=`Image ${selected+1} of ${images.length} unavailable`;};
   image.addEventListener('error',unavailable);
-  image.addEventListener('load',()=>{image.hidden=false;fallback.hidden=true;});
+  image.addEventListener('load',()=>{image.hidden=false;fallback.hidden=true;status.textContent=`Image ${selected+1} of ${images.length}: ${images[selected].alt}`;});
   function select(index,focus=false){
     selected=index;image.hidden=false;fallback.hidden=true;image.alt=images[index].alt;image.src=images[index].url;
     buttons.forEach((button,i)=>button.setAttribute('aria-pressed',String(i===index)));

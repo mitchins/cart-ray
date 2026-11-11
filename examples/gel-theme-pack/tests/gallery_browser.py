@@ -161,8 +161,12 @@ def main():
                     assert buttons.nth(0).get_attribute("aria-pressed") == "true"
                     buttons.nth(0).press("ArrowLeft")
                     page.locator("[data-gallery-fallback]").wait_for(state="visible")
+                    assert "unavailable" in page.locator("[data-gallery-status]").inner_text()
                     buttons.nth(2).press("ArrowRight")
                     page.locator("[data-gallery-image]").wait_for(state="visible")
+                    page.wait_for_function(
+                        "() => document.querySelector('[data-gallery-status]').textContent === 'Image 1 of 3: Front'"
+                    )
                     assert page.locator(".gallery-stage").bounding_box()["height"] == stage["height"]
                     assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
                     assert page.locator(".gallery-thumbnail img").first.get_attribute("loading") == "lazy"
