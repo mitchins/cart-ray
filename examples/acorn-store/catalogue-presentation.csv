@@ -1,4 +1,4 @@
-product_key,short_description,image_key
-ACORN-KIT,Everything you need to start a tiny woodland.,acorn-kit-v1
-ACORN-PLANTER,A home for your growing acorns.,acorn-planter-v1
-ACORN-GUIDE,A free guide to caring for your acorns.,acorn-guide-v1
+product_key,short_description,image_key,image_alt,images_json
+ACORN-KIT,Everything you need to start a tiny woodland. Images are fictional mock-ups; pictured items do not specify included components.,acorn-kit-primary,Illustrative mock-up of an acorn growing kit,"[{""image_key"":""acorn-kit-contents"",""alt"":""Illustrative arrangement of growing-kit packaging and accessories""},{""image_key"":""acorn-kit-lifestyle"",""alt"":""Illustrative growing-kit scene on a windowsill""}]"
+ACORN-PLANTER,A home for your growing acorns. Images are fictional mock-ups; pictured items do not specify included components.,acorn-planter-primary,Illustrative planter mock-up with an oak seedling,"[{""image_key"":""acorn-planter-detail"",""alt"":""Illustrative close view of the planter mock-up and packaging""},{""image_key"":""acorn-planter-lifestyle"",""alt"":""Illustrative planter mock-up on a sunny windowsill""}]"
+ACORN-GUIDE,A free guide to caring for your acorns. Images are fictional mock-ups; pictured items do not specify included components. This guide is digital.,acorn-guide-primary,Illustrative booklet mock-up for the digital growing guide,"[{""image_key"":""acorn-guide-interior"",""alt"":""Illustrative mock-up showing pages of a growing guide""},{""image_key"":""acorn-guide-lifestyle"",""alt"":""Illustrative guide mock-up beside an oak seedling""}]"

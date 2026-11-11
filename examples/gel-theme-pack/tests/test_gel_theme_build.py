@@ -8,10 +8,14 @@ import unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from build import ROOT, build_site
+sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "src"))
+from build import ROOT, build_site, load_inputs
 from connect import BOOT, EXPORTS, connect
 from src.gel import contrast, tokens, validate, validate_asset
 from src.templates import money
+
+from cartray.models import PresentationSource
+from cartray.presentation import fingerprint_presentation_assets
 
 
 class GelTests(unittest.TestCase):
@@ -59,6 +63,14 @@ class GelTests(unittest.TestCase):
         del self.gel["assets"]["hero_alt"]
         validate(self.gel, ROOT)
 
+    def test_hero_caption_is_merchant_supplied(self):
+        from src.templates import hero
+
+        self.assertIn("Illustrative imagery.", hero(self.gel, "minimal", "/"))
+        self.gel["hero"].pop("image_caption")
+        validate(self.gel, ROOT)
+        self.assertNotIn("Illustrative imagery.", hero(self.gel, "minimal", "/"))
+
     def test_contrast_known_values(self):
         self.assertEqual(contrast("#000000", "#FFFFFF"), 21)
 
@@ -94,6 +106,45 @@ class GelTests(unittest.TestCase):
                 }
 
             self.assertEqual(hashes(a), hashes(b))
+
+    def test_gallery_assets_are_validated_hashed_and_selectively_copied(self):
+        content = json.loads((ROOT / "content/northline.json").read_text())
+        product = content["products"][0]
+        extra = "assets/woodland-planter.svg"
+        product["images"] = [{"url": product["image"], "alt": "Primary"}, {"url": extra, "alt": "Detail"}]
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp) / "content.json"
+            source.write_text(json.dumps(content))
+            output = Path(tmp) / "site"
+            build_site(output, ROOT / "gel/northline.json", source, "minimal")
+            config = (output / "site-config.js").read_text()
+            self.assertIn('"alt": "Detail"', config)
+            self.assertEqual((output / extra).read_bytes(), (ROOT / extra).read_bytes())
+            self.assertFalse((output / "assets/acorn-kit.svg").exists())
+            _, _, report = load_inputs(ROOT / "gel/northline.json", source)
+            self.assertIn(extra, report["asset_sha256"])
+
+    def test_gallery_rejects_unsafe_duplicate_unordered_or_unbounded_images(self):
+        content = json.loads((ROOT / "content/northline.json").read_text())
+        product = content["products"][0]
+        primary = {"url": product["image"], "alt": "Primary"}
+        invalid = [
+            [],
+            [primary] * 9,
+            [primary, primary],
+            [{"url": "assets/../secret.svg", "alt": "Unsafe"}],
+            [{"url": "https://example.com/image.webp", "alt": "Remote"}],
+            [{"url": product["image"], "alt": ""}],
+            [{"url": content["products"][1]["image"], "alt": "Wrong primary"}],
+        ]
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp) / "content.json"
+            for images in invalid:
+                with self.subTest(images=images):
+                    product["images"] = images
+                    source.write_text(json.dumps(content))
+                    with self.assertRaises(ValueError):
+                        load_inputs(ROOT / "gel/northline.json", source)
 
     def test_all_pages_have_one_h1_labels_and_local_assets(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -132,9 +183,29 @@ class GelTests(unittest.TestCase):
             core = "\n".join(f"export function {name}() {{}}" for name in EXPORTS) + "\nfunction boot() {}\n" + BOOT
             (site / "app.js").write_text(core)
             (site / "reviews.mjs").write_text("// public reader fixture\n")
+            product_assets = site / "assets/products"
+            product_assets.mkdir(parents=True)
+            collision = product_assets / "acorn-kit-primary.webp"
+            authoritative = (ROOT / "assets/products/acorn-planter-primary.webp").read_bytes()
+            collision.write_bytes(authoritative)
+            fingerprint = fingerprint_presentation_assets(
+                (PresentationSource("ACORN-KIT", "Description", "acorn-kit-primary"),), product_assets
+            )[0]
+            expected_hash = json.loads(fingerprint.asset_hashes_json)["acorn-kit-primary"]
+            self.assertNotEqual(authoritative, (ROOT / "assets/products/acorn-kit-primary.webp").read_bytes())
             for name in ("reviews.js", "manage.js"):
                 (repo / "modules/reviews/ui" / name).write_text("// native fixture " + name + "\n")
             connect(site, repo, output, ROOT / "gel/squirrel.json", ROOT / "content/squirrel.json", "classic")
+            self.assertEqual(
+                hashlib.sha256((output / "assets/products/acorn-kit-primary.webp").read_bytes()).hexdigest(),
+                expected_hash,
+            )
+            resolved = json.loads((output / "gel.resolved.json").read_text())
+            self.assertEqual(
+                resolved["validation"]["asset_sha256"]["assets/products/acorn-kit-primary.webp"], expected_hash
+            )
+            receipt = json.loads((output / "build-receipt.json").read_text())
+            self.assertEqual(receipt["files"]["assets/products/acorn-kit-primary.webp"], expected_hash)
             self.assertEqual(core, (output / "theme/core-storefront.js").read_text())
             self.assertIn('data-cartray-presenter="gel"', (output / "index.html").read_text())
             self.assertEqual((site / "app.js").read_text(), core)
@@ -146,7 +217,6 @@ class GelTests(unittest.TestCase):
             self.assertFalse((output / "inbox").exists())
             self.assertIn("/storefront-config.js", (output / "index.html").read_text())
             self.assertIn("Price loading", (output / "products/acorn-growing-kit/index.html").read_text())
-
 
 
 class CurrencyTests(unittest.TestCase):

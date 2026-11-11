@@ -57,12 +57,28 @@ def test_theme_selection_and_gel_inputs_survive_original_handoff(tmp_path):
     (source / "assets").mkdir(parents=True)
     (source / "assets/mark.svg").write_text("<svg/>")
     (source / "assets/product.svg").write_text("<svg/>")
+    (source / "assets/detail.svg").write_text("<svg/>")
     (source / "credentials.json").write_text("private")
     (source / "assets/unreferenced.svg").write_text("private")
     manifest = source / "gel.json"
     manifest.write_text(json.dumps({"assets": {"logo": "assets/mark.svg"}}))
     content = tmp_path / "content.json"
-    content.write_text(json.dumps({"title": "Sample", "products": [{"image": "assets/product.svg"}]}))
+    content.write_text(
+        json.dumps(
+            {
+                "title": "Sample",
+                "products": [
+                    {
+                        "image": "assets/product.svg",
+                        "images": [
+                            {"url": "assets/product.svg", "alt": "Primary"},
+                            {"url": "assets/detail.svg", "alt": "Detail"},
+                        ],
+                    }
+                ],
+            }
+        )
+    )
     installation = operations.Installation.plan(
         tmp_path / "installation",
         {
@@ -78,6 +94,7 @@ def test_theme_selection_and_gel_inputs_survive_original_handoff(tmp_path):
     )
     copied = installation.directory / "inputs/gel-assets"
     assert sorted(str(path.relative_to(copied)) for path in copied.rglob("*") if path.is_file()) == [
+        "assets/detail.svg",
         "assets/mark.svg",
         "assets/product.svg",
     ]
@@ -374,3 +391,26 @@ def test_plan_rejects_unsafe_referenced_gel_assets_before_writing(tmp_path, kind
             },
         )
     assert not directory.exists()
+
+
+@pytest.mark.parametrize(
+    "images",
+    [
+        [],
+        [{"url": "assets/product.svg", "alt": "Primary"}] * 9,
+        [{"url": "assets/product.svg", "alt": "Primary"}] * 2,
+        [{"url": "assets/../private.svg", "alt": "Unsafe"}],
+        [{"url": "assets/product.svg", "alt": ""}],
+        [{"url": "https://example.com/product.svg", "alt": "Remote"}],
+        [{"url": "assets/other.svg", "alt": "Wrong primary"}],
+    ],
+)
+def test_gel_gallery_snapshot_rejects_invalid_images(tmp_path, images):
+    (tmp_path / "assets").mkdir()
+    (tmp_path / "assets/product.svg").write_text("<svg/>")
+    manifest = tmp_path / "gel.json"
+    manifest.write_text(json.dumps({"assets": {}}))
+    content = tmp_path / "content.json"
+    content.write_text(json.dumps({"products": [{"image": "assets/product.svg", "images": images}]}))
+    with pytest.raises(ValueError):
+        operations.Installation.gel_inputs(manifest, tmp_path, content)

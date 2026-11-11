@@ -16,3 +16,9 @@
 
 /* Native forms keep their own fields and retry handlers. */
 .page-review #content>form .rating-options input,.page-manage #content>form .rating-options input{position:absolute;opacity:0;width:100%;height:100%;min-height:0;padding:0;margin:0;border:0}.page-review #content>.review-tabs{display:flex;gap:12px;margin:20px 0}.page-review #content>.review-tabs .review-tab{width:auto;max-width:50%}.page-review #content>form .field input,.page-manage #content>form .field input{width:100%}
+
+/* Shared product gallery retains a stable stage across every theme and viewport. */
+.product-detail>.detail-art{min-width:0;align-self:start}.gallery-stage{position:relative;aspect-ratio:10/9;background:var(--color-panel);display:grid;place-items:center;overflow:hidden;border-radius:var(--card-radius)}.detail-art .gallery-stage>img{width:100%;height:100%;max-height:none;object-fit:contain;position:absolute;inset:0}.gallery-stage>p{padding:24px;text-align:center;color:var(--color-subtle)}.gallery-thumbnails{display:flex;flex-wrap:wrap;gap:10px;padding:12px 4px 4px}.gallery-thumbnail{width:72px;height:66px;min-height:44px;padding:3px;border:2px solid transparent;background:var(--color-panel);color:var(--color-ink);border-radius:var(--gel-radius);overflow:hidden}.gallery-thumbnail[aria-pressed=true]{border-color:var(--color-action)}.detail-art .gallery-thumbnail img{width:100%;height:100%;max-height:none;object-fit:contain}.gallery-thumbnail:focus-visible{outline:3px solid var(--color-focus);outline-offset:2px}
+/* This illustrative Acorn pack has its own wordmark baked into the top. Keep
+   Squirrel's identity in the header by showing the product scene below it. */
+.hero-art img[src$="/acorn-hero.webp"]{width:100%;height:clamp(180px,18vw,260px);max-height:none;object-fit:cover;object-position:center bottom}

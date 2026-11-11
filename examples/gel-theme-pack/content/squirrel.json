@@ -2,8 +2,117 @@
   "version": "theme-preview-squirrel-v1",
   "review_invitation_default_checked": true,
   "products": [
-    {"product_key":"ACORN-KIT","slug":"acorn-growing-kit","title":"Acorn growing kit","category":"Growing kits","amount_minor":2400,"currency":"AUD","max_quantity":10,"review_subject":"acorn-growing-kit","image":"assets/acorn-kit.svg","image_alt":"Illustration of an acorn growing kit with a fibre pot, soil and acorns.","eyebrow":"A SMALL START","short_description":"Everything for your first little oak. Just add water and a sunny spot.","details":"Bring the quiet pleasure of growing something into your day. This sample kit brings a fibre pot, growing medium and acorns together in one simple beginning.","features":["One simple growing project","Illustrated getting-started guide","A thoughtful gift for curious growers"],"specs":{"Format":"Growing kit","Collection":"Little beginnings","Care":"Follow the enclosed growing guide"}},
-    {"product_key":"ACORN-PLANTER","slug":"woodland-planter","title":"Woodland planter","category":"Planters","amount_minor":1800,"currency":"AUD","max_quantity":10,"review_subject":"woodland-planter","image":"assets/woodland-planter.svg","image_alt":"Illustration of a warm terracotta planter holding a young oak seedling.","eyebrow":"ROOM TO GROW","short_description":"A warm, earthy home for whatever you are growing next.","details":"A considered shape and an easy place on the windowsill. The Woodland planter gives your next growing project a little room of its own.","features":["A simple, versatile shape","Warm terracotta palette","Pairs with the Acorn growing kit"],"specs":{"Format":"Planter","Collection":"Room to grow","Plant":"Shown for illustration"}},
-    {"product_key":"ACORN-GUIDE","slug":"acorn-growing-guide","title":"The little growing guide","category":"Guides","amount_minor":0,"currency":"AUD","max_quantity":1,"review_subject":null,"image":"assets/growing-guide.svg","image_alt":"Illustration of a cream growing guide with an oak leaf on its cover.","eyebrow":"A LITTLE KNOW-HOW","short_description":"An easy first chapter in growing an oak. A free digital guide.","details":"Make your first growing project feel a little less mysterious. This sample digital guide introduces the basics, from choosing a spot to noticing the first signs of growth.","features":["A gentle introduction","Digital format","Free to add to your order"],"specs":{"Format":"Digital guide","Collection":"A little know-how","Review invitations":"Not applicable"}}
+    {
+      "product_key": "ACORN-KIT",
+      "slug": "acorn-growing-kit",
+      "title": "Acorn growing kit",
+      "category": "Growing kits",
+      "amount_minor": 2400,
+      "currency": "AUD",
+      "max_quantity": 10,
+      "review_subject": "acorn-growing-kit",
+      "image": "assets/products/acorn-kit-primary.webp",
+      "image_alt": "Illustrative mock-up of an acorn growing kit",
+      "eyebrow": "A SMALL START",
+      "short_description": "Everything for your first little oak. Just add water and a sunny spot.",
+      "details": "A sample growing project. Images are fictional mock-ups; packaging and pictured accessories do not specify included components.",
+      "features": [
+        "A sample growing project",
+        "Imagery is illustrative"
+      ],
+      "specs": {
+        "Format": "Growing kit",
+        "Images": "Fictional mock-ups"
+      },
+      "images": [
+        {
+          "url": "assets/products/acorn-kit-primary.webp",
+          "alt": "Illustrative mock-up of an acorn growing kit"
+        },
+        {
+          "url": "assets/products/acorn-kit-contents.webp",
+          "alt": "Illustrative arrangement of growing-kit packaging and accessories"
+        },
+        {
+          "url": "assets/products/acorn-kit-lifestyle.webp",
+          "alt": "Illustrative growing-kit scene on a windowsill"
+        }
+      ]
+    },
+    {
+      "product_key": "ACORN-PLANTER",
+      "slug": "woodland-planter",
+      "title": "Woodland planter",
+      "category": "Planters",
+      "amount_minor": 1800,
+      "currency": "AUD",
+      "max_quantity": 10,
+      "review_subject": "woodland-planter",
+      "image": "assets/products/acorn-planter-primary.webp",
+      "image_alt": "Illustrative planter mock-up with an oak seedling",
+      "eyebrow": "ROOM TO GROW",
+      "short_description": "A warm, earthy home for whatever you are growing next.",
+      "details": "A sample planter for your growing project. The pictured packaging is a fictional mock-up and does not establish self-watering or other product features.",
+      "features": [
+        "A sample planter",
+        "Imagery is illustrative"
+      ],
+      "specs": {
+        "Format": "Planter",
+        "Images": "Fictional mock-ups"
+      },
+      "images": [
+        {
+          "url": "assets/products/acorn-planter-primary.webp",
+          "alt": "Illustrative planter mock-up with an oak seedling"
+        },
+        {
+          "url": "assets/products/acorn-planter-detail.webp",
+          "alt": "Illustrative close view of the planter mock-up and packaging"
+        },
+        {
+          "url": "assets/products/acorn-planter-lifestyle.webp",
+          "alt": "Illustrative planter mock-up on a sunny windowsill"
+        }
+      ]
+    },
+    {
+      "product_key": "ACORN-GUIDE",
+      "slug": "acorn-growing-guide",
+      "title": "The little growing guide",
+      "category": "Guides",
+      "amount_minor": 0,
+      "currency": "AUD",
+      "max_quantity": 1,
+      "review_subject": null,
+      "image": "assets/products/acorn-guide-primary.webp",
+      "image_alt": "Illustrative booklet mock-up for the digital growing guide",
+      "eyebrow": "A LITTLE KNOW-HOW",
+      "short_description": "An easy first chapter in growing an oak. A free digital guide.",
+      "details": "A free digital guide to growing. The pictured booklet and accessories are fictional mock-ups; no printed guide is included.",
+      "features": [
+        "Digital format",
+        "Free to add to your order"
+      ],
+      "specs": {
+        "Format": "Digital guide",
+        "Images": "Fictional mock-ups",
+        "Review invitations": "Not applicable"
+      },
+      "images": [
+        {
+          "url": "assets/products/acorn-guide-primary.webp",
+          "alt": "Illustrative booklet mock-up for the digital growing guide"
+        },
+        {
+          "url": "assets/products/acorn-guide-interior.webp",
+          "alt": "Illustrative mock-up showing pages of a growing guide"
+        },
+        {
+          "url": "assets/products/acorn-guide-lifestyle.webp",
+          "alt": "Illustrative guide mock-up beside an oak seedling"
+        }
+      ]
+    }
   ]
 }

@@ -1,0 +1,78 @@
+{
+  "version": 1,
+  "source": "acorn_store_image_pack.zip",
+  "source_manifest": "Not supplied; roles mapped by visual inspection.",
+  "images_are_fictional_mockups": true,
+  "images": [
+    {
+      "role": "acorn-hero",
+      "source_filename": "a_polished_realistic_product_hero_brand_hero_phot_1_batch_1.png",
+      "source_sha256": "3af2f0e4cfad67fbcb939f340d02d324e455d17ffad3faa8bbcf1fe816d19574",
+      "webp_sha256": "dbe6763460cf2683f6bb31f1d27497cf08d8288937d128e8c36aaf4dfdbe4c74",
+      "destination": "assets/products/acorn-hero.webp"
+    },
+    {
+      "role": "acorn-kit-primary",
+      "source_filename": "a_clean_well_lit_high_end_product_studio_shot_s_2_batch_2.png",
+      "source_sha256": "d18df15db88cc1ced5d701ff404b8402e2563343a5e4ff01798a4001b36f5bee",
+      "webp_sha256": "de111f1ed8936de49265181115241033e11746e5f5cbb6f611c7e679bf1124f0",
+      "destination": "assets/products/acorn-kit-primary.webp"
+    },
+    {
+      "role": "acorn-planter-primary",
+      "source_filename": "a_clean_high_end_product_photography_shot_square_3_batch_3.png",
+      "source_sha256": "902f217383253cc2d83f157475c214bcbe39466077c14e42f31174f38652ac39",
+      "webp_sha256": "9ad3f01193b1875452603b35ec0b17a94ba18946ad2cb1044bbcab847ebdca45",
+      "destination": "assets/products/acorn-planter-primary.webp"
+    },
+    {
+      "role": "acorn-guide-primary",
+      "source_filename": "a_clean_well_lit_studio_style_product_mockup_pho_4_batch_4.png",
+      "source_sha256": "42cbbc258e7c3c037ea723be01920c75a2ae8d587ae21386386cf6a328ab946a",
+      "webp_sha256": "bfbeb0ed4a3d06281724ad700ef886087435b97c3815ce86f1f78b2d75cad0d6",
+      "destination": "assets/products/acorn-guide-primary.webp"
+    },
+    {
+      "role": "acorn-kit-contents",
+      "source_filename": "a_crisp_highly_detailed_top_down_flat_lay_prod_5_batch_1.png",
+      "source_sha256": "10e00a588bb4a96dfbab206cd351b8aaefc5a084810452f2775df4208979bd94",
+      "webp_sha256": "184a3c2870cced507c701278679999f39255e57cf68531b589eb1dbd50296a9e",
+      "destination": "assets/products/acorn-kit-contents.webp"
+    },
+    {
+      "role": "acorn-kit-lifestyle",
+      "source_filename": "a_crisp_photorealistic_high_detail_warm_sunlit_6_batch_2.png",
+      "source_sha256": "a179fc49c3b2d7f7cf09909d5734ae7106493990bfb6d3b12c2066b3c70708cc",
+      "webp_sha256": "a4747feda7d0bd59729e70f866529e2453c78bd8575e456c42a4af0330a172b6",
+      "destination": "assets/products/acorn-kit-lifestyle.webp"
+    },
+    {
+      "role": "acorn-planter-detail",
+      "source_filename": "a_crisp_photorealistic_high_detail_studio_lit_p_7_batch_3.png",
+      "source_sha256": "2b8f3f1d4e43aaf45f302806f59c9981a6d9e4c1c21b1760fee1198d496b2481",
+      "webp_sha256": "df33fb8918747b44cbe259d3c5da15a934e60b4cf2fb7838373c0e2a0486e7b6",
+      "destination": "assets/products/acorn-planter-detail.webp"
+    },
+    {
+      "role": "acorn-planter-lifestyle",
+      "source_filename": "a_warm_photorealistic_premium_lifestyle_product_p_8_batch_4.png",
+      "source_sha256": "c2d66ef62127bcadc941a4cc946412c32a89e603c4736f30d6c2474d4008a430",
+      "webp_sha256": "1d4f9d91b38e02cdfbf0d417b594ba70443b4c54ddffd82319a26a028cac6a14",
+      "destination": "assets/products/acorn-planter-lifestyle.webp"
+    },
+    {
+      "role": "acorn-guide-interior",
+      "source_filename": "a_highly_detailed_photorealistic_styled_product_9_batch_5.png",
+      "source_sha256": "6dd12ab62a6d793f395af4f95feb5dcfc13d5cc9ca0cc3b2c6281a8614c76345",
+      "webp_sha256": "31544dba1a53c035c77378eacb8cb11afc6acdb9668bc45969a7ad6159fd40ba",
+      "destination": "assets/products/acorn-guide-interior.webp"
+    },
+    {
+      "role": "acorn-guide-lifestyle",
+      "source_filename": "a_warm_realistic_highly_detailed_lifestyle_produ_10_batch_6.png",
+      "source_sha256": "8ae5178843d85959e5e28f2aac9a66f5090dd1a2ee8231826c05079e2115b6a1",
+      "webp_sha256": "7b4e0c78c3d10fb3aa6805f453edb377b61ccc1f6a35656a94464c4fe9c2a43c",
+      "destination": "assets/products/acorn-guide-lifestyle.webp"
+    }
+  ]
+}

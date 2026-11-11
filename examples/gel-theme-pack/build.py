@@ -57,7 +57,7 @@ def load_inputs(gel_path, catalogue_path, assets_root=ROOT):
             "features",
             "specs",
         }
-        if not isinstance(p, dict) or set(p) != required:
+        if not isinstance(p, dict) or not required <= set(p) or set(p) - required - {"images"}:
             raise ValueError("invalid product fields")
         if not re.fullmatch(r"[A-Z0-9-]{1,64}", p["product_key"]) or p["product_key"] in keys:
             raise ValueError("invalid product key")
@@ -85,6 +85,23 @@ def load_inputs(gel_path, catalogue_path, assets_root=ROOT):
         ):
             raise ValueError("invalid specs")
         report["asset_sha256"][p["image"]] = validate_asset(Path(assets_root), p["image"])
+        if "images" in p:
+            images = p["images"]
+            if not isinstance(images, list) or not 1 <= len(images) <= 8:
+                raise ValueError("product images must contain 1 to 8 images")
+            seen = set()
+            for image in images:
+                if not isinstance(image, dict) or set(image) != {"url", "alt"}:
+                    raise ValueError("invalid product image fields")
+                if not isinstance(image["alt"], str) or not image["alt"].strip() or len(image["alt"]) > 2000:
+                    raise ValueError("invalid product image alt")
+                digest = validate_asset(Path(assets_root), image["url"])
+                if image["url"] in seen:
+                    raise ValueError("duplicate product image")
+                seen.add(image["url"])
+                report["asset_sha256"][image["url"]] = digest
+            if images[0]["url"] != p["image"]:
+                raise ValueError("product images must start with the primary image")
     return gel, catalogue, report
 
 
@@ -138,12 +155,14 @@ def build_site(output, gel_path, catalogue_path, theme="minimal", base="/", asse
         ("base.css", "base.css"),
         (theme + ".css", "theme.css"),
         ("app.mjs", "app.mjs"),
+        ("gallery.mjs", "gallery.mjs"),
         ("native-presenter.mjs", "native-presenter.mjs"),
     ]:
         shutil.copyfile(ROOT / "src" / src, output / "theme" / dest)
     adapter = "demo-adapter.mjs" if preview else "cartray-adapter.mjs"
     shutil.copyfile(ROOT / "src" / adapter, output / "theme" / adapter)
     paths = set(v for k, v in gel["assets"].items() if k != "hero_alt") | {p["image"] for p in catalogue["products"]}
+    paths.update(image["url"] for p in catalogue["products"] for image in p.get("images", []))
     for path in sorted(paths):
         dest = output / path
         dest.parent.mkdir(parents=True, exist_ok=True)

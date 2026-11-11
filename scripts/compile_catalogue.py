@@ -49,6 +49,7 @@ def main() -> None:
             expansions,
             presentation_adapter,
             expected_catalogue_version=expected_catalogue_version,
+            product_assets=options.product_assets,
         )
     )
     rendered = render_compiled_catalogue_module(bundle)

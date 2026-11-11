@@ -183,7 +183,7 @@ def validate(gel, root):
         raise ValueError("unsupported corners")
     if gel["layout"]["density"] not in ("compact", "comfortable", "spacious"):
         raise ValueError("unsupported density")
-    keys(gel["hero"], ("eyebrow", "title", "body", "cta"), "hero")
+    keys(gel["hero"], ("eyebrow", "title", "body", "cta"), "hero", ("image_caption",))
     for k, v in gel["hero"].items():
         text(v, "hero." + k)
     return {"manifest_sha256": digest(gel), "asset_sha256": hashes, "contrast": checks}

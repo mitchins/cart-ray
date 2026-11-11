@@ -85,9 +85,26 @@ def connect(source_site, cartray_root, output, gel, catalogue, theme, assets_roo
             raise ValueError("source build must not contain symlinks")
         relative = file.relative_to(source_site)
         dest = output / relative
-        if file.is_file() and not dest.exists():
+        # The source storefront was built from the validated catalogue. Product
+        # images must win over same-named theme files, including on upgrades.
+        authoritative_product = relative.parts[:2] == ("assets", "products")
+        if file.is_file() and (authoritative_product or not dest.exists()):
             dest.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(file, dest)
+            if authoritative_product and (
+                hashlib.sha256(dest.read_bytes()).digest() != hashlib.sha256(file.read_bytes()).digest()
+            ):
+                raise ValueError(f"catalogue image copy mismatch: {relative}")
+    # The theme report was generated before catalogue precedence was applied.
+    # Make its asset hashes describe the actual connected output as well.
+    resolved_path = output / "gel.resolved.json"
+    resolved = json.loads(resolved_path.read_text())
+    assets = resolved["manifest"]["assets"]
+    for key in resolved["validation"]["asset_sha256"]:
+        path = assets.get(key, key)
+        if path.startswith("assets/products/"):
+            resolved["validation"]["asset_sha256"][key] = hashlib.sha256((output / path).read_bytes()).hexdigest()
+    write(resolved_path, json.dumps(resolved, indent=2, sort_keys=True) + "\n")
     preserved = {}
     for destination, path in files.items():
         raw = path.read_bytes()

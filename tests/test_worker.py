@@ -269,10 +269,12 @@ def test_catalogue_route_can_serve_trusted_public_presentation(fixture_catalogue
         "title",
         "short_description",
         "image_url",
+        "images",
         "amount_minor",
         "currency",
         "max_quantity",
     }
+    assert payload["products"][0]["images"][0]["url"] == payload["products"][0]["image_url"]
     assert "stripe_price_id" not in json.dumps(payload)
     assert "fulfilment_resources" not in json.dumps(payload)
 

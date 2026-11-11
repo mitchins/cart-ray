@@ -30,7 +30,7 @@ jobs:
       - name: Test GEL compiler and connected adapter
         run: |
           python3 -m unittest discover -s examples/gel-theme-pack/tests -p 'test_*.py'
-          node --test tests/gel_adapter.test.mjs examples/gel-theme-pack/tests/demo.test.mjs
+          node --test tests/gel_adapter.test.mjs examples/gel-theme-pack/tests/*.test.mjs
       - name: Test the Acorn reference storefront
         run: |
           uv run --locked pytest examples/acorn-store/tests/test_build.py
@@ -172,7 +172,7 @@ jobs:
           persist-credentials: false
       - uses: astral-sh/setup-uv@v6
       - name: Clear reference evidence before qualification
-        run: rm -f examples/gel-theme-pack/evidence/connected-browser-*.json
+        run: rm -f examples/gel-theme-pack/evidence/connected-browser-*.json examples/gel-theme-pack/evidence/gallery-browser-*.json
       - name: Install pinned Playwright engines
         run: uv run --with playwright==1.57.0 python -m playwright install --with-deps chromium firefox webkit
       - name: Build connected themes and Northline contract fixture
@@ -193,8 +193,11 @@ jobs:
           port=4174
           for theme in minimal studio classic northline-classic; do
             uv run --with playwright==1.57.0 python examples/gel-theme-pack/tests/connected_browser.py --origin "http://127.0.0.1:$port" --label "$theme" --engines chromium,firefox,webkit
+            uv run --with playwright==1.57.0 python examples/gel-theme-pack/tests/gallery_browser.py --origin "http://127.0.0.1:$port" --label "$theme" --engines chromium,firefox,webkit
             port=$((port + 1))
           done
+      - name: Exercise gallery failure and recovery states
+        run: uv run --with playwright==1.57.0 python examples/gel-theme-pack/tests/gallery_browser.py --engines chromium,firefox,webkit
       - name: Retain browser evidence
         if: always()
         uses: actions/upload-artifact@v4
@@ -202,5 +205,7 @@ jobs:
           name: gel-connected-browser-evidence
           path: |
             examples/gel-theme-pack/evidence/connected-browser-*.json
+            examples/gel-theme-pack/evidence/gallery-browser-*.json
             /tmp/gel-http-*.log
             examples/gel-theme-pack/screenshots/connected-*.png
+            examples/gel-theme-pack/screenshots/gallery-*.png
