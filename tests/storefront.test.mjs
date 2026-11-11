@@ -57,11 +57,14 @@ test("generated storefront configuration is safe for its declared build mode", a
       "amount_minor",
       "currency",
       "image_url",
+      "images",
       "max_quantity",
       "product_key",
       "short_description",
       "title",
     ]);
+    assert.equal(configuration.previewCatalogue.products[0].images[0].url,
+      configuration.previewCatalogue.products[0].image_url);
     await readFile(new URL("../storefront-dist/assets/products/test-template-cover-v1.webp", import.meta.url));
     return;
   }
