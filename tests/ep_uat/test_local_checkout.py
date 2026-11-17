@@ -64,3 +64,35 @@ def test_lost_checkout_response_cannot_be_claimed_by_another_browser():
         lane.start("owner-two", payload)
     with pytest.raises(TimeoutError):
         lane.start("owner-one", payload)
+
+
+def test_keychain_secret_is_loaded_without_exposing_subprocess_output(monkeypatch, tmp_path):
+    from types import SimpleNamespace
+
+    calls = []
+
+    def run(args, **kwargs):
+        calls.append((args, kwargs))
+        return SimpleNamespace(stdout="secret-value\n")
+
+    monkeypatch.setattr(module.subprocess, "run", run)
+    assert module.read_secret(None, "cartray-test", tmp_path) == "secret-value"
+    assert calls[0][0] == ["security", "find-generic-password", "-s", "cartray-test", "-w"]
+    assert calls[0][1]["capture_output"] is True
+
+
+def test_file_secret_requires_private_mode_and_outside_site(tmp_path):
+    site = tmp_path / "site"
+    site.mkdir()
+    key = tmp_path / "key"
+    key.write_text("not-a-real-key")
+    key.chmod(0o644)
+    with pytest.raises(ValueError, match="private"):
+        module.read_secret(key, None, site)
+    key.chmod(0o600)
+    assert module.read_secret(key, None, site) == "not-a-real-key"
+    inside = site / "key"
+    inside.write_text("not-a-real-key")
+    inside.chmod(0o600)
+    with pytest.raises(ValueError, match="private"):
+        module.read_secret(inside, None, site)

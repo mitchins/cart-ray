@@ -20,12 +20,14 @@ import threading
 import time
 import urllib.error
 import urllib.request
+from contextlib import closing
 from functools import partial
 from http.cookies import SimpleCookie
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
+from delivery_email import TestDelivery
 from prepare import APPROVED_SHA256, prepare, read_archive
 from provision_test_prices import amount_minor, dummy_followups
 
@@ -359,12 +361,35 @@ class TestLane:
                     "INSERT OR IGNORE INTO uat_grants VALUES (?,?,?)",
                     (row["order_id"], row["product_key"], row["quantity"]),
                 )
+        # Sending happens on a separate connection and thread, never under the
+        # checkout lock or on the customer's confirmation response path.
+        mail_config = getattr(self, "test_delivery_config", None)
+        if mail_config:
+            order = self.connection.execute(
+                """SELECT s.order_id,s.external_session_id FROM checkout_sessions s
+                JOIN orders o USING(order_id) JOIN uat_order_owner u USING(order_id)
+                WHERE o.checkout_request_id=? AND u.token_hash=? AND s.settlement_state='confirmed'
+                  AND EXISTS (SELECT 1 FROM outbox x WHERE x.order_id=s.order_id AND x.event_type='OrderConfirmed')""",
+                (request_id, owner),
+            ).fetchone()
+            if order:
+                links = sorted({link for grant in self.grants(owner, request_id) for link in grant["followups"]})
+                threading.Thread(target=self.send_test_delivery,
+                                 args=(order["order_id"], order["external_session_id"], links), daemon=True).start()
         state = self.connection.execute(
             """SELECT s.settlement_state FROM checkout_sessions s
             JOIN orders o USING(order_id) JOIN uat_order_owner u USING(order_id)
             WHERE o.checkout_request_id=? AND u.token_hash=?""", (request_id, owner)
         ).fetchone()
         return {"state": state["settlement_state"] if state else "pending", "grants": self.grants(owner, request_id)}
+
+    def send_test_delivery(self, order_id, session_id, links):
+        try:
+            with closing(sqlite3.connect(self.fixture / "uat-order-test.sqlite", timeout=5)) as connection:
+                mail = TestDelivery(connection, self.client, *self.test_delivery_config)
+                mail.dispatch(order_id, session_id, links)
+        except Exception:
+            pass  # Provider failures must not affect checkout or expose private details.
 
     def grants(self, owner, request_id=None):
         rows = self.connection.execute(
@@ -473,27 +498,51 @@ class Handler(SimpleHTTPRequestHandler):
         return super().do_GET()
 
 
+def read_secret(key_file, keychain_service, site):
+    if key_file:
+        if key_file.stat().st_mode & 0o077 or key_file.resolve().is_relative_to(site):
+            raise ValueError("test key must be private and outside the site")
+        return key_file.read_text().strip()
+    if keychain_service:
+        try:
+            result = subprocess.run(
+                ["security", "find-generic-password", "-s", keychain_service, "-w"],
+                check=True, capture_output=True, text=True,
+            )
+        except (OSError, subprocess.CalledProcessError) as error:
+            raise ValueError("test credential not available in the configured Keychain item") from error
+        return result.stdout.strip()
+    return None
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--site", type=Path, required=True)
     parser.add_argument("--fixture", type=Path, required=True)
-    parser.add_argument("--key-file", type=Path, required=True)
+    stripe_secret = parser.add_mutually_exclusive_group(required=True)
+    stripe_secret.add_argument("--key-file", type=Path)
+    stripe_secret.add_argument("--stripe-keychain-service")
     parser.add_argument("--archive", type=Path, required=True)
     parser.add_argument("--port", type=int, default=45984)
+    mail_secret = parser.add_mutually_exclusive_group()
+    mail_secret.add_argument("--smtp2go-key-file", type=Path, help="Enable the single-recipient test delivery")
+    mail_secret.add_argument("--smtp2go-keychain-service", help="Enable test delivery using macOS Keychain")
     args = parser.parse_args()
-    if args.key_file.stat().st_mode & 0o077:
-        raise ValueError("test key must have 0600 permissions")
     site = args.site.resolve(strict=True)
     fixture = args.fixture.resolve(strict=True)
     if not site.is_dir() or site.is_relative_to(fixture) or fixture.is_relative_to(site):
         raise ValueError("static site and private test fixture must be separate")
-    if args.key_file.resolve().is_relative_to(site) or args.archive.resolve().is_relative_to(site):
+    if args.archive.resolve().is_relative_to(site):
         raise ValueError("credentials and source archive must not be inside the static site")
     if any(path.is_symlink() for path in site.rglob("*")):
         raise ValueError("static site must not contain symlinks")
-    lane = TestLane(fixture, args.key_file.read_text().strip(), args.port, args.archive)
+    lane = TestLane(fixture, read_secret(args.key_file, args.stripe_keychain_service, site), args.port, args.archive)
+    mail_key = read_secret(args.smtp2go_key_file, args.smtp2go_keychain_service, site)
+    if mail_key:
+        lane.test_delivery_config = (mail_key, "uat@mitchellcurrie.com", "test-1034@mitchellcurrie.com")
+        TestDelivery(lane.connection, lane.client, *lane.test_delivery_config)
     server = ThreadingHTTPServer(("127.0.0.1", args.port), partial(Handler, directory=str(site), lane=lane))
-    print(f"Local-only UAT server on http://localhost:{args.port}; Stripe test mode, no email.", flush=True)
+    print(f"Local-only UAT server on http://localhost:{args.port}; test email is restricted and opt-in.", flush=True)
     server.serve_forever()
 
 

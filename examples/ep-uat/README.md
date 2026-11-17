@@ -12,7 +12,7 @@ Select `minimal`, `studio` or `classic`. The default EP UAT GEL is `gel.json`; s
 
 ## Controlled sandbox lane
 
-`provision_test_prices.py --help` explains the opt-in sandbox fixture: the approved source archive is checked again, selected source prices are explicitly mapped to Stripe test Prices, and dummy fulfilment is separate from source catalogue authority. Keep the generated fixture and test key private. Never use a live key, real paid files, or real customer data. No follow-up email is sent; the supplied test-only Dropbox follow-up can be displayed only after the appropriate test grant.
+`provision_test_prices.py --help` explains the opt-in sandbox fixture: the approved source archive is checked again, selected source prices are explicitly mapped to Stripe test Prices, and dummy fulfilment is separate from source catalogue authority. Keep the generated fixture and test key private. Never use a live key, real paid files, or real customer data. A single test-only transactional email may be explicitly enabled after a confirmed purchase to the approved test mailbox; it contains only the supplied dummy Dropbox transfer.
 
 Build with `--test-fixture /private/fixture/test-price-map.json`, then run `test_server.py --help`. The server binds loopback only, uses real Stripe test mode and CartRay's existing checkout/settlement code, and grants a harmless dummy file to the same browser context. It is a local qualification harness backed by SQLite, not a production download service, a supported merchant deployment, or evidence of cross-device delivery. Checkout remains disabled when the test server is absent. No production consent or Reviews automation is enabled.
 
@@ -34,3 +34,13 @@ uv run --locked --with 'playwright==1.57.0' python examples/ep-uat/review_custom
 ```
 
 The test uses disposable local D1 data and a synthetic confirmed acquisition, not the real Stripe test order. The default native acquisition suite remains separately runnable with `uv run --locked python modules/reviews/tests/native_acquisition_workerd.py`; the browser scenario intentionally uses only the part of that setup needed to create the synthetic invitation.
+
+## Test-only transactional delivery
+
+Pass `--smtp2go-key-file /private/path/to/key` to the loopback server to enable delivery from `uat@mitchellcurrie.com` to `test-1034@mitchellcurrie.com` only. The server retrieves the Checkout Session directly from Stripe, checks the test-mode paid state and the Stripe purchase contact, and requires the previously reconciled confirmed order and `OrderConfirmed` event. This local harness currently reconciles on browser return; it does not prove independent webhook-driven delivery if the browser never returns. A per-order persistent claim is committed before sending; a timeout or crash is held for investigation and is never blindly resent. Checkout remains independent of the mail provider. The normal server remains email-disabled if this flag is absent. The provider accepting a message does not prove mailbox delivery.
+
+This is a local UAT implementation, not production delivery infrastructure or a customer recovery portal. It sends the source-approved dummy links only. Test links may expire under the provider's own rules; verify real fulfilment link lifetime and production sender/recipient mapping separately before cutover.
+
+### Persistent test credentials on macOS
+
+Keep the Stripe sandbox and SMTP2GO test credentials in the operator's macOS login Keychain, using separate generic-password entries named `cartray-ep-uat-stripe-test` and `cartray-ep-uat-smtp2go-test`. Create or update those entries interactively in Keychain Access; do not put secrets in command arguments, shell history, source control, the site output, or a disposable worktree. Use `--stripe-keychain-service cartray-ep-uat-stripe-test --smtp2go-keychain-service cartray-ep-uat-smtp2go-test` when starting the local server. Keychain may request access approval. The credential values are read into the local process only and the server never deletes the entries. Existing `--key-file` and `--smtp2go-key-file` options remain available for protected operator-managed files. Revoke or rotate credentials only when the operator chooses or an actual exposure requires it.
