@@ -198,6 +198,40 @@ def run(args: list[str], project: Path, env: dict[str, str]) -> None:
     subprocess.run(args, cwd=project, env=env, check=True)
 
 
+def repair_missing_pywrangler_vendor(project: Path, env: dict[str, str]) -> bool:
+    """Materialize locked wheels if uv selected the host venv instead of Pyodide's.
+
+    Some uv/pywrangler combinations report a successful sync while leaving
+    Pyodide site-packages empty. The resulting Worker cannot import kinglet.
+    Install into an explicit disposable target, then retain only wheel files;
+    verify_vendor still checks every byte against the locked wheels.
+    """
+    vendor = project / "python_modules"
+    if all(list(vendor.glob(f"{name.replace('-', '_')}-*.dist-info")) for name in PACKAGES):
+        return False
+    target = project / "locked-vendor-target"
+    run(
+        ["uv", "pip", "install", "--no-build", "--target", str(target), "-r", str(project / "pylock.toml"),
+         "--preview-features", "pylock"],
+        project,
+        env,
+    )
+    for item in target.iterdir():
+        # These are installer-generated host artifacts, not Worker modules.
+        if item.name in ("bin", ".lock"):
+            continue
+        if item.is_symlink():
+            raise RuntimeError("symlink in locked vendor target")
+        for destination in (vendor, project / "bundle/python_modules"):
+            if item.is_dir():
+                shutil.copytree(item, destination / item.name, dirs_exist_ok=True)
+            elif item.is_file():
+                shutil.copyfile(item, destination / item.name)
+            else:
+                raise RuntimeError("invalid locked vendor target entry")
+    return True
+
+
 def verify_output(path: Path, expected_bundle: str, expected_config: str) -> None:
     if not all(re.fullmatch(r"[a-f0-9]{64}", value) for value in (expected_bundle, expected_config)):
         raise ValueError("expected digests must be SHA-256")
@@ -460,6 +494,7 @@ def main() -> None:
             project,
             env,
         )
+        repaired_vendor = repair_missing_pywrangler_vendor(project, env)
         versions = verify_vendor(project, lock)
         source = project / "src/cartray"
         vendor = project / "python_modules/cartray"
@@ -516,6 +551,7 @@ def main() -> None:
             "source_commit": commit,
             "profile": env["CARTRAY_CATALOGUE_PROFILE"],
             "merchant_input_sha256": input_digest,
+            "explicit_vendor_target_used": repaired_vendor,
             "versions": versions,
             "catalogue_lock_sha256": hashlib.sha256(lock_bytes).hexdigest(),
             "input_configuration_sha256": hashlib.sha256(input_config.encode()).hexdigest(),

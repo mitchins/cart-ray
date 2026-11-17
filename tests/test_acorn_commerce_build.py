@@ -197,6 +197,7 @@ def test_clean_build_checks_source_and_no_bundle_output(tmp_path, monkeypatch):
     )
     monkeypatch.setattr(build, "lock_seed", lambda lock: ("seed", "manifest"))
     monkeypatch.setattr(build, "verify_vendor", lambda project, lock: {"kinglet": "1.8.3"})
+    monkeypatch.setattr(build, "repair_missing_pywrangler_vendor", lambda project, env: False)
     state = {"tamper_source": False, "tamper_redeploy": False}
 
     def fake_run(args, project, env):
@@ -332,3 +333,27 @@ def test_merchant_build_snapshot_pins_inputs_and_rejects_symlinks(tmp_path):
     image.symlink_to(source / "catalogue.csv")
     with pytest.raises(ValueError, match="unsafe"):
         build.snapshot_merchant_inputs(source, tmp_path / "third", b"lock")
+
+
+def test_empty_pywrangler_vendor_uses_explicit_locked_target(tmp_path, monkeypatch):
+    vendor = tmp_path / "python_modules"
+    bundle = tmp_path / "bundle/python_modules"
+    vendor.mkdir()
+    bundle.mkdir(parents=True)
+
+    def install(command, project, env):
+        assert command[:4] == ["uv", "pip", "install", "--no-build"]
+        assert "pylock.toml" in " ".join(command)
+        target = project / "locked-vendor-target"
+        (target / "kinglet").mkdir(parents=True)
+        (target / "kinglet/__init__.py").write_text("locked module")
+        (target / "bin").mkdir()
+        (target / "bin/host-script").write_text("host only")
+        (target / ".lock").touch()
+
+    monkeypatch.setattr(build, "run", install)
+    assert build.repair_missing_pywrangler_vendor(tmp_path, {}) is True
+    for root in (vendor, bundle):
+        assert (root / "kinglet/__init__.py").read_text() == "locked module"
+        assert not (root / "bin").exists()
+        assert not (root / ".lock").exists()
