@@ -111,6 +111,9 @@ def main():
                             start = time.perf_counter()
                             page.goto(f"http://127.0.0.1:{port}/", wait_until="load", timeout=30000)
                             initial_ms = (time.perf_counter() - start) * 1000
+                            initial_resource_bytes = page.evaluate(
+                                "performance.getEntriesByType('resource').reduce((n, r) => n + r.transferSize, 0)"
+                            )
                             initial_memory = page.evaluate(
                                 "performance.memory ? performance.memory.usedJSHeapSize : null"
                             )
@@ -199,6 +202,7 @@ def main():
                                     "search_ms_p50": round(statistics.median(times), 2),
                                     "search_ms_p95": round(sorted(times)[18], 2),
                                     "resource_transfer_bytes": sum(x["bytes"] for x in resources),
+                                    "initial_resource_transfer_bytes": initial_resource_bytes,
                                     "document_transfer_bytes": navigation["transfer"] if navigation else None,
                                     "dom_content_loaded_ms": (
                                         navigation["dom_content_loaded_ms"] if navigation else None
