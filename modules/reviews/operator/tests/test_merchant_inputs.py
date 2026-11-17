@@ -1,10 +1,12 @@
 """Merchant snapshots must retain checkout authority and build identity."""
 
+import hashlib
 import importlib.util
 import json
 import shutil
 import sys
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
@@ -127,6 +129,10 @@ def test_operator_pins_merchant_inputs_and_fails_closed_on_change(tmp_path):
     shutil.rmtree(source)
     resumed = Installation(installation.directory)
     resumed.verify_merchant_inputs()
+    identity = resumed.merchant_config_hash()
+    resumed.config["review_invitation_default_checked"] = False
+    assert resumed.merchant_config_hash() != identity
+    resumed.config["review_invitation_default_checked"] = True
     page = Path(resumed.config["merchant_inputs"]) / "storefront/products/one/index.html"
     page.write_text(page.read_text() + "changed")
     with pytest.raises(ValueError, match="merchant inputs changed"):
@@ -142,6 +148,33 @@ def test_commerce_fingerprint_matches_builder_for_nested_assets(tmp_path):
     builder = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(builder)
     assert commerce_build_hash(source, b"lock") == builder.snapshot_merchant_inputs(source, tmp_path / "out", b"lock")
+
+
+def test_cached_build_and_deploy_reject_changed_merchant_configuration(tmp_path):
+    source = merchant(tmp_path / "source")
+    lock = tmp_path / "lock.json"
+    lock.write_text(json.dumps({"stripe_mode": "test", "catalogue_version": "sha256:" + "b" * 64}))
+    p = Installation.plan(tmp_path / "installation", {
+        "namespace": "merchant-test", "account_id": "a" * 32, "stripe_account_id": "acct_Test",
+        "preflight_lock": str(lock), "reviews_enabled": False, "merchant_name": "Merchant",
+        "store_key": "merchant-one", "merchant_inputs": str(source), "subject_map": {}, "subject_details": [],
+    })
+    p.vault = lambda: {}
+    p.check_schema = lambda: None
+    p.state["pages_subdomain"] = "merchant-test.pages.dev"
+    p.state["build"] = "test-commit"
+    release = p.directory / "releases/test-commit"
+    release.mkdir(parents=True)
+    (release / "build.json").write_text(json.dumps({
+        "merchant_inputs_sha256": p.config["merchant_inputs_sha256"],
+        "merchant_lock_sha256": hashlib.sha256(Path(p.config["preflight_lock"]).read_bytes()).hexdigest(),
+        "merchant_config_sha256": "old-configuration",
+    }))
+    with patch("operate.subprocess.check_output", return_value="test-commit\n"), patch("operate.subprocess.run"):
+        with pytest.raises(ValueError, match="cached release uses different merchant inputs"):
+            p.build()
+    with pytest.raises(ValueError, match="release merchant configuration differs"):
+        p.deploy()
 
 
 def test_merchant_reviews_require_correct_subject_pages_and_native_clients(tmp_path):
@@ -213,13 +246,32 @@ def test_merchant_reviews_require_correct_subject_pages_and_native_clients(tmp_p
     assert all(call[1][2][0] == "merchant-one" for call in calls if call[0] == "query")
     assert any(call[0] == "request" and "REVIEWS_GATEWAY" in call[1][2]["deployment_configs"]["production"]["env_vars"]
                for call in calls)
+    output_page = output / "products/one/index.html"
+    original_output = output_page.read_text()
+    output_page.write_text(original_output + "tampered")
+    with pytest.raises(ValueError, match="retained merchant storefront changed"):
+        installation.deploy_storefront({"commit": "test-release"})
+    output_page.write_text(original_output)
+    (output.parent / "storefront-integrity.json").unlink()
+    installation.deploy_storefront({"commit": "test-release"})
+    assert output_page.read_text() == original_output
     installation.config["subject_details"][0][0] = "another-subject"
-    with pytest.raises(ValueError, match="review presentation differs"):
+    with pytest.raises(ValueError, match="unapproved review subject"):
         installation.verify_merchant_inputs()
     installation.config["subject_details"][0][0] = "product-one"
     snap = Path(installation.config["merchant_inputs"])
     manage = snap / "storefront/review/manage.html"
-    manage.write_text(manage.read_text().replace("data-dialog-confirm", "data-unrelated"))
+    original_manage = manage.read_text()
+    manage.write_text(original_manage.replace("data-dialog-confirm", "data-unrelated"))
     installation.config["merchant_inputs_sha256"] = validate(snap, ROOT)
     with pytest.raises(ValueError, match="review page does not load"):
+        installation.verify_merchant_inputs()
+    manage.write_text(original_manage)
+    unrelated = snap / "storefront/products/unrelated"
+    unrelated.mkdir()
+    (unrelated / "index.html").write_text(
+        '<script type="application/json" id="product-data">{"review_subject":"product-one"}</script>'
+    )
+    installation.config["merchant_inputs_sha256"] = validate(snap, ROOT)
+    with pytest.raises(ValueError, match="unapproved review subject"):
         installation.verify_merchant_inputs()

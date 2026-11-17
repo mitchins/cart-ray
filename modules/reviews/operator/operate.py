@@ -16,7 +16,7 @@ import time
 from pathlib import Path
 
 from cloud import API, CloudError, stripe
-from merchant_inputs import ConnectedShell, commerce_build_hash, javascript_json
+from merchant_inputs import ConnectedShell, commerce_build_hash, javascript_json, tree_hash
 from merchant_inputs import snapshot as snapshot_merchant_inputs
 from merchant_inputs import validate as validate_merchant_inputs
 from topology import graph, secret_bindings, wrangler_config
@@ -665,6 +665,19 @@ class Installation:
             if not (site / route.lstrip("/") / "index.html").is_file():
                 raise ValueError("review subject route is missing from the merchant storefront")
         if self.config["reviews_enabled"]:
+            approved_routes = {route: subject for subject, route, _label in self.config["subject_details"]}
+            for product_page in (site / "products").rglob("index.html"):
+                page = ConnectedShell()
+                page.feed(product_page.read_text())
+                if not page.product_data:
+                    continue
+                try:
+                    actual = json.loads(page.product_data).get("review_subject")
+                except (ValueError, AttributeError) as error:
+                    raise ValueError("merchant product review presentation is invalid") from error
+                route = "/" + str(product_page.parent.relative_to(site)) + "/"
+                if actual is not None and approved_routes.get(route) != actual:
+                    raise ValueError("merchant product contains an unapproved review subject")
             for subject, route, _label in self.config["subject_details"]:
                 page = ConnectedShell()
                 page.feed((site / route.lstrip("/") / "index.html").read_text())
@@ -695,19 +708,29 @@ class Installation:
                 if (site / dest).read_bytes() != (ROOT / source).read_bytes():
                     raise ValueError("merchant review client differs from the supported Reviews module")
 
+    def merchant_config_hash(self):
+        if "merchant_inputs" not in self.config:
+            return None
+        fields = ("store_key", "subject_map", "subject_details", "merchant_name", "theme", "reviews_enabled",
+                  "review_invitation_default_checked")
+        encoded = json.dumps({key: self.config[key] for key in fields}, sort_keys=True, separators=(",", ":"))
+        return digest(encoded.encode())
+
     def build(self):
         self.vault()
         self.check_schema()
         self.verify_merchant_inputs()
         merchant_lock_hash = (digest(Path(self.config["preflight_lock"]).read_bytes())
                               if "merchant_inputs" in self.config else None)
+        merchant_config_hash = self.merchant_config_hash()
         commit = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip()
         subprocess.run(["git", "diff", "--quiet", "HEAD"], cwd=ROOT, check=True)
         release = self.directory / "releases" / commit
         if (release / "build.json").exists():
             recorded = json.loads((release / "build.json").read_text())
             if (recorded.get("merchant_inputs_sha256") != self.config.get("merchant_inputs_sha256")
-                    or recorded.get("merchant_lock_sha256") != merchant_lock_hash):
+                    or recorded.get("merchant_lock_sha256") != merchant_lock_hash
+                    or recorded.get("merchant_config_sha256") != merchant_config_hash):
                 raise ValueError("cached release uses different merchant inputs; build a new release")
             self.state["build"] = commit
             self.save()
@@ -798,6 +821,7 @@ class Installation:
             "commit": commit,
             "merchant_inputs_sha256": self.config.get("merchant_inputs_sha256"),
             "merchant_lock_sha256": merchant_lock_hash,
+            "merchant_config_sha256": merchant_config_hash,
             "artifacts": artifacts,
             "schema": self.state.get("migration_ledgers"),
             "suppression_key_fingerprint": self.state["secret_fingerprints"]["recipient_hash"],
@@ -833,6 +857,8 @@ class Installation:
         build = json.loads((self.directory / "releases" / self.state["build"] / "build.json").read_text())
         if build.get("merchant_inputs_sha256") != self.config.get("merchant_inputs_sha256"):
             raise ValueError("release merchant inputs differ; rebuild before deploying")
+        if build.get("merchant_config_sha256") != self.merchant_config_hash():
+            raise ValueError("release merchant configuration differs; rebuild before deploying")
         if ("merchant_inputs" in self.config
                 and build.get("merchant_lock_sha256") != digest(Path(self.config["preflight_lock"]).read_bytes())):
             raise ValueError("release preflight lock differs; rebuild before deploying")
@@ -955,6 +981,12 @@ class Installation:
 
     def deploy_storefront(self, build):
         output = self.directory / "releases" / build["commit"] / "storefront"
+        integrity = output.parent / "storefront-integrity.json"
+        if output.is_symlink() or integrity.is_symlink():
+            raise ValueError("refusing symlinked generated storefront or integrity record")
+        if ("merchant_inputs" in self.config and (output / ".operator-build-complete").exists()
+                and not integrity.exists()):
+            shutil.rmtree(output)  # Resume an interrupted local generation from the pinned snapshot.
         if not (output / ".operator-build-complete").exists():
             staging = output.with_name("storefront.partial")
             if staging.exists():
@@ -1010,6 +1042,11 @@ class Installation:
                 )
             (staging / ".operator-build-complete").write_text(build["commit"] + "\n")
             os.replace(staging, output)
+            if "merchant_inputs" in self.config:
+                atomic_json(integrity, {"sha256": tree_hash(output)})
+        if "merchant_inputs" in self.config:
+            if not integrity.is_file() or json.loads(integrity.read_text()).get("sha256") != tree_hash(output):
+                raise ValueError("retained merchant storefront changed; rebuild before deploying")
         origin = self.state["urls"]["storefront"]
         deployment = {
             "env_vars": {

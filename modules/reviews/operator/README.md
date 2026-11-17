@@ -75,6 +75,10 @@ deployed.
 
 ### Other test merchants
 
+Merchant storefront files are trusted operator input; validation checks the
+supported connected runtime and declared purchase/review wiring, but is not a
+sandbox for arbitrary HTML or JavaScript.
+
 Provide `merchant_inputs` as an absolute path to an operator-owned package:
 
 ```text
