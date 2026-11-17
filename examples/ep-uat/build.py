@@ -145,7 +145,7 @@ def catalogue(products, merchant_name, test_ids=()):
     return f"""<section class="collection wrap"><h1>{esc(merchant_name)} catalogue</h1><p>UAT audit snapshot includes products hidden in the source catalogue; {checkout_note}.</p><div class="catalogue-tools"><label>Search <input id="search" type="search" autocomplete="off"></label><label>Category <select id="category"><option value="">All categories</option>{options}</select></label><label>Sort <select id="sort"><option value="featured">Source order</option><option value="name">Name</option><option value="low">Source price: low to high</option></select></label></div><p id="results-status" role="status" aria-live="polite">{len(products)} products</p><p id="uat-cart-message" role="status"></p><div id="products" class="product-grid">{"".join(product_card(p, test_ids) for p in products)}</div></section>"""
 
 
-def detail(p, test_ids=()):
+def detail(p, test_ids=(), review_subject=None):
     if p["images"]:
         first = p["images"][0]
         gallery = f'''<figure class="detail-art" data-product-gallery aria-label="Product images"><div class="gallery-stage"><img data-gallery-image src="/{esc(first["path"])}" alt="{esc(first["alt"])}" width="800" height="720"><p data-gallery-fallback hidden>Image unavailable</p></div><div data-gallery-controls hidden></div><figcaption class="sr-only" data-gallery-status role="status" aria-live="polite"></figcaption></figure>'''
@@ -177,17 +177,32 @@ def detail(p, test_ids=()):
             "images": [{"url": "/" + i["path"], "alt": i["alt"]} for i in p["images"]],
             "variations": p["variations"],
             "default_attributes": p["default_attributes"],
+            "review_subject": review_subject,
         },
         ensure_ascii=True,
     ).replace("<", "\\u003c")
-    return f"""<div class="wrap breadcrumb"><a href="/shop/">Catalogue</a> / {esc(p["title"])}</div><section class="product-detail wrap">{gallery}<div class="detail-copy"><h1>{esc(p["title"])}</h1><p id="variant-price">{price(p["source_price"], p["source_id"] in test_ids)}</p><p>{esc(p["summary"])}</p>{choices}{action}<div class="uat-description">{description}</div></div></section><script type="application/json" id="product-data">{payload}</script>"""
+    reviews = ('<section class="wrap" id="reviews" hidden><h2>Reviews</h2><p id="reviews-status" role="status"></p>'
+               '<div id="review-list"></div><button id="reviews-more" type="button" hidden>Load more reviews</button></section>') if review_subject else ""
+    return f"""<div class="wrap breadcrumb"><a href="/shop/">Catalogue</a> / {esc(p["title"])}</div><section class="product-detail wrap">{gallery}<div class="detail-copy"><h1>{esc(p["title"])}</h1><p id="variant-price">{price(p["source_price"], p["source_id"] in test_ids)}</p><p>{esc(p["summary"])}</p>{choices}{action}<div class="uat-description">{description}</div></div></section>{reviews}<script type="application/json" id="product-data">{payload}</script>"""
 
 
-def build(source, output, theme, test_fixture=None):
+def build(source, output, theme, test_fixture=None, review_fixture=None):
     source, output = Path(source), Path(output)
     if output.exists():
         raise ValueError("output already exists")
     data = json.loads((source / "catalogue.json").read_text())
+    review_subjects = {}
+    if review_fixture:
+        review_config = json.loads(Path(review_fixture).read_text())
+        if (review_config.get("schema_version") != 1
+                or review_config.get("source_archive_sha256") != data["source_archive_sha256"]
+                or not isinstance(review_config.get("subjects"), dict)):
+            raise ValueError("invalid UAT review subject fixture")
+        product_ids = {str(p["source_id"]) for p in data["products"]}
+        review_subjects = review_config["subjects"]
+        if any(key not in product_ids or not isinstance(value, str) or not re.fullmatch(r"[a-z0-9-]{1,128}", value)
+               for key, value in review_subjects.items()) or len(set(review_subjects.values())) != len(review_subjects):
+            raise ValueError("invalid or duplicate UAT review subject")
     test_products = []
     if test_fixture:
         fixture = json.loads(Path(test_fixture).read_text())
@@ -260,6 +275,7 @@ def build(source, output, theme, test_fixture=None):
         shutil.copyfile(PACK / "src" / name, output / "theme" / dest)
     shutil.copyfile(Path(__file__).parent / "uat.css", output / "theme/uat.css")
     shutil.copyfile(Path(__file__).parent / "uat.mjs", output / "theme/uat.mjs")
+    shutil.copyfile(Path(__file__).parent.parent / "acorn-store/reviews.mjs", output / "theme/reviews.mjs")
     logo_source = source / data["brand_logo"]
     if not logo_source.is_file():
         raise ValueError("source logo unavailable")
@@ -280,7 +296,7 @@ def build(source, output, theme, test_fixture=None):
     for p in products:
         file = output / path(p).lstrip("/") / "index.html"
         file.parent.mkdir(parents=True, exist_ok=True)
-        file.write_text(shell(gel, p["title"], detail(p, test_ids), test_products))
+        file.write_text(shell(gel, p["title"], detail(p, test_ids, review_subjects.get(str(p["source_id"]))), test_products))
     (output / "provenance.json").write_text(
         json.dumps(
             {"source_archive_sha256": data["source_archive_sha256"], "theme": theme, "counts": data["reconciliation"]},
@@ -297,5 +313,6 @@ if __name__ == "__main__":
     parser.add_argument("output", type=Path)
     parser.add_argument("--theme", choices=["minimal", "studio", "classic"], required=True)
     parser.add_argument("--test-fixture", type=Path)
+    parser.add_argument("--review-fixture", type=Path)
     args = parser.parse_args()
-    build(args.source, args.output, args.theme, args.test_fixture)
+    build(args.source, args.output, args.theme, args.test_fixture, args.review_fixture)

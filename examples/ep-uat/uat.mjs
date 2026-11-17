@@ -1,4 +1,5 @@
 import {mountGallery} from './gallery.mjs';
+import {attachReviews} from './reviews.mjs';
 const products=document.querySelector('#products');
 if(products){
   const original=[...products.querySelectorAll('.product-card')];
@@ -24,6 +25,7 @@ if(products){
 const script=document.querySelector('#product-data');
 if(script){
   const product=JSON.parse(script.textContent);let root=document.querySelector('[data-product-gallery]');
+  if (product.review_subject) attachReviews({reviewsEnabled:true, productKey:'uat', reviewSubjects:{uat:product.review_subject}});
   if(root)mountGallery(root,product,'/');
   const select=document.querySelector('[data-variant]');
   if(select){
@@ -54,6 +56,7 @@ if (testProducts.length) {
   const known = new Map(testProducts.map(p => [String(p.source_id), p]));
   const key = 'ep-uat-test-cart-v1';
   const pendingKey = 'ep-uat-test-request-v1';
+  const confirmedKey = 'ep-uat-test-confirmed-v1';
   const readCart = () => { try { return JSON.parse(sessionStorage.getItem(key) || '{}'); } catch { return {}; } };
   const saveCart = cart => sessionStorage.setItem(key, JSON.stringify(cart));
   const pending = () => sessionStorage.getItem(pendingKey);
@@ -95,7 +98,7 @@ if (testProducts.length) {
     const grants = Array.isArray(data.grants) ? data.grants : [];
     const heading = document.createElement('p'); heading.setAttribute('role','status');
     heading.textContent = grants.length ? 'Payment confirmed for this test order. Your dummy downloads are ready.' : data.state === 'expired' ? 'This test checkout expired without payment.' : 'Payment confirmation is not yet available. Please retry shortly.'; returnRoot.append(heading);
-    if (grants.length) { sessionStorage.removeItem(key); sessionStorage.removeItem(pendingKey); }
+    if (grants.length && pending()) { sessionStorage.setItem(confirmedKey, pending()); sessionStorage.removeItem(key); sessionStorage.removeItem(pendingKey); }
     for (const grant of grants) {
       if (!Number.isSafeInteger(grant.source_id) || !known.has(String(grant.source_id))) continue;
       const section = document.createElement('section'); const name = document.createElement('h2'); name.textContent = known.get(String(grant.source_id)).title; section.append(name);
@@ -107,8 +110,9 @@ if (testProducts.length) {
     const retry = document.createElement('button'); retry.type = 'button'; retry.textContent = 'Refresh confirmation'; retry.addEventListener('click', reconcile); returnRoot.append(retry);
   }
   async function reconcile() {
-    if (!pending()) { returnRoot.textContent = 'There is no test checkout awaiting confirmation in this browser.'; return; }
-    try { const response = await fetch('/__uat/reconcile', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({request_id:pending()})}); if (!response.ok) throw new Error('unavailable'); renderReturn(await response.json()); }
+    const requestId = pending() || sessionStorage.getItem(confirmedKey);
+    if (!requestId) { returnRoot.textContent = 'There is no test checkout awaiting confirmation in this browser.'; return; }
+    try { const response = await fetch('/__uat/reconcile', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({request_id:requestId})}); if (!response.ok) throw new Error('unavailable'); renderReturn(await response.json()); }
     catch { returnRoot.textContent = 'Confirmation is temporarily unavailable. Refresh this page to retry.'; }
   }
   fetch('/__uat/context', {cache:'no-store'}).then(response => {

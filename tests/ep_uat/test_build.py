@@ -63,3 +63,19 @@ def test_source_markup_rejects_active_or_undeclared_content():
     ):
         with pytest.raises(ValueError):
             module.SourceMarkupCheck(set()).feed(markup)
+
+
+def test_reviews_are_explicitly_scoped_to_a_product(tmp_path):
+    source = tmp_path / "source"
+    data = make_source(source)
+    mapping = tmp_path / "reviews.json"
+    mapping.write_text(json.dumps({"schema_version": 1, "source_archive_sha256": data["source_archive_sha256"],
+                                   "subjects": {"1": "synthetic-subject"}}))
+    output = tmp_path / "output"
+    module.build(source, output, "minimal", review_fixture=mapping)
+    page = (output / "products/woo-1/index.html").read_text()
+    assert 'id="reviews"' in page and '"review_subject": "synthetic-subject"' in page
+    assert (output / "theme/reviews.mjs").is_file()
+    mapping.write_text(json.dumps({"schema_version": 1, "source_archive_sha256": "wrong", "subjects": {"1": "x"}}))
+    with pytest.raises(ValueError, match="fixture"):
+        module.build(source, tmp_path / "bad", "minimal", review_fixture=mapping)

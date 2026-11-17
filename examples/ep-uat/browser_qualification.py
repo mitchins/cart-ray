@@ -93,6 +93,19 @@ def main():
                             page.goto(f"http://127.0.0.1:{port}/products/woo-30/", wait_until="load")
                             assert page.locator("a[download]").count() == 1
                             page.screenshot(path=str(args.output / f"{theme}-{engine}-{layout}-free.png"))
+                            page.goto(f"http://127.0.0.1:{port}/products/woo-171/", wait_until="load")
+                            assert page.locator("[data-product-gallery]").count() == 1
+                            page.screenshot(path=str(args.output / f"{theme}-{engine}-{layout}-product.png"))
+                            page.goto(f"http://127.0.0.1:{port}/products/woo-148/", wait_until="load")
+                            assert (
+                                page.get_by_text("External live site; destination has not been tested in UAT.").count()
+                                == 1
+                            )
+                            assert page.locator("[data-uat-add]").count() == 0
+                            page.screenshot(path=str(args.output / f"{theme}-{engine}-{layout}-external.png"))
+                            page.goto(f"http://127.0.0.1:{port}/cart/", wait_until="load")
+                            assert page.get_by_text("Checkout is not yet enabled for this UAT catalogue.").count() == 1
+                            page.screenshot(path=str(args.output / f"{theme}-{engine}-{layout}-cart.png"))
                             assert not errors, errors
                             assert not failed, failed
                             report["runs"].append(
