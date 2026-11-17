@@ -1,5 +1,4 @@
 import {mountGallery} from './gallery.mjs';
-import {attachReviews} from './reviews.mjs';
 const products=document.querySelector('#products');
 if(products){
   const original=[...products.querySelectorAll('.product-card')];
@@ -25,7 +24,6 @@ if(products){
 const script=document.querySelector('#product-data');
 if(script){
   const product=JSON.parse(script.textContent);let root=document.querySelector('[data-product-gallery]');
-  if (product.review_subject) attachReviews({reviewsEnabled:true, productKey:'uat', reviewSubjects:{uat:product.review_subject}});
   if(root)mountGallery(root,product,'/');
   const select=document.querySelector('[data-variant]');
   if(select){

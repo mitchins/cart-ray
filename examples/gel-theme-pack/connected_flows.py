@@ -23,6 +23,7 @@ def install(
     context_path: str | None = None,
     return_extension: str | None = None,
     api_origin: str | None = None,
+    reviews_enabled: bool = False,
 ):
     """Install shared cart/return UI; offers are presentation only, never checkout authority."""
     if not offers or len({offer["product_key"] for offer in offers}) != len(offers):
@@ -101,7 +102,7 @@ def install(
         "previewCatalogue": None,
         "productPaths": paths,
         "reviewSubjects": {},
-        "reviewsEnabled": False,
+        "reviewsEnabled": reviews_enabled,
         "reviewInvitationsEnabled": False,
     }
     api = json.dumps(api_origin, ensure_ascii=True) if api_origin else "location.origin"

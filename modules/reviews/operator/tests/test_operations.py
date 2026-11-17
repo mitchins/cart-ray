@@ -48,6 +48,8 @@ def test_plan_is_nonsecret_offline_and_test_only(tmp_path):
     for namespace in ["production", "prod", "not-test/../other", "Acorn-test"]:
         with pytest.raises(ValueError, match="namespace"):
             operations.validate_config(installation.config | {"namespace": namespace})
+    with pytest.raises(ValueError, match="checkbox default requires"):
+        operations.validate_config(installation.config | {"review_invitation_default_checked": False})
 
 
 def test_theme_selection_and_gel_inputs_survive_original_handoff(tmp_path):

@@ -1,6 +1,8 @@
-# Acorn test installation operator
+# CartRay test installation operator
 
-This workflow installs **one** isolated Squirrel/Acorn test store. It uses the
+This workflow installs **one** isolated test store. Its default configuration
+installs Squirrel/Acorn; the merchant package option below supplies another
+store's catalogue, connected storefront and review subjects. It uses the
 current automatic checkout invitation permission and `reviews_gateway.mjs`.
 It does not deploy the older `/review-consent/` bridge, import historical data,
 rotate suppression keys, or support production. Upgrades and
@@ -70,6 +72,56 @@ directory so subsequent builds do not depend on the original handoff. Keep this
 directory with the installation inventory. The connected build uses CartRay's
 real checkout and Reviews APIs; the theme preview's simulated adapter is not
 deployed.
+
+### Other test merchants
+
+Provide `merchant_inputs` as an absolute path to an operator-owned package:
+
+```text
+merchant-inputs/
+  commerce/catalogue.csv
+  commerce/fulfilment-expansions.json
+  commerce/presentation.csv
+  commerce/product-assets/
+  storefront/                 # already-built connected GEL storefront
+```
+
+The commerce directory must contain exactly these inputs. Generate the
+storefront from the merchant's approved public content and selected GEL theme;
+it must contain the shared connected CartRay cart, return and browse code, not
+the preview adapter. For Effective Policy's test lane, the existing
+`examples/ep-uat/build.py` is the source adapter; its audit catalogue includes
+source-hidden listings and is not approved for public production publication.
+Keep test prices and dummy fulfilment separate from the source handoff. Never
+put credentials, customer records or paid fulfilment files in this package.
+
+Add the following fields to the install JSON, using the actual merchant values:
+
+```json
+{
+  "merchant_inputs": "/absolute/path/to/merchant-inputs",
+  "merchant_name": "Example merchant",
+  "store_key": "example-merchant",
+  "theme": "minimal",
+  "reviews_enabled": true,
+  "review_invitation_default_checked": false,
+  "subject_map": {"PRODUCT-ONE": "product-one"},
+  "subject_details": [["product-one", "/products/product-one/", "Product one"]]
+}
+```
+
+`subject_map` binds checkout-authorised product keys to review subjects;
+`subject_details` supplies canonical storefront routes and labels. Additional
+display-only subjects may be listed without a checkout mapping. To omit
+Reviews, set `reviews_enabled` to `false`; the maps may be empty. Planning
+copies and fingerprints the package and preflight lock. The installer verifies
+the checkout identity set, shared runtime bytes, connected pages, selected
+theme and review wiring before build/deploy. Never modify a saved snapshot in
+place. This test workflow does not yet offer an in-place merchant catalogue
+update; use a new isolated test installation until that operation is supported.
+Ordinary Worker rollback does not rewind D1 or Pages data. The test-only EP
+package and hosted integration still require qualification; this option is not
+production activation.
 
 A namespace must end in `-test`. The lock is produced by the existing
 `scripts/preflight_catalogue.py` for `examples/acorn-store/catalogue.csv` and

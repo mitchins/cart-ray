@@ -1,4 +1,4 @@
-// UAT presentation only. Native Reviews clients retain capability and retry handling.
+// Connected presentation. Native Reviews clients retain capability and retry handling.
 import {presentNativeReviews} from './native-presenter.mjs';
 const root = document.querySelector('[data-native-review]');
 const page = root?.dataset.nativeReview;

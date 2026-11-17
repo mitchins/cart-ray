@@ -90,14 +90,15 @@ def esc(s):
     return html.escape(str(s or ""), quote=True)
 
 
-def shell(gel, title, body, test_products=(), theme="minimal"):
+def shell(gel, title, body, test_products=(), theme="minimal", review_enabled=False):
     name = esc(gel["identity"]["name"])
     test_data = json.dumps(list(test_products), ensure_ascii=True).replace("<", "\\u003c")
     locale = esc(gel["identity"]["locale"])
     header = theme_header(gel, theme, "/", False, nav_links=(("/shop/", "Catalogue"),), header_search=False, cart_count=False)
     footer = "Selected products use Stripe test mode only. Review invitations are disabled." if test_products else "Browsing qualification only. Purchases and review invitations are disabled."
     connected = ('<script src="/storefront-config.js" defer></script><script src="/site-config.js" defer></script>'
-                 '<script type="module" src="/theme/connected-browse.mjs"></script>') if test_products else ""
+                 '<script type="module" src="/theme/connected-browse.mjs"></script>') if test_products else (
+                     '<script src="/storefront-config.js" defer></script>' if review_enabled else "")
     presenter = ' data-cartray-presenter="gel"' if test_products else ""
     return f"""<!doctype html><html lang="{locale}"><head>{connected}<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex,nofollow"><meta name="referrer" content="no-referrer"><title>{esc(title)} · {name}</title><link rel="stylesheet" href="/theme/tokens.css"><link rel="stylesheet" href="/theme/base.css"><link rel="stylesheet" href="/theme/theme.css"><link rel="stylesheet" href="/theme/uat.css"><script type="module" src="/theme/uat.mjs"></script></head><body{presenter}>{header}<main id="main">{body}</main><script type="application/json" id="uat-test-products">{test_data}</script><footer class="site-footer"><div class="wrap"><p>{name} · UAT catalogue</p><p>{footer}</p></div></footer></body></html>"""
 
@@ -203,7 +204,8 @@ def detail(p, test_ids=(), review_subject=None, currency="AUD"):
     ).replace("<", "\\u003c")
     reviews = ('<section class="wrap" id="reviews" hidden><h2>Reviews</h2><p id="reviews-status" role="status"></p>'
                '<div id="review-list"></div><button id="reviews-more" type="button" hidden>Load more reviews</button></section>') if review_subject else ""
-    return f"""<div class="wrap breadcrumb"><a href="/shop/">Catalogue</a> / {esc(p["title"])}</div><section class="product-detail wrap">{gallery}<div class="detail-copy"><h1>{esc(p["title"])}</h1><p id="variant-price">{price(p["source_price"], p["source_id"] in test_ids, currency)}</p><p>{esc(p["summary"])}</p>{choices}{action}<div class="uat-description">{description}</div></div></section>{reviews}<script type="application/json" id="product-data">{payload}</script>"""
+    reader = '<script type="module" src="/theme/connected-public-reviews.mjs"></script>' if review_subject else ""
+    return f"""<div class="wrap breadcrumb"><a href="/shop/">Catalogue</a> / {esc(p["title"])}</div><section class="product-detail wrap">{gallery}<div class="detail-copy"><h1>{esc(p["title"])}</h1><p id="variant-price">{price(p["source_price"], p["source_id"] in test_ids, currency)}</p><p>{esc(p["summary"])}</p>{choices}{action}<div class="uat-description">{description}</div></div></section>{reviews}<script type="application/json" id="product-data">{payload}</script>{reader}"""
 
 
 def build(source, output, theme, test_fixture=None, review_fixture=None, gel_file=None):
@@ -317,9 +319,12 @@ def build(source, output, theme, test_fixture=None, review_fixture=None, gel_fil
         shutil.copyfile(PACK / "src" / name, output / "theme" / dest)
     shutil.copyfile(Path(__file__).parent / "uat.css", output / "theme/uat.css")
     shutil.copyfile(Path(__file__).parent / "uat.mjs", output / "theme/uat.mjs")
-    shutil.copyfile(Path(__file__).parent.parent / "acorn-store/reviews.mjs", output / "theme/reviews.mjs")
+    shutil.copyfile(ROOT / "modules/reviews/ui/public.mjs", output / "theme/reviews.mjs")
     if review_subjects:
-        shutil.copyfile(Path(__file__).parent / "review-presenter.mjs", output / "theme/review-presenter.mjs")
+        shutil.copyfile(PACK / "src/connected-public-reviews.mjs", output / "theme/connected-public-reviews.mjs")
+        if not test_products:
+            (output / "storefront-config.js").write_text('window.CARTRAY_STOREFRONT = {"reviewsEnabled":true};\n')
+        shutil.copyfile(PACK / "src/connected-review.mjs", output / "theme/review-presenter.mjs")
         shutil.copyfile(PACK / "src/native-presenter.mjs", output / "theme/native-presenter.mjs")
         for filename, dest in (("reviews.js", "native-reviews.js"), ("manage.js", "native-manage.js")):
             shutil.copyfile(ROOT / "modules/reviews/ui" / filename, output / "theme" / dest)
@@ -339,7 +344,7 @@ def build(source, output, theme, test_fixture=None, review_fixture=None, gel_fil
     ]:
         file = output / route
         file.parent.mkdir(parents=True, exist_ok=True)
-        file.write_text(shell(gel, "Catalogue", content, test_products, theme))
+        file.write_text(shell(gel, "Catalogue", content, test_products, theme, bool(review_subjects)))
     if review_subjects:
         for route, kind, heading in (("review/index.html", "review", "Share your experience"),
                                      ("review/manage.html", "manage", "Manage your review")):
@@ -351,11 +356,11 @@ def build(source, output, theme, test_fixture=None, review_fixture=None, gel_fil
                     '<script type="module" src="/theme/review-presenter.mjs"></script>')
             file = output / route
             file.parent.mkdir(parents=True, exist_ok=True)
-            file.write_text(shell(gel, heading, body, test_products, theme))
+            file.write_text(shell(gel, heading, body, test_products, theme, bool(review_subjects)))
     for p in products:
         file = output / path(p).lstrip("/") / "index.html"
         file.parent.mkdir(parents=True, exist_ok=True)
-        file.write_text(shell(gel, p["title"], detail(p, test_ids, review_subjects.get(str(p["source_id"])), data["source_currency"]), test_products, theme))
+        file.write_text(shell(gel, p["title"], detail(p, test_ids, review_subjects.get(str(p["source_id"])), data["source_currency"]), test_products, theme, bool(review_subjects)))
     if test_products:
         if "cartray_gel" not in sys.modules:
             spec = importlib.util.spec_from_file_location(
@@ -367,7 +372,7 @@ def build(source, output, theme, test_fixture=None, review_fixture=None, gel_fil
         shutil.copyfile(Path(__file__).parent / "return-grants.mjs", output / "theme/return-grants.mjs")
         importlib.import_module("cartray_gel.connected_flows").install(
             output, ROOT, gel, theme, test_products, context_path="/__uat/context",
-            return_extension="/theme/return-grants.mjs",
+            return_extension="/theme/return-grants.mjs", reviews_enabled=bool(review_subjects),
         )
     (output / "provenance.json").write_text(
         json.dumps(

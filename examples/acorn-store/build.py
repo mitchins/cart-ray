@@ -194,9 +194,9 @@ def build(
     for filename in ("app.js", "styles.css"):
         shutil.copy2(ROOT / "storefront" / filename, output / filename)
     shutil.copy2(HERE / "acorn.css", output / "acorn.css")
-    shutil.copy2(HERE / "reviews.mjs", output / "reviews.mjs")
+    shutil.copy2(ROOT / "modules/reviews/ui/public.mjs", output / "reviews.mjs")
     if test_review_gateway:
-        shutil.copy2(HERE / "reviews_gateway.mjs", output / "_worker.js")
+        shutil.copy2(ROOT / "modules/reviews/gateway/worker.mjs", output / "_worker.js")
     copy_declared_assets(output)
     shutil.copytree(ROOT / "modules/reviews/ui", output / "review")
     paths = {item["product_key"]: item["path"] for item in config["products"]}

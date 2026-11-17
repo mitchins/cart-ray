@@ -16,6 +16,9 @@ import time
 from pathlib import Path
 
 from cloud import API, CloudError, stripe
+from merchant_inputs import ConnectedShell, commerce_build_hash, javascript_json
+from merchant_inputs import snapshot as snapshot_merchant_inputs
+from merchant_inputs import validate as validate_merchant_inputs
 from topology import graph, secret_bindings, wrangler_config
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -86,6 +89,12 @@ def validate_config(config):
         "gel",
         "theme_content",
         "gel_assets",
+        "merchant_inputs",
+        "merchant_inputs_sha256",
+        "store_key",
+        "subject_map",
+        "subject_details",
+        "review_invitation_default_checked",
     }
     if not isinstance(config, dict) or set(config) - required - optional or required - set(config):
         raise ValueError("installation config has missing or unknown fields")
@@ -109,6 +118,8 @@ def validate_config(config):
             raise ValueError(f"invalid public {name}")
     if type(config.get("reviews_enabled", True)) is not bool:
         raise ValueError("reviews_enabled must be a boolean")
+    if type(config.get("review_invitation_default_checked", True)) is not bool:
+        raise ValueError("review_invitation_default_checked must be a boolean")
     if config.get("theme", "minimal") not in ("minimal", "studio", "classic"):
         raise ValueError("theme must be minimal, studio or classic")
     for field in ("gel", "theme_content", "gel_assets"):
@@ -116,8 +127,37 @@ def validate_config(config):
             raise ValueError(f"invalid {field} path")
     if any(field in config for field in ("theme_content", "gel_assets")) and "gel" not in config:
         raise ValueError("custom theme_content or gel_assets requires a GEL manifest")
+    if "merchant_inputs" in config:
+        if any(field in config for field in ("gel", "theme_content", "gel_assets")):
+            raise ValueError("merchant inputs already include GEL and storefront content; rebuild the package instead")
+        if (not isinstance(config["merchant_inputs"], str) or not config["merchant_inputs"].strip()
+                or not isinstance(config.get("merchant_name"), str) or not config["merchant_name"].strip()
+                or not re.fullmatch(r"[a-z][a-z0-9-]{0,63}", config.get("store_key", ""))
+                or not isinstance(config.get("subject_map"), dict)
+                or not isinstance(config.get("subject_details"), list)):
+            raise ValueError("merchant inputs require a store key and explicit review subject mappings")
+        mapping, details = config["subject_map"], config["subject_details"]
+        if (len(mapping) > 1000
+                or any(not isinstance(k, str) or not re.fullmatch(r"[A-Z0-9][A-Z0-9_-]{0,63}", k) or
+                       not isinstance(v, str) or not re.fullmatch(r"[a-z0-9-]{1,128}", v)
+                       for k, v in mapping.items())
+                or any(not isinstance(x, list) or len(x) != 3 or not all(isinstance(v, str) for v in x)
+                       or not re.fullmatch(r"[a-z0-9-]{1,128}", x[0])
+                       or not re.fullmatch(r"/products/[a-z0-9]+(?:-[a-z0-9]+)*/", x[1])
+                       or not x[2].strip() or len(x[2]) > 200 for x in details)
+                or len(set(mapping.values())) != len(mapping)
+                or len({x[0] for x in details}) != len(details)
+                or not set(mapping.values()).issubset({x[0] for x in details})):
+            raise ValueError("invalid merchant review subject mappings")
+        if "merchant_inputs_sha256" in config and not re.fullmatch(r"[a-f0-9]{64}", config["merchant_inputs_sha256"]):
+            raise ValueError("invalid merchant inputs fingerprint")
+    elif any(k in config for k in ("merchant_inputs_sha256", "store_key", "subject_map", "subject_details")):
+        raise ValueError("merchant identity requires merchant inputs")
+    elif config.get("review_invitation_default_checked", True) is not True:
+        raise ValueError("custom invitation checkbox default requires a merchant inputs package")
     return {
         "reviews_enabled": True,
+        "review_invitation_default_checked": True,
         "merchant_name": "Squirrel’s Acorn Store",
         "merchant_contact": "Contact the test merchant",
         "delay_seconds": 0,
@@ -142,7 +182,7 @@ class Installation:
             raise ValueError("inventory scope/format mismatch; no resource operation is permitted")
         if not Path(self.config["preflight_lock"]).is_absolute():
             self.config["preflight_lock"] = str(self.directory / self.config["preflight_lock"])
-        for field in ("gel", "theme_content", "gel_assets"):
+        for field in ("gel", "theme_content", "gel_assets", "merchant_inputs"):
             if field in self.config and not Path(self.config[field]).is_absolute():
                 self.config[field] = str(self.directory / self.config[field])
         self.credentials = credentials
@@ -232,6 +272,16 @@ class Installation:
             gel, content, references = cls.gel_inputs(manifest, assets, content_path)
         atomic_json(directory / "inputs/preflight-lock.json", lock)
         config["preflight_lock"] = "inputs/preflight-lock.json"
+        if "merchant_inputs" in config:
+            source = Path(config["merchant_inputs"])
+            if source.is_symlink():
+                raise ValueError("merchant inputs root must not be a symlink")
+            source = source.resolve(strict=True)
+            if directory.is_relative_to(source) or source.is_relative_to(directory):
+                raise ValueError("installation and merchant inputs must not overlap")
+            destination = directory / "inputs/merchant"
+            config["merchant_inputs_sha256"] = snapshot_merchant_inputs(source, destination, ROOT)
+            config["merchant_inputs"] = "inputs/merchant"
         if "gel" in config:
             destination = directory / "inputs/gel-assets"
             for name in sorted(references):
@@ -592,19 +642,89 @@ class Installation:
         self.save()
         return nodes
 
+    def verify_merchant_inputs(self):
+        if "merchant_inputs" not in self.config:
+            return
+        source = Path(self.config["merchant_inputs"])
+        if validate_merchant_inputs(source, ROOT) != self.config.get("merchant_inputs_sha256"):
+            raise ValueError("merchant inputs changed; restore the recorded snapshot before building or deploying")
+        site = source / "storefront"
+        storefront = javascript_json(site / "storefront-config.js", "window.CARTRAY_STOREFRONT = ")
+        if storefront.get("storeName") != self.config["merchant_name"]:
+            raise ValueError("merchant storefront identity differs from installation")
+        cart = ConnectedShell()
+        cart.feed((site / "cart/index.html").read_text())
+        if "theme-" + self.config["theme"] not in cart.body.get("class", "").split():
+            raise ValueError("merchant storefront theme differs from installation")
+        if not set(self.config["subject_map"]).issubset(storefront["productPaths"]):
+            raise ValueError("review subject mapping refers to an unauthorised commerce product")
+        for subject, route, _label in self.config["subject_details"]:
+            product = next((k for k, v in self.config["subject_map"].items() if v == subject), None)
+            if product is not None and storefront["productPaths"][product] != route:
+                raise ValueError("review subject route differs from its merchant product route")
+            if not (site / route.lstrip("/") / "index.html").is_file():
+                raise ValueError("review subject route is missing from the merchant storefront")
+        if self.config["reviews_enabled"]:
+            for subject, route, _label in self.config["subject_details"]:
+                page = ConnectedShell()
+                page.feed((site / route.lstrip("/") / "index.html").read_text())
+                try:
+                    actual = json.loads(page.product_data).get("review_subject")
+                except (ValueError, AttributeError) as error:
+                    raise ValueError("merchant product review presentation is missing") from error
+                if (actual != subject or not {"reviews", "reviews-status", "review-list", "reviews-more"} <= page.ids
+                        or "/theme/connected-public-reviews.mjs" not in page.module_scripts):
+                    raise ValueError("merchant product review presentation differs from subject mapping")
+            for route in ("review/index.html", "review/manage.html"):
+                if not (site / route).is_file():
+                    raise ValueError("merchant review and management pages are required")
+                shell = ConnectedShell()
+                shell.feed((site / route).read_text())
+                mode = "manage" if route.endswith("manage.html") else "review"
+                if (mode not in shell.review_modes or not {"content", "message", "confirm-dialog"} <= shell.ids
+                        or "/theme/review-presenter.mjs" not in shell.module_scripts
+                        or (mode == "manage" and not {"data-dialog-cancel", "data-dialog-confirm"}
+                            <= shell.dialog_controls)):
+                    raise ValueError("merchant review page does not load the supported review client")
+            for dest, source in {"theme/native-reviews.js": "modules/reviews/ui/reviews.js",
+                                 "theme/native-manage.js": "modules/reviews/ui/manage.js",
+                                 "theme/review-presenter.mjs": "examples/gel-theme-pack/src/connected-review.mjs",
+                                 "theme/connected-public-reviews.mjs":
+                                     "examples/gel-theme-pack/src/connected-public-reviews.mjs",
+                                 "theme/reviews.mjs": "modules/reviews/ui/public.mjs"}.items():
+                if (site / dest).read_bytes() != (ROOT / source).read_bytes():
+                    raise ValueError("merchant review client differs from the supported Reviews module")
+
     def build(self):
         self.vault()
         self.check_schema()
+        self.verify_merchant_inputs()
+        merchant_lock_hash = (digest(Path(self.config["preflight_lock"]).read_bytes())
+                              if "merchant_inputs" in self.config else None)
         commit = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip()
         subprocess.run(["git", "diff", "--quiet", "HEAD"], cwd=ROOT, check=True)
         release = self.directory / "releases" / commit
         if (release / "build.json").exists():
+            recorded = json.loads((release / "build.json").read_text())
+            if (recorded.get("merchant_inputs_sha256") != self.config.get("merchant_inputs_sha256")
+                    or recorded.get("merchant_lock_sha256") != merchant_lock_hash):
+                raise ValueError("cached release uses different merchant inputs; build a new release")
             self.state["build"] = commit
             self.save()
-            return json.loads((release / "build.json").read_text())
+            return recorded
         release.mkdir(parents=True, exist_ok=True)
         self.render()
         source = release / "source"
+        if "merchant_inputs" in self.config and (source / "receipt.json").exists():
+            receipt = json.loads((source / "receipt.json").read_text())
+            expected_inputs = commerce_build_hash(
+                Path(self.config["merchant_inputs"]) / "commerce", Path(self.config["preflight_lock"]).read_bytes()
+            )
+            if (receipt.get("source_commit") != commit or receipt.get("catalogue_lock_sha256") != merchant_lock_hash
+                    or receipt.get("merchant_input_sha256") != expected_inputs):
+                if source.is_symlink():
+                    raise ValueError("refusing symlinked generated source artifact")
+                shutil.rmtree(source)
         if not (source / "receipt.json").exists():
             if source.exists():
                 shutil.rmtree(source)
@@ -622,8 +742,18 @@ class Installation:
                     str(self.directory / "configs/source.toml"),
                     "--output",
                     str(source),
+                    *(["--merchant-input", str(Path(self.config["merchant_inputs"]) / "commerce")]
+                      if "merchant_inputs" in self.config else []),
                 ],
             )
+        if "merchant_inputs" in self.config:
+            receipt = json.loads((source / "receipt.json").read_text())
+            expected_inputs = commerce_build_hash(
+                Path(self.config["merchant_inputs"]) / "commerce", Path(self.config["preflight_lock"]).read_bytes()
+            )
+            if (receipt.get("source_commit") != commit or receipt.get("catalogue_lock_sha256") != merchant_lock_hash
+                    or receipt.get("merchant_input_sha256") != expected_inputs):
+                raise ValueError("built commerce artifact does not match the pinned merchant inputs and lock")
         reviews = release / "reviews"
         if self.config["reviews_enabled"] and not (reviews / "receipt.json").exists():
             if reviews.exists():
@@ -666,6 +796,8 @@ class Installation:
             artifacts[role] = files
         result = {
             "commit": commit,
+            "merchant_inputs_sha256": self.config.get("merchant_inputs_sha256"),
+            "merchant_lock_sha256": merchant_lock_hash,
             "artifacts": artifacts,
             "schema": self.state.get("migration_ledgers"),
             "suppression_key_fingerprint": self.state["secret_fingerprints"]["recipient_hash"],
@@ -694,10 +826,16 @@ class Installation:
     def deploy(self):
         self.ensure_pages_subdomain()
         self.check_schema()
+        self.verify_merchant_inputs()
         self.pin_suppression()
         if "build" not in self.state:
             raise ValueError("build the clean commit before deployment")
         build = json.loads((self.directory / "releases" / self.state["build"] / "build.json").read_text())
+        if build.get("merchant_inputs_sha256") != self.config.get("merchant_inputs_sha256"):
+            raise ValueError("release merchant inputs differ; rebuild before deploying")
+        if ("merchant_inputs" in self.config
+                and build.get("merchant_lock_sha256") != digest(Path(self.config["preflight_lock"]).read_bytes())):
+            raise ValueError("release preflight lock differs; rebuild before deploying")
         if build["schema"] != self.state.get("migration_ledgers"):
             raise ValueError("build schema contract differs; migrate then build a new release")
         progress = self.state.setdefault("deployment", {"commit": build["commit"], "versions": {}, "complete": False})
@@ -791,27 +929,28 @@ class Installation:
     def seed_subjects(self):
         if not self.config["reviews_enabled"]:
             return
-        subjects = [
+        subjects = self.config.get("subject_details", [
             ("acorn-growing-kit", "/products/acorn-growing-kit/", "Acorn growing kit"),
             ("woodland-planter", "/products/woodland-planter/", "Woodland planter"),
-        ]
+        ])
+        store = self.config.get("store_key", "acorn-store")
         for subject, path, label in subjects:
             self.api.query(
                 self.db("reviews"),
-                "INSERT INTO review_subjects VALUES ('acorn-store','test',?,'product',?) ON CONFLICT DO NOTHING",
-                [subject, path],
+                "INSERT INTO review_subjects VALUES (?,'test',?,'product',?) ON CONFLICT DO NOTHING",
+                [store, subject, path],
             )
             self.api.query(
                 self.db("reviews"),
-                "INSERT INTO review_subject_display_names VALUES ('acorn-store','test',?,?) ON CONFLICT DO NOTHING",
-                [subject, label],
+                "INSERT INTO review_subject_display_names VALUES (?,'test',?,?) ON CONFLICT DO NOTHING",
+                [store, subject, label],
             )
             self.api.query(
                 self.db("reviews"),
                 "INSERT INTO native_publication_versions "
                 "(store_key,environment,subject_id,version,contribution_count,rated_count,rating_sum) "
-                "VALUES ('acorn-store','test',?,0,0,0,0) ON CONFLICT DO NOTHING",
-                [subject],
+                "VALUES (?,'test',?,0,0,0,0) ON CONFLICT DO NOTHING",
+                [store, subject],
             )
 
     def deploy_storefront(self, build):
@@ -822,29 +961,53 @@ class Installation:
                 shutil.rmtree(staging)
             if output.exists():
                 shutil.rmtree(output)
-            self.run(
-                "build-storefront",
-                [
-                    "uv",
-                    "run",
-                    "--locked",
-                    "python",
-                    "examples/acorn-store/build.py",
-                    "--output",
-                    str(staging),
-                    "--test-checkout-api",
-                    self.state["urls"]["source"],
-                    "--theme",
-                    self.config["theme"],
-                    "--gel",
-                    self.config.get("gel", str(ROOT / "examples/gel-theme-pack/gel/squirrel.json")),
-                    *(["--gel-assets", self.config["gel_assets"]] if "gel_assets" in self.config else []),
-                    *(["--theme-content", self.config["theme_content"]] if "theme_content" in self.config else []),
-                    *(["--reviews", "--test-review-gateway"] if self.config["reviews_enabled"] else []),
-                    "--preflight-lock",
-                    self.config["preflight_lock"],
-                ],
-            )
+            if "merchant_inputs" in self.config:
+                site = Path(self.config["merchant_inputs"]) / "storefront"
+                shutil.copytree(site, staging)
+                storefront = javascript_json(site / "storefront-config.js", "window.CARTRAY_STOREFRONT = ")
+                storefront["reviewsEnabled"] = self.config["reviews_enabled"]
+                storefront["reviewInvitationsEnabled"] = self.config["reviews_enabled"]
+                storefront["reviewInvitationDefaultChecked"] = (
+                    self.config["reviews_enabled"] and self.config["review_invitation_default_checked"]
+                )
+                storefront["reviewSubjects"] = self.config["subject_map"] if self.config["reviews_enabled"] else {}
+                theme = javascript_json(site / "site-config.js", "window.CARTRAY_THEME = ")
+                theme["contextPath"] = None
+                theme["returnExtension"] = None
+                (staging / "storefront-config.js").write_text(
+                    "window.CARTRAY_STOREFRONT = " + json.dumps(storefront, ensure_ascii=True)
+                    + "; window.CARTRAY_STOREFRONT.apiBaseUrl = "
+                    + json.dumps(self.state["urls"]["source"]) + "; window.CARTRAY_CONNECTED_CATALOGUE = true;\n"
+                )
+                (staging / "site-config.js").write_text(
+                    "window.CARTRAY_THEME = " + json.dumps(theme, ensure_ascii=True) + ";\n"
+                )
+                if self.config["reviews_enabled"]:
+                    shutil.copyfile(ROOT / "modules/reviews/gateway/worker.mjs", staging / "_worker.js")
+            else:
+                self.run(
+                    "build-storefront",
+                    [
+                        "uv",
+                        "run",
+                        "--locked",
+                        "python",
+                        "examples/acorn-store/build.py",
+                        "--output",
+                        str(staging),
+                        "--test-checkout-api",
+                        self.state["urls"]["source"],
+                        "--theme",
+                        self.config["theme"],
+                        "--gel",
+                        self.config.get("gel", str(ROOT / "examples/gel-theme-pack/gel/squirrel.json")),
+                        *(["--gel-assets", self.config["gel_assets"]] if "gel_assets" in self.config else []),
+                        *(["--theme-content", self.config["theme_content"]] if "theme_content" in self.config else []),
+                        *(["--reviews", "--test-review-gateway"] if self.config["reviews_enabled"] else []),
+                        "--preflight-lock",
+                        self.config["preflight_lock"],
+                    ],
+                )
             (staging / ".operator-build-complete").write_text(build["commit"] + "\n")
             os.replace(staging, output)
         origin = self.state["urls"]["storefront"]
@@ -859,6 +1022,12 @@ class Installation:
                 for name in ("REVIEWS_API", "REVIEWS_PUBLIC")
             },
         }
+        if "merchant_inputs" in self.config and self.config["reviews_enabled"]:
+            deployment["env_vars"] = {
+                "REVIEWS_GATEWAY": {"type": "plain_text", "value": "test"},
+                "REVIEWS_READ_MODE": {"type": "plain_text", "value": "test"},
+                "REVIEWS_STOREFRONT_ORIGIN": {"type": "plain_text", "value": origin},
+            }
         if not self.config["reviews_enabled"]:
             deployment = {"env_vars": {}, "services": {}}
         self.api.request(
@@ -1082,7 +1251,7 @@ class Installation:
                     "cartray-reviews-order-confirmed-v1",
                     self.config["namespace"],
                     self.config["namespace"],
-                    "acorn-store",
+                    self.config.get("store_key", "acorn-store"),
                     "test",
                     identity,
                 ]
@@ -1094,7 +1263,7 @@ class Installation:
                             "version": 1,
                             "issuer": self.config["namespace"],
                             "installation": self.config["namespace"],
-                            "store": "acorn-store",
+                            "store": self.config.get("store_key", "acorn-store"),
                             "environment": "test",
                             "outbox_id": identity,
                             "signature": signature,
@@ -1211,22 +1380,26 @@ class Installation:
         deliveries = self.api.query(
             self.db("reviews"),
             "SELECT delivery_identity,provider_email_id,accepted_at FROM review_provider_deliveries "
-            "WHERE store_key='acorn-store' AND environment='test' ORDER BY accepted_at",
+            "WHERE store_key=? AND environment='test' ORDER BY accepted_at",
+            [self.config.get("store_key", "acorn-store")],
         )
         states = self.api.query(
             self.db("reviews"),
             "SELECT state,COUNT(*) AS count FROM invitation_generations "
-            "WHERE store_key='acorn-store' AND environment='test' GROUP BY state",
+            "WHERE store_key=? AND environment='test' GROUP BY state",
+            [self.config.get("store_key", "acorn-store")],
         )
         public = self.api.query(
             self.db("reviews"),
             "SELECT subject_id,contribution_count,rated_count,version FROM native_publication_versions "
-            "WHERE store_key='acorn-store' AND environment='test' ORDER BY subject_id",
+            "WHERE store_key=? AND environment='test' ORDER BY subject_id",
+            [self.config.get("store_key", "acorn-store")],
         )
         suppressed = self.api.query(
             self.db("reviews"),
             "SELECT COUNT(*) AS count FROM review_recipient_suppressions "
-            "WHERE store_key='acorn-store' AND environment='test'",
+            "WHERE store_key=? AND environment='test'",
+            [self.config.get("store_key", "acorn-store")],
         )
         result = {
             "format": 1,
@@ -1389,7 +1562,7 @@ class Installation:
             return
         self.assert_resources()
         vault = self.vault()
-        params = ["acorn-store", "test", self.config["namespace"]]
+        params = [self.config.get("store_key", "acorn-store"), "test", self.config["namespace"]]
         check = hmac.new(
             vault["recipient_hash"].encode(),
             json.dumps(["reviews-suppression-key-check-v1", *params, "key1"], separators=(",", ":")).encode(),
