@@ -130,3 +130,15 @@ def test_merchant_currency_comes_from_catalogue_and_gel(tmp_path):
     module.build(source, out, "minimal", gel_file=path)
     assert "NZD" in (out / "index.html").read_text()
     assert '"currency": "NZD"' in (out / "products/woo-1/index.html").read_text()
+
+
+def test_aud_sandbox_checkout_cannot_be_shown_as_another_currency(tmp_path):
+    source = tmp_path / "source"
+    data = make_source(source)
+    data["source_currency"] = "NZD"
+    (source / "catalogue.json").write_text(json.dumps(data))
+    fixture_path = tmp_path / "test-fixture.json"
+    fixture_path.write_text(json.dumps({"livemode": False, "source_archive_sha256": data["source_archive_sha256"],
+                                        "offers": []}))
+    with pytest.raises(ValueError, match="requires an AUD catalogue"):
+        module.build(source, tmp_path / "unsafe", "minimal", test_fixture=fixture_path)

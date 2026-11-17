@@ -212,6 +212,8 @@ def build(source, output, theme, test_fixture=None, review_fixture=None, gel_fil
             raise ValueError("invalid or duplicate UAT review subject")
     test_products = []
     if test_fixture:
+        if data.get("source_currency") != "AUD":
+            raise ValueError("this Stripe test checkout fixture requires an AUD catalogue")
         fixture = json.loads(Path(test_fixture).read_text())
         if fixture.get("livemode") is not False or fixture.get("source_archive_sha256") != data["source_archive_sha256"]:
             raise ValueError("test price fixture is not scoped to this catalogue")
