@@ -140,11 +140,15 @@ def product_card(p, test_ids=(), currency="AUD"):
     search = " ".join(
         [p["title"], p.get("source_sku") or "", p["summary"], p["description"], *(c["name"] for c in p["categories"])]
     )
+    search_lower = search.lower()
+    search_folded = search.casefold()
+    if search_folded != search_lower:
+        search_lower += " " + search_folded
     visibility = (
         '<p class="muted">UAT audit: restricted visibility in source catalogue.</p>' if p["source_visibility"] else ""
     )
     add = f'<button type="button" data-uat-add="{p["source_id"]}" disabled>Add to test cart</button>' if p["source_id"] in test_ids else ""
-    return f'''<article class="product-card" data-category-ids="{esc(categories)}" data-search="{esc(search.casefold())}" data-order="{p["menu_order"]}" data-name="{esc(p["title"].casefold())}" data-price="{esc(p["source_price"])}"><a class="product-art" href="{path(p)}" tabindex="-1" aria-hidden="true">{image(p)}</a><div class="product-copy"><h2><a href="{path(p)}">{esc(p["title"])}</a></h2><p>{esc(p["summary"][:400])}</p>{visibility}<p class="muted">{price(p["source_price"], p["source_id"] in test_ids, currency)}</p><a href="{path(p)}">View product</a>{add}</div></article>'''
+    return f'''<article class="product-card" data-category-ids="{esc(categories)}" data-search="{esc(search_lower)}" data-order="{p["menu_order"]}" data-name="{esc(p["title"].casefold())}" data-price="{esc(p["source_price"])}"><a class="product-art" href="{path(p)}" tabindex="-1" aria-hidden="true">{image(p)}</a><div class="product-copy"><h2><a href="{path(p)}">{esc(p["title"])}</a></h2><p>{esc(p["summary"][:400])}</p>{visibility}<p class="muted">{price(p["source_price"], p["source_id"] in test_ids, currency)}</p><a href="{path(p)}">View product</a>{add}</div></article>'''
 
 
 def catalogue(products, merchant_name, test_ids=(), currency="AUD"):

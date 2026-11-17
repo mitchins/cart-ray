@@ -177,3 +177,14 @@ def test_merchant_snapshot_update_preserves_subject_and_rejects_stale_mapping(tm
                                    "subjects": {"3": "retired-subject"}}))
     with pytest.raises(ValueError, match="review subject"):
         module.build(source, tmp_path / "stale", "minimal", review_fixture=mapping)
+
+
+def test_search_index_supports_both_original_and_casefolded_unicode(tmp_path):
+    source = tmp_path / "source"
+    data = make_source(source)
+    data["products"][0]["title"] = "Straße"
+    (source / "catalogue.json").write_text(json.dumps(data))
+    out = tmp_path / "out"
+    module.build(source, out, "minimal")
+    page = (out / "index.html").read_text()
+    assert "straße" in page and "strasse" in page

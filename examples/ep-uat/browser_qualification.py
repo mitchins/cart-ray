@@ -126,6 +126,15 @@ def main():
                                 menu.locator("summary").press("Enter")
                                 assert menu.get_attribute("open") is None
                             page.screenshot(path=str(args.output / f"{theme}-{engine}-{layout}-catalogue.png"))
+                            if args.source and theme == "minimal" and engine == "chromium" and layout == "desktop":
+                                cards = page.locator("#products .product-card")
+                                titles = cards.locator("h2").all_text_contents()
+                                for index, title in enumerate(titles):
+                                    page.locator("#search").fill(title)
+                                    if not cards.nth(index).is_visible():
+                                        raise ValueError(f"exact title search failed for listing index {index}")
+                                page.locator("#search").fill("")
+                                report["exact_title_searches"] = len(titles)
                             times = []
                             for _ in range(20):
                                 start = time.perf_counter()

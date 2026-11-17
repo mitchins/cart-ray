@@ -5,7 +5,7 @@ if(products){
   const original=[...products.querySelectorAll('.product-card')];
   const search=document.querySelector('#search'),category=document.querySelector('#category'),sort=document.querySelector('#sort');
   function update(){
-    const query=search.value.trim().toLocaleLowerCase(),choice=category.value;
+    const query=search.value.trim().toLowerCase(),choice=category.value;
     let visible=0;
     for(const card of original){
       const show=card.dataset.search.includes(query)&&(!choice||card.dataset.categoryIds.split(' ').includes(choice));
