@@ -114,12 +114,8 @@ def main():
                             page.goto(f"http://127.0.0.1:{port}/", wait_until="load", timeout=30000)
                             initial_ms = (time.perf_counter() - start) * 1000
                             cdp = page.context.new_cdp_session(page) if engine == "chromium" else None
-                            initial_heap = cdp.send("Runtime.getHeapUsage")["usedSize"] if cdp else None
                             initial_resource_bytes = page.evaluate(
                                 "performance.getEntriesByType('resource').reduce((n, r) => n + r.transferSize, 0)"
-                            )
-                            initial_memory = page.evaluate(
-                                "performance.memory ? performance.memory.usedJSHeapSize : null"
                             )
                             page.wait_for_selector("#products .product-card")
                             assert page.locator("#products .product-card").count() == args.expected_products
@@ -142,6 +138,10 @@ def main():
                                         raise ValueError(f"exact title search failed for listing index {index}")
                                 page.locator("#search").fill("")
                                 report["exact_title_searches"] = len(titles)
+                            initial_heap = cdp.send("Runtime.getHeapUsage")["usedSize"] if cdp else None
+                            initial_memory = page.evaluate(
+                                "performance.memory ? performance.memory.usedJSHeapSize : null"
+                            )
                             times = []
                             for _ in range(20):
                                 start = time.perf_counter()
