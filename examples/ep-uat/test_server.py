@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import copy
 import hashlib
 import hmac
 import json
@@ -27,7 +28,7 @@ from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
-from delivery_email import TestDelivery
+from delivery_email import TEST_BODY, TEST_SUBJECT, TestDelivery
 from prepare import APPROVED_SHA256, prepare, read_archive
 from provision_test_prices import amount_minor, dummy_followups
 
@@ -35,6 +36,7 @@ from cartray.canonical import CanonicalItem
 from cartray.catalogue import CsvCatalogueSourceAdapter, build_catalogue_from_source
 from cartray.checkout import CheckoutService
 from cartray.models import CHECKOUT_REQUEST_ID_RE, CheckoutRequest
+from cartray.post_purchase import Action, SqliteDispatcher
 from cartray.reconciliation import StripeReconciliationService
 from cartray.store import ReconciliationCandidate, SqliteOrderStore
 from cartray.stripe import (
@@ -125,7 +127,7 @@ class Ed25519:
 
 
 class TestLane:
-    def __init__(self, fixture, key, port, archive):
+    def __init__(self, fixture, key, port, archive, no_return=False):
         self.fixture = fixture
         self.lock = threading.RLock()
         self.port = port
@@ -181,7 +183,17 @@ class TestLane:
             CREATE TABLE IF NOT EXISTS uat_grants(
                 order_id TEXT NOT NULL, product_key TEXT NOT NULL, quantity INTEGER NOT NULL,
                 PRIMARY KEY(order_id, product_key));
+            CREATE TABLE IF NOT EXISTS uat_settlement_origins(
+                order_id TEXT PRIMARY KEY, origin TEXT NOT NULL);
         """)
+        if not self.connection.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='post_purchase_executions'"
+        ).fetchone():
+            migration = Path(__file__).resolve().parents[2] / "migrations/0006_post_purchase_actions.sql"
+            self.connection.executescript(
+                "BEGIN;\n" + migration.read_text()
+                + "\nINSERT INTO post_purchase_installation VALUES (1,'effective-policy-uat','test');\nCOMMIT;"
+            )
         self.crypto = Ed25519(fixture)
         self.client = StripeApiClient(key, Network())
         account = asyncio.run(self.client.get("/v1/account", {}))
@@ -224,7 +236,7 @@ class TestLane:
             self.catalogue,
             self.store,
             StripeCheckoutGateway(self.client, CheckoutMetadataSealer("test", "ep-uat-local", self.crypto)),
-            success_url=f"http://localhost:{port}/uat-return/",
+            success_url="https://example.com/" if no_return else f"http://localhost:{port}/uat-return/",
             cancel_url=f"http://localhost:{port}/cart/",
         )
         self.reconciler = StripeReconciliationService(
@@ -295,7 +307,7 @@ class TestLane:
             self.connection.execute("INSERT OR IGNORE INTO uat_order_owner VALUES (?,?)", (row["order_id"], owner))
         return {"url": redirect.url}
 
-    def reconcile(self, owner, request_id):
+    def reconcile(self, owner, request_id, origin="browser"):
         if not isinstance(request_id, str) or not CHECKOUT_REQUEST_ID_RE.fullmatch(request_id):
             raise ValueError("invalid request identity")
         bound = self.connection.execute(
@@ -337,7 +349,11 @@ class TestLane:
                     ).fetchone()["attempt_count"]
                     candidates.append(ReconciliationCandidate(order_id, session_id, lease, count))
         for candidate in candidates:
-            asyncio.run(self.reconciler._reconcile_candidate(candidate, now=now))
+            outcome = asyncio.run(self.reconciler._reconcile_candidate(candidate, now=now))
+            if outcome == "confirmed":
+                with self.connection:
+                    self.connection.execute("INSERT OR IGNORE INTO uat_settlement_origins VALUES (?,?)",
+                                            (candidate.order_id, origin))
             # In this local UAT only, permit bounded retry after open or transient outcomes.
             with self.connection:
                 self.connection.execute(
@@ -361,21 +377,17 @@ class TestLane:
                     "INSERT OR IGNORE INTO uat_grants VALUES (?,?,?)",
                     (row["order_id"], row["product_key"], row["quantity"]),
                 )
-        # Sending happens on a separate connection and thread, never under the
-        # checkout lock or on the customer's confirmation response path.
-        mail_config = getattr(self, "test_delivery_config", None)
-        if mail_config:
+        # Optional test dispatcher never runs provider work under the checkout lock.
+        if getattr(self, "test_delivery_config", None):
             order = self.connection.execute(
-                """SELECT s.order_id,s.external_session_id FROM checkout_sessions s
-                JOIN orders o USING(order_id) JOIN uat_order_owner u USING(order_id)
+                """SELECT s.order_id FROM checkout_sessions s JOIN orders o USING(order_id)
+                JOIN uat_order_owner u USING(order_id)
                 WHERE o.checkout_request_id=? AND u.token_hash=? AND s.settlement_state='confirmed'
                   AND EXISTS (SELECT 1 FROM outbox x WHERE x.order_id=s.order_id AND x.event_type='OrderConfirmed')""",
                 (request_id, owner),
             ).fetchone()
             if order:
-                links = sorted({link for grant in self.grants(owner, request_id) for link in grant["followups"]})
-                threading.Thread(target=self.send_test_delivery,
-                                 args=(order["order_id"], order["external_session_id"], links), daemon=True).start()
+                threading.Thread(target=self.send_test_delivery, args=(order["order_id"],), daemon=True).start()
         state = self.connection.execute(
             """SELECT s.settlement_state FROM checkout_sessions s
             JOIN orders o USING(order_id) JOIN uat_order_owner u USING(order_id)
@@ -383,11 +395,87 @@ class TestLane:
         ).fetchone()
         return {"state": state["settlement_state"] if state else "pending", "grants": self.grants(owner, request_id)}
 
-    def send_test_delivery(self, order_id, session_id, links):
+    def run_test_automation_once(self):
+        """Drive local sandbox reconciliation independently of the purchase browser."""
+        with closing(sqlite3.connect(self.fixture / "uat-order-test.sqlite", timeout=5)) as connection:
+            lane = copy.copy(self)
+            lane.connection = connection
+            lane.store = SqliteOrderStore(connection)
+            lane.reconciler = StripeReconciliationService(
+                lane.store, StripeCheckoutSessionRetriever(lane.client),
+                CheckoutMetadataVerifier("test", {"ep-uat-local": lane.crypto}),
+            )
+            source_keys = {row["source_key"]: row["cartray_product_key"] for row in self.mapping.values()}
+            pairs = sorted({(source_keys[x["source_key"]], x["workflow_key"]) for x in self.followups["items"]})
+            missing = " OR ".join(
+                "(i.product_key=? AND NOT EXISTS (SELECT 1 FROM post_purchase_executions p "
+                "WHERE p.order_id=o.order_id AND p.workflow_key=?))" for _ in pairs
+            ) or "0"
+            parameters = [value for pair in pairs for value in pair]
+            rows = connection.execute(
+                """SELECT COALESCE(u.token_hash,c.token_hash) AS owner,o.order_id,o.checkout_request_id
+                FROM orders o JOIN checkout_sessions s USING(order_id)
+                LEFT JOIN uat_order_owner u USING(order_id)
+                JOIN uat_checkout_owner c ON c.request_id=o.checkout_request_id
+                LEFT JOIN checkout_reconciliations r USING(order_id)
+                WHERE s.external_session_id IS NOT NULL AND (u.token_hash IS NULL OR u.token_hash=c.token_hash) AND
+                (s.settlement_state='pending' AND (r.next_attempt_at IS NULL OR r.next_attempt_at<=?)
+                    AND (r.lease_expires_at IS NULL OR r.lease_expires_at<=?) OR
+                 s.settlement_state='confirmed' AND NOT EXISTS
+                    (SELECT 1 FROM uat_delivery_emails e WHERE e.order_id=o.order_id) AND EXISTS
+                    (SELECT 1 FROM order_items i WHERE i.order_id=o.order_id AND (""" + missing + """)))
+                ORDER BY COALESCE(r.next_attempt_at,0),o.created_at LIMIT 10""",
+                [int(time.time()), int(time.time()), *parameters],
+            ).fetchall()
+            for row in rows:
+                try:
+                    with connection:
+                        connection.execute("INSERT OR IGNORE INTO uat_order_owner VALUES (?,?)",
+                                           (row["order_id"], row["owner"]))
+                    lane.reconcile(row["owner"], row["checkout_request_id"], origin="background")
+                except Exception:
+                    continue  # A transient failure cannot stop later scheduled attempts.
+
+    def run_test_automation(self):
+        while True:
+            try:
+                self.run_test_automation_once()
+            except Exception:
+                pass  # The isolated test runner retries without impacting checkout.
+            time.sleep(10)
+
+    def send_test_delivery(self, order_id):
         try:
             with closing(sqlite3.connect(self.fixture / "uat-order-test.sqlite", timeout=5)) as connection:
+                # Preserve the already sent order-level UAT claim on upgrade.
+                if connection.execute("SELECT 1 FROM uat_delivery_emails WHERE order_id=?", (order_id,)).fetchone():
+                    return
                 mail = TestDelivery(connection, self.client, *self.test_delivery_config)
-                mail.dispatch(order_id, session_id, links)
+                source_keys = {row["source_key"]: row["cartray_product_key"] for row in self.mapping.values()}
+                workflow_links = {}
+                workflow_offers = {}
+                for item in self.followups["items"]:
+                    key = item["workflow_key"]
+                    workflow_links.setdefault(key, set()).add(item["dummy_url"])
+                    workflow_offers.setdefault(key, set()).add(source_keys[item["source_key"]])
+                actions = tuple(
+                    Action(
+                        key, tuple(sorted(offers)), "transactional_email", key,
+                        hashlib.sha256(json.dumps(
+                            [TEST_SUBJECT, TEST_BODY, "uat@mitchellcurrie.com", "test-1034@mitchellcurrie.com",
+                             sorted(workflow_links[key])],
+                            separators=(",", ":"),
+                        ).encode()).hexdigest(),
+                    )
+                    for key, offers in workflow_offers.items()
+                )
+                dispatcher = SqliteDispatcher(
+                    connection, "effective-policy-uat", "test",
+                    {"transactional_email": lambda purchase, execution: mail.send_verified(
+                        purchase.session_id, sorted(workflow_links[execution.config_ref])
+                    )},
+                )
+                dispatcher.dispatch(order_id, actions)
         except Exception:
             pass  # Provider failures must not affect checkout or expose private details.
 
@@ -524,6 +612,7 @@ def main():
     stripe_secret.add_argument("--stripe-keychain-service")
     parser.add_argument("--archive", type=Path, required=True)
     parser.add_argument("--port", type=int, default=45984)
+    parser.add_argument("--no-return-test", action="store_true", help="Return test checkout outside the UAT store")
     mail_secret = parser.add_mutually_exclusive_group()
     mail_secret.add_argument("--smtp2go-key-file", type=Path, help="Enable the single-recipient test delivery")
     mail_secret.add_argument("--smtp2go-keychain-service", help="Enable test delivery using macOS Keychain")
@@ -536,11 +625,15 @@ def main():
         raise ValueError("credentials and source archive must not be inside the static site")
     if any(path.is_symlink() for path in site.rglob("*")):
         raise ValueError("static site must not contain symlinks")
-    lane = TestLane(fixture, read_secret(args.key_file, args.stripe_keychain_service, site), args.port, args.archive)
+    lane = TestLane(
+        fixture, read_secret(args.key_file, args.stripe_keychain_service, site), args.port, args.archive,
+        no_return=args.no_return_test,
+    )
     mail_key = read_secret(args.smtp2go_key_file, args.smtp2go_keychain_service, site)
     if mail_key:
         lane.test_delivery_config = (mail_key, "uat@mitchellcurrie.com", "test-1034@mitchellcurrie.com")
         TestDelivery(lane.connection, lane.client, *lane.test_delivery_config)
+        threading.Thread(target=lane.run_test_automation, daemon=True).start()
     server = ThreadingHTTPServer(("127.0.0.1", args.port), partial(Handler, directory=str(site), lane=lane))
     print(f"Local-only UAT server on http://localhost:{args.port}; test email is restricted and opt-in.", flush=True)
     server.serve_forever()

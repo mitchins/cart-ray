@@ -6,6 +6,9 @@ import asyncio
 import json
 import urllib.request
 
+TEST_SUBJECT = "Your Effective Policy UAT test resources"
+TEST_BODY = "This is a test purchase. These links contain dummy materials only.\n\n"
+
 
 class TestDelivery:
     """Claim before sending; uncertain provider outcomes are never automatically retried."""
@@ -35,6 +38,36 @@ class TestDelivery:
         with urllib.request.urlopen(request, timeout=15) as response:
             return json.load(response)
 
+    def send_verified(self, session_id, links):
+        """Perform one already-claimed test send and return its provider reference."""
+        session = asyncio.run(self.stripe.get("/v1/checkout/sessions/" + session_id, {}))
+        contact = session.get("customer_details") or {}
+        if (
+            session.get("id") != session_id
+            or session.get("livemode") is not False
+            or session.get("payment_status") != "paid"
+            or contact.get("email", "").casefold() != self.recipient.casefold()
+            or not links
+        ):
+            raise ValueError("test purchase or recipient is not verified")
+        result = self.transport(
+            {
+                "sender": self.sender,
+                "to": [self.recipient],
+                "subject": TEST_SUBJECT,
+                "text_body": TEST_BODY + "\n".join(links),
+            }
+        )
+        data = result.get("data", {})
+        if (
+            data.get("succeeded") != 1
+            or data.get("failed") != 0
+            or not isinstance(data.get("email_id"), str)
+            or not data["email_id"]
+        ):
+            raise ValueError("provider acceptance not confirmed")
+        return data["email_id"]
+
     def dispatch(self, order_id, session_id, links):
         if not links:
             return "no_followup"
@@ -62,7 +95,7 @@ class TestDelivery:
                 {
                     "sender": self.sender,
                     "to": [self.recipient],
-                    "subject": "Your Effective Policy UAT test resources",
+                    "subject": TEST_SUBJECT,
                     "text_body": "This is a test purchase. These links contain dummy materials only.\n\n"
                     + "\n".join(links),
                 }
