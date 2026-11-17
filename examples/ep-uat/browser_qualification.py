@@ -42,6 +42,11 @@ def audit_source(source, root):
         page = (root / navigation.lstrip("/") / "index.html").read_text()
         if html.escape(product["title"]) not in page:
             raise ValueError("listing title missing from its page")
+        description = product["description_html"].replace("\r\n", "\n").replace("\r", "\n")
+        if description and description not in page:
+            raise ValueError("sanitized source description missing from its page")
+        if any(image["path"] not in page for image in product["images"]):
+            raise ValueError("product gallery image missing from its page")
         if product["canonical_url"] is not None or 'rel="canonical"' in page:
             raise ValueError("UAT must not invent source canonical URLs")
         if product["action"] == "external":
@@ -57,6 +62,8 @@ def audit_source(source, root):
         for variant in product["variations"]:
             if variant["key"] not in page:
                 raise ValueError("variation is missing from its parent page")
+            if any(image["path"] not in page for image in variant["images"]):
+                raise ValueError("variation gallery image missing from its parent page")
             counts["variations"] += 1
         counts["products"] += 1
     return counts
