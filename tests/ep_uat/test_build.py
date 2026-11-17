@@ -40,6 +40,7 @@ def test_local_build_preserves_identity_without_checkout_or_canonical(tmp_path, 
     assert "ep:woo:offer:2" in page and "checkout is not available" in page.lower()
     assert 'rel="canonical"' not in page and "stripe" not in page.lower()
     assert not (output / "media/private-draft.png").exists()
+    assert not (output / "review/index.html").exists()
 
 
 def test_local_build_rejects_tampered_media_and_checkout_flag(tmp_path):
@@ -77,6 +78,10 @@ def test_reviews_are_explicitly_scoped_to_a_product(tmp_path):
     page = (output / "products/woo-1/index.html").read_text()
     assert 'id="reviews"' in page and '"review_subject": "synthetic-subject"' in page
     assert (output / "theme/reviews.mjs").is_file()
+    assert (output / "review/index.html").is_file()
+    assert (output / "review/manage.html").is_file()
+    assert (output / "theme/native-reviews.js").read_bytes() == (ROOT / "modules/reviews/ui/reviews.js").read_bytes()
+    assert (output / "theme/native-manage.js").read_bytes() == (ROOT / "modules/reviews/ui/manage.js").read_bytes()
     mapping.write_text(json.dumps({"schema_version": 1, "source_archive_sha256": "wrong", "subjects": {"1": "x"}}))
     with pytest.raises(ValueError, match="fixture"):
         module.build(source, tmp_path / "bad", "minimal", review_fixture=mapping)

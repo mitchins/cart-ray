@@ -6,6 +6,7 @@ import argparse
 import hashlib
 import importlib.util
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -45,6 +46,34 @@ class Handler(SimpleHTTPRequestHandler):
         except (OSError, urllib.error.HTTPError):
             self.send_error(503)
 
+    def do_POST(self):
+        allowed = self.path in {
+            "/reviews/v1/invitation", "/reviews/v1/invitation-recovery", "/reviews/v1/contributions"
+        }
+        allowed |= bool(re.fullmatch(r"/reviews/v1/manage/[A-Za-z0-9_-]+/(read|edit|withdraw)", self.path))
+        try:
+            length = int(self.headers.get("Content-Length", "0"))
+            if not allowed or not 0 < length <= 16384:
+                return self.send_error(404)
+            headers = {"Content-Type": "application/json"}
+            if self.headers.get("Idempotency-Key"):
+                headers["Idempotency-Key"] = self.headers["Idempotency-Key"]
+            request = urllib.request.Request(f"http://127.0.0.1:{worker.PORT}{self.path}",
+                                             data=self.rfile.read(length), headers=headers, method="POST")
+            try:
+                response = urllib.request.urlopen(request, timeout=5)
+            except urllib.error.HTTPError as error:
+                response = error
+            with response:
+                content = response.read()
+                self.send_response(response.status)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(content)))
+                self.end_headers()
+                self.wfile.write(content)
+        except (OSError, ValueError):
+            self.send_error(503)
+
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
@@ -82,12 +111,15 @@ def main():
                 requests.clear()
                 page.goto(base + "/products/woo-131/", wait_until="load")
                 assert page.locator("#reviews").count() == 0 and not requests
+                page.goto(base + "/review/#invitation=" + "0" * 64, wait_until="load")
+                page.get_by_text("This invitation is unavailable.", exact=False).wait_for()
+                assert all("0" * 64 not in request for request in requests)
                 worker.stop(proc)
                 stopped = True
                 page.goto(base + "/products/woo-171/", wait_until="load")
                 page.get_by_text("Reviews are temporarily unavailable. Please refresh to try again.").wait_for()
                 browser.close()
-            print("Synthetic public Reviews: mapped summary/list passed; unmapped silent; outage safe.")
+            print("Synthetic Reviews: mapped summary/list, unmapped silence, invalid invitation and outage passed.")
         finally:
             if not stopped:
                 worker.stop(proc)

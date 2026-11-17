@@ -23,3 +23,5 @@ The browse snapshot distinguishes listing identity and presentation from checkou
 To recheck source media formats, run `uv run --locked --with "pillow==13.0.0" python examples/ep-uat/media_qualification.py /path/to/prepared --output /path/to/media-audit.json`. The check decodes raster files and checks the free PDF signature; it is not a PDF content audit.
 
 The malformed-media regression runs with the same optional tool dependency: `uv run --locked --with "pillow==13.0.0" pytest -q tests/ep_uat/test_media_qualification.py`. The production CartRay runtime does not depend on Pillow.
+
+An explicit `--review-fixture` can map selected source IDs to synthetic Reviews subjects. Such builds include the existing native review and management clients and the shared theme presenter; unconfigured builds omit those routes. The pages require an independently configured same-origin Reviews gateway and a valid purchase-scoped capability. A mapping alone does not create purchase authority, publish reviews, send invitations or make the UAT checkout a production integration.

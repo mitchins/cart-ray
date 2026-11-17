@@ -94,7 +94,7 @@ def shell(gel, title, body, test_products=(), theme="minimal"):
     locale = esc(gel["identity"]["locale"])
     header = theme_header(gel, theme, "/", False, nav_links=(("/shop/", "Catalogue"),), header_search=False, cart_count=False)
     footer = "Selected products use Stripe test mode only. Review invitations are disabled." if test_products else "Browsing qualification only. Purchases and review invitations are disabled."
-    return f"""<!doctype html><html lang="{locale}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex,nofollow"><title>{esc(title)} · {name}</title><link rel="stylesheet" href="/theme/tokens.css"><link rel="stylesheet" href="/theme/base.css"><link rel="stylesheet" href="/theme/theme.css"><link rel="stylesheet" href="/theme/uat.css"><script type="module" src="/theme/uat.mjs"></script></head><body>{header}<main id="main">{body}</main><script type="application/json" id="uat-test-products">{test_data}</script><footer class="site-footer"><div class="wrap"><p>{name} · UAT catalogue</p><p>{footer}</p></div></footer></body></html>"""
+    return f"""<!doctype html><html lang="{locale}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex,nofollow"><meta name="referrer" content="no-referrer"><title>{esc(title)} · {name}</title><link rel="stylesheet" href="/theme/tokens.css"><link rel="stylesheet" href="/theme/base.css"><link rel="stylesheet" href="/theme/theme.css"><link rel="stylesheet" href="/theme/uat.css"><script type="module" src="/theme/uat.mjs"></script></head><body>{header}<main id="main">{body}</main><script type="application/json" id="uat-test-products">{test_data}</script><footer class="site-footer"><div class="wrap"><p>{name} · UAT catalogue</p><p>{footer}</p></div></footer></body></html>"""
 
 
 def path(p):
@@ -306,6 +306,11 @@ def build(source, output, theme, test_fixture=None, review_fixture=None, gel_fil
     shutil.copyfile(Path(__file__).parent / "uat.css", output / "theme/uat.css")
     shutil.copyfile(Path(__file__).parent / "uat.mjs", output / "theme/uat.mjs")
     shutil.copyfile(Path(__file__).parent.parent / "acorn-store/reviews.mjs", output / "theme/reviews.mjs")
+    if review_subjects:
+        shutil.copyfile(Path(__file__).parent / "review-presenter.mjs", output / "theme/review-presenter.mjs")
+        shutil.copyfile(PACK / "src/native-presenter.mjs", output / "theme/native-presenter.mjs")
+        for filename, dest in (("reviews.js", "native-reviews.js"), ("manage.js", "native-manage.js")):
+            shutil.copyfile(ROOT / "modules/reviews/ui" / filename, output / "theme" / dest)
     logo_source = source / data["brand_logo"]
     if not logo_source.is_file():
         raise ValueError("source logo unavailable")
@@ -323,6 +328,18 @@ def build(source, output, theme, test_fixture=None, review_fixture=None, gel_fil
         file = output / route
         file.parent.mkdir(parents=True, exist_ok=True)
         file.write_text(shell(gel, "Catalogue", content, test_products, theme))
+    if review_subjects:
+        for route, kind, heading in (("review/index.html", "review", "Share your experience"),
+                                     ("review/manage.html", "manage", "Manage your review")):
+            body = (f'<section class="wrap" data-native-review="{kind}"><h1>{heading}</h1>'
+                    '<p id="message" role="status" aria-live="polite"></p><div id="content"></div></section>'
+                    '<dialog id="confirm-dialog" aria-labelledby="dialog-title"><h2 id="dialog-title">Withdraw this review?</h2>'
+                    '<p>Your review will no longer be displayed.</p><button type="button" data-dialog-cancel>Keep my review</button>'
+                    '<button type="button" data-dialog-confirm>Withdraw review</button></dialog>'
+                    '<script type="module" src="/theme/review-presenter.mjs"></script>')
+            file = output / route
+            file.parent.mkdir(parents=True, exist_ok=True)
+            file.write_text(shell(gel, heading, body, test_products, theme))
     for p in products:
         file = output / path(p).lstrip("/") / "index.html"
         file.parent.mkdir(parents=True, exist_ok=True)
