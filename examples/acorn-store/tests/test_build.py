@@ -148,7 +148,7 @@ def test_review_gateway_requires_explicit_test_checkout(tmp_path):
         test_review_gateway=True,
         preflight_lock=fixture_preflight(tmp_path),
     )
-    assert (out / "_worker.js").read_bytes() == (HERE / "reviews_gateway.mjs").read_bytes()
+    assert (out / "_worker.js").read_bytes() == (module.ROOT / "modules/reviews/gateway/worker.mjs").read_bytes()
 
 
 def test_public_reads_and_invitation_gateway_can_be_built_together(tmp_path):
@@ -163,7 +163,7 @@ def test_public_reads_and_invitation_gateway_can_be_built_together(tmp_path):
         preflight_lock=fixture_preflight(tmp_path),
     )
     assert '"reviewsEnabled": true' in (out / "storefront-config.js").read_text()
-    assert (out / "_worker.js").read_bytes() == (HERE / "reviews_gateway.mjs").read_bytes()
+    assert (out / "_worker.js").read_bytes() == (module.ROOT / "modules/reviews/gateway/worker.mjs").read_bytes()
     assert (out / "review/index.html").exists()
 
 
@@ -206,8 +206,8 @@ def test_connected_theme_preserves_approved_checkout_and_review_gateway(tmp_path
         test_review_gateway=True,
         preflight_lock=fixture_preflight(tmp_path),
     )
-    assert (output / "_worker.js").read_bytes() == (HERE / "reviews_gateway.mjs").read_bytes()
+    assert (output / "_worker.js").read_bytes() == (module.ROOT / "modules/reviews/gateway/worker.mjs").read_bytes()
     text = (output / "storefront-config.js").read_text()
     assert '"checkoutEnabled": true' in text and '"reviewsEnabled": true' in text
     assert '"reviewInvitationDefaultChecked": false' in text
-    assert (output / "reviews.mjs").read_bytes() == (HERE / "reviews.mjs").read_bytes()
+    assert (output / "reviews.mjs").read_bytes() == (module.ROOT / "modules/reviews/ui/public.mjs").read_bytes()

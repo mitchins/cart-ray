@@ -18,8 +18,10 @@ def graph(installation, versions=None, sending=False):
     source_origin = f"https://{worker('source')}.{state['workers_subdomain']}.workers.dev"
     sender_origin = f"https://{worker('sender')}.{state['workers_subdomain']}.workers.dev"
     storefront = "https://" + state["pages_subdomain"]
+    return_path = "/purchase-return/" if "merchant_inputs" in config else "/"
     catalogue = json.loads(open(config["preflight_lock"]).read())["catalogue_version"]
-    mapping = json.dumps({catalogue: SUBJECTS}, separators=(",", ":"))
+    store = config.get("store_key", "acorn-store")
+    mapping = json.dumps({catalogue: config.get("subject_map", SUBJECTS)}, separators=(",", ":"))
     mapping_hash = hashlib.sha256(mapping.encode()).hexdigest()
     common = {"REVIEWS_ENVIRONMENT": "test"}
     if not config["reviews_enabled"]:
@@ -31,8 +33,8 @@ def graph(installation, versions=None, sending=False):
                 "CARTRAY_ENVIRONMENT": "test",
                 "CARTRAY_SIGNING_KEY_ID": config["namespace"],
                 "CARTRAY_STOREFRONT_ORIGIN": storefront,
-                "CARTRAY_SUCCESS_URL": storefront + "/?checkout=complete",
-                "CARTRAY_CANCEL_URL": storefront + "/?checkout=cancelled",
+                "CARTRAY_SUCCESS_URL": storefront + return_path + "?checkout=complete",
+                "CARTRAY_CANCEL_URL": storefront + return_path + "?checkout=cancelled",
             },
             "db": {"DB": "commerce"},
             "ratelimits": {"CHECKOUT_RATE_LIMITER": ("20261110", 20)},
@@ -54,7 +56,7 @@ def graph(installation, versions=None, sending=False):
         "EVENT_QUEUE_ID": queue("events"),
         "DEAD_LETTER_QUEUE_NAME": worker("dlq"),
         "DEAD_LETTER_QUEUE_ID": queue("dlq"),
-        "SOURCE_STORE": "acorn-store",
+        "SOURCE_STORE": store,
         "SOURCE_ISSUER": config["namespace"],
         "SOURCE_INSTALLATION": config["namespace"],
         "CATALOGUE_VERSION": catalogue,
@@ -74,10 +76,12 @@ def graph(installation, versions=None, sending=False):
                 "CARTRAY_REVIEWS_PRODUCER": "test",
                 "CARTRAY_SIGNING_KEY_ID": config["namespace"],
                 "CARTRAY_STOREFRONT_ORIGIN": storefront,
-                "CARTRAY_SUCCESS_URL": storefront + "/?checkout=complete",
-                "CARTRAY_CANCEL_URL": storefront + "/?checkout=cancelled",
+                "CARTRAY_SUCCESS_URL": storefront + return_path + "?checkout=complete",
+                "CARTRAY_CANCEL_URL": storefront + return_path + "?checkout=cancelled",
                 "CARTRAY_REVIEW_INVITATION_MODE": "automatic",
-                "CARTRAY_REVIEW_INVITATION_DEFAULT": "checked",
+                "CARTRAY_REVIEW_INVITATION_DEFAULT": (
+                    "checked" if config.get("review_invitation_default_checked", True) else "unchecked"
+                ),
             },
             "db": {"DB": "commerce"},
             "services": {"REVIEWS_SOURCE_TRIGGER": "producer"},
@@ -89,7 +93,7 @@ def graph(installation, versions=None, sending=False):
             "vars": {
                 **common,
                 "REVIEWS_MODE": "verified_acquisition_only",
-                "REVIEWS_STORE_KEY": "acorn-store",
+                "REVIEWS_STORE_KEY": store,
                 "REVIEWS_AUTOMATION_INTAKE": "test",
                 "REVIEWS_SUBJECT_MAPS": mapping,
                 "REVIEWS_AUTOMATION_SENDING": "test",
@@ -112,7 +116,7 @@ def graph(installation, versions=None, sending=False):
             "vars": {
                 **common,
                 "REVIEWS_ORDER_SUBSCRIBER": "test",
-                "SOURCE_STORE": "acorn-store",
+                "SOURCE_STORE": store,
                 "SOURCE_ISSUER": config["namespace"],
                 "SOURCE_INSTALLATION": config["namespace"],
                 "AUTOMATION_EVIDENCE_ENABLED": "test",
@@ -125,7 +129,7 @@ def graph(installation, versions=None, sending=False):
             "main": "modules/reviews/consent/purchase_evidence.mjs",
             "vars": {
                 "PURCHASE_EVIDENCE_MODE": "test",
-                "STORE_KEY": "acorn-store",
+                "STORE_KEY": store,
                 "ENVIRONMENT": "test",
                 "INSTALLATION_ID": config["namespace"],
                 "STRIPE_ACCOUNT_ID": config["stripe_account_id"],
@@ -149,7 +153,7 @@ def graph(installation, versions=None, sending=False):
         },
         "scheduler": {
             "main": "modules/reviews/automation-due-producer/worker.mjs",
-            "vars": {**common, "REVIEWS_DUE_SCHEDULER": "test", "REVIEWS_STORE": "acorn-store"},
+            "vars": {**common, "REVIEWS_DUE_SCHEDULER": "test", "REVIEWS_STORE": store},
             "db": {"REVIEWS_DB": "reviews"},
             "consumes": "schedule",
             "produces": {"SCHEDULE_QUEUE": "schedule", "DUE_QUEUE": "due"},

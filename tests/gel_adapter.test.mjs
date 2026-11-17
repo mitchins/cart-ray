@@ -56,3 +56,33 @@ test('storage denial and failed checkout preserve in-memory cart and permit retr
   assert.equal(await adapter.checkout(),'https://checkout.stripe.com/test');assert.equal(payload.review_invitation_opt_in,false);
 });
 test.after(async()=>{await rm(dir,{recursive:true,force:true});delete globalThis.window;delete globalThis.fetch;delete globalThis.location;delete globalThis.history;});
+test('lost response retries the original request and keeps cart and permission fixed',async()=>{
+  const {storage}=setup();const adapter=await createAdapter(presentation);adapter.add('ACORN-KIT');adapter.setPermission(true);
+  const requests=[];globalThis.fetch=async(_url,request)=>{requests.push(JSON.parse(request.body));if(requests.length===1)throw Error('lost response');return {ok:true,json:async()=>({session_id:'cs_test_retry',checkout_url:'https://checkout.stripe.com/test'})};};
+  await assert.rejects(adapter.checkout());assert.equal(adapter.attemptPending,true);assert.equal(adapter.quantity('ACORN-KIT',2),false);
+  adapter.setPermission(false);assert.equal(adapter.state.permission,true);
+  assert.equal(await adapter.checkout(),'https://checkout.stripe.com/test');assert.equal(requests[0].checkout_request_id,requests[1].checkout_request_id);
+  assert.deepEqual(requests[0],requests[1]);assert.equal(storage.getItem('cartray.checkout-attempt.v1'),null);
+});
+test('an interrupted attempt survives reload and restores its checkout permission',async()=>{
+  const {storage}=setup();let adapter=await createAdapter(presentation);adapter.add('ACORN-KIT');adapter.setPermission(true);
+  let original;globalThis.fetch=async(_url,request)=>{original=JSON.parse(request.body);throw Error('lost response');};await assert.rejects(adapter.checkout());
+  globalThis.fetch=async(url,request)=>String(url).endsWith('/catalogue')?{ok:true,json:async()=>catalogue}:{ok:true,json:async()=>{assert.deepEqual(JSON.parse(request.body),original);return {session_id:'cs_test_retry',checkout_url:'https://checkout.stripe.com/test'};}};
+  adapter=await createAdapter(presentation);assert.equal(adapter.attemptPending,true);assert.equal(adapter.state.permission,true);assert.equal(adapter.add('ACORN-KIT'),false);assert.equal(await adapter.checkout(),'https://checkout.stripe.com/test');assert.equal(storage.getItem('cartray.checkout-attempt.v1'),null);
+});
+test('a checkout attempt from an old catalogue cannot lock a new cart',async()=>{
+  const {storage}=setup();
+  storage.setItem('cartray.checkout-attempt.v1',JSON.stringify({requestId:`checkout_${'a'.repeat(32)}`,catalogueVersion:'old',revision:1,items:[['ACORN-KIT',1]],permission:false}));
+  const adapter=await createAdapter(presentation);
+  assert.equal(adapter.attemptPending,false);assert.equal(adapter.add('ACORN-KIT'),true);
+  assert.equal(storage.getItem('cartray.checkout-attempt.v1'),null);
+});
+test('a rejected checkout can be edited while an in-progress checkout remains retryable',async()=>{
+  const {storage}=setup();const adapter=await createAdapter(presentation);adapter.add('ACORN-KIT');
+  globalThis.fetch=async()=>({ok:false,status:400});
+  await assert.rejects(adapter.checkout());assert.equal(adapter.attemptPending,false);
+  assert.equal(adapter.quantity('ACORN-KIT',2),true);assert.equal(storage.getItem('cartray.checkout-attempt.v1'),null);
+  globalThis.fetch=async()=>({ok:false,status:409});
+  await assert.rejects(adapter.checkout());assert.equal(adapter.attemptPending,true);
+  assert.equal(adapter.quantity('ACORN-KIT',1),false);
+});

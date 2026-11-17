@@ -53,7 +53,7 @@ def main():
     with tempfile.TemporaryDirectory(prefix="northline-browser-source-") as temporary:
         source = Path(temporary)
         shutil.copyfile(REPO / "storefront/app.js", source / "app.js")
-        shutil.copyfile(REPO / "examples/acorn-store/reviews.mjs", source / "reviews.mjs")
+        shutil.copyfile(REPO / "modules/reviews/ui/public.mjs", source / "reviews.mjs")
         (source / "storefront-config.js").write_text("window.CARTRAY_STOREFRONT = " + json.dumps(config) + ";\n")
         connect(source, REPO, args.output, PACK / "gel/northline.json", PACK / "content/northline.json", "classic")
 

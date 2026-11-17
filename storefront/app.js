@@ -107,7 +107,11 @@ export async function startCheckout(configuration, payload, fetchImpl = fetch) {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
   });
-  if (!response.ok) throw new Error("Checkout could not be started.");
+  if (!response.ok) {
+    const error = new Error("Checkout could not be started.");
+    error.checkoutStatus = response.status;
+    throw error;
+  }
   const result = await response.json();
   if (typeof result.checkout_url !== "string" || !validSessionId(result.session_id)) {
     throw new Error("Checkout response was incomplete.");

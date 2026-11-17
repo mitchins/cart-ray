@@ -155,7 +155,7 @@ def signed_recipient(data, secret=RECIPIENT_SECRET):
         return exc.code, json.loads(exc.read())
 
 
-def main():
+def main(on_customer_ready=None, public_store_name="Example Store", public_names=None):
     with tempfile.TemporaryDirectory(prefix="reviews-acquisition-d1-") as directory:
         env = os.environ | {"REVIEWS_LOCAL_PERSIST_DIR": directory}
         subprocess.run([sys.executable, str(MODULE / "tools/install.py")], cwd=ROOT, env=env, check=True)
@@ -221,7 +221,7 @@ def main():
                 "REVIEWS_AUTOMATION_INTAKE": "test",
                 "REVIEWS_AUTOMATION_INGRESS_TOKEN": AUTOMATION_TOKEN,
                 "REVIEWS_RECIPIENT_EVIDENCE_SECRET": RECIPIENT_SECRET,
-                "REVIEWS_PUBLIC_STORE_NAME": "Example Store",
+                "REVIEWS_PUBLIC_STORE_NAME": public_store_name,
                 "REVIEWS_RECOVERY_MODE": "manual_test",
                 "REVIEWS_SUBJECT_MAPS": json.dumps(
                     {manifest: {"TEST-TEMPLATE": "example-policy", "TEST-BUNDLE": "example-bundle"}},
@@ -288,12 +288,13 @@ def main():
             with ThreadPoolExecutor(max_workers=8) as pool:
                 due_results = list(pool.map(lambda _: internal(due_path, due_data, AUTOMATION_TOKEN), range(8)))
             assert all(result == (200, {"status": "held"}) for result in due_results)
-            subprocess.run(
-                ["node", str(MODULE / "tests/automation_queue_workerd.mjs"), BASE, order_ids[0], AUTOMATION_TOKEN],
-                cwd=ROOT,
-                check=True,
-                timeout=120,
-            )
+            if on_customer_ready is None:
+                subprocess.run(
+                    ["node", str(MODULE / "tests/automation_queue_workerd.mjs"), BASE, order_ids[0], AUTOMATION_TOKEN],
+                    cwd=ROOT,
+                    check=True,
+                    timeout=120,
+                )
             assert internal(due_path, due_data, AUTOMATION_TOKEN) == (200, {"status": "held"})
             held = subprocess.run(
                 [
@@ -343,7 +344,8 @@ def main():
             assert (
                 call(
                     "/reviews-admin/v1/subject-display-names",
-                    {"subject_id": "example-bundle", "public_name": "Example bundle"},
+                    {"subject_id": "example-bundle",
+                     "public_name": (public_names or {}).get("example-bundle", "Example bundle")},
                     admin=True,
                 )[0]
                 == 200
@@ -351,7 +353,8 @@ def main():
             assert (
                 call(
                     "/reviews-admin/v1/subject-display-names",
-                    {"subject_id": "example-policy", "public_name": "Example policy"},
+                    {"subject_id": "example-policy",
+                     "public_name": (public_names or {}).get("example-policy", "Example policy")},
                     admin=True,
                 )[0]
                 == 200
@@ -410,7 +413,7 @@ def main():
                 acquisition_id=invitation["acquisition_id"],
                 expected_recipient_hash=recipient_hashes[0],
                 resolve_recipient=trusted_recipients.get,
-                store_name="Example Store",
+                store_name=public_store_name,
                 landing_url="http://127.0.0.1:3000/review/",
                 token=invitation["token"],
             )
@@ -436,6 +439,11 @@ def main():
                     )
                 )
             assert outcomes == [(200, {"state": "accepted"}), (200, {"state": "accepted"})], outcomes
+            if on_customer_ready is not None:
+                # Optional consumer uses this synthetic acquisition and local Worker.
+                # The ordinary regression continues below by default.
+                on_customer_ready(BASE, invitation["token"])
+                return
             receipt_result = subprocess.run(
                 [wrangler, "d1", "execute", "cartray-reviews-local-test", *common, "--json", "--command",
                  "SELECT provider_email_id FROM review_provider_deliveries"],
@@ -464,11 +472,15 @@ def main():
             assert call(landing, capability) == (
                 200,
                 {
-                    "store_name": "Example Store",
+                    "store_name": public_store_name,
                     "draft_scope": draft_scope,
                     "subjects": [
-                        {"subject_id": "example-bundle", "public_name": "Example bundle", "progress": "available"},
-                        {"subject_id": "example-policy", "public_name": "Example policy", "progress": "available"},
+                        {"subject_id": "example-bundle",
+                         "public_name": (public_names or {}).get("example-bundle", "Example bundle"),
+                         "progress": "available"},
+                        {"subject_id": "example-policy",
+                         "public_name": (public_names or {}).get("example-policy", "Example policy"),
+                         "progress": "available"},
                     ],
                 },
             )
@@ -541,7 +553,7 @@ def main():
                 delivery_token=DELIVERY_TOKEN,
                 resolve_recipient=trusted_recipients.get,
                 mailbox_path=mailbox_path,
-                store_name="Example Store",
+                store_name=public_store_name,
                 landing_url="http://127.0.0.1:3000/review/",
             ) == {"status": "accepted"}
             inbox = mailbox.Maildir(mailbox_path, create=False)
@@ -611,7 +623,7 @@ def main():
                 acquisition_id=fresh["acquisition_id"],
                 expected_recipient_hash=recipient_hashes[1],
                 resolve_recipient=trusted_recipients.get,
-                store_name="Example Store",
+                store_name=public_store_name,
                 landing_url="http://127.0.0.1:3000/review/",
                 token=fresh["token"],
             )

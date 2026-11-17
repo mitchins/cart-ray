@@ -5,6 +5,7 @@ import hashlib
 import io
 import json
 import os
+import runpy
 import shutil
 import signal
 import socket
@@ -164,6 +165,8 @@ def main():
             ],
             project,
         )
+        repair = runpy.run_path(str(project / "scripts/build_acorn_commerce.py"))["repair_missing_pywrangler_vendor"]
+        repaired_vendor = repair(project, os.environ.copy(), packages=("workers-runtime-sdk",))
         vendor_lock = tomllib.loads((project / "pylock.toml").read_text())
         versions = {package["name"]: package["version"] for package in vendor_lock["packages"]}
         if set(versions) != {"workers-runtime-sdk"} or any(
@@ -253,6 +256,7 @@ def main():
             "wrangler": wrangler,
             "workerd": workerd,
             "vendored_versions": versions,
+            "explicit_vendor_target_used": repaired_vendor,
             "runtime_source_sha256": hashes,
             "bundle_content_sha256": bundle_hash.hexdigest(),
             "deployable_content_sha256": deployable_hash.hexdigest(),

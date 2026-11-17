@@ -48,6 +48,31 @@ def test_plan_is_nonsecret_offline_and_test_only(tmp_path):
     for namespace in ["production", "prod", "not-test/../other", "Acorn-test"]:
         with pytest.raises(ValueError, match="namespace"):
             operations.validate_config(installation.config | {"namespace": namespace})
+    with pytest.raises(ValueError, match="checkbox default requires"):
+        operations.validate_config(installation.config | {"review_invitation_default_checked": False})
+
+
+def test_failed_merchant_snapshot_can_be_retried(tmp_path, monkeypatch):
+    lock = tmp_path / "lock.json"
+    lock.write_text(json.dumps({"stripe_mode": "test", "catalogue_version": "sha256:" + "b" * 64}))
+    source = tmp_path / "merchant"
+    source.mkdir()
+    target = tmp_path / "installation"
+    config = {"namespace": "acorn-operator-test", "account_id": "a" * 32,
+              "stripe_account_id": "acct_Test", "preflight_lock": str(lock), "merchant_inputs": str(source),
+              "merchant_name": "Test merchant", "store_key": "test-store", "subject_map": {}, "subject_details": []}
+    monkeypatch.setattr(operations, "validate_merchant_inputs", lambda *_: "digest")
+
+    def fail_snapshot(_source, destination, _root):
+        destination.mkdir(parents=True)
+        raise OSError("copy interrupted")
+
+    monkeypatch.setattr(operations, "snapshot_merchant_inputs", fail_snapshot)
+    with pytest.raises(OSError, match="copy interrupted"):
+        operations.Installation.plan(target, config)
+    assert not (target / "inputs").exists()
+    monkeypatch.setattr(operations, "snapshot_merchant_inputs", lambda *_: "a" * 64)
+    assert operations.Installation.plan(target, config).state["phase"] == "planned"
 
 
 def test_theme_selection_and_gel_inputs_survive_original_handoff(tmp_path):
@@ -224,7 +249,7 @@ def migrated(tmp_path):
 def test_shared_real_sqlite_migration_chains_resume_without_reapplication(tmp_path):
     installation, cloud = migrated(tmp_path)
     first = installation.migrate()
-    assert first == {"commerce": 5, "subscriber": 2, "reviews": 33, "context": 2}
+    assert first == {"commerce": 7, "subscriber": 2, "reviews": 33, "context": 2}
     counts = {
         role: len(cloud.query(installation.db(role), "SELECT * FROM cartray_operator_migrations"))
         for role in operations.DATABASES
@@ -295,7 +320,7 @@ def test_shared_bindings_and_namespace_tampering_fail_closed(tmp_path):
     installation.migrate()
     assert len(cloud.databases) == 1
     assert {installation.db(role) for role in ("commerce", "reviews", "context")} == {"commerce-id"}
-    assert len(cloud.query("commerce-id", "SELECT * FROM cartray_operator_migrations")) == 42
+    assert len(cloud.query("commerce-id", "SELECT * FROM cartray_operator_migrations")) == 44
     cloud.query("commerce-id", "INSERT INTO cartray_operator_migrations VALUES ('unknown',1,'unknown','bad')")
     with pytest.raises(ValueError, match="namespace"):
         installation.migrate()
