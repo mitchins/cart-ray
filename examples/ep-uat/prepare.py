@@ -255,6 +255,8 @@ def prepare(blobs, archive_hash):
             {
                 "key": p["key"],
                 "source_id": p["legacyWooId"],
+                # This is a local audit route, not a claim about the source canonical URL.
+                "navigation_path": f"/products/woo-{p['legacyWooId']}/",
                 "source_content_sha256": p.get("sourceContentSha256"),
                 "title": p["title"],
                 "source_sku": p["commerce"].get("_sku"),

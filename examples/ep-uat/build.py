@@ -95,15 +95,20 @@ def shell(gel, title, body, test_products=()):
 
 
 def path(p):
-    # UAT navigation uses the stable source identity; it is not a canonical URL.
-    return f"/products/woo-{p['source_id']}/"
+    # Audit navigation is explicitly supplied and never treated as canonical.
+    result = p.get("navigation_path")
+    if result is None and type(p.get("source_id")) is int:
+        result = f"/products/woo-{p['source_id']}/"  # Earlier UAT snapshot compatibility.
+    if not isinstance(result, str) or not re.fullmatch(r"/products/[a-z0-9]+(?:-[a-z0-9]+)*/", result):
+        raise ValueError("invalid product navigation path")
+    return result
 
 
-def price(raw, test_enabled=False):
+def price(raw, test_enabled=False, currency="AUD"):
     if raw is None or raw == "":
         return "Price unavailable"
     suffix = " (Stripe test mode only)" if test_enabled else " (not checkout-authorised)"
-    return "Source price: " + esc(raw) + " AUD" + suffix
+    return "Source price: " + esc(raw) + " " + esc(currency) + suffix
 
 
 def image(p):
@@ -127,7 +132,7 @@ def safe_external(url):
         return False
 
 
-def product_card(p, test_ids=()):
+def product_card(p, test_ids=(), currency="AUD"):
     categories = " ".join(str(c["id"]) for c in p["categories"])
     search = " ".join(
         [p["title"], p.get("source_sku") or "", p["summary"], p["description"], *(c["name"] for c in p["categories"])]
@@ -136,17 +141,17 @@ def product_card(p, test_ids=()):
         '<p class="muted">UAT audit: restricted visibility in source catalogue.</p>' if p["source_visibility"] else ""
     )
     add = f'<button type="button" data-uat-add="{p["source_id"]}" disabled>Add to test cart</button>' if p["source_id"] in test_ids else ""
-    return f'''<article class="product-card" data-category-ids="{esc(categories)}" data-search="{esc(search.casefold())}" data-order="{p["menu_order"]}" data-name="{esc(p["title"].casefold())}" data-price="{esc(p["source_price"])}"><a class="product-art" href="{path(p)}" tabindex="-1" aria-hidden="true">{image(p)}</a><div class="product-copy"><h2><a href="{path(p)}">{esc(p["title"])}</a></h2><p>{esc(p["summary"][:400])}</p>{visibility}<p class="muted">{price(p["source_price"], p["source_id"] in test_ids)}</p><a href="{path(p)}">View product</a>{add}</div></article>'''
+    return f'''<article class="product-card" data-category-ids="{esc(categories)}" data-search="{esc(search.casefold())}" data-order="{p["menu_order"]}" data-name="{esc(p["title"].casefold())}" data-price="{esc(p["source_price"])}"><a class="product-art" href="{path(p)}" tabindex="-1" aria-hidden="true">{image(p)}</a><div class="product-copy"><h2><a href="{path(p)}">{esc(p["title"])}</a></h2><p>{esc(p["summary"][:400])}</p>{visibility}<p class="muted">{price(p["source_price"], p["source_id"] in test_ids, currency)}</p><a href="{path(p)}">View product</a>{add}</div></article>'''
 
 
-def catalogue(products, merchant_name, test_ids=()):
+def catalogue(products, merchant_name, test_ids=(), currency="AUD"):
     cats = {c["id"]: c["name"] for p in products for c in p["categories"]}
     options = "".join(f'<option value="{k}">{esc(v)}</option>' for k, v in sorted(cats.items(), key=lambda i: i[1]))
     checkout_note = "only selected products support test checkout" if test_ids else "product checkout is not enabled"
-    return f"""<section class="collection wrap"><h1>{esc(merchant_name)} catalogue</h1><p>UAT audit snapshot includes products hidden in the source catalogue; {checkout_note}.</p><div class="catalogue-tools"><label>Search <input id="search" type="search" autocomplete="off"></label><label>Category <select id="category"><option value="">All categories</option>{options}</select></label><label>Sort <select id="sort"><option value="featured">Source order</option><option value="name">Name</option><option value="low">Source price: low to high</option></select></label></div><p id="results-status" role="status" aria-live="polite">{len(products)} products</p><p id="uat-cart-message" role="status"></p><div id="products" class="product-grid">{"".join(product_card(p, test_ids) for p in products)}</div></section>"""
+    return f"""<section class="collection wrap"><h1>{esc(merchant_name)} catalogue</h1><p>UAT audit snapshot includes products hidden in the source catalogue; {checkout_note}.</p><div class="catalogue-tools"><label>Search <input id="search" type="search" autocomplete="off"></label><label>Category <select id="category"><option value="">All categories</option>{options}</select></label><label>Sort <select id="sort"><option value="featured">Source order</option><option value="name">Name</option><option value="low">Source price: low to high</option></select></label></div><p id="results-status" role="status" aria-live="polite">{len(products)} products</p><p id="uat-cart-message" role="status"></p><div id="products" class="product-grid">{"".join(product_card(p, test_ids, currency) for p in products)}</div></section>"""
 
 
-def detail(p, test_ids=(), review_subject=None):
+def detail(p, test_ids=(), review_subject=None, currency="AUD"):
     if p["images"]:
         first = p["images"][0]
         gallery = f'''<figure class="detail-art" data-product-gallery aria-label="Product images"><div class="gallery-stage"><img data-gallery-image src="/{esc(first["path"])}" alt="{esc(first["alt"])}" width="800" height="720"><p data-gallery-fallback hidden>Image unavailable</p></div><div data-gallery-controls hidden></div><figcaption class="sr-only" data-gallery-status role="status" aria-live="polite"></figcaption></figure>'''
@@ -155,7 +160,7 @@ def detail(p, test_ids=(), review_subject=None):
     choices = ""
     if p["variations"]:
         items = "".join(
-            f'<option value="{esc(v["key"])}">{esc(", ".join(k.removeprefix("attribute_").replace("_", " ").title() + ": " + str(value) for k, value in v["attributes"].items()))} · {price(v["source_price"])}</option>'
+            f'<option value="{esc(v["key"])}">{esc(", ".join(k.removeprefix("attribute_").replace("_", " ").title() + ": " + str(value) for k, value in v["attributes"].items()))} · {price(v["source_price"], currency=currency)}</option>'
             for v in p["variations"]
         )
         choices = f'<label for="variant">Choose an option</label><select id="variant" data-variant><option value="">Select an option</option>{items}</select><p id="variant-status" role="status"></p><p id="variant-description"></p>'
@@ -179,12 +184,13 @@ def detail(p, test_ids=(), review_subject=None):
             "variations": p["variations"],
             "default_attributes": p["default_attributes"],
             "review_subject": review_subject,
+            "currency": currency,
         },
         ensure_ascii=True,
     ).replace("<", "\\u003c")
     reviews = ('<section class="wrap" id="reviews" hidden><h2>Reviews</h2><p id="reviews-status" role="status"></p>'
                '<div id="review-list"></div><button id="reviews-more" type="button" hidden>Load more reviews</button></section>') if review_subject else ""
-    return f"""<div class="wrap breadcrumb"><a href="/shop/">Catalogue</a> / {esc(p["title"])}</div><section class="product-detail wrap">{gallery}<div class="detail-copy"><h1>{esc(p["title"])}</h1><p id="variant-price">{price(p["source_price"], p["source_id"] in test_ids)}</p><p>{esc(p["summary"])}</p>{choices}{action}<div class="uat-description">{description}</div></div></section>{reviews}<script type="application/json" id="product-data">{payload}</script>"""
+    return f"""<div class="wrap breadcrumb"><a href="/shop/">Catalogue</a> / {esc(p["title"])}</div><section class="product-detail wrap">{gallery}<div class="detail-copy"><h1>{esc(p["title"])}</h1><p id="variant-price">{price(p["source_price"], p["source_id"] in test_ids, currency)}</p><p>{esc(p["summary"])}</p>{choices}{action}<div class="uat-description">{description}</div></div></section>{reviews}<script type="application/json" id="product-data">{payload}</script>"""
 
 
 def build(source, output, theme, test_fixture=None, review_fixture=None, gel_file=None):
@@ -243,11 +249,17 @@ def build(source, output, theme, test_fixture=None, review_fixture=None, gel_fil
             raise ValueError(f"source media fingerprint mismatch: {relative}")
     if data["brand_logo"] not in declared:
         raise ValueError("source logo is not declared")
-    ids = set()
+    ids, navigation_paths = set(), set()
     for product in data["products"]:
-        if type(product["source_id"]) is not int or product["source_id"] < 1 or product["source_id"] in ids:
+        source_id = product.get("source_id")
+        if not ((type(source_id) is int and source_id > 0) or
+                (isinstance(source_id, str) and re.fullmatch(r"[A-Za-z0-9_-]{1,64}", source_id))) or str(source_id) in ids:
             raise ValueError("invalid product identity")
-        ids.add(product["source_id"])
+        ids.add(str(source_id))
+        navigation = path(product)
+        if navigation in navigation_paths:
+            raise ValueError("duplicate product navigation path")
+        navigation_paths.add(navigation)
         if product["checkout_authorized"] or product["canonical_url"] is not None:
             raise ValueError("browse-only build cannot grant checkout or canonical authority")
         if any(variant["checkout_authorized"] for variant in product["variations"]):
@@ -291,8 +303,8 @@ def build(source, output, theme, test_fixture=None, review_fixture=None, gel_fil
     shutil.copyfile(logo_source, output / "assets/ep-logo.jpg")
     products = data["products"]
     for route, content in [
-        ("index.html", catalogue(products, data["merchant_name"], test_ids)),
-        ("shop/index.html", catalogue(products, data["merchant_name"], test_ids)),
+        ("index.html", catalogue(products, data["merchant_name"], test_ids, data["source_currency"])),
+        ("shop/index.html", catalogue(products, data["merchant_name"], test_ids, data["source_currency"])),
         (
             "cart/index.html",
             '<section class="wrap"><h1>Test cart</h1><div id="uat-cart"><p>Checkout is not available.</p></div></section>' if test_ids else '<section class="wrap"><h1>Cart</h1><p>Checkout is not yet enabled for this UAT catalogue.</p></section>',
@@ -305,7 +317,7 @@ def build(source, output, theme, test_fixture=None, review_fixture=None, gel_fil
     for p in products:
         file = output / path(p).lstrip("/") / "index.html"
         file.parent.mkdir(parents=True, exist_ok=True)
-        file.write_text(shell(gel, p["title"], detail(p, test_ids, review_subjects.get(str(p["source_id"]))), test_products))
+        file.write_text(shell(gel, p["title"], detail(p, test_ids, review_subjects.get(str(p["source_id"])), data["source_currency"]), test_products))
     (output / "provenance.json").write_text(
         json.dumps(
             {"source_archive_sha256": data["source_archive_sha256"], "theme": theme,

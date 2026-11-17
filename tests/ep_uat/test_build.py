@@ -98,3 +98,35 @@ def test_merchant_gel_is_injected_and_rejects_wrong_identity(tmp_path):
     path.write_text(json.dumps(gel))
     with pytest.raises(ValueError, match="identity"):
         module.build(source, tmp_path / "bad-merchant", "classic", gel_file=path)
+
+
+def test_listing_accepts_explicit_merchant_identity_and_navigation(tmp_path):
+    source = tmp_path / "source"
+    data = make_source(source)
+    product = data["products"][0]
+    product["source_id"] = "merchant-item-7"
+    product["navigation_path"] = "/products/merchant-item-seven/"
+    (source / "catalogue.json").write_text(json.dumps(data))
+    output = tmp_path / "output"
+    module.build(source, output, "minimal")
+    assert (output / "products/merchant-item-seven/index.html").is_file()
+    assert 'rel="canonical"' not in (output / "products/merchant-item-seven/index.html").read_text()
+    product["navigation_path"] = "/products/../checkout/"
+    (source / "catalogue.json").write_text(json.dumps(data))
+    with pytest.raises(ValueError, match="navigation"):
+        module.build(source, tmp_path / "unsafe", "minimal")
+
+
+def test_merchant_currency_comes_from_catalogue_and_gel(tmp_path):
+    source = tmp_path / "source"
+    data = make_source(source)
+    data["source_currency"] = "NZD"
+    (source / "catalogue.json").write_text(json.dumps(data))
+    gel = json.loads((ROOT / "examples/ep-uat/gel.json").read_text())
+    gel["identity"]["currency"] = "NZD"
+    path = tmp_path / "gel.json"
+    path.write_text(json.dumps(gel))
+    out = tmp_path / "out"
+    module.build(source, out, "minimal", gel_file=path)
+    assert "NZD" in (out / "index.html").read_text()
+    assert '"currency": "NZD"' in (out / "products/woo-1/index.html").read_text()

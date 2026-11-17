@@ -36,7 +36,7 @@ if(script){
     function setVariant(){
       const selected=product.variations.find(v=>v.key===select.value);
       document.querySelector('#variant-status').textContent=selected?'Selected option: '+Object.entries(selected.attributes).map(([name,value])=>name.replace(/^attribute_/,'').replaceAll('_',' ')+': '+value).join(', ')+'. Checkout unavailable.':'';
-      document.querySelector('#variant-price').textContent=selected&&selected.source_price?'Source price: '+selected.source_price+' AUD (not checkout-authorised)':'Price unavailable';
+      document.querySelector('#variant-price').textContent=selected&&selected.source_price?'Source price: '+selected.source_price+' '+product.currency+' (not checkout-authorised)':'Price unavailable';
       document.querySelector('#variant-description').textContent=selected?.description||'';
       if(root){
         const items=selected?.images?.length?selected.images.map(i=>({url:'/'+i.path,alt:i.alt})):product.images;

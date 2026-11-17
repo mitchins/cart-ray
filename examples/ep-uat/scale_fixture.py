@@ -21,6 +21,7 @@ def create(source, output, factor):
         for index, item in enumerate(original):
             synthetic = copy.deepcopy(item)
             synthetic["source_id"] = 90_000_000 + batch * len(original) + index
+            synthetic["navigation_path"] = f"/products/synthetic-{batch}-{index}/"
             synthetic["key"] = f"synthetic:scaling:{batch}:{index}"
             synthetic["title"] = f"Synthetic {batch}-{index}: {item['title']}"
             synthetic["action"] = "browse_only"
