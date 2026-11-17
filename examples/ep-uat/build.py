@@ -90,8 +90,10 @@ def esc(s):
 def shell(gel, title, body, test_products=()):
     name = esc(gel["identity"]["name"])
     test_data = json.dumps(list(test_products), ensure_ascii=True).replace("<", "\\u003c")
+    logo = esc(gel["assets"]["logo"])
+    locale = esc(gel["identity"]["locale"])
     footer = "Selected products use Stripe test mode only. Review invitations are disabled." if test_products else "Browsing qualification only. Purchases and review invitations are disabled."
-    return f"""<!doctype html><html lang="en-AU"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex,nofollow"><title>{esc(title)} · {name}</title><link rel="stylesheet" href="/theme/tokens.css"><link rel="stylesheet" href="/theme/base.css"><link rel="stylesheet" href="/theme/theme.css"><link rel="stylesheet" href="/theme/uat.css"><script type="module" src="/theme/uat.mjs"></script></head><body><a class="skip-link" href="#main">Skip to content</a><header class="site-header"><div class="masthead wrap"><a class="brand" href="/"><img src="/assets/ep-logo.jpg" alt=""><span>{name}</span></a><nav class="desktop-nav" aria-label="Main navigation"><a href="/shop/">Catalogue</a><a href="/cart/">Cart</a></nav><a class="header-cart" href="/cart/">Cart</a></div></header><main id="main">{body}</main><script type="application/json" id="uat-test-products">{test_data}</script><footer class="site-footer"><div class="wrap"><p>{name} · UAT catalogue</p><p>{footer}</p></div></footer></body></html>"""
+    return f"""<!doctype html><html lang="{locale}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex,nofollow"><title>{esc(title)} · {name}</title><link rel="stylesheet" href="/theme/tokens.css"><link rel="stylesheet" href="/theme/base.css"><link rel="stylesheet" href="/theme/theme.css"><link rel="stylesheet" href="/theme/uat.css"><script type="module" src="/theme/uat.mjs"></script></head><body><a class="skip-link" href="#main">Skip to content</a><header class="site-header"><div class="masthead wrap"><a class="brand" href="/"><img src="/{logo}" alt=""><span>{name}</span></a><nav class="desktop-nav" aria-label="Main navigation"><a href="/shop/">Catalogue</a></nav><a class="header-cart" href="/cart/">Cart</a></div></header><main id="main">{body}</main><script type="application/json" id="uat-test-products">{test_data}</script><footer class="site-footer"><div class="wrap"><p>{name} · UAT catalogue</p><p>{footer}</p></div></footer></body></html>"""
 
 
 def path(p):
@@ -278,12 +280,12 @@ def build(source, output, theme, test_fixture=None, review_fixture=None, gel_fil
     gel = json.loads(Path(gel_file or Path(__file__).with_name("gel.json")).read_text())
     if gel.get("identity", {}).get("name") != data["merchant_name"] or gel["identity"].get("currency") != data["source_currency"]:
         raise ValueError("GEL merchant identity or currency does not match the UAT catalogue")
-    if gel.get("assets") != {"logo": "assets/ep-logo.jpg", "logo_inverse": "assets/ep-logo.jpg", "favicon": "assets/ep-logo.jpg"}:
+    if gel.get("assets") != {"logo": "assets/merchant-logo.jpg", "logo_inverse": "assets/merchant-logo.jpg", "favicon": "assets/merchant-logo.jpg"}:
         raise ValueError("UAT GEL assets must use the approved source logo")
     with TemporaryDirectory(prefix="ep-uat-gel-") as tmp:
         root = Path(tmp)
         (root / "assets").mkdir()
-        shutil.copyfile(source / data["brand_logo"], root / "assets/ep-logo.jpg")
+        shutil.copyfile(source / data["brand_logo"], root / "assets/merchant-logo.jpg")
         gel_validation = validate(gel, root)
     css, _ = tokens(gel, theme)
     output.mkdir(parents=True)
@@ -302,7 +304,7 @@ def build(source, output, theme, test_fixture=None, review_fixture=None, gel_fil
     logo_source = source / data["brand_logo"]
     if not logo_source.is_file():
         raise ValueError("source logo unavailable")
-    shutil.copyfile(logo_source, output / "assets/ep-logo.jpg")
+    shutil.copyfile(logo_source, output / "assets/merchant-logo.jpg")
     products = data["products"]
     for route, content in [
         ("index.html", catalogue(products, data["merchant_name"], test_ids, data["source_currency"])),

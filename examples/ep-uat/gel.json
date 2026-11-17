@@ -12,9 +12,9 @@
     "currency": "AUD"
   },
   "assets": {
-    "logo": "assets/ep-logo.jpg",
-    "logo_inverse": "assets/ep-logo.jpg",
-    "favicon": "assets/ep-logo.jpg"
+    "logo": "assets/merchant-logo.jpg",
+    "logo_inverse": "assets/merchant-logo.jpg",
+    "favicon": "assets/merchant-logo.jpg"
   },
   "colours": {
     "brand": "#263B50",

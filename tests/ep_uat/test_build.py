@@ -34,6 +34,7 @@ def test_local_build_preserves_identity_without_checkout_or_canonical(tmp_path, 
     hidden.write_bytes(b"not approved")
     output = tmp_path / "output"
     module.build(source, output, theme)
+    assert (output / "index.html").read_text().count('href="/cart/"') == 1
     page = (output / "products/woo-1/index.html").read_text()
     assert data["products"][0]["key"] == "ep:woo:offer:1"
     assert "ep:woo:offer:2" in page and "checkout is not available" in page.lower()
@@ -91,6 +92,7 @@ def test_merchant_gel_is_injected_and_rejects_wrong_identity(tmp_path):
     output = tmp_path / "output"
     module.build(source, output, "classic", gel_file=path)
     assert "#252525" in (output / "theme/tokens.css").read_text()
+    assert 'src="/assets/merchant-logo.jpg"' in (output / "index.html").read_text()
     assert "Squirrel" not in (output / "index.html").read_text()
     assert "Acorn" not in (output / "index.html").read_text()
     assert json.loads((output / "provenance.json").read_text())["gel_sha256"]
@@ -124,11 +126,13 @@ def test_merchant_currency_comes_from_catalogue_and_gel(tmp_path):
     (source / "catalogue.json").write_text(json.dumps(data))
     gel = json.loads((ROOT / "examples/ep-uat/gel.json").read_text())
     gel["identity"]["currency"] = "NZD"
+    gel["identity"]["locale"] = "en-NZ"
     path = tmp_path / "gel.json"
     path.write_text(json.dumps(gel))
     out = tmp_path / "out"
     module.build(source, out, "minimal", gel_file=path)
     assert "NZD" in (out / "index.html").read_text()
+    assert 'lang="en-NZ"' in (out / "index.html").read_text()
     assert '"currency": "NZD"' in (out / "products/woo-1/index.html").read_text()
 
 
@@ -142,3 +146,34 @@ def test_aud_sandbox_checkout_cannot_be_shown_as_another_currency(tmp_path):
                                         "offers": []}))
     with pytest.raises(ValueError, match="requires an AUD catalogue"):
         module.build(source, tmp_path / "unsafe", "minimal", test_fixture=fixture_path)
+
+
+def test_merchant_snapshot_update_preserves_subject_and_rejects_stale_mapping(tmp_path):
+    import copy
+
+    source = tmp_path / "source"
+    data = make_source(source)
+    retired = copy.deepcopy(data["products"][0])
+    retired.update({"source_id": 3, "key": "merchant:retired:3", "navigation_path": "/products/retired-item/"})
+    data["products"].append(retired)
+    (source / "catalogue.json").write_text(json.dumps(data))
+    mapping = tmp_path / "reviews.json"
+    mapping.write_text(json.dumps({"schema_version": 1, "source_archive_sha256": data["source_archive_sha256"],
+                                   "subjects": {"1": "synthetic-subject"}}))
+    first = tmp_path / "first"
+    module.build(source, first, "minimal", review_fixture=mapping)
+    assert (first / "products/retired-item/index.html").is_file()
+    product = data["products"][0]
+    product["images"][0]["path"] = data["brand_logo"]
+    data["products"] = [product]
+    (source / "catalogue.json").write_text(json.dumps(data))
+    second = tmp_path / "second"
+    module.build(source, second, "minimal", review_fixture=mapping)
+    page = (second / "products/woo-1/index.html").read_text()
+    assert not (second / "products/retired-item/index.html").exists()
+    assert data["brand_logo"] in page and '"review_subject": "synthetic-subject"' in page
+    assert (second / data["brand_logo"]).read_bytes() == (source / data["brand_logo"]).read_bytes()
+    mapping.write_text(json.dumps({"schema_version": 1, "source_archive_sha256": data["source_archive_sha256"],
+                                   "subjects": {"3": "retired-subject"}}))
+    with pytest.raises(ValueError, match="review subject"):
+        module.build(source, tmp_path / "stale", "minimal", review_fixture=mapping)
