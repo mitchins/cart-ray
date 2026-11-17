@@ -29,3 +29,9 @@ On 17 November 2026, using the previously confirmed two-product Stripe test purc
 ## Post-purchase dispatcher: Workerd/D1 smoke
 
 The local CartRay Workerd smoke applied the commerce migrations, confirmed a synthetic order, then concurrently dispatched two registered workflow identities for the same product and replayed the event. The Worker returned `workflows_once: true`; each workflow had one accepted receipt. This exercised actual local Workerd/D1 with Wrangler 4.127.1, using `pylock.toml`-locked `kinglet` 1.8.3 and `workers-runtime-sdk` 1.9.6 dependencies. The source and vendored `cartray/post_purchase.py` SHA-256 both matched `9f18790f336bb291e252a94af7735d4c8846639ba81da95334205ccae889e878`. The test does not qualify cross-isolate concurrency, a deployed scheduler, real provider delivery from D1, or a no-return purchase.
+
+## Background confirmation and customer experience
+
+A second Stripe test purchase was confirmed by the local background reconciler, recorded one `OrderConfirmed` event and one accepted configured workflow, and delivered one dummy-link email to the approved mailbox. Three dispatcher replays left one execution receipt; the mailbox contained one additional matching message for this purchase. The customer's browser did navigate to the UAT confirmation page, so this is **not** the requested literal no-return test. The delivery runner used local SQLite; the D1 dispatcher smoke above did not send this message. The test-only sender and runner were stopped after qualification.
+
+The owner reported poor test-order UX. The current flow uses a bare UAT cart and confirmation, and Stripe's shared sandbox identifies the merchant as Squirrel Acorn Store. The test confirmation and dummy links establish payment/fulfilment behavior, not an acceptable white-labelled customer experience. The supported connected merchant storefront and customer-facing checkout/confirmation presentation remain open work.
