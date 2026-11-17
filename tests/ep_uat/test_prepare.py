@@ -14,6 +14,10 @@ module = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(module)
 
 
+def test_plain_flushes_trailing_source_text():
+    assert module.plain("<p>Supplied by AT&T") == "Supplied by AT&T"
+
+
 def encoded(value):
     return json.dumps(value).encode()
 

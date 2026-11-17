@@ -70,3 +70,19 @@ test('an interrupted attempt survives reload and restores its checkout permissio
   globalThis.fetch=async(url,request)=>String(url).endsWith('/catalogue')?{ok:true,json:async()=>catalogue}:{ok:true,json:async()=>{assert.deepEqual(JSON.parse(request.body),original);return {session_id:'cs_test_retry',checkout_url:'https://checkout.stripe.com/test'};}};
   adapter=await createAdapter(presentation);assert.equal(adapter.attemptPending,true);assert.equal(adapter.state.permission,true);assert.equal(adapter.add('ACORN-KIT'),false);assert.equal(await adapter.checkout(),'https://checkout.stripe.com/test');assert.equal(storage.getItem('cartray.checkout-attempt.v1'),null);
 });
+test('a checkout attempt from an old catalogue cannot lock a new cart',async()=>{
+  const {storage}=setup();
+  storage.setItem('cartray.checkout-attempt.v1',JSON.stringify({requestId:`checkout_${'a'.repeat(32)}`,catalogueVersion:'old',revision:1,items:[['ACORN-KIT',1]],permission:false}));
+  const adapter=await createAdapter(presentation);
+  assert.equal(adapter.attemptPending,false);assert.equal(adapter.add('ACORN-KIT'),true);
+  assert.equal(storage.getItem('cartray.checkout-attempt.v1'),null);
+});
+test('a rejected checkout can be edited while an in-progress checkout remains retryable',async()=>{
+  const {storage}=setup();const adapter=await createAdapter(presentation);adapter.add('ACORN-KIT');
+  globalThis.fetch=async()=>({ok:false,status:400});
+  await assert.rejects(adapter.checkout());assert.equal(adapter.attemptPending,false);
+  assert.equal(adapter.quantity('ACORN-KIT',2),true);assert.equal(storage.getItem('cartray.checkout-attempt.v1'),null);
+  globalThis.fetch=async()=>({ok:false,status:409});
+  await assert.rejects(adapter.checkout());assert.equal(adapter.attemptPending,true);
+  assert.equal(adapter.quantity('ACORN-KIT',1),false);
+});

@@ -17,7 +17,7 @@ from functools import partial
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-from playwright.sync_api import sync_playwright
+from playwright.sync_api import expect, sync_playwright
 
 ROOT = Path(__file__).resolve().parents[2]
 MODULE = ROOT / "modules/reviews"
@@ -36,14 +36,18 @@ class Handler(SimpleHTTPRequestHandler):
         if not self.path.startswith("/reviews/v1/"):
             return super().do_GET()
         try:
-            with urllib.request.urlopen(f"http://127.0.0.1:{worker.PORT}{self.path}", timeout=5) as response:
+            try:
+                response = urllib.request.urlopen(f"http://127.0.0.1:{worker.PORT}{self.path}", timeout=5)
+            except urllib.error.HTTPError as error:
+                response = error
+            with response:
                 content = response.read()
                 self.send_response(response.status)
                 self.send_header("Content-Type", "application/json")
                 self.send_header("Content-Length", str(len(content)))
                 self.end_headers()
                 self.wfile.write(content)
-        except (OSError, urllib.error.HTTPError):
+        except OSError:
             self.send_error(503)
 
     def do_POST(self):
@@ -105,11 +109,12 @@ def main():
                 base = f"http://127.0.0.1:{server.server_port}"
                 page.goto(base + "/products/woo-171/", wait_until="load")
                 page.get_by_text("4.5 out of 5 · 2 ratings · 3 contributions").wait_for()
+                expect(page.locator("#review-list article")).to_have_count(3)
                 assert len(requests) == 2
-                assert page.locator("#review-list article").count() == 3
                 page.screenshot(path=str(args.output / "mapped-native-reviews.png"))
                 requests.clear()
                 page.goto(base + "/products/woo-131/", wait_until="load")
+                page.wait_for_load_state("networkidle")
                 assert page.locator("#reviews").count() == 0 and not requests
                 page.goto(base + "/review/#invitation=" + "0" * 64, wait_until="load")
                 page.get_by_text("This invitation is unavailable.", exact=False).wait_for()

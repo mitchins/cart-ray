@@ -21,7 +21,10 @@ export async function createAdapter(config) {
   const validAttempt = value => value && typeof value.requestId==='string' && /^checkout_[a-f0-9]{32}$/.test(value.requestId)
     && typeof value.catalogueVersion==='string' && Number.isSafeInteger(value.revision) && Array.isArray(value.items)
     && typeof value.permission==='boolean';
-  if (!validAttempt(attempt)) attempt=null;
+  if (!validAttempt(attempt) || attempt.catalogueVersion!==catalogue.version) {
+    attempt=null;
+    try {storage?.removeItem(attemptKey);} catch { /* storage is optional */ }
+  }
   const local=new Map(config.catalogue.products.map(p=>[p.product_key,p]));
   // Theme content contributes presentation only, never a price, product identity or review entitlement.
   const products=catalogue.products.map(p=>{
@@ -73,7 +76,15 @@ export async function createAdapter(config) {
         try {storage?.removeItem(attemptKey);} catch { /* return may still be checked */ }
         attempt=null;this.attemptPending=false;
         return result.url;
-      }catch(error){this.checkoutLocked=false;throw error;}
+      }catch(error){
+        // A 400 is a definitive validation rejection. Network failures, 409
+        // in-progress responses and server errors retain the idempotency key.
+        if(error.checkoutStatus===400){
+          attempt=null;this.attemptPending=false;
+          try {storage?.removeItem(attemptKey);} catch { /* storage is optional */ }
+        }
+        this.checkoutLocked=false;throw error;
+      }
     },
     async returnState(){
       if(returnResult)return returnResult;

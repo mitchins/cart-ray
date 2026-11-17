@@ -296,7 +296,7 @@ class D1Dispatcher:
             )
             if _changes(result) != 1:
                 existing = await self._first(
-                    """SELECT action_digest FROM post_purchase_executions
+                    """SELECT action_digest,state FROM post_purchase_executions
                     WHERE merchant_id=? AND environment=? AND order_id=? AND workflow_key=?""",
                     self.merchant,
                     self.environment,
@@ -305,7 +305,8 @@ class D1Dispatcher:
                 )
                 if not existing or existing["action_digest"] != digest:
                     raise ValueError("existing workflow identity has different configuration")
-                outcomes[action.workflow_key] = "already_claimed"
+                # A concurrent or interrupted claimant may still be running.
+                outcomes[action.workflow_key] = "pending_claim" if existing["state"] == "claimed" else "already_claimed"
                 continue
             try:
                 reference = self.handlers[action.handler](
@@ -378,7 +379,9 @@ async def drain_confirmed_d1(dispatcher: D1Dispatcher, actions: tuple[Action, ..
             or payload.get("items_digest") != event["items_digest"]
         ):
             raise ValueError("confirmed event does not match the immutable purchase")
-        await dispatcher.dispatch(event["order_id"], actions)
+        outcomes = await dispatcher.dispatch(event["order_id"], actions)
+        if "pending_claim" in outcomes.values():
+            return processed
         advanced = (
             await dispatcher.database.prepare(
                 """UPDATE post_purchase_checkpoint SET last_outbox_id=?

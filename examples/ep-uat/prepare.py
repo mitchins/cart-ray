@@ -9,6 +9,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import html
+import io
 import json
 import re
 import tarfile
@@ -50,6 +51,7 @@ class TextOnly(HTMLParser):
 def plain(value):
     parser = TextOnly()
     parser.feed(value or "")
+    parser.close()
     return html.unescape(parser.text())
 
 
@@ -126,10 +128,10 @@ class SafeSourceHTML(HTMLParser):
             self.output.append(html.escape(data))
 
 
-def read_archive(path):
+def read_archive(raw):
     """Verify every declared byte and reject unexpected members before reading data."""
     blobs = {}
-    with tarfile.open(path, "r:gz") as archive:
+    with tarfile.open(fileobj=io.BytesIO(raw), mode="r:gz") as archive:
         for member in archive.getmembers():
             name = PurePosixPath(member.name)
             if not member.isfile() or name.parts[:1] != ("ep-catalogue-uat",) or ".." in name.parts:
@@ -251,6 +253,7 @@ def prepare(blobs, archive_hash):
         cta = p.get("externalCatalogueCta") or {}
         safe_html = SafeSourceHTML(media_by_ref)
         safe_html.feed(p["contentHtml"] or "")
+        safe_html.close()
         result.append(
             {
                 "key": p["key"],
@@ -316,12 +319,13 @@ def main():
     parser.add_argument("--expected-sha256", default=APPROVED_SHA256)
     args = parser.parse_args()
     raw = args.archive.read_bytes()
-    if hashlib.sha256(raw).hexdigest() != args.expected_sha256:
+    digest = hashlib.sha256(raw).hexdigest()
+    if digest != args.expected_sha256:
         raise ValueError("archive does not match the explicitly approved SHA-256")
-    if hashlib.sha256(raw).hexdigest() == "824cf47fa8c57af588a767d655db38f351de2f5d191518dbaa28af1ba82b5f3f":
+    if digest == "824cf47fa8c57af588a767d655db38f351de2f5d191518dbaa28af1ba82b5f3f":
         raise ValueError("superseded handoff archive is not permitted")
-    blobs, _ = read_archive(args.archive)
-    document = prepare(blobs, hashlib.sha256(raw).hexdigest())
+    blobs, _ = read_archive(raw)
+    document = prepare(blobs, digest)
     if args.output.exists():
         raise ValueError("output already exists")
     args.output.mkdir(parents=True)

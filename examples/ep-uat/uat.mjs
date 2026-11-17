@@ -31,10 +31,11 @@ if(script){
     const defaults=product.default_attributes||{};
     const defaultOption=Object.keys(defaults).length?product.variations.find(v=>Object.entries(defaults).every(([k,value])=>v.attributes[`attribute_${k}`]===value)):null;
     try{select.value=sessionStorage.getItem(storageKey)||defaultOption?.key||'';}catch{select.value=defaultOption?.key||'';}
+    const originalPrice=document.querySelector('#variant-price').textContent;
     function setVariant(){
       const selected=product.variations.find(v=>v.key===select.value);
       document.querySelector('#variant-status').textContent=selected?'Selected option: '+Object.entries(selected.attributes).map(([name,value])=>name.replace(/^attribute_/,'').replaceAll('_',' ')+': '+value).join(', ')+'. Checkout unavailable.':'';
-      document.querySelector('#variant-price').textContent=selected&&selected.source_price?'Source price: '+selected.source_price+' '+product.currency+' (not checkout-authorised)':'Price unavailable';
+      document.querySelector('#variant-price').textContent=!selected?originalPrice:selected.source_price?'Source price: '+selected.source_price+' '+product.currency+' (not checkout-authorised)':'Price unavailable';
       document.querySelector('#variant-description').textContent=selected?.description||'';
       if(root){
         const items=selected?.images?.length?selected.images.map(i=>({url:'/'+i.path,alt:i.alt})):product.images;

@@ -62,9 +62,19 @@ def test_source_markup_rejects_active_or_undeclared_content():
         "<script>alert(1)</script>",
         '<img src="/media/other.png" alt="" loading="lazy">',
         '<p onclick="alert(1)">Text</p>',
+        '<!--><img src=x onerror=alert(1)>-->',
+        '<!--!><img src=x onerror=alert(1)>-->',
     ):
         with pytest.raises(ValueError):
             module.SourceMarkupCheck(set()).feed(markup)
+
+    parser = module.SourceMarkupCheck(set())
+    parser.feed('<p>safe</p><img src=x onerror=alert(1)')
+    with pytest.raises(ValueError, match="incomplete"):
+        parser.close()
+    parser = module.SourceMarkupCheck(set())
+    parser.feed('<p>Less than &lt; five</p>')
+    parser.close()
 
 
 def test_reviews_are_explicitly_scoped_to_a_product(tmp_path):
@@ -277,7 +287,9 @@ def test_generic_connected_flow_rejects_protocol_relative_context_and_images(tmp
         flows.install(tmp_path, ROOT, {}, "minimal", [offer], api_origin="https://example.test@attacker.test/path")
     (tmp_path / "theme").mkdir()
     monkeypatch.setattr(flows.templates, "simple_page", lambda *args: "content")
-    monkeypatch.setattr(flows.templates, "page_shell", lambda *args, **kwargs: '<body class="test"></body>')
+    monkeypatch.setattr(flows.templates, "page_shell", lambda *args, **kwargs:
+                        '<body class="test"><script src="/site-config.js" defer></script>'
+                        '<script type="module" src="/theme/app.mjs"></script></body>')
     flows.install(tmp_path, ROOT, {"identity": {"name": "Merchant"}}, "minimal", [offer],
                   api_origin="https://checkout.example.test/")
     assert 'apiBaseUrl = "https://checkout.example.test"' in (tmp_path / "storefront-config.js").read_text()

@@ -270,8 +270,6 @@ class Installation:
                 raise ValueError("installation directory and GEL asset root must not overlap")
             content_path = Path(config.get("theme_content", ROOT / "examples/gel-theme-pack/content/squirrel.json"))
             gel, content, references = cls.gel_inputs(manifest, assets, content_path)
-        atomic_json(directory / "inputs/preflight-lock.json", lock)
-        config["preflight_lock"] = "inputs/preflight-lock.json"
         if "merchant_inputs" in config:
             source = Path(config["merchant_inputs"])
             if source.is_symlink():
@@ -279,8 +277,16 @@ class Installation:
             source = source.resolve(strict=True)
             if directory.is_relative_to(source) or source.is_relative_to(directory):
                 raise ValueError("installation and merchant inputs must not overlap")
+            validate_merchant_inputs(source, ROOT)
+        atomic_json(directory / "inputs/preflight-lock.json", lock)
+        config["preflight_lock"] = "inputs/preflight-lock.json"
+        if "merchant_inputs" in config:
             destination = directory / "inputs/merchant"
-            config["merchant_inputs_sha256"] = snapshot_merchant_inputs(source, destination, ROOT)
+            try:
+                config["merchant_inputs_sha256"] = snapshot_merchant_inputs(source, destination, ROOT)
+            except Exception:
+                shutil.rmtree(directory / "inputs", ignore_errors=True)
+                raise
             config["merchant_inputs"] = "inputs/merchant"
         if "gel" in config:
             destination = directory / "inputs/gel-assets"

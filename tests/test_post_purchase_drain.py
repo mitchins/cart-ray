@@ -76,6 +76,18 @@ def test_drain_preserves_watermark_and_replay():
     assert db.execute("SELECT COUNT(*) FROM outbox WHERE delivered_at IS NOT NULL").fetchone()[0] == 0
 
 
+def test_unresolved_claim_stops_checkpoint_without_resending():
+    db = setup_database()
+    action = Action("workflow", ("product",), "service", "private/config", "a" * 64)
+    dispatcher = D1Dispatcher(Database(db), "store", "test", {"service": lambda *_: "receipt"})
+    assert asyncio.run(dispatcher.dispatch("after", (action,))) == {"workflow": "accepted"}
+    db.execute("UPDATE post_purchase_executions SET state='claimed', provider_reference=NULL")
+    db.commit()
+    dispatcher.handlers["service"] = lambda *_: pytest.fail("must not resend an unresolved claim")
+    assert asyncio.run(drain_confirmed_d1(dispatcher, (action,))) == 0
+    assert db.execute("SELECT last_outbox_id FROM post_purchase_checkpoint").fetchone()[0] == 1
+
+
 def test_invalid_event_never_calls_handler_or_advances_checkpoint():
     db = setup_database()
     db.execute("UPDATE outbox SET payload_json=? WHERE id=2", (json.dumps({"order_id": "wrong"}),))

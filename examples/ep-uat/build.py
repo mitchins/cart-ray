@@ -60,7 +60,7 @@ class SourceMarkupCheck(HTMLParser):
     }
 
     def __init__(self, declared):
-        super().__init__(convert_charrefs=True)
+        super().__init__(convert_charrefs=False)
         self.declared = declared
 
     def handle_starttag(self, tag, attrs):
@@ -84,6 +84,13 @@ class SourceMarkupCheck(HTMLParser):
 
     def handle_decl(self, decl):
         raise ValueError("source markup declarations are not allowed")
+
+    def handle_comment(self, data):
+        raise ValueError("source markup comments are not allowed")
+
+    def handle_data(self, data):
+        if "<" in data:
+            raise ValueError("incomplete source markup is not allowed")
 
 
 def esc(s):
@@ -296,6 +303,7 @@ def build(source, output, theme, test_fixture=None, review_fixture=None, gel_fil
                 raise ValueError("product media is not declared")
         validator = SourceMarkupCheck(declared)
         validator.feed(product["description_html"])
+        validator.close()
     gel = json.loads(Path(gel_file or Path(__file__).with_name("gel.json")).read_text())
     if gel.get("identity", {}).get("name") != data["merchant_name"] or gel["identity"].get("currency") != data["source_currency"]:
         raise ValueError("GEL merchant identity or currency does not match the UAT catalogue")

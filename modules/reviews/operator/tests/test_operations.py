@@ -52,6 +52,29 @@ def test_plan_is_nonsecret_offline_and_test_only(tmp_path):
         operations.validate_config(installation.config | {"review_invitation_default_checked": False})
 
 
+def test_failed_merchant_snapshot_can_be_retried(tmp_path, monkeypatch):
+    lock = tmp_path / "lock.json"
+    lock.write_text(json.dumps({"stripe_mode": "test", "catalogue_version": "sha256:" + "b" * 64}))
+    source = tmp_path / "merchant"
+    source.mkdir()
+    target = tmp_path / "installation"
+    config = {"namespace": "acorn-operator-test", "account_id": "a" * 32,
+              "stripe_account_id": "acct_Test", "preflight_lock": str(lock), "merchant_inputs": str(source),
+              "merchant_name": "Test merchant", "store_key": "test-store", "subject_map": {}, "subject_details": []}
+    monkeypatch.setattr(operations, "validate_merchant_inputs", lambda *_: "digest")
+
+    def fail_snapshot(_source, destination, _root):
+        destination.mkdir(parents=True)
+        raise OSError("copy interrupted")
+
+    monkeypatch.setattr(operations, "snapshot_merchant_inputs", fail_snapshot)
+    with pytest.raises(OSError, match="copy interrupted"):
+        operations.Installation.plan(target, config)
+    assert not (target / "inputs").exists()
+    monkeypatch.setattr(operations, "snapshot_merchant_inputs", lambda *_: "a" * 64)
+    assert operations.Installation.plan(target, config).state["phase"] == "planned"
+
+
 def test_theme_selection_and_gel_inputs_survive_original_handoff(tmp_path):
     lock = tmp_path / "lock.json"
     lock.write_text(json.dumps({"stripe_mode": "test", "catalogue_version": "sha256:" + "b" * 64}))

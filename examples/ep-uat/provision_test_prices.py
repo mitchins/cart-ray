@@ -173,10 +173,11 @@ def main():
     spec = importlib.util.spec_from_file_location("ep_uat_prepare", Path(__file__).with_name("prepare.py"))
     source = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(source)
-    archive_hash = hashlib.sha256(args.archive.read_bytes()).hexdigest()
+    raw = args.archive.read_bytes()
+    archive_hash = hashlib.sha256(raw).hexdigest()
     if archive_hash != source.APPROVED_SHA256:
         raise ValueError("test prices require the approved source archive")
-    blobs, _manifest = source.read_archive(args.archive)
+    blobs, _manifest = source.read_archive(raw)
     catalogue = source.prepare(blobs, archive_hash)
     followups = dummy_followups(blobs, catalogue, args.offer_id)
     key = args.key_file.read_text().strip()

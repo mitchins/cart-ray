@@ -271,7 +271,8 @@ def test_d1_ambiguous_write_never_blindly_resends(fault):
     else:
         assert asyncio.run(dispatcher.dispatch("order1", action)) == {"first": "uncertain"}
         assert len(calls) == 1
-    assert asyncio.run(dispatcher.dispatch("order1", action)) == {"first": "already_claimed"}
+    expected = "pending_claim" if fault == "claim_response_lost" else "already_claimed"
+    assert asyncio.run(dispatcher.dispatch("order1", action)) == {"first": expected}
     assert len(calls) == (0 if fault == "claim_response_lost" else 1)
 
 

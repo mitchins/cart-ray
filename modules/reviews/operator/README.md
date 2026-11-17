@@ -127,7 +127,22 @@ Ordinary Worker rollback does not rewind D1 or Pages data. The test-only EP
 package and hosted integration still require qualification; this option is not
 production activation.
 
-A namespace must end in `-test`. The lock is produced by the existing
+A namespace must end in `-test`. For a merchant package, generate a separate
+test-mode lock with its own catalogue and fulfilment expansions:
+
+```sh
+uv run --locked python scripts/preflight_catalogue.py \
+  --catalogue /absolute/path/to/merchant-inputs/commerce/catalogue.csv \
+  --fulfilment-expansions /absolute/path/to/merchant-inputs/commerce/fulfilment-expansions.json \
+  --output-lock /private/path/merchant-preflight.lock.json
+```
+
+Supply the Stripe test credential securely as `STRIPE_API_KEY`, review the
+resulting account, test-mode prices and catalogue version, and set
+`preflight_lock` to that private file. Its lookup keys must exactly match the
+merchant catalogue; the Acorn lock is not interchangeable.
+
+For Acorn, the lock is produced by the existing
 `scripts/preflight_catalogue.py` for `examples/acorn-store/catalogue.csv` and
 `fulfilment-expansions.json`; it is not a request to create or alter Stripe
 products. The installation copies it into its inputs so subsequent commands do

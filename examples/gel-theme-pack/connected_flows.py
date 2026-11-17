@@ -84,6 +84,8 @@ def install(
         }
         for offer in offers
     ]
+    if return_extension and not (output / return_extension.lstrip("/")).is_file():
+        raise ValueError("return extension is missing from the storefront")
     config = {
         "schemaVersion": 1,
         "preview": False,
@@ -124,12 +126,15 @@ def install(
             nav_links=(("/shop/", "Catalogue"),),
             minimal_footer=True,
         )
-        html = html.replace("<body class=", '<body data-cartray-presenter="gel" class=')
-        html = html.replace(
-            '<script src="/site-config.js" defer>',
-            '<script src="/storefront-config.js" defer></script><script src="/site-config.js" defer>',
-        )
-        html = html.replace('src="/theme/app.mjs"', 'src="/theme/connected-start.mjs"')
+        for old, new in (
+            ("<body class=", '<body data-cartray-presenter="gel" class='),
+            ('<script src="/site-config.js" defer>',
+             '<script src="/storefront-config.js" defer></script><script src="/site-config.js" defer>'),
+            ('src="/theme/app.mjs"', 'src="/theme/connected-start.mjs"'),
+        ):
+            if html.count(old) != 1:
+                raise ValueError("connected page template is missing an expected unique element")
+            html = html.replace(old, new, 1)
         path = output / route
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(html)

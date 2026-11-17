@@ -134,10 +134,11 @@ class TestLane:
         mapping = json.loads((fixture / "test-price-map.json").read_text())
         if not key.startswith(("sk_test_", "rk_test_")) or mapping["livemode"] is not False:
             raise ValueError("test-only Stripe credentials and fixture required")
-        source_hash = hashlib.sha256(archive.read_bytes()).hexdigest()
+        raw = archive.read_bytes()
+        source_hash = hashlib.sha256(raw).hexdigest()
         if source_hash != APPROVED_SHA256 or mapping.get("source_archive_sha256") != source_hash:
             raise ValueError("test mapping does not match the approved archive")
-        blobs, _manifest = read_archive(archive)
+        blobs, _manifest = read_archive(raw)
         source = prepare(blobs, source_hash)
         source_offers = {p["source_id"]: p for p in source["products"]}
         if not 1 <= len(mapping["offers"]) <= 2:
@@ -606,7 +607,9 @@ class Handler(SimpleHTTPRequestHandler):
                     return self.json_response(200, self.lane.reconcile(owner, payload["request_id"]))
                 return self.json_response(404, {"error": "not found"})
             except Exception:
-                return self.json_response(400, {"error": "UAT checkout or confirmation unavailable"})
+                # This test harness may have reached Stripe before an error.
+                # Do not label an unknown outcome as a definitive rejection.
+                return self.json_response(503, {"error": "UAT checkout or confirmation unavailable"})
 
     def do_GET(self):
         path = urlsplit(self.path).path
