@@ -34,6 +34,9 @@ def qualify(source: Path) -> dict:
                 if image.format != expected[relative.suffix.lower()]:
                     raise ValueError("media format does not match its extension")
                 image.verify()
+            # verify() checks structure without decoding pixel data.
+            with Image.open(file) as image:
+                image.load()
             images += 1
         elif relative.suffix.lower() == ".pdf" and raw.startswith(b"%PDF-"):
             pdfs += 1  # Signature only; not a full PDF rendering or content audit.
