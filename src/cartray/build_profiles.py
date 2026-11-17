@@ -72,6 +72,16 @@ _PROFILES = {
         product_assets=ROOT / "examples/acorn-store/assets/products",
         preflight_lock=ROOT / "examples/acorn-store/.private/stripe-test-preflight.lock.json",
     ),
+    # Populated only in the isolated operator build directory, never from the
+    # browser or a path supplied to a deployed Worker.
+    "merchant-stripe-test": CatalogueProfile(
+        name="merchant-stripe-test",
+        catalogue=ROOT / "merchant-input/catalogue.csv",
+        fulfilment_expansions=ROOT / "merchant-input/fulfilment-expansions.json",
+        presentation=ROOT / "merchant-input/presentation.csv",
+        product_assets=ROOT / "merchant-input/product-assets",
+        preflight_lock=ROOT / "merchant-input/stripe-test-preflight.lock.json",
+    ),
     "real-test-subset": CatalogueProfile(
         name="real-test-subset",
         catalogue=ROOT / "catalogue" / "real-test-subset" / "catalogue.csv",

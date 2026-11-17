@@ -36,6 +36,39 @@ def digest_tree(root: Path) -> str:
     return digest.hexdigest()
 
 
+def snapshot_merchant_inputs(source: Path, destination: Path, lock_bytes: bytes) -> str:
+    """Copy bounded operator-supplied build inputs into the isolated checkout."""
+    if source.is_symlink():
+        raise ValueError("merchant catalogue root must not be a symlink")
+    source = source.resolve(strict=True)
+    required = ("catalogue.csv", "fulfilment-expansions.json", "presentation.csv")
+    for name in required:
+        path = source / name
+        if path.is_symlink() or not path.is_file() or path.stat().st_size > 10_000_000:
+            raise ValueError(f"invalid merchant catalogue input: {name}")
+    assets = source / "product-assets"
+    if assets.is_symlink() or not assets.is_dir():
+        raise ValueError("merchant product-assets must be a local directory")
+    paths = list(assets.rglob("*"))
+    if len(paths) > 5000 or any(
+        path.is_symlink() or (not path.is_file() and not path.is_dir())
+        or (path.is_file() and path.stat().st_size > 20_000_000)
+        for path in paths
+    ):
+        raise ValueError("unsafe or oversized merchant product assets")
+    destination.mkdir(mode=0o700)
+    for name in required:
+        shutil.copyfile(source / name, destination / name)
+    shutil.copytree(assets, destination / "product-assets")
+    (destination / "stripe-test-preflight.lock.json").write_bytes(lock_bytes)
+    checksum = hashlib.sha256()
+    for path in sorted(p for p in destination.rglob("*") if p.is_file()):
+        checksum.update(
+            str(path.relative_to(destination)).encode() + b"\0" + hashlib.sha256(path.read_bytes()).digest()
+        )
+    return checksum.hexdigest()
+
+
 def lock_seed(lock: dict) -> tuple[str, str]:
     packages = {p["name"]: p for p in lock["package"]}
     seed = ['lock-version = "1.0"', 'created-by = "uv"', 'requires-python = ">=3.13.2"']
@@ -331,6 +364,7 @@ def attest_version(
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--preflight-lock", type=Path)
+    parser.add_argument("--merchant-input", type=Path, help="operator-owned test catalogue bundle")
     parser.add_argument("--wrangler-config", type=Path)
     parser.add_argument("--output", type=Path)
     parser.add_argument("--verify-output", type=Path)
@@ -384,15 +418,28 @@ def main() -> None:
     config_raw = normalized_config(input_config)
     config = checked_config(config_raw)
     env = os.environ.copy()
-    env["CARTRAY_CATALOGUE_PROFILE"] = "acorn-stripe-test"
+    env["CARTRAY_CATALOGUE_PROFILE"] = "merchant-stripe-test" if args.merchant_input else "acorn-stripe-test"
     with tempfile.TemporaryDirectory(prefix="acorn-commerce-clean-") as tmp:
         project = Path(tmp)
         archive = subprocess.check_output(["git", "archive", commit], cwd=ROOT)
         with tarfile.open(fileobj=io.BytesIO(archive)) as src:
             src.extractall(project, filter="data")
-        private = project / "examples/acorn-store/.private"
-        private.mkdir(mode=0o700)
-        (private / "stripe-test-preflight.lock.json").write_bytes(lock_bytes)
+        if args.merchant_input:
+            private = project / "merchant-input"
+            input_digest = snapshot_merchant_inputs(args.merchant_input, private, lock_bytes)
+            catalogue = private / "catalogue.csv"
+            expansions = private / "fulfilment-expansions.json"
+            presentation = private / "presentation.csv"
+            assets = private / "product-assets"
+        else:
+            private = project / "examples/acorn-store/.private"
+            private.mkdir(mode=0o700)
+            (private / "stripe-test-preflight.lock.json").write_bytes(lock_bytes)
+            input_digest = None
+            catalogue = project / "examples/acorn-store/catalogue.csv"
+            expansions = project / "examples/acorn-store/fulfilment-expansions.json"
+            presentation = project / "examples/acorn-store/catalogue-presentation.csv"
+            assets = project / "examples/acorn-store/assets/products"
         run(["uv", "sync", "--locked", "--all-groups"], project, env)
         run(["npm", "ci", "--ignore-scripts"], project, env)
         lock = tomllib.loads((project / "uv.lock").read_text())
@@ -429,13 +476,13 @@ def main() -> None:
                 str(project / ".venv/bin/python"),
                 str(project / "scripts/compile_catalogue.py"),
                 "--catalogue",
-                str(project / "examples/acorn-store/catalogue.csv"),
+                str(catalogue),
                 "--fulfilment-expansions",
-                str(project / "examples/acorn-store/fulfilment-expansions.json"),
+                str(expansions),
                 "--presentation",
-                str(project / "examples/acorn-store/catalogue-presentation.csv"),
+                str(presentation),
                 "--product-assets",
-                str(project / "examples/acorn-store/assets/products"),
+                str(assets),
                 "--preflight-lock",
                 str(private / "stripe-test-preflight.lock.json"),
                 "--output",
@@ -467,7 +514,8 @@ def main() -> None:
             raise RuntimeError("retained deployment artifact changed during no-bundle dry run")
         receipt = {
             "source_commit": commit,
-            "profile": "acorn-stripe-test",
+            "profile": env["CARTRAY_CATALOGUE_PROFILE"],
+            "merchant_input_sha256": input_digest,
             "versions": versions,
             "catalogue_lock_sha256": hashlib.sha256(lock_bytes).hexdigest(),
             "input_configuration_sha256": hashlib.sha256(input_config.encode()).hexdigest(),

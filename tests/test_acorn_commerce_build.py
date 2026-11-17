@@ -313,3 +313,22 @@ def test_lock_seed_requires_wheel_hash_and_pins_versions():
     lock["package"][0]["wheels"][0]["hash"] = "bad"
     with pytest.raises(ValueError, match="invalid locked wheel hash"):
         build.lock_seed(lock)
+
+
+def test_merchant_build_snapshot_pins_inputs_and_rejects_symlinks(tmp_path):
+    source = tmp_path / "merchant"
+    source.mkdir()
+    for name in ("catalogue.csv", "fulfilment-expansions.json", "presentation.csv"):
+        (source / name).write_text(name)
+    (source / "product-assets").mkdir()
+    image = source / "product-assets" / "product.webp"
+    image.write_bytes(b"image")
+    first = build.snapshot_merchant_inputs(source, tmp_path / "first", b"lock")
+    image.write_bytes(b"different image")
+    second = build.snapshot_merchant_inputs(source, tmp_path / "second", b"lock")
+    assert first != second
+    assert (tmp_path / "first/product-assets/product.webp").read_bytes() == b"image"
+    image.unlink()
+    image.symlink_to(source / "catalogue.csv")
+    with pytest.raises(ValueError, match="unsafe"):
+        build.snapshot_merchant_inputs(source, tmp_path / "third", b"lock")
