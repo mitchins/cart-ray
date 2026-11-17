@@ -41,3 +41,26 @@ def test_confirmation_scoped_to_current_owned_request():
     assert result == {"state": "pending", "grants": []}
     with pytest.raises(ValueError, match="not bound"):
         lane.reconcile("different-owner", "new-request-12345678")
+
+
+def test_lost_checkout_response_cannot_be_claimed_by_another_browser():
+    from types import SimpleNamespace
+
+    class UncertainCheckout:
+        async def checkout(self, request):
+            raise TimeoutError("provider outcome unknown")
+
+    lane = object.__new__(module.TestLane)
+    lane.connection = sqlite3.connect(":memory:")
+    lane.connection.row_factory = sqlite3.Row
+    lane.connection.execute("CREATE TABLE uat_checkout_owner(request_id TEXT PRIMARY KEY, token_hash TEXT NOT NULL)")
+    lane.mapping = {"171": {"cartray_product_key": "EP-UAT-171"}}
+    lane.catalogue = SimpleNamespace(version="fixture-v1")
+    lane.checkout = UncertainCheckout()
+    payload = {"request_id": "request-1234567890-abcd", "items": [{"source_id": 171, "quantity": 1}]}
+    with pytest.raises(TimeoutError):
+        lane.start("owner-one", payload)
+    with pytest.raises(ValueError, match="already bound"):
+        lane.start("owner-two", payload)
+    with pytest.raises(TimeoutError):
+        lane.start("owner-one", payload)
