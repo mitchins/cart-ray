@@ -34,7 +34,7 @@ The local CartRay Workerd smoke applied the commerce migrations, confirmed a syn
 
 A second Stripe test purchase was confirmed by the local background reconciler, recorded one `OrderConfirmed` event and one accepted configured workflow, and delivered one dummy-link email to the approved mailbox. Three dispatcher replays left one execution receipt; the mailbox contained one additional matching message for this purchase. The customer's browser did navigate to the UAT confirmation page, so this is **not** the requested literal no-return test. The delivery runner used local SQLite; the D1 dispatcher smoke above did not send this message. The test-only sender and runner were stopped after qualification.
 
-The owner reported poor test-order UX. The current flow uses a bare UAT cart and confirmation, and Stripe's shared sandbox identifies the merchant as Squirrel Acorn Store. The test confirmation and dummy links establish payment/fulfilment behavior, not an acceptable white-labelled customer experience. The supported connected merchant storefront and customer-facing checkout/confirmation presentation remain open work.
+The owner reported poor test-order UX in the original bare UAT cart and confirmation. A later connected-cart implementation is being qualified separately; the earlier test is not evidence of a completed white-labelled merchant installation. Stripe's shared sandbox identifies the merchant as Squirrel Acorn Store. The supported generic merchant installation and deployed customer-facing flow remain open work.
 
 ## Stripe test purchase without a store return
 

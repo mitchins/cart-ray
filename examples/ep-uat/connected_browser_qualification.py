@@ -59,6 +59,13 @@ def main():
             page.goto(args.origin + "/purchase-return/?checkout=cancelled", wait_until="domcontentloaded")
             page.get_by_text("Checkout cancelled.", exact=False).wait_for()
             assert page.get_by_text("Your test downloads").count() == 0
+            # A test Checkout issued by the previous cart still has its original
+            # return URL and must remain usable after the shared cart is installed.
+            page.evaluate("sessionStorage.setItem('ep-uat-test-request-v1', 'legacy-request')")
+            page.route("**/__uat/reconcile", lambda route: route.fulfill(json={"state": "confirmed", **grants}))
+            page.goto(args.origin + "/uat-return/", wait_until="domcontentloaded")
+            page.get_by_text("Payment confirmed for this test order.", exact=False).wait_for()
+            assert page.get_by_role("link", name="Download dummy test file").count() == 2
             assert not errors, errors
             evidence.append(
                 {
@@ -67,6 +74,7 @@ def main():
                     "synthetic_return": True,
                     "confirmed_reload": True,
                     "cancelled_not_previous_order": True,
+                    "legacy_return": True,
                     "page_errors": errors,
                 }
             )
