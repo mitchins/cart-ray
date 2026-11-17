@@ -198,7 +198,7 @@ def run(args: list[str], project: Path, env: dict[str, str]) -> None:
     subprocess.run(args, cwd=project, env=env, check=True)
 
 
-def repair_missing_pywrangler_vendor(project: Path, env: dict[str, str]) -> bool:
+def repair_missing_pywrangler_vendor(project: Path, env: dict[str, str], packages=PACKAGES) -> bool:
     """Materialize locked wheels if uv selected the host venv instead of Pyodide's.
 
     Some uv/pywrangler combinations report a successful sync while leaving
@@ -207,7 +207,7 @@ def repair_missing_pywrangler_vendor(project: Path, env: dict[str, str]) -> bool
     verify_vendor still checks every byte against the locked wheels.
     """
     vendor = project / "python_modules"
-    if all(list(vendor.glob(f"{name.replace('-', '_')}-*.dist-info")) for name in PACKAGES):
+    if all(list(vendor.glob(f"{name.replace('-', '_')}-*.dist-info")) for name in packages):
         return False
     target = project / "locked-vendor-target"
     run(
