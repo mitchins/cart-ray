@@ -41,6 +41,49 @@ class Action:
             raise ValueError("invalid post-purchase action")
 
 
+def parse_action_config(raw: str) -> tuple[str, str, tuple[Action, ...]]:
+    """Read trusted, bounded deployment configuration; never parse browser input."""
+    if not isinstance(raw, str) or len(raw.encode()) > 16384:
+        raise ValueError("invalid post-purchase configuration")
+    try:
+        config = json.loads(raw)
+        if not isinstance(config, dict) or set(config) != {"merchant", "environment", "actions"}:
+            raise ValueError("invalid post-purchase configuration")
+        merchant, environment, rows = config["merchant"], config["environment"], config["actions"]
+        if (
+            not isinstance(merchant, str)
+            or not _IDENTIFIER.fullmatch(merchant)
+            or environment != "test"
+            or not isinstance(rows, list)
+            or not rows
+            or len(rows) > 100
+        ):
+            raise ValueError("invalid post-purchase configuration")
+        actions = []
+        for row in rows:
+            if (
+                not isinstance(row, dict)
+                or set(row) != {"workflow_key", "offer_keys", "handler", "config_ref", "config_digest"}
+                or row["handler"] != "service"
+                or not isinstance(row["offer_keys"], list)
+            ):
+                raise ValueError("invalid post-purchase action")
+            actions.append(
+                Action(
+                    row["workflow_key"],
+                    tuple(row["offer_keys"]),
+                    row["handler"],
+                    row["config_ref"],
+                    row["config_digest"],
+                )
+            )
+        if len({action.workflow_key for action in actions}) != len(actions):
+            raise ValueError("duplicate workflow identity")
+        return merchant, environment, tuple(actions)
+    except (KeyError, TypeError, json.JSONDecodeError) as error:
+        raise ValueError("invalid post-purchase configuration") from error
+
+
 def _action_digest(action: Action) -> str:
     return hashlib.sha256(
         json.dumps(
@@ -56,6 +99,7 @@ class Execution:
     environment: str
     workflow_key: str
     config_ref: str
+    config_digest: str
 
 
 @dataclass(frozen=True)
@@ -147,7 +191,10 @@ class SqliteDispatcher:
                 continue
             try:
                 reference = self.handlers[action.handler](
-                    purchase, Execution(self.merchant, self.environment, action.workflow_key, action.config_ref)
+                    purchase,
+                    Execution(
+                        self.merchant, self.environment, action.workflow_key, action.config_ref, action.config_digest
+                    ),
                 )
                 if not isinstance(reference, str) or not reference or len(reference) > 256:
                     raise ValueError("handler did not confirm acceptance")
@@ -262,7 +309,10 @@ class D1Dispatcher:
                 continue
             try:
                 reference = self.handlers[action.handler](
-                    purchase, Execution(self.merchant, self.environment, action.workflow_key, action.config_ref)
+                    purchase,
+                    Execution(
+                        self.merchant, self.environment, action.workflow_key, action.config_ref, action.config_digest
+                    ),
                 )
                 if isawaitable(reference):
                     reference = await reference
@@ -290,3 +340,56 @@ class D1Dispatcher:
                 )
                 outcomes[action.workflow_key] = "uncertain"
         return outcomes
+
+
+async def drain_confirmed_d1(dispatcher: D1Dispatcher, actions: tuple[Action, ...], *, limit: int = 10) -> int:
+    """Consume a bounded batch from an explicitly activated independent checkpoint."""
+    from cartray.store import _changes, _results
+
+    if not 1 <= limit <= 50:
+        raise ValueError("invalid post-purchase batch limit")
+    checkpoint = await dispatcher._first(
+        """SELECT merchant_id,environment,activation_watermark,last_outbox_id
+        FROM post_purchase_checkpoint WHERE singleton=1"""
+    )
+    if (
+        not checkpoint
+        or (checkpoint["merchant_id"], checkpoint["environment"]) != (dispatcher.merchant, dispatcher.environment)
+        or checkpoint["last_outbox_id"] < checkpoint["activation_watermark"]
+    ):
+        raise ValueError("post-purchase checkpoint is missing or mismatched")
+    previous = checkpoint["last_outbox_id"]
+    result = (
+        await dispatcher.database.prepare(
+            """SELECT e.id,e.order_id,e.payload_json,s.external_session_id,o.items_digest
+        FROM outbox e JOIN orders o USING(order_id) JOIN checkout_sessions s USING(order_id)
+        WHERE e.event_type='OrderConfirmed' AND e.id>? ORDER BY e.id LIMIT ?"""
+        )
+        .bind(previous, limit)
+        .all()
+    )
+    processed = 0
+    for event in _results(result):
+        payload = json.loads(event["payload_json"])
+        if (
+            not isinstance(payload, dict)
+            or payload.get("order_id") != event["order_id"]
+            or payload.get("session_id") != event["external_session_id"]
+            or payload.get("items_digest") != event["items_digest"]
+        ):
+            raise ValueError("confirmed event does not match the immutable purchase")
+        await dispatcher.dispatch(event["order_id"], actions)
+        advanced = (
+            await dispatcher.database.prepare(
+                """UPDATE post_purchase_checkpoint SET last_outbox_id=?
+            WHERE singleton=1 AND merchant_id=? AND environment=? AND last_outbox_id=?"""
+            )
+            .bind(event["id"], dispatcher.merchant, dispatcher.environment, previous)
+            .run()
+        )
+        if _changes(advanced) != 1:
+            # A competing consumer may have moved the checkpoint. Stop; replay is safe.
+            return processed
+        previous = event["id"]
+        processed += 1
+    return processed

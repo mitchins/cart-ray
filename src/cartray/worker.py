@@ -19,6 +19,7 @@ from cartray.errors import (
     WebhookValidationError,
 )
 from cartray.models import CheckoutRequest
+from cartray.post_purchase import D1Dispatcher, drain_confirmed_d1, parse_action_config
 from cartray.reconciliation import StripeReconciliationService
 from cartray.settlement import StripeSettlementService
 from cartray.store import D1OrderStore
@@ -248,7 +249,11 @@ async def checkout_service_from_environment(env) -> CheckoutService:
         CheckoutMetadataSealer(environment, _required_env(env, "CARTRAY_SIGNING_KEY_ID"), signer),
     )
     return CheckoutService(
-        catalogue, D1OrderStore(env.DB), gateway, success_url, cancel_url,
+        catalogue,
+        D1OrderStore(env.DB),
+        gateway,
+        success_url,
+        cancel_url,
         review_invitations_enabled=_automatic_invitation_enabled(env),
         review_invitation_default_selected=getattr(env, "CARTRAY_REVIEW_INVITATION_DEFAULT", None) == "checked",
     )
@@ -443,6 +448,17 @@ class Default(WorkerEntrypoint):
                 self.ctx.waitUntil(_wake_reviews_subscriber(self.env))
         except Exception:
             pass
+        try:
+            if (
+                getattr(self.env, "CARTRAY_POST_PURCHASE_MODE", "disabled") == "test"
+                and getattr(self.env, "CARTRAY_ENVIRONMENT", "") == "test"
+                and request.method == "POST"
+                and urlparse(str(request.url)).path == "/stripe/webhook"
+                and response.status == 200
+            ):
+                self.ctx.waitUntil(_drain_post_purchase(self.env))
+        except Exception:
+            pass
         return response
 
     async def scheduled(self, controller, env, ctx):
@@ -454,6 +470,69 @@ class Default(WorkerEntrypoint):
                     ctx.waitUntil(_wake_reviews_subscriber(self.env))
             except Exception:
                 pass
+            try:
+                if (
+                    getattr(self.env, "CARTRAY_POST_PURCHASE_MODE", "disabled") == "test"
+                    and getattr(self.env, "CARTRAY_ENVIRONMENT", "") == "test"
+                ):
+                    ctx.waitUntil(_drain_post_purchase(self.env))
+            except Exception:
+                pass
+
+
+async def _drain_post_purchase(env):
+    """Test-only best-effort drain; absent checkpoint or handler fails closed."""
+    try:
+        if getattr(env, "CARTRAY_POST_PURCHASE_MODE", "disabled") != "test" or _test_environment(env) != "test":
+            return
+        merchant, environment, actions = parse_action_config(_required_env(env, "CARTRAY_POST_PURCHASE_CONFIG"))
+        token = _required_env(env, "CARTRAY_POST_PURCHASE_TOKEN")
+        service = getattr(env, "POST_PURCHASE_HANDLER", None)
+        if len(token) < 32 or not callable(getattr(service, "fetch", None)):
+            return
+        from js import Request
+        from pyodide.ffi import to_js
+
+        async def service_handler(purchase, execution):
+            body = json.dumps(
+                {
+                    "merchant": execution.merchant,
+                    "environment": execution.environment,
+                    "workflow_key": execution.workflow_key,
+                    "config_ref": execution.config_ref,
+                    "config_digest": execution.config_digest,
+                    "order_id": purchase.order_id,
+                    "session_id": purchase.session_id,
+                    "items": purchase.items,
+                },
+                separators=(",", ":"),
+            )
+            request = Request.new(
+                "https://post-purchase-handler.internal/",
+                to_js(
+                    {
+                        "method": "POST",
+                        "headers": {"authorization": f"Bearer {token}", "content-type": "application/json"},
+                        "body": body,
+                    },
+                    dict_converter=__import__("js").Object.fromEntries,
+                ),
+            )
+            response = await service.fetch(request)
+            if response.status != 200:
+                raise RuntimeError("post-purchase handler outcome uncertain")
+            result = await response.json()
+            if hasattr(result, "to_py"):
+                result = result.to_py()
+            if not isinstance(result, dict):
+                raise RuntimeError("post-purchase handler outcome uncertain")
+            return result.get("provider_reference")
+
+        dispatcher = D1Dispatcher(env.DB, merchant, environment, {"service": service_handler})
+        await drain_confirmed_d1(dispatcher, actions)
+    except Exception:
+        # Checkout is already committed; cron retries the durable checkpoint.
+        return
 
 
 async def _wake_reviews_subscriber(env):

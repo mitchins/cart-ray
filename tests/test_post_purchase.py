@@ -273,3 +273,10 @@ def test_d1_ambiguous_write_never_blindly_resends(fault):
         assert len(calls) == 1
     assert asyncio.run(dispatcher.dispatch("order1", action)) == {"first": "already_claimed"}
     assert len(calls) == (0 if fault == "claim_response_lost" else 1)
+
+
+def test_enabled_configuration_rejects_empty_actions():
+    from cartray.post_purchase import parse_action_config
+
+    with pytest.raises(ValueError, match="invalid post-purchase configuration"):
+        parse_action_config('{"merchant":"store","environment":"test","actions":[]}')

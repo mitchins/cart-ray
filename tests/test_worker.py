@@ -8,6 +8,7 @@ from hashlib import sha256
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
 from kinglet import TestClient
 
 import cartray.worker as worker_module
@@ -544,8 +545,10 @@ def test_runtime_reviews_identity_is_authenticated_and_does_not_call_stripe(monk
     monkeypatch.setattr(worker_module, "WorkersFetchTransport", NoTransport)
     monkeypatch.setattr(worker_module, "COMPILED_CATALOGUE", SimpleNamespace(expected_catalogue_version="sha256:abc"))
     env = {
-        "CARTRAY_ENVIRONMENT": "test", "CARTRAY_REVIEWS_SOURCE": "test",
-        "CARTRAY_REVIEWS_IDENTITY_TOKEN": "i" * 32, "CF_VERSION_METADATA": SimpleNamespace(id="version-1"),
+        "CARTRAY_ENVIRONMENT": "test",
+        "CARTRAY_REVIEWS_SOURCE": "test",
+        "CARTRAY_REVIEWS_IDENTITY_TOKEN": "i" * 32,
+        "CF_VERSION_METADATA": SimpleNamespace(id="version-1"),
     }
     path = "/internal/reviews-runtime-identity"
     assert TestClient(create_app(), env=env).request("GET", path)[0] == 503
@@ -555,9 +558,12 @@ def test_runtime_reviews_identity_is_authenticated_and_does_not_call_stripe(monk
     assert status == 200
     assert json.loads(body) == {"version_id": "version-1", "catalogue_version": "sha256:abc"}
     assert headers.get("Cache-Control") == "no-store"
-    assert TestClient(create_app(), env=env | {"CF_VERSION_METADATA": None}).request(
-        "GET", path, headers={"authorization": "Bearer " + "i" * 32}
-    )[0] == 503
+    assert (
+        TestClient(create_app(), env=env | {"CF_VERSION_METADATA": None}).request(
+            "GET", path, headers={"authorization": "Bearer " + "i" * 32}
+        )[0]
+        == 503
+    )
 
 
 def test_webhook_subscriber_wakeup_does_not_change_checkout_response(monkeypatch):
@@ -583,3 +589,53 @@ def test_webhook_subscriber_wakeup_does_not_change_checkout_response(monkeypatch
     asyncio.run(captured.pop())
     entry.ctx = None
     assert asyncio.run(entry.fetch(SimpleNamespace(method="POST", url="https://store.test/stripe/webhook"))) is response
+
+
+def test_post_purchase_webhook_wakeup_is_opt_in_and_checkout_independent(monkeypatch):
+    captured = []
+    response = SimpleNamespace(status=200)
+
+    async def fake_app(request, env):
+        return response
+
+    async def failing_drain(env):
+        raise RuntimeError("test subscriber failure")
+
+    class Context:
+        def waitUntil(self, work):
+            captured.append(work)
+
+    monkeypatch.setattr(worker_module, "app", fake_app)
+    monkeypatch.setattr(worker_module, "_drain_post_purchase", failing_drain)
+    entry = worker_module.Default()
+    entry.ctx = Context()
+    request = SimpleNamespace(method="POST", url="https://store.test/stripe/webhook")
+    entry.env = SimpleNamespace(CARTRAY_POST_PURCHASE_MODE="disabled", CARTRAY_ENVIRONMENT="test")
+    assert asyncio.run(entry.fetch(request)) is response
+    assert captured == []
+    entry.env = SimpleNamespace(CARTRAY_POST_PURCHASE_MODE="test", CARTRAY_ENVIRONMENT="test")
+    assert asyncio.run(entry.fetch(request)) is response
+    assert len(captured) == 1
+    with pytest.raises(RuntimeError, match="subscriber failure"):
+        asyncio.run(captured.pop())
+    entry.env = SimpleNamespace(CARTRAY_POST_PURCHASE_MODE="test", CARTRAY_ENVIRONMENT="production")
+    assert asyncio.run(entry.fetch(request)) is response
+    assert captured == []
+
+
+def test_missing_post_purchase_service_is_rejected_before_claims(monkeypatch):
+    action = {
+        "workflow_key": "delivery",
+        "offer_keys": ["product"],
+        "handler": "service",
+        "config_ref": "private/delivery",
+        "config_digest": "a" * 64,
+    }
+    env = SimpleNamespace(
+        CARTRAY_POST_PURCHASE_MODE="test",
+        CARTRAY_ENVIRONMENT="test",
+        CARTRAY_POST_PURCHASE_CONFIG=json.dumps({"merchant": "store", "environment": "test", "actions": [action]}),
+        CARTRAY_POST_PURCHASE_TOKEN="a" * 32,
+    )
+    monkeypatch.setattr(worker_module, "D1Dispatcher", lambda *args: pytest.fail("must not claim"))
+    asyncio.run(worker_module._drain_post_purchase(env))

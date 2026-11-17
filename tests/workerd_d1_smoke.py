@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import json
 import time
+from types import SimpleNamespace
 
 from js import crypto
 from kinglet.storage import bytes_to_arraybuffer
@@ -15,6 +17,7 @@ from cartray.errors import CheckoutInProgress
 from cartray.models import CheckoutOrder, CheckoutRedirect, OrderItem
 from cartray.post_purchase import Action, D1Dispatcher
 from cartray.store import D1OrderStore, _results
+from cartray.worker import _drain_post_purchase
 from cartray.workers_crypto import WorkersEd25519Signer, WorkersEd25519Verifier
 
 TEST_PRIVATE_KEY_PKCS8_B64 = "MC4CAQAwBQYDK2VwBCIEIJZ4orlcGRX4w6SOrvHeEh5ZpFSC0FR4Onu1OKF/Lt87"
@@ -25,6 +28,10 @@ TEST_PAYLOAD = b"cartray-worker-webcrypto-smoke-v1"
 
 class Default(WorkerEntrypoint):
     async def fetch(self, _request):
+        await self.env.DB.prepare(
+            """INSERT OR IGNORE INTO post_purchase_checkpoint
+            SELECT 1,'smoke-store','test',COALESCE(MAX(id),0),COALESCE(MAX(id),0) FROM outbox"""
+        ).run()
         token = str(time.time_ns())
         order = CheckoutOrder(
             order_id=f"cr_smoke_{token}",
@@ -94,6 +101,44 @@ class Default(WorkerEntrypoint):
             dispatcher.dispatch(order.order_id, actions), dispatcher.dispatch(order.order_id, actions)
         )
         replay = await dispatcher.dispatch(order.order_id, actions)
+        service_calls = []
+
+        class TestService:
+            async def fetch(self, request):
+                body = await request.json()
+                if hasattr(body, "to_py"):
+                    body = body.to_py()
+                service_calls.append((body["order_id"], body["workflow_key"], body["config_digest"]))
+
+                async def response_json():
+                    return {"provider_reference": "test-service-receipt"}
+
+                return SimpleNamespace(status=200, json=response_json)
+
+        test_env = SimpleNamespace(
+            DB=self.env.DB,
+            CARTRAY_ENVIRONMENT="test",
+            CARTRAY_POST_PURCHASE_MODE="test",
+            CARTRAY_POST_PURCHASE_TOKEN="t" * 32,
+            POST_PURCHASE_HANDLER=TestService(),
+            CARTRAY_POST_PURCHASE_CONFIG=json.dumps(
+                {
+                    "merchant": "smoke-store",
+                    "environment": "test",
+                    "actions": [
+                        {
+                            "workflow_key": "workflow-three",
+                            "offer_keys": ["SMOKE-TEMPLATE"],
+                            "handler": "service",
+                            "config_ref": "test/three",
+                            "config_digest": "c" * 64,
+                        }
+                    ],
+                }
+            ),
+        )
+        await _drain_post_purchase(test_env)
+        await _drain_post_purchase(test_env)
         workflow_receipts = (
             await self.env.DB.prepare(
                 "SELECT workflow_key,state FROM post_purchase_executions WHERE order_id=? ORDER BY workflow_key"
@@ -103,9 +148,14 @@ class Default(WorkerEntrypoint):
         )
         workflow_rows = _results(workflow_receipts)
         workflows_once = (
-            sorted(calls) == [(order.order_id, "workflow-one"), (order.order_id, "workflow-two")]
+            sorted(calls)
+            == [
+                (order.order_id, "workflow-one"),
+                (order.order_id, "workflow-two"),
+            ]
             and replay == {"workflow-one": "already_claimed", "workflow-two": "already_claimed"}
-            and len(workflow_rows) == 2
+            and service_calls == [(order.order_id, "workflow-three", "c" * 64)]
+            and len(workflow_rows) == 3
             and all(row["state"] == "accepted" for row in workflow_rows)
             and all(set(result) == {"workflow-one", "workflow-two"} for result in runs)
         )

@@ -1,0 +1,88 @@
+from __future__ import annotations
+
+import asyncio
+import json
+import sqlite3
+from pathlib import Path
+
+import pytest
+
+from cartray.post_purchase import Action, D1Dispatcher, drain_confirmed_d1
+
+ROOT = Path(__file__).resolve().parents[1]
+
+
+class Statement:
+    def __init__(self, db, sql):
+        self.db, self.sql, self.args = db, sql, ()
+
+    def bind(self, *args):
+        self.args = args
+        return self
+
+    async def all(self):
+        return {"results": [dict(row) for row in self.db.execute(self.sql, self.args)]}
+
+    async def run(self):
+        result = self.db.execute(self.sql, self.args)
+        self.db.commit()
+        return {"meta": {"changes": result.rowcount}}
+
+
+class Database:
+    def __init__(self, db):
+        self.db = db
+
+    def prepare(self, sql):
+        return Statement(self.db, sql)
+
+
+def setup_database():
+    db = sqlite3.connect(":memory:")
+    db.row_factory = sqlite3.Row
+    db.executescript("""
+        CREATE TABLE orders(order_id TEXT PRIMARY KEY, items_digest TEXT);
+        CREATE TABLE checkout_sessions(order_id TEXT, external_session_id TEXT, settlement_state TEXT);
+        CREATE TABLE order_items(order_id TEXT, product_key TEXT, quantity INTEGER);
+        CREATE TABLE outbox(id INTEGER PRIMARY KEY, order_id TEXT, event_type TEXT,
+                            payload_json TEXT, delivered_at INTEGER);
+        INSERT INTO orders VALUES ('before','old-digest'),('after','new-digest');
+        INSERT INTO checkout_sessions VALUES ('before','old-session','confirmed'),('after','new-session','confirmed');
+        INSERT INTO order_items VALUES ('before','product',1),('after','product',1);
+    """)
+    for ident, order in [(1, "before"), (2, "after")]:
+        session, digest = ("old-session", "old-digest") if order == "before" else ("new-session", "new-digest")
+        db.execute(
+            "INSERT INTO outbox VALUES (?,?,'OrderConfirmed',?,NULL)",
+            (ident, order, json.dumps({"order_id": order, "session_id": session, "items_digest": digest})),
+        )
+    db.executescript((ROOT / "migrations/0006_post_purchase_actions.sql").read_text())
+    db.executescript((ROOT / "migrations/0007_post_purchase_checkpoint.sql").read_text())
+    db.execute("INSERT INTO post_purchase_installation VALUES (1,'store','test')")
+    db.execute("INSERT INTO post_purchase_checkpoint VALUES (1,'store','test',1,1)")
+    db.commit()
+    return db
+
+
+def test_drain_preserves_watermark_and_replay():
+    db = setup_database()
+    calls = []
+    dispatcher = D1Dispatcher(Database(db), "store", "test", {"service": lambda *args: calls.append(args) or "ok"})
+    action = Action("workflow", ("product",), "service", "private/config", "a" * 64)
+    assert asyncio.run(drain_confirmed_d1(dispatcher, (action,))) == 1
+    assert asyncio.run(drain_confirmed_d1(dispatcher, (action,))) == 0
+    assert [call[0].order_id for call in calls] == ["after"]
+    assert db.execute("SELECT last_outbox_id FROM post_purchase_checkpoint").fetchone()[0] == 2
+    assert db.execute("SELECT COUNT(*) FROM outbox WHERE delivered_at IS NOT NULL").fetchone()[0] == 0
+
+
+def test_invalid_event_never_calls_handler_or_advances_checkpoint():
+    db = setup_database()
+    db.execute("UPDATE outbox SET payload_json=? WHERE id=2", (json.dumps({"order_id": "wrong"}),))
+    db.commit()
+    dispatcher = D1Dispatcher(Database(db), "store", "test", {"service": lambda *_: pytest.fail("must not send")})
+    action = Action("workflow", ("product",), "service", "private/config", "a" * 64)
+    with pytest.raises(ValueError, match="does not match"):
+        asyncio.run(drain_confirmed_d1(dispatcher, (action,)))
+    assert db.execute("SELECT last_outbox_id FROM post_purchase_checkpoint").fetchone()[0] == 1
+    assert db.execute("SELECT COUNT(*) FROM post_purchase_executions").fetchone()[0] == 0
