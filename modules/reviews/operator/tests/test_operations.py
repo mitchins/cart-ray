@@ -224,7 +224,7 @@ def migrated(tmp_path):
 def test_shared_real_sqlite_migration_chains_resume_without_reapplication(tmp_path):
     installation, cloud = migrated(tmp_path)
     first = installation.migrate()
-    assert first == {"commerce": 5, "subscriber": 2, "reviews": 33, "context": 2}
+    assert first == {"commerce": 6, "subscriber": 2, "reviews": 33, "context": 2}
     counts = {
         role: len(cloud.query(installation.db(role), "SELECT * FROM cartray_operator_migrations"))
         for role in operations.DATABASES
@@ -295,7 +295,7 @@ def test_shared_bindings_and_namespace_tampering_fail_closed(tmp_path):
     installation.migrate()
     assert len(cloud.databases) == 1
     assert {installation.db(role) for role in ("commerce", "reviews", "context")} == {"commerce-id"}
-    assert len(cloud.query("commerce-id", "SELECT * FROM cartray_operator_migrations")) == 42
+    assert len(cloud.query("commerce-id", "SELECT * FROM cartray_operator_migrations")) == 43
     cloud.query("commerce-id", "INSERT INTO cartray_operator_migrations VALUES ('unknown',1,'unknown','bad')")
     with pytest.raises(ValueError, match="namespace"):
         installation.migrate()
