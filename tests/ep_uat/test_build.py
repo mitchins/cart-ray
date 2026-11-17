@@ -254,7 +254,7 @@ def test_only_visibility_exclusions_are_labeled_hidden():
     assert "restricted visibility" in module.product_card(product)
 
 
-def test_generic_connected_flow_rejects_protocol_relative_context_and_images(tmp_path):
+def test_generic_connected_flow_rejects_protocol_relative_context_and_images(tmp_path, monkeypatch):
     import importlib
     import sys
 
@@ -273,3 +273,11 @@ def test_generic_connected_flow_rejects_protocol_relative_context_and_images(tmp
         flows.install(tmp_path, ROOT, {}, "minimal", [offer], context_path="//attacker/context")
     with pytest.raises(ValueError, match="offer presentation"):
         flows.install(tmp_path, ROOT, {}, "minimal", [{**offer, "image": "//attacker.example/image.png"}])
+    with pytest.raises(ValueError, match="HTTPS origin"):
+        flows.install(tmp_path, ROOT, {}, "minimal", [offer], api_origin="https://example.test@attacker.test/path")
+    (tmp_path / "theme").mkdir()
+    monkeypatch.setattr(flows.templates, "simple_page", lambda *args: "content")
+    monkeypatch.setattr(flows.templates, "page_shell", lambda *args, **kwargs: '<body class="test"></body>')
+    flows.install(tmp_path, ROOT, {"identity": {"name": "Merchant"}}, "minimal", [offer],
+                  api_origin="https://checkout.example.test/")
+    assert 'apiBaseUrl = "https://checkout.example.test"' in (tmp_path / "storefront-config.js").read_text()

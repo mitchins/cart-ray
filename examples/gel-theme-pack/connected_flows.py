@@ -6,6 +6,7 @@ import json
 import re
 import shutil
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from .src import templates
 
@@ -21,6 +22,7 @@ def install(
     *,
     context_path: str | None = None,
     return_extension: str | None = None,
+    api_origin: str | None = None,
 ):
     """Install shared cart/return UI; offers are presentation only, never checkout authority."""
     if not offers or len({offer["product_key"] for offer in offers}) != len(offers):
@@ -31,6 +33,17 @@ def install(
         raise ValueError("context path must be same-origin")
     if return_extension is not None and not re.fullmatch(r"/theme/[A-Za-z0-9_-]+\.mjs", return_extension):
         raise ValueError("return extension must be a local theme module")
+    if api_origin is not None:
+        try:
+            url = urlsplit(api_origin)
+            _ = url.port  # Reject malformed or out-of-range ports.
+        except (ValueError, TypeError) as error:
+            raise ValueError("checkout API must be an HTTPS origin") from error
+        if (url.scheme != "https" or not url.hostname or not re.fullmatch(r"[A-Za-z0-9.-]+", url.hostname)
+                or url.username or url.password or url.query or url.fragment or url.path not in ("", "/")
+                or any(char.isspace() for char in api_origin)):
+            raise ValueError("checkout API must be an HTTPS origin")
+        api_origin = api_origin.rstrip("/")
     source_ids, paths = set(), set()
     for offer in offers:
         if (
@@ -91,10 +104,11 @@ def install(
         "reviewsEnabled": False,
         "reviewInvitationsEnabled": False,
     }
+    api = json.dumps(api_origin, ensure_ascii=True) if api_origin else "location.origin"
     (output / "storefront-config.js").write_text(
         "window.CARTRAY_STOREFRONT = "
         + json.dumps(storefront, ensure_ascii=True)
-        + "; window.CARTRAY_STOREFRONT.apiBaseUrl = location.origin; window.CARTRAY_CONNECTED_CATALOGUE = true;\n"
+        + "; window.CARTRAY_STOREFRONT.apiBaseUrl = " + api + "; window.CARTRAY_CONNECTED_CATALOGUE = true;\n"
     )
     for route, page in (("cart/index.html", "cart"), ("purchase-return/index.html", "purchase-return")):
         content = templates.simple_page(page, gel, "/")
