@@ -23,19 +23,21 @@ APPROVED_SHA256 = "fd004ca15d26a0562fada8fcbd4fc0ab8f7a86a3b87abd89ed63668016307
 class TextOnly(HTMLParser):
     """Extract source copy as inert text; scripts, styles and links are never executed."""
 
+    suppressed_tags = frozenset({"script", "style", "iframe", "object"})
+
     def __init__(self):
         super().__init__(convert_charrefs=True)
         self.parts = []
         self.suppressed = 0
 
     def handle_starttag(self, tag, attrs):
-        if tag in {"script", "style", "iframe", "object"}:
+        if tag in self.suppressed_tags:
             self.suppressed += 1
         if tag in {"p", "br", "div", "li", "h1", "h2", "h3", "h4", "tr"}:
             self.parts.append("\n")
 
     def handle_endtag(self, tag):
-        if tag in {"script", "style", "iframe", "object"} and self.suppressed:
+        if tag in self.suppressed_tags and self.suppressed:
             self.suppressed -= 1
         if tag in {"p", "div", "li", "h1", "h2", "h3", "h4", "tr"}:
             self.parts.append("\n")

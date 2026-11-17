@@ -237,11 +237,15 @@ def create_app(
     return app
 
 
+def _stripe_client(env):
+    return StripeApiClient(_required_env(env, "STRIPE_API_KEY"), WorkersFetchTransport())
+
+
 async def checkout_service_from_environment(env) -> CheckoutService:
     environment = _test_environment(env)
     success_url = _https_url(_required_env(env, "CARTRAY_SUCCESS_URL"), "CARTRAY_SUCCESS_URL")
     cancel_url = _https_url(_required_env(env, "CARTRAY_CANCEL_URL"), "CARTRAY_CANCEL_URL")
-    client = StripeApiClient(_required_env(env, "STRIPE_API_KEY"), WorkersFetchTransport())
+    client = _stripe_client(env)
     catalogue = await build_runtime_catalogue(COMPILED_CATALOGUE, StripePriceResolver(client))
     signer = WorkersEd25519Signer(_required_env(env, "CARTRAY_SIGNING_PRIVATE_KEY_PKCS8_B64"))
     gateway = StripeCheckoutGateway(
@@ -265,19 +269,19 @@ def _automatic_invitation_enabled(env) -> bool:
 
 async def catalogue_from_environment(env):
     _test_environment(env)
-    client = StripeApiClient(_required_env(env, "STRIPE_API_KEY"), WorkersFetchTransport())
+    client = _stripe_client(env)
     return await build_runtime_catalogue(COMPILED_CATALOGUE, StripePriceResolver(client))
 
 
 async def public_catalogue_from_environment(env):
     _test_environment(env)
-    client = StripeApiClient(_required_env(env, "STRIPE_API_KEY"), WorkersFetchTransport())
+    client = _stripe_client(env)
     return await build_runtime_presented_catalogue(COMPILED_CATALOGUE, StripePriceResolver(client))
 
 
 async def settlement_service_from_environment(env) -> StripeSettlementService:
     environment = _test_environment(env)
-    client = StripeApiClient(_required_env(env, "STRIPE_API_KEY"), WorkersFetchTransport())
+    client = _stripe_client(env)
     return StripeSettlementService(
         D1OrderStore(env.DB),
         StripeCheckoutSessionRetriever(client),
@@ -287,7 +291,7 @@ async def settlement_service_from_environment(env) -> StripeSettlementService:
 
 async def reconciliation_service_from_environment(env) -> StripeReconciliationService:
     environment = _test_environment(env)
-    client = StripeApiClient(_required_env(env, "STRIPE_API_KEY"), WorkersFetchTransport())
+    client = _stripe_client(env)
     return StripeReconciliationService(
         D1OrderStore(env.DB),
         StripeCheckoutSessionRetriever(client),
@@ -480,6 +484,17 @@ class Default(WorkerEntrypoint):
                 pass
 
 
+def _internal_post(url, token, body=None):
+    from js import Request
+    from pyodide.ffi import to_js
+
+    options = {"method": "POST", "headers": {"authorization": f"Bearer {token}"}}
+    if body is not None:
+        options["headers"]["content-type"] = "application/json"
+        options["body"] = body
+    return Request.new(url, to_js(options, dict_converter=__import__("js").Object.fromEntries))
+
+
 async def _drain_post_purchase(env):
     """Test-only best-effort drain; absent checkpoint or handler fails closed."""
     try:
@@ -490,9 +505,6 @@ async def _drain_post_purchase(env):
         service = getattr(env, "POST_PURCHASE_HANDLER", None)
         if len(token) < 32 or not callable(getattr(service, "fetch", None)):
             return
-        from js import Request
-        from pyodide.ffi import to_js
-
         async def service_handler(purchase, execution):
             body = json.dumps(
                 {
@@ -507,17 +519,7 @@ async def _drain_post_purchase(env):
                 },
                 separators=(",", ":"),
             )
-            request = Request.new(
-                "https://post-purchase-handler.internal/",
-                to_js(
-                    {
-                        "method": "POST",
-                        "headers": {"authorization": f"Bearer {token}", "content-type": "application/json"},
-                        "body": body,
-                    },
-                    dict_converter=__import__("js").Object.fromEntries,
-                ),
-            )
+            request = _internal_post("https://post-purchase-handler.internal/", token, body)
             response = await service.fetch(request)
             if response.status != 200:
                 raise RuntimeError("post-purchase handler outcome uncertain")
@@ -543,16 +545,7 @@ async def _wake_reviews_subscriber(env):
         token = _required_env(env, "CARTRAY_REVIEWS_TRIGGER_TOKEN")
         if _test_environment(env) != "test" or len(token) < 32:
             return
-        from js import Request
-        from pyodide.ffi import to_js
-
-        request = Request.new(
-            "https://reviews-producer.internal/",
-            to_js(
-                {"method": "POST", "headers": {"authorization": f"Bearer {token}"}},
-                dict_converter=__import__("js").Object.fromEntries,
-            ),
-        )
+        request = _internal_post("https://reviews-producer.internal/", token)
         await env.REVIEWS_SOURCE_TRIGGER.fetch(request)
     except Exception:
         # Never fail an already committed settlement because a subscriber is down.

@@ -1,12 +1,13 @@
 """Snapshot and validate operator-owned connected merchant build inputs."""
 
 import csv
-import hashlib
 import json
 import re
 import shutil
 from html.parser import HTMLParser
 from pathlib import Path
+
+from cartray.fingerprints import fingerprint_entries
 
 
 class ConnectedShell(HTMLParser):
@@ -53,22 +54,19 @@ class ConnectedShell(HTMLParser):
 
 
 def tree_hash(root):
-    checksum = hashlib.sha256()
-    for path in sorted(root.rglob("*")):
-        if path.is_symlink() or (not path.is_file() and not path.is_dir()):
-            raise ValueError("merchant inputs must contain only regular files and directories")
-        if path.is_file():
-            checksum.update(str(path.relative_to(root)).encode() + b"\0" + hashlib.sha256(path.read_bytes()).digest())
-    return checksum.hexdigest()
+    def entries():
+        for path in sorted(root.rglob("*")):
+            if path.is_symlink() or (not path.is_file() and not path.is_dir()):
+                raise ValueError("merchant inputs must contain only regular files and directories")
+            if path.is_file():
+                yield path.relative_to(root), path.read_bytes()
+    return fingerprint_entries(entries())
 
 
 def commerce_build_hash(root, lock):
     entries = {path.relative_to(root): path.read_bytes() for path in root.rglob("*") if path.is_file()}
     entries[Path("stripe-test-preflight.lock.json")] = lock
-    checksum = hashlib.sha256()
-    for name, content in sorted(entries.items()):
-        checksum.update(str(name).encode() + b"\0" + hashlib.sha256(content).digest())
-    return checksum.hexdigest()
+    return fingerprint_entries(sorted(entries.items()))
 
 
 def javascript_json(path, prefix):

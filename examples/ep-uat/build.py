@@ -88,6 +88,12 @@ class SourceMarkupCheck(HTMLParser):
     def handle_comment(self, data):
         raise ValueError("source markup comments are not allowed")
 
+    def close(self):
+        # Python versions differ in how close() flushes an incomplete tag.
+        if "<" in self.rawdata:
+            raise ValueError("incomplete source markup is not allowed")
+        super().close()
+
     def handle_data(self, data):
         if "<" in data:
             raise ValueError("incomplete source markup is not allowed")

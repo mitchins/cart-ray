@@ -21,19 +21,19 @@ import zipfile
 from importlib.metadata import PathDistribution
 from pathlib import Path
 
+from cartray.fingerprints import fingerprint_entries
+
 ROOT = Path(__file__).resolve().parents[1]
 PACKAGES = ("kinglet", "workers-runtime-sdk")
 
 
 def digest_tree(root: Path) -> str:
-    digest = hashlib.sha256()
-    for path in sorted(
+    paths = sorted(
         p
         for p in root.rglob("*")
         if p.is_file() and p.relative_to(root) not in {Path("README.md"), Path("wrangler.toml")}
-    ):
-        digest.update(str(path.relative_to(root)).encode() + b"\0" + hashlib.sha256(path.read_bytes()).digest())
-    return digest.hexdigest()
+    )
+    return fingerprint_entries((path.relative_to(root), path.read_bytes()) for path in paths)
 
 
 def snapshot_merchant_inputs(source: Path, destination: Path, lock_bytes: bytes) -> str:
@@ -61,12 +61,10 @@ def snapshot_merchant_inputs(source: Path, destination: Path, lock_bytes: bytes)
         shutil.copyfile(source / name, destination / name)
     shutil.copytree(assets, destination / "product-assets")
     (destination / "stripe-test-preflight.lock.json").write_bytes(lock_bytes)
-    checksum = hashlib.sha256()
-    for path in sorted(p for p in destination.rglob("*") if p.is_file()):
-        checksum.update(
-            str(path.relative_to(destination)).encode() + b"\0" + hashlib.sha256(path.read_bytes()).digest()
-        )
-    return checksum.hexdigest()
+    return fingerprint_entries(
+        (path.relative_to(destination), path.read_bytes())
+        for path in sorted(p for p in destination.rglob("*") if p.is_file())
+    )
 
 
 def lock_seed(lock: dict) -> tuple[str, str]:

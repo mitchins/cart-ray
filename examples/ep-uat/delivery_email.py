@@ -38,18 +38,17 @@ class TestDelivery:
         with urllib.request.urlopen(request, timeout=15) as response:
             return json.load(response)
 
-    def send_verified(self, session_id, links):
-        """Perform one already-claimed test send and return its provider reference."""
+    def _verified_purchase(self, session_id):
         session = asyncio.run(self.stripe.get("/v1/checkout/sessions/" + session_id, {}))
         contact = session.get("customer_details") or {}
-        if (
+        return not (
             session.get("id") != session_id
             or session.get("livemode") is not False
             or session.get("payment_status") != "paid"
             or contact.get("email", "").casefold() != self.recipient.casefold()
-            or not links
-        ):
-            raise ValueError("test purchase or recipient is not verified")
+        )
+
+    def _send_links(self, links):
         result = self.transport(
             {
                 "sender": self.sender,
@@ -68,19 +67,18 @@ class TestDelivery:
             raise ValueError("provider acceptance not confirmed")
         return data["email_id"]
 
+    def send_verified(self, session_id, links):
+        """Perform one already-claimed test send and return its provider reference."""
+        if not links or not self._verified_purchase(session_id):
+            raise ValueError("test purchase or recipient is not verified")
+        return self._send_links(links)
+
     def dispatch(self, order_id, session_id, links):
         if not links:
             return "no_followup"
         if self.db.execute("SELECT 1 FROM uat_delivery_emails WHERE order_id=?", (order_id,)).fetchone():
             return "already_claimed"
-        session = asyncio.run(self.stripe.get("/v1/checkout/sessions/" + session_id, {}))
-        contact = session.get("customer_details") or {}
-        if (
-            session.get("id") != session_id
-            or session.get("livemode") is not False
-            or session.get("payment_status") != "paid"
-            or contact.get("email", "").casefold() != self.recipient.casefold()
-        ):
+        if not self._verified_purchase(session_id):
             return "recipient_or_payment_unverified"
         # Commit the unique claim before the network operation. A crash or timeout
         # leaves a held claim, never an automatic resend of a potentially sent mail.
@@ -91,27 +89,11 @@ class TestDelivery:
         if not claimed:
             return "already_claimed"
         try:
-            result = self.transport(
-                {
-                    "sender": self.sender,
-                    "to": [self.recipient],
-                    "subject": TEST_SUBJECT,
-                    "text_body": "This is a test purchase. These links contain dummy materials only.\n\n"
-                    + "\n".join(links),
-                }
-            )
-            data = result.get("data", {})
-            if (
-                data.get("succeeded") != 1
-                or data.get("failed") != 0
-                or not isinstance(data.get("email_id"), str)
-                or not data["email_id"]
-            ):
-                raise ValueError("provider acceptance not confirmed")
+            provider_id = self._send_links(links)
             with self.db:
                 self.db.execute(
                     "UPDATE uat_delivery_emails SET state='accepted',provider_id=? WHERE order_id=?",
-                    (data["email_id"], order_id),
+                    (provider_id, order_id),
                 )
             return "accepted"
         except Exception:

@@ -333,25 +333,25 @@ class TestLane:
         redirect = self.start(owner, {"request_id": payload["checkout_request_id"], "items": items}, native=True)
         return {"checkout_url": redirect["url"], "session_id": redirect["session_id"]}
 
+    def _owned_checkout(self, owner, session_id, *, confirmed=False):
+        row = self.connection.execute(
+            """SELECT o.checkout_request_id FROM checkout_sessions s JOIN orders o USING(order_id)
+            JOIN uat_order_owner u USING(order_id)
+            WHERE s.external_session_id=? AND u.token_hash=? AND (?=0 OR s.settlement_state='confirmed')""",
+            (session_id, owner, int(confirmed)),
+        ).fetchone()
+        return row
+
     def status_native(self, owner, session_id):
         if not isinstance(session_id, str):
             raise ValueError("invalid session")
-        row = self.connection.execute(
-            """SELECT o.checkout_request_id FROM checkout_sessions s JOIN orders o USING(order_id)
-            JOIN uat_order_owner u USING(order_id) WHERE s.external_session_id=? AND u.token_hash=?""",
-            (session_id, owner),
-        ).fetchone()
+        row = self._owned_checkout(owner, session_id)
         if not row:
             raise ValueError("checkout not bound to browser")
         return {"state": self.reconcile(owner, row["checkout_request_id"])["state"]}
 
     def current_grants(self, owner, session_id):
-        row = self.connection.execute(
-            """SELECT o.checkout_request_id FROM checkout_sessions s JOIN orders o USING(order_id)
-            JOIN uat_order_owner u USING(order_id)
-            WHERE s.external_session_id=? AND u.token_hash=? AND s.settlement_state='confirmed'""",
-            (session_id, owner),
-        ).fetchone()
+        row = self._owned_checkout(owner, session_id, confirmed=True)
         if not row:
             raise ValueError("confirmed checkout not bound to browser")
         return self.grants(owner, row["checkout_request_id"])
