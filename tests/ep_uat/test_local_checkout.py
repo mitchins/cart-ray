@@ -203,3 +203,59 @@ def test_background_selection_handles_due_orders_partial_workflows_and_missing_o
     assert sorted(called) == [("owner", "paid", "background"), ("owner", "partial", "background")]
     with sqlite3.connect(path) as db:
         assert db.execute("SELECT COUNT(*) FROM uat_order_owner").fetchone()[0] == 2
+
+
+def test_native_checkout_adapter_accepts_only_authorised_offer_and_version():
+    from types import SimpleNamespace
+
+    lane = object.__new__(module.TestLane)
+    lane.catalogue = SimpleNamespace(version="verified-v1")
+    lane.reverse = {"EP-UAT-171": {"source_id": 171}}
+    calls = []
+
+    def start(owner, payload, *, native=False):
+        assert native is True
+        calls.append((owner, payload))
+        return {"url": "https://checkout.stripe.com/test", "session_id": "cs_test_1"}
+
+    lane.start = start
+    payload = {
+        "checkout_request_id": "request-1234567890",
+        "manifest_version": "verified-v1",
+        "items": [{"product_key": "EP-UAT-171", "quantity": 1}],
+    }
+    assert lane.start_native("owner", payload) == {
+        "checkout_url": "https://checkout.stripe.com/test",
+        "session_id": "cs_test_1",
+    }
+    assert calls[0][1]["items"] == [{"source_id": 171, "quantity": 1}]
+    with pytest.raises(ValueError, match="version mismatch"):
+        lane.start_native("owner", {**payload, "manifest_version": "unverified"})
+    with pytest.raises(ValueError, match="not enabled"):
+        lane.start_native("owner", {**payload, "items": [{"product_key": "unmapped", "quantity": 1}]})
+    with pytest.raises(ValueError, match="invalid checkout request"):
+        lane.start_native("owner", {**payload, "amount_minor": 1})
+    assert len(calls) == 1
+
+
+def test_current_grants_are_bound_to_the_confirmed_order_and_owner():
+    lane = object.__new__(module.TestLane)
+    lane.connection = sqlite3.connect(":memory:")
+    lane.connection.row_factory = sqlite3.Row
+    lane.connection.executescript("""
+      CREATE TABLE orders(order_id TEXT,checkout_request_id TEXT);
+      CREATE TABLE checkout_sessions(order_id TEXT,external_session_id TEXT,settlement_state TEXT);
+      CREATE TABLE uat_order_owner(order_id TEXT,token_hash TEXT);
+      CREATE TABLE uat_grants(order_id TEXT,product_key TEXT,quantity INTEGER);
+      INSERT INTO orders VALUES ('one','request-one'),('two','request-two');
+      INSERT INTO checkout_sessions VALUES ('one','cs_test_one','confirmed'),('two','cs_test_two','confirmed');
+      INSERT INTO uat_order_owner VALUES ('one','owner'),('two','owner');
+      INSERT INTO uat_grants VALUES ('one','p1',1),('two','p2',1);
+    """)
+    lane.reverse = {"p1": {"source_id": 1, "source_key": "one"}, "p2": {"source_id": 2, "source_key": "two"}}
+    lane.followups = {"items": []}
+    assert [grant["source_id"] for grant in lane.current_grants("owner", "cs_test_one")] == [1]
+    with pytest.raises(ValueError, match="not bound"):
+        lane.current_grants("other-owner", "cs_test_one")
+    with pytest.raises(ValueError, match="not bound"):
+        lane.current_grants("owner", "cs_test_unknown")

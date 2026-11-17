@@ -52,7 +52,7 @@ if(script){
 // This cart is enabled only by the loopback, test-mode UAT server. It never
 // treats catalogue display data as payment authority.
 const testProducts = JSON.parse(document.querySelector('#uat-test-products')?.textContent || '[]');
-if (testProducts.length) {
+if (testProducts.length && !window.CARTRAY_CONNECTED_CATALOGUE) {
   const known = new Map(testProducts.map(p => [String(p.source_id), p]));
   const key = 'ep-uat-test-cart-v1';
   const pendingKey = 'ep-uat-test-request-v1';

@@ -217,3 +217,59 @@ def test_second_merchant_uses_own_listing_identity_gel_and_currency(tmp_path, th
     assert "Harbour Workshop" in page and "harbour:offer:blue" in page and "NZD" in page
     assert "Effective Policy" not in page and "Squirrel" not in page and "Acorn" not in page
     assert 'rel="canonical"' not in page and "data-uat-add=" not in page
+
+
+@pytest.mark.parametrize("theme", ["minimal", "studio", "classic"])
+def test_connected_cart_uses_shared_client_and_only_explicit_offer(tmp_path, theme):
+    source = tmp_path / "source"
+    data = make_source(source)
+    product = data["products"][0]
+    product["source_delivery_kind"] = "uat_dummy_transfer"
+    (source / "catalogue.json").write_text(json.dumps(data))
+    price_fixture = tmp_path / "fixture.json"
+    price_fixture.write_text(json.dumps({"livemode": False, "source_archive_sha256": data["source_archive_sha256"],
+        "offers": [{"source_id": 1, "source_key": product["key"], "currency": "aud", "amount_minor": 1200,
+                    "cartray_product_key": "EP-UAT-1"}]}))
+    output = tmp_path / "out"
+    module.build(source, output, theme, test_fixture=price_fixture)
+    assert (output / "theme/core-storefront.js").read_bytes() == (ROOT / "storefront/app.js").read_bytes()
+    assert (output / "theme/cartray-adapter.mjs").read_bytes() == (
+        ROOT / "examples/gel-theme-pack/src/cartray-adapter.mjs"
+    ).read_bytes()
+    cart = (output / "cart/index.html").read_text()
+    assert 'data-cartray-presenter="gel"' in cart and 'data-page="cart"' in cart
+    assert 'src="/theme/connected-start.mjs"' in cart
+    config = (output / "site-config.js").read_text()
+    assert '"productKey": "EP-UAT-1"' in config and '"sourceId": 1' in config
+    assert '"productKey": "EP-UAT-2"' not in config
+    assert (output / "purchase-return/index.html").is_file()
+
+
+def test_only_visibility_exclusions_are_labeled_hidden():
+    product = {"source_id": 1, "source_visibility": ["rated-5"], "title": "Product", "summary": "",
+               "description": "", "source_sku": "", "source_price": "10", "menu_order": 0,
+               "navigation_path": "/products/product/", "categories": [], "images": []}
+    assert "restricted visibility" not in module.product_card(product)
+    product["source_visibility"] = ["exclude-from-catalog"]
+    assert "restricted visibility" in module.product_card(product)
+
+
+def test_generic_connected_flow_rejects_protocol_relative_context_and_images(tmp_path):
+    import importlib
+    import sys
+
+    pack = ROOT / "examples/gel-theme-pack"
+    if "cartray_gel" not in sys.modules:
+        spec = importlib.util.spec_from_file_location(
+            "cartray_gel", pack / "__init__.py", submodule_search_locations=[str(pack)]
+        )
+        package = importlib.util.module_from_spec(spec)
+        sys.modules[spec.name] = package
+        spec.loader.exec_module(package)
+    flows = importlib.import_module("cartray_gel.connected_flows")
+    offer = {"product_key": "PRODUCT-1", "source_id": 1, "path": "/products/product-one/",
+             "image": "/media/product.png", "image_alt": "Product", "category": "Products"}
+    with pytest.raises(ValueError, match="same-origin"):
+        flows.install(tmp_path, ROOT, {}, "minimal", [offer], context_path="//attacker/context")
+    with pytest.raises(ValueError, match="offer presentation"):
+        flows.install(tmp_path, ROOT, {}, "minimal", [{**offer, "image": "//attacker.example/image.png"}])

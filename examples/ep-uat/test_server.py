@@ -239,6 +239,14 @@ class TestLane:
             success_url=f"http://localhost:{port + 1}/" if no_return else f"http://localhost:{port}/uat-return/",
             cancel_url=f"http://localhost:{port}/cart/",
         )
+        self.native_checkout = CheckoutService(
+            self.catalogue,
+            self.store,
+            StripeCheckoutGateway(self.client, CheckoutMetadataSealer("test", "ep-uat-local", self.crypto)),
+            success_url=(f"http://localhost:{port + 1}/" if no_return else
+                         f"http://localhost:{port}/purchase-return/?checkout=complete"),
+            cancel_url=f"http://localhost:{port}/purchase-return/?checkout=cancelled",
+        )
         self.reconciler = StripeReconciliationService(
             self.store,
             StripeCheckoutSessionRetriever(self.client),
@@ -261,7 +269,7 @@ class TestLane:
             self.connection.execute("INSERT INTO uat_browsers VALUES (?,?)", (digest, int(time.time())))
         return token
 
-    def start(self, owner, payload):
+    def start(self, owner, payload, *, native=False):
         if (
             set(payload) != {"request_id", "items"}
             or not isinstance(payload["items"], list)
@@ -294,7 +302,7 @@ class TestLane:
             self.connection.execute(
                 "INSERT OR IGNORE INTO uat_checkout_owner VALUES (?,?)", (payload["request_id"], owner)
             )
-        redirect = asyncio.run(self.checkout.checkout(request))
+        redirect = asyncio.run((self.native_checkout if native else self.checkout).checkout(request))
         row = self.connection.execute(
             "SELECT order_id FROM checkout_sessions WHERE external_session_id=?", (redirect.session_id,)
         ).fetchone()
@@ -305,7 +313,47 @@ class TestLane:
             if existing and not hmac.compare_digest(existing["token_hash"], owner):
                 raise ValueError("order already bound")
             self.connection.execute("INSERT OR IGNORE INTO uat_order_owner VALUES (?,?)", (row["order_id"], owner))
-        return {"url": redirect.url}
+        return {"url": redirect.url, "session_id": redirect.session_id}
+
+    def start_native(self, owner, payload):
+        """Use the public CartRay checkout ABI while retaining UAT purchase authority."""
+        if not isinstance(payload, dict) or set(payload) != {"checkout_request_id", "manifest_version", "items"}:
+            raise ValueError("invalid checkout request")
+        if payload["manifest_version"] != self.catalogue.version or not isinstance(payload["items"], list):
+            raise ValueError("checkout catalogue version mismatch")
+        items = []
+        for item in payload["items"]:
+            if not isinstance(item, dict) or set(item) != {"product_key", "quantity"}:
+                raise ValueError("invalid checkout item")
+            mapping = self.reverse.get(item["product_key"])
+            if not mapping:
+                raise ValueError("offer not enabled for test checkout")
+            items.append({"source_id": mapping["source_id"], "quantity": item["quantity"]})
+        redirect = self.start(owner, {"request_id": payload["checkout_request_id"], "items": items}, native=True)
+        return {"checkout_url": redirect["url"], "session_id": redirect["session_id"]}
+
+    def status_native(self, owner, session_id):
+        if not isinstance(session_id, str):
+            raise ValueError("invalid session")
+        row = self.connection.execute(
+            """SELECT o.checkout_request_id FROM checkout_sessions s JOIN orders o USING(order_id)
+            JOIN uat_order_owner u USING(order_id) WHERE s.external_session_id=? AND u.token_hash=?""",
+            (session_id, owner),
+        ).fetchone()
+        if not row:
+            raise ValueError("checkout not bound to browser")
+        return {"state": self.reconcile(owner, row["checkout_request_id"])["state"]}
+
+    def current_grants(self, owner, session_id):
+        row = self.connection.execute(
+            """SELECT o.checkout_request_id FROM checkout_sessions s JOIN orders o USING(order_id)
+            JOIN uat_order_owner u USING(order_id)
+            WHERE s.external_session_id=? AND u.token_hash=? AND s.settlement_state='confirmed'""",
+            (session_id, owner),
+        ).fetchone()
+        if not row:
+            raise ValueError("confirmed checkout not bound to browser")
+        return self.grants(owner, row["checkout_request_id"])
 
     def reconcile(self, owner, request_id, origin="browser"):
         if not isinstance(request_id, str) or not CHECKOUT_REQUEST_ID_RE.fullmatch(request_id):
@@ -538,11 +586,16 @@ class Handler(SimpleHTTPRequestHandler):
             if not owner:
                 return self.json_response(403, {"error": "forbidden"})
             try:
-                if self.path == "/__uat/checkout":
+                if self.path in ("/__uat/checkout", "/checkout"):
                     length = int(self.headers.get("Content-Length", "0"))
                     if not 0 < length <= 4096:
                         raise ValueError("invalid request")
-                    return self.json_response(200, self.lane.start(owner, json.loads(self.rfile.read(length))))
+                    payload = json.loads(self.rfile.read(length))
+                    if self.path == "/checkout":
+                        result = self.lane.start_native(owner, payload)
+                    else:
+                        result = self.lane.start(owner, payload)
+                    return self.json_response(200, result)
                 if self.path == "/__uat/reconcile":
                     length = int(self.headers.get("Content-Length", "0"))
                     if not 0 < length <= 4096:
@@ -564,6 +617,32 @@ class Handler(SimpleHTTPRequestHandler):
                     return self.json_response(200, {"ready": True})
                 token = self.lane.create_browser()
                 return self.json_response(200, {"ready": True}, cookie=token)
+            if path == "/catalogue":
+                return self.json_response(200, self.lane.catalogue.public_manifest())
+            if path == "/checkout-status":
+                if not owner:
+                    return self.json_response(404, {"error": "not found"})
+                requested = parse_qs(urlsplit(self.path).query).get("session_id", [])
+                try:
+                    if len(requested) != 1:
+                        raise ValueError("invalid session")
+                    return self.json_response(200, self.lane.status_native(owner, requested[0]))
+                except Exception:
+                    return self.json_response(404, {"error": "not found"})
+            if path == "/__uat/current-grants":
+                if not owner:
+                    return self.json_response(404, {"error": "not found"})
+                requested = parse_qs(urlsplit(self.path).query).get("session_id", [])
+                if len(requested) != 1:
+                    return self.json_response(404, {"error": "not found"})
+                try:
+                    grants = self.lane.current_grants(owner, requested[0])
+                    for grant in grants:
+                        key = self.lane.mapping[str(grant["source_id"])]["cartray_product_key"]
+                        grant["title"] = self.lane.catalogue.product(key).source.title
+                    return self.json_response(200, {"grants": grants})
+                except ValueError:
+                    return self.json_response(404, {"error": "not found"})
             if path == "/__uat/grants":
                 if not owner:
                     return self.json_response(403, {"error": "forbidden"})

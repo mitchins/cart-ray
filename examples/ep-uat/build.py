@@ -11,6 +11,8 @@ from __future__ import annotations
 import argparse
 import hashlib
 import html
+import importlib
+import importlib.util
 import json
 import re
 import shutil
@@ -94,7 +96,10 @@ def shell(gel, title, body, test_products=(), theme="minimal"):
     locale = esc(gel["identity"]["locale"])
     header = theme_header(gel, theme, "/", False, nav_links=(("/shop/", "Catalogue"),), header_search=False, cart_count=False)
     footer = "Selected products use Stripe test mode only. Review invitations are disabled." if test_products else "Browsing qualification only. Purchases and review invitations are disabled."
-    return f"""<!doctype html><html lang="{locale}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex,nofollow"><meta name="referrer" content="no-referrer"><title>{esc(title)} · {name}</title><link rel="stylesheet" href="/theme/tokens.css"><link rel="stylesheet" href="/theme/base.css"><link rel="stylesheet" href="/theme/theme.css"><link rel="stylesheet" href="/theme/uat.css"><script type="module" src="/theme/uat.mjs"></script></head><body>{header}<main id="main">{body}</main><script type="application/json" id="uat-test-products">{test_data}</script><footer class="site-footer"><div class="wrap"><p>{name} · UAT catalogue</p><p>{footer}</p></div></footer></body></html>"""
+    connected = ('<script src="/storefront-config.js" defer></script><script src="/site-config.js" defer></script>'
+                 '<script type="module" src="/theme/connected-browse.mjs"></script>') if test_products else ""
+    presenter = ' data-cartray-presenter="gel"' if test_products else ""
+    return f"""<!doctype html><html lang="{locale}"><head>{connected}<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex,nofollow"><meta name="referrer" content="no-referrer"><title>{esc(title)} · {name}</title><link rel="stylesheet" href="/theme/tokens.css"><link rel="stylesheet" href="/theme/base.css"><link rel="stylesheet" href="/theme/theme.css"><link rel="stylesheet" href="/theme/uat.css"><script type="module" src="/theme/uat.mjs"></script></head><body{presenter}>{header}<main id="main">{body}</main><script type="application/json" id="uat-test-products">{test_data}</script><footer class="site-footer"><div class="wrap"><p>{name} · UAT catalogue</p><p>{footer}</p></div></footer></body></html>"""
 
 
 def path(p):
@@ -145,7 +150,8 @@ def product_card(p, test_ids=(), currency="AUD"):
     if search_folded != search_lower:
         search_lower += " " + search_folded
     visibility = (
-        '<p class="muted">UAT audit: restricted visibility in source catalogue.</p>' if p["source_visibility"] else ""
+        '<p class="muted">UAT audit: restricted visibility in source catalogue.</p>'
+        if set(p["source_visibility"]) & {"exclude-from-catalog", "exclude-from-search"} else ""
     )
     add = f'<button type="button" data-uat-add="{p["source_id"]}" disabled>Add to test cart</button>' if p["source_id"] in test_ids else ""
     return f'''<article class="product-card" data-category-ids="{esc(categories)}" data-search="{esc(search_lower)}" data-order="{p["menu_order"]}" data-name="{esc(p["title"].casefold())}" data-price="{esc(p["source_price"])}"><a class="product-art" href="{path(p)}" tabindex="-1" aria-hidden="true">{image(p)}</a><div class="product-copy"><h2><a href="{path(p)}">{esc(p["title"])}</a></h2><p>{esc(p["summary"][:400])}</p>{visibility}<p class="muted">{price(p["source_price"], p["source_id"] in test_ids, currency)}</p><a href="{path(p)}">View product</a>{add}</div></article>'''
@@ -234,8 +240,14 @@ def build(source, output, theme, test_fixture=None, review_fixture=None, gel_fil
             if (not matches_price or product["key"] != item["source_key"] or item["currency"] != "aud"
                     or product["source_delivery_kind"] != "uat_dummy_transfer"):
                 raise ValueError("test price fixture conflicts with source offer")
-            test_products.append({"source_id": item["source_id"], "title": product["title"],
-                                  "amount_minor": item["amount_minor"]})
+            product_key = item.get("cartray_product_key")
+            if product_key != f"EP-UAT-{item['source_id']}" or not product.get("images"):
+                raise ValueError("invalid authorised offer identity or presentation")
+            test_products.append({"source_id": item["source_id"], "product_key": product_key,
+                                  "title": product["title"], "amount_minor": item["amount_minor"],
+                                  "path": path(product), "image": "/" + product["images"][0]["path"],
+                                  "image_alt": product["images"][0]["alt"],
+                                  "category": product["categories"][0]["name"] if product["categories"] else "Products"})
         if len({x["source_id"] for x in test_products}) != len(test_products) or not 1 <= len(test_products) <= 2:
             raise ValueError("invalid test fixture offer list")
     test_ids = {x["source_id"] for x in test_products}
@@ -344,6 +356,19 @@ def build(source, output, theme, test_fixture=None, review_fixture=None, gel_fil
         file = output / path(p).lstrip("/") / "index.html"
         file.parent.mkdir(parents=True, exist_ok=True)
         file.write_text(shell(gel, p["title"], detail(p, test_ids, review_subjects.get(str(p["source_id"])), data["source_currency"]), test_products, theme))
+    if test_products:
+        if "cartray_gel" not in sys.modules:
+            spec = importlib.util.spec_from_file_location(
+                "cartray_gel", PACK / "__init__.py", submodule_search_locations=[str(PACK)]
+            )
+            module = importlib.util.module_from_spec(spec)
+            sys.modules[spec.name] = module
+            spec.loader.exec_module(module)
+        shutil.copyfile(Path(__file__).parent / "return-grants.mjs", output / "theme/return-grants.mjs")
+        importlib.import_module("cartray_gel.connected_flows").install(
+            output, ROOT, gel, theme, test_products, context_path="/__uat/context",
+            return_extension="/theme/return-grants.mjs",
+        )
     (output / "provenance.json").write_text(
         json.dumps(
             {"source_archive_sha256": data["source_archive_sha256"], "theme": theme,
