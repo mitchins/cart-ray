@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import time
 
@@ -12,6 +13,7 @@ from workers import Response, WorkerEntrypoint
 
 from cartray.errors import CheckoutInProgress
 from cartray.models import CheckoutOrder, CheckoutRedirect, OrderItem
+from cartray.post_purchase import Action, D1Dispatcher
 from cartray.store import D1OrderStore, _results
 from cartray.workers_crypto import WorkersEd25519Signer, WorkersEd25519Verifier
 
@@ -74,6 +76,40 @@ class Default(WorkerEntrypoint):
             .all()
         )
 
+        await self.env.DB.prepare(
+            "INSERT OR IGNORE INTO post_purchase_installation VALUES (1,'smoke-store','test')"
+        ).run()
+        calls = []
+
+        async def action_handler(purchase, execution):
+            calls.append((purchase.order_id, execution.workflow_key))
+            return "test-provider-reference"
+
+        actions = (
+            Action("workflow-one", ("SMOKE-TEMPLATE",), "email", "test/one", "a" * 64),
+            Action("workflow-two", ("SMOKE-TEMPLATE",), "email", "test/two", "b" * 64),
+        )
+        dispatcher = D1Dispatcher(self.env.DB, "smoke-store", "test", {"email": action_handler})
+        runs = await asyncio.gather(
+            dispatcher.dispatch(order.order_id, actions), dispatcher.dispatch(order.order_id, actions)
+        )
+        replay = await dispatcher.dispatch(order.order_id, actions)
+        workflow_receipts = (
+            await self.env.DB.prepare(
+                "SELECT workflow_key,state FROM post_purchase_executions WHERE order_id=? ORDER BY workflow_key"
+            )
+            .bind(order.order_id)
+            .all()
+        )
+        workflow_rows = _results(workflow_receipts)
+        workflows_once = (
+            sorted(calls) == [(order.order_id, "workflow-one"), (order.order_id, "workflow-two")]
+            and replay == {"workflow-one": "already_claimed", "workflow-two": "already_claimed"}
+            and len(workflow_rows) == 2
+            and all(row["state"] == "accepted" for row in workflow_rows)
+            and all(set(result) == {"workflow-one", "workflow-two"} for result in runs)
+        )
+
         signer = WorkersEd25519Signer(TEST_PRIVATE_KEY_PKCS8_B64)
         signature = await signer.sign(TEST_PAYLOAD)
         public_key = await crypto.subtle.importKey(
@@ -99,6 +135,7 @@ class Default(WorkerEntrypoint):
             and session_rows[0]["redirect_url"] == redirect.url,
             "signature_verified": bool(signature_verified),
             "verifier_accepted": verifier_accepted,
+            "workflows_once": workflows_once,
         }
         expected = {
             "d1_batch_owner": True,
@@ -108,5 +145,6 @@ class Default(WorkerEntrypoint):
             "redirect_persisted": True,
             "signature_verified": True,
             "verifier_accepted": True,
+            "workflows_once": True,
         }
         return Response.json(result, status=200 if result == expected else 500)
