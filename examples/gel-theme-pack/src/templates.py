@@ -39,14 +39,22 @@ def search(base, label="Search products", value=""):
     return f'''<form class="search-form" action="{base}shop/" role="search"><label class="sr-only" for="site-search">{label}</label><input id="site-search" name="q" type="search" placeholder="Search the collection" value="{esc(value)}" maxlength="100"><button aria-label="Search" type="submit">{icon("search")}</button></form>'''
 
 
-def header(gel, theme, base, preview):
+def header(gel, theme, base, preview, *, nav_links=None, header_search=True, cart_count=True):
     i = gel["identity"]
     logo = f'''<a class="brand" href="{base}" aria-label="{esc(i["name"])} — home"><img src="{base + gel["assets"]["logo"]}" width="38" height="38" alt=""><span>{esc(i["short_name"])}<small>{esc(i["wordmark_descriptor"])}</small></span></a>'''
-    nav = f'''<nav class="desktop-nav" aria-label="Main navigation"><a href="{base}shop/">Shop all</a><a href="{base}#our-story">Our story</a><a href="{base}help/">Help & care</a></nav>'''
-    cart = f'''<a class="header-cart" href="{base}cart/" aria-label="Your cart"><span class="cart-label">Cart</span>{icon("bag")}<span data-cart-count class="cart-count">0</span></a>'''
-    mobile = f'''<details class="mobile-nav"><summary aria-label="Open navigation">{icon("menu")}</summary><nav aria-label="Mobile navigation"><a href="{base}shop/">Shop all</a><a href="{base}#our-story">Our story</a><a href="{base}help/">Help & care</a></nav></details>'''
+    if nav_links is None:
+        nav_links = ((f"{base}shop/", "Shop all"), (f"{base}#our-story", "Our story"), (f"{base}help/", "Help & care"))
+    if any(not isinstance(url, str) or not url.startswith("/") or url.startswith("//") or "\\" in url
+           or any(ord(ch) < 33 for ch in url) or not isinstance(label, str) or not label.strip()
+           for url, label in nav_links):
+        raise ValueError("navigation links must be local paths with labels")
+    links = "".join(f'<a href="{esc(url, quote=True)}">{esc(label)}</a>' for url, label in nav_links)
+    nav = f'<nav class="desktop-nav" aria-label="Main navigation">{links}</nav>'
+    count = '<span data-cart-count class="cart-count">0</span>' if cart_count else ""
+    cart = f'''<a class="header-cart" href="{base}cart/" aria-label="Your cart"><span class="cart-label">Cart</span>{icon("bag")}{count}</a>'''
+    mobile = f'''<details class="mobile-nav"><summary aria-label="Open navigation">{icon("menu")}</summary><nav aria-label="Mobile navigation">{links}</nav></details>'''
     if theme == "classic":
-        head = f'<div class="masthead wrap">{logo}{search(base)}{cart}{mobile}</div><div class="navigation-bar"><div class="wrap">{nav}<span class="navigation-note">{esc(i["tagline"])}</span></div></div>'
+        head = f'<div class="masthead wrap">{logo}{search(base) if header_search else ""}{cart}{mobile}</div><div class="navigation-bar"><div class="wrap">{nav}<span class="navigation-note">{esc(i["tagline"])}</span></div></div>'
     else:
         head = f'<div class="masthead wrap">{logo}{nav}{cart}{mobile}</div>'
     bar = (

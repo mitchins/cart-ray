@@ -1,6 +1,6 @@
 # Effective Policy catalogue UAT
 
-This is a local, no-index UAT audit of the approved public/demo handoff, not a production shop, delivery system or WordPress migration. It displays all published entries, including source-hidden entries marked as such, for audit; it must not be published as the merchant's production catalogue. It uses existing GEL assets and gallery code, but the UAT page builder is not yet a supported generic merchant storefront or installer.
+This is a local, no-index UAT audit of the approved public/demo handoff, not a production shop, delivery system or WordPress migration. It displays all published entries, including source-hidden entries marked as such, for audit; it must not be published as the merchant's production catalogue. It uses the existing GEL theme assets, shared configurable header and gallery code, but the UAT page builder is not yet a supported generic merchant storefront or installer.
 
 The source archive is intentionally not in this repository. Prepare a snapshot with `uv run --locked python examples/ep-uat/prepare.py --help` and build it with:
 

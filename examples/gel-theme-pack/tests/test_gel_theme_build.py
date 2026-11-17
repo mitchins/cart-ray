@@ -12,7 +12,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "src"))
 from build import ROOT, build_site, load_inputs
 from connect import BOOT, EXPORTS, connect
 from src.gel import contrast, tokens, validate, validate_asset
-from src.templates import money
+from src.templates import header, money
 
 from cartray.models import PresentationSource
 from cartray.presentation import fingerprint_presentation_assets
@@ -24,6 +24,14 @@ class GelTests(unittest.TestCase):
 
     def test_defaults_validate(self):
         self.assertGreater(len(validate(self.gel, ROOT)["contrast"]), 10)
+
+    def test_merchant_header_accepts_only_local_navigation(self):
+        output = header(self.gel, "classic", "/", False, nav_links=(("/shop/", "Products"),),
+                        header_search=False, cart_count=False)
+        self.assertIn('href="/shop/"', output)
+        self.assertNotIn('data-cart-count', output)
+        with self.assertRaisesRegex(ValueError, "navigation"):
+            header(self.gel, "classic", "/", False, nav_links=(("//other.example/", "Products"),))
 
     def test_wordmark_descriptor_matches_schema_limit(self):
         self.gel["identity"]["wordmark_descriptor"] = "x" * 40

@@ -25,6 +25,7 @@ ROOT = Path(__file__).resolve().parents[2]
 PACK = ROOT / "examples/gel-theme-pack"
 sys.path.insert(0, str(PACK))
 from src.gel import tokens, validate  # noqa: E402
+from src.templates import header as theme_header  # noqa: E402
 
 
 class SourceMarkupCheck(HTMLParser):
@@ -87,13 +88,13 @@ def esc(s):
     return html.escape(str(s or ""), quote=True)
 
 
-def shell(gel, title, body, test_products=()):
+def shell(gel, title, body, test_products=(), theme="minimal"):
     name = esc(gel["identity"]["name"])
     test_data = json.dumps(list(test_products), ensure_ascii=True).replace("<", "\\u003c")
-    logo = esc(gel["assets"]["logo"])
     locale = esc(gel["identity"]["locale"])
+    header = theme_header(gel, theme, "/", False, nav_links=(("/shop/", "Catalogue"),), header_search=False, cart_count=False)
     footer = "Selected products use Stripe test mode only. Review invitations are disabled." if test_products else "Browsing qualification only. Purchases and review invitations are disabled."
-    return f"""<!doctype html><html lang="{locale}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex,nofollow"><title>{esc(title)} · {name}</title><link rel="stylesheet" href="/theme/tokens.css"><link rel="stylesheet" href="/theme/base.css"><link rel="stylesheet" href="/theme/theme.css"><link rel="stylesheet" href="/theme/uat.css"><script type="module" src="/theme/uat.mjs"></script></head><body><a class="skip-link" href="#main">Skip to content</a><header class="site-header"><div class="masthead wrap"><a class="brand" href="/"><img src="/{logo}" alt=""><span>{name}</span></a><nav class="desktop-nav" aria-label="Main navigation"><a href="/shop/">Catalogue</a></nav><a class="header-cart" href="/cart/">Cart</a></div></header><main id="main">{body}</main><script type="application/json" id="uat-test-products">{test_data}</script><footer class="site-footer"><div class="wrap"><p>{name} · UAT catalogue</p><p>{footer}</p></div></footer></body></html>"""
+    return f"""<!doctype html><html lang="{locale}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex,nofollow"><title>{esc(title)} · {name}</title><link rel="stylesheet" href="/theme/tokens.css"><link rel="stylesheet" href="/theme/base.css"><link rel="stylesheet" href="/theme/theme.css"><link rel="stylesheet" href="/theme/uat.css"><script type="module" src="/theme/uat.mjs"></script></head><body>{header}<main id="main">{body}</main><script type="application/json" id="uat-test-products">{test_data}</script><footer class="site-footer"><div class="wrap"><p>{name} · UAT catalogue</p><p>{footer}</p></div></footer></body></html>"""
 
 
 def path(p):
@@ -317,11 +318,11 @@ def build(source, output, theme, test_fixture=None, review_fixture=None, gel_fil
     ]:
         file = output / route
         file.parent.mkdir(parents=True, exist_ok=True)
-        file.write_text(shell(gel, "Catalogue", content, test_products))
+        file.write_text(shell(gel, "Catalogue", content, test_products, theme))
     for p in products:
         file = output / path(p).lstrip("/") / "index.html"
         file.parent.mkdir(parents=True, exist_ok=True)
-        file.write_text(shell(gel, p["title"], detail(p, test_ids, review_subjects.get(str(p["source_id"])), data["source_currency"]), test_products))
+        file.write_text(shell(gel, p["title"], detail(p, test_ids, review_subjects.get(str(p["source_id"])), data["source_currency"]), test_products, theme))
     (output / "provenance.json").write_text(
         json.dumps(
             {"source_archive_sha256": data["source_archive_sha256"], "theme": theme,
