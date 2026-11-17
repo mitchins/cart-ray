@@ -25,3 +25,12 @@ To recheck source media formats, run `uv run --locked --with "pillow==13.0.0" py
 The malformed-media regression runs with the same optional tool dependency: `uv run --locked --with "pillow==13.0.0" pytest -q tests/ep_uat/test_media_qualification.py`. The production CartRay runtime does not depend on Pillow.
 
 An explicit `--review-fixture` can map selected source IDs to synthetic Reviews subjects. Such builds include the existing native review and management clients and the shared theme presenter; unconfigured builds omit those routes. The pages require an independently configured same-origin Reviews gateway and a valid purchase-scoped capability. A mapping alone does not create purchase authority, publish reviews, send invitations or make the UAT checkout a production integration.
+
+For a local synthetic review journey, create a test-only JSON fixture with `schema_version: 1`, the prepared `source_archive_sha256`, and a `subjects` object mapping source ID `171` to `example-policy`. Build with `--review-fixture /path/to/fixture.json`, install the repository's locked Node dependencies, then run:
+
+```sh
+uv run --locked --with 'playwright==1.57.0' python examples/ep-uat/review_customer_qualification.py \
+  --site /path/to/built-site --source /path/to/prepared --output /path/to/new-evidence
+```
+
+The test uses disposable local D1 data and a synthetic confirmed acquisition, not the real Stripe test order. The default native acquisition suite remains separately runnable with `uv run --locked python modules/reviews/tests/native_acquisition_workerd.py`; the browser scenario intentionally uses only the part of that setup needed to create the synthetic invitation.
