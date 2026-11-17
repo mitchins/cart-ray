@@ -1,0 +1,41 @@
+{
+  "schema_version": "1.0",
+  "identity": {
+    "key": "effective-policy-uat",
+    "name": "Effective Policy",
+    "short_name": "Effective Policy",
+    "wordmark_descriptor": "UAT CATALOGUE",
+    "tagline": "Catalogue qualification",
+    "description": "A non-production catalogue for Effective Policy UAT.",
+    "contact_email": "uat@example.invalid",
+    "locale": "en-AU",
+    "currency": "AUD"
+  },
+  "assets": {
+    "logo": "assets/ep-logo.jpg",
+    "logo_inverse": "assets/ep-logo.jpg",
+    "favicon": "assets/ep-logo.jpg"
+  },
+  "colours": {
+    "brand": "#263B50",
+    "on_brand": "#FFFFFF",
+    "accent": "#DBDFE3",
+    "on_accent": "#20252A",
+    "background": "#F8F9FA",
+    "surface": "#FFFFFF",
+    "text": "#20252A",
+    "muted": "#505860",
+    "border": "#69737D",
+    "focus": "#344D65",
+    "danger": "#972B2B"
+  },
+  "typography": {"heading": "humanist", "body": "humanist"},
+  "shape": {"corners": "soft"},
+  "layout": {"density": "comfortable"},
+  "hero": {
+    "eyebrow": "UAT CATALOGUE",
+    "title": "Effective Policy catalogue",
+    "body": "Browse the supplied public catalogue for testing.",
+    "cta": "Browse products"
+  }
+}

@@ -20,7 +20,7 @@ def encoded(value):
 
 def fixture():
     image = b"synthetic public image"
-    logo = b"synthetic logo"
+    logo = b"\xff\xd8synthetic logo"
     pic = "media/" + hashlib.sha256(image).hexdigest() + ".png"
     brand = "media/" + hashlib.sha256(logo).hexdigest() + ".jpg"
     offer = {

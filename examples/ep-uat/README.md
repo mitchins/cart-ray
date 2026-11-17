@@ -8,7 +8,7 @@ The source archive is intentionally not in this repository. Prepare a snapshot w
 uv run --locked python examples/ep-uat/build.py /path/to/prepared /path/to/new-output --theme minimal
 ```
 
-Select `minimal`, `studio` or `classic`. The builder validates source image fingerprints and copies only declared approved media. The local routes are UAT routes, not source canonical URLs. Browse-only products remain visible without payment or entitlement mappings. Variations are selectable under their source parent; they are not checkout-authorised.
+Select `minimal`, `studio` or `classic`. The default EP UAT GEL is `gel.json`; supply a merchant-specific validated manifest with `--gel`. Its identity and currency must match the catalogue, and only the approved source logo may be used. Colours are provisional UAT choices. The builder validates source image fingerprints and copies only declared approved media. The local routes are UAT routes, not source canonical URLs. Browse-only products remain visible without payment or entitlement mappings. Variations are selectable under their source parent; they are not checkout-authorised.
 
 ## Controlled sandbox lane
 

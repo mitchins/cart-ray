@@ -18,12 +18,13 @@ import sys
 from decimal import Decimal, InvalidOperation
 from html.parser import HTMLParser
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from urllib.parse import urlsplit
 
 ROOT = Path(__file__).resolve().parents[2]
 PACK = ROOT / "examples/gel-theme-pack"
 sys.path.insert(0, str(PACK))
-from src.gel import tokens  # noqa: E402
+from src.gel import tokens, validate  # noqa: E402
 
 
 class SourceMarkupCheck(HTMLParser):
@@ -186,7 +187,7 @@ def detail(p, test_ids=(), review_subject=None):
     return f"""<div class="wrap breadcrumb"><a href="/shop/">Catalogue</a> / {esc(p["title"])}</div><section class="product-detail wrap">{gallery}<div class="detail-copy"><h1>{esc(p["title"])}</h1><p id="variant-price">{price(p["source_price"], p["source_id"] in test_ids)}</p><p>{esc(p["summary"])}</p>{choices}{action}<div class="uat-description">{description}</div></div></section>{reviews}<script type="application/json" id="product-data">{payload}</script>"""
 
 
-def build(source, output, theme, test_fixture=None, review_fixture=None):
+def build(source, output, theme, test_fixture=None, review_fixture=None, gel_file=None):
     source, output = Path(source), Path(output)
     if output.exists():
         raise ValueError("output already exists")
@@ -260,8 +261,16 @@ def build(source, output, theme, test_fixture=None, review_fixture=None):
                 raise ValueError("product media is not declared")
         validator = SourceMarkupCheck(declared)
         validator.feed(product["description_html"])
-    gel = json.loads((PACK / "gel/squirrel.json").read_text())
-    gel["identity"]["name"] = gel["identity"]["short_name"] = data["merchant_name"]
+    gel = json.loads(Path(gel_file or Path(__file__).with_name("gel.json")).read_text())
+    if gel.get("identity", {}).get("name") != data["merchant_name"] or gel["identity"].get("currency") != data["source_currency"]:
+        raise ValueError("GEL merchant identity or currency does not match the UAT catalogue")
+    if gel.get("assets") != {"logo": "assets/ep-logo.jpg", "logo_inverse": "assets/ep-logo.jpg", "favicon": "assets/ep-logo.jpg"}:
+        raise ValueError("UAT GEL assets must use the approved source logo")
+    with TemporaryDirectory(prefix="ep-uat-gel-") as tmp:
+        root = Path(tmp)
+        (root / "assets").mkdir()
+        shutil.copyfile(source / data["brand_logo"], root / "assets/ep-logo.jpg")
+        gel_validation = validate(gel, root)
     css, _ = tokens(gel, theme)
     output.mkdir(parents=True)
     for name in sorted(declared):
@@ -299,7 +308,8 @@ def build(source, output, theme, test_fixture=None, review_fixture=None):
         file.write_text(shell(gel, p["title"], detail(p, test_ids, review_subjects.get(str(p["source_id"]))), test_products))
     (output / "provenance.json").write_text(
         json.dumps(
-            {"source_archive_sha256": data["source_archive_sha256"], "theme": theme, "counts": data["reconciliation"]},
+            {"source_archive_sha256": data["source_archive_sha256"], "theme": theme,
+             "gel_sha256": gel_validation["manifest_sha256"], "counts": data["reconciliation"]},
             indent=2,
         )
         + "\n"
@@ -314,5 +324,6 @@ if __name__ == "__main__":
     parser.add_argument("--theme", choices=["minimal", "studio", "classic"], required=True)
     parser.add_argument("--test-fixture", type=Path)
     parser.add_argument("--review-fixture", type=Path)
+    parser.add_argument("--gel", type=Path, help="merchant-specific GEL manifest (defaults to EP UAT)")
     args = parser.parse_args()
-    build(args.source, args.output, args.theme, args.test_fixture, args.review_fixture)
+    build(args.source, args.output, args.theme, args.test_fixture, args.review_fixture, args.gel)

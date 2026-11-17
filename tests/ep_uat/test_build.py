@@ -79,3 +79,22 @@ def test_reviews_are_explicitly_scoped_to_a_product(tmp_path):
     mapping.write_text(json.dumps({"schema_version": 1, "source_archive_sha256": "wrong", "subjects": {"1": "x"}}))
     with pytest.raises(ValueError, match="fixture"):
         module.build(source, tmp_path / "bad", "minimal", review_fixture=mapping)
+
+
+def test_merchant_gel_is_injected_and_rejects_wrong_identity(tmp_path):
+    source = tmp_path / "source"
+    make_source(source)
+    gel = json.loads((ROOT / "examples/ep-uat/gel.json").read_text())
+    gel["colours"]["brand"] = "#252525"
+    path = tmp_path / "merchant-gel.json"
+    path.write_text(json.dumps(gel))
+    output = tmp_path / "output"
+    module.build(source, output, "classic", gel_file=path)
+    assert "#252525" in (output / "theme/tokens.css").read_text()
+    assert "Squirrel" not in (output / "index.html").read_text()
+    assert "Acorn" not in (output / "index.html").read_text()
+    assert json.loads((output / "provenance.json").read_text())["gel_sha256"]
+    gel["identity"]["name"] = "Different merchant"
+    path.write_text(json.dumps(gel))
+    with pytest.raises(ValueError, match="identity"):
+        module.build(source, tmp_path / "bad-merchant", "classic", gel_file=path)
