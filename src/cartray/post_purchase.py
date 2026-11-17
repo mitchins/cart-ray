@@ -41,6 +41,15 @@ class Action:
             raise ValueError("invalid post-purchase action")
 
 
+def _action_digest(action: Action) -> str:
+    return hashlib.sha256(
+        json.dumps(
+            [action.handler, action.config_ref, action.config_digest, sorted(action.offer_keys)],
+            separators=(",", ":"),
+        ).encode()
+    ).hexdigest()
+
+
 @dataclass(frozen=True)
 class Execution:
     merchant: str
@@ -104,12 +113,7 @@ class SqliteDispatcher:
         # Validate all existing action identities before any external effect.
         digests = {}
         for action in actions:
-            digest = hashlib.sha256(
-                json.dumps(
-                    [action.handler, action.config_ref, action.config_digest, sorted(action.offer_keys)],
-                    separators=(",", ":"),
-                ).encode()
-            ).hexdigest()
+            digest = _action_digest(action)
             existing = self.connection.execute(
                 """SELECT action_digest FROM post_purchase_executions
                 WHERE merchant_id=? AND environment=? AND order_id=? AND workflow_key=?""",
@@ -161,5 +165,128 @@ class SqliteDispatcher:
                         WHERE merchant_id=? AND environment=? AND order_id=? AND workflow_key=? AND state='claimed'""",
                         (int(time.time()), self.merchant, self.environment, order_id, action.workflow_key),
                     )
+                outcomes[action.workflow_key] = "uncertain"
+        return outcomes
+
+
+class D1Dispatcher:
+    """D1-backed action dispatcher; handlers must be trusted server-side callables."""
+
+    def __init__(self, database, merchant: str, environment: str, handlers: Mapping[str, Callable]):
+        if not _IDENTIFIER.fullmatch(merchant) or not _IDENTIFIER.fullmatch(environment):
+            raise ValueError("invalid merchant identity")
+        self.database, self.merchant, self.environment, self.handlers = database, merchant, environment, dict(handlers)
+
+    async def _first(self, sql, *values):
+        from cartray.store import _results
+
+        result = await self.database.prepare(sql).bind(*values).all()
+        rows = _results(result)
+        return rows[0] if rows else None
+
+    async def dispatch(self, order_id: str, actions: tuple[Action, ...]) -> dict[str, str]:
+        from inspect import isawaitable
+
+        from cartray.store import _changes, _results
+
+        if not _IDENTIFIER.fullmatch(order_id) or len(actions) > 100:
+            raise ValueError("invalid dispatch request")
+        if len({action.workflow_key for action in actions}) != len(actions):
+            raise ValueError("duplicate workflow identity")
+        if any(action.handler not in self.handlers for action in actions):
+            raise ValueError("unregistered post-purchase handler")
+        binding = await self._first("SELECT merchant_id,environment FROM post_purchase_installation WHERE singleton=1")
+        if not binding or (binding["merchant_id"], binding["environment"]) != (self.merchant, self.environment):
+            raise ValueError("post-purchase installation binding mismatch")
+        order = await self._first(
+            """SELECT s.external_session_id FROM checkout_sessions s
+            WHERE s.order_id=? AND s.settlement_state='confirmed' AND EXISTS
+              (SELECT 1 FROM outbox e WHERE e.order_id=s.order_id AND e.event_type='OrderConfirmed')""",
+            order_id,
+        )
+        if not order or not order["external_session_id"]:
+            raise ValueError("purchase is not confirmed")
+        result = (
+            await self.database.prepare(
+                "SELECT product_key,quantity FROM order_items WHERE order_id=? ORDER BY product_key"
+            )
+            .bind(order_id)
+            .all()
+        )
+        purchase = Purchase(
+            order_id,
+            order["external_session_id"],
+            tuple((row["product_key"], row["quantity"]) for row in _results(result)),
+        )
+        purchased = {product for product, _ in purchase.items}
+        digests = {}
+        for action in actions:
+            digest = _action_digest(action)
+            existing = await self._first(
+                """SELECT action_digest FROM post_purchase_executions
+                WHERE merchant_id=? AND environment=? AND order_id=? AND workflow_key=?""",
+                self.merchant,
+                self.environment,
+                order_id,
+                action.workflow_key,
+            )
+            if existing and existing["action_digest"] != digest:
+                raise ValueError("existing workflow identity has different configuration")
+            digests[action.workflow_key] = digest
+        outcomes = {}
+        for action in actions:
+            if not purchased.intersection(action.offer_keys):
+                continue
+            digest, now = digests[action.workflow_key], int(time.time())
+            result = (
+                await self.database.prepare(
+                    """INSERT OR IGNORE INTO post_purchase_executions
+                (merchant_id,environment,order_id,workflow_key,action_digest,state,created_at,updated_at)
+                VALUES (?,?,?,?,?,'claimed',?,?)"""
+                )
+                .bind(self.merchant, self.environment, order_id, action.workflow_key, digest, now, now)
+                .run()
+            )
+            if _changes(result) != 1:
+                existing = await self._first(
+                    """SELECT action_digest FROM post_purchase_executions
+                    WHERE merchant_id=? AND environment=? AND order_id=? AND workflow_key=?""",
+                    self.merchant,
+                    self.environment,
+                    order_id,
+                    action.workflow_key,
+                )
+                if not existing or existing["action_digest"] != digest:
+                    raise ValueError("existing workflow identity has different configuration")
+                outcomes[action.workflow_key] = "already_claimed"
+                continue
+            try:
+                reference = self.handlers[action.handler](
+                    purchase, Execution(self.merchant, self.environment, action.workflow_key, action.config_ref)
+                )
+                if isawaitable(reference):
+                    reference = await reference
+                if not isinstance(reference, str) or not reference or len(reference) > 256:
+                    raise ValueError("handler did not confirm acceptance")
+                updated = await (
+                    self.database.prepare(
+                        """UPDATE post_purchase_executions SET state='accepted',provider_reference=?,updated_at=?
+                    WHERE merchant_id=? AND environment=? AND order_id=? AND workflow_key=? AND state='claimed'"""
+                    )
+                    .bind(reference, int(time.time()), self.merchant, self.environment, order_id, action.workflow_key)
+                    .run()
+                )
+                if _changes(updated) != 1:
+                    raise RuntimeError("execution acceptance was not recorded")
+                outcomes[action.workflow_key] = "accepted"
+            except Exception:
+                await (
+                    self.database.prepare(
+                        """UPDATE post_purchase_executions SET state='uncertain',updated_at=?
+                    WHERE merchant_id=? AND environment=? AND order_id=? AND workflow_key=? AND state='claimed'"""
+                    )
+                    .bind(int(time.time()), self.merchant, self.environment, order_id, action.workflow_key)
+                    .run()
+                )
                 outcomes[action.workflow_key] = "uncertain"
         return outcomes

@@ -174,3 +174,102 @@ def test_config_references_allow_namespaces_but_reject_traversal():
     assert action.config_ref == "private/merchant/dummy-delivery"
     with pytest.raises(ValueError, match="invalid post-purchase action"):
         Action("delivery", ("one",), "email", "private/../credentials", "a" * 64)
+
+
+def test_async_d1_adapter_executes_distinct_workflows_and_replays():
+    import asyncio
+
+    from cartray.post_purchase import D1Dispatcher
+
+    db = setup_store()
+    db.row_factory = sqlite3.Row
+
+    class Statement:
+        def __init__(self, sql):
+            self.sql = sql
+            self.args = ()
+
+        def bind(self, *args):
+            self.args = args
+            return self
+
+        async def all(self):
+            return {"results": [dict(row) for row in db.execute(self.sql, self.args).fetchall()]}
+
+        async def run(self):
+            result = db.execute(self.sql, self.args)
+            db.commit()
+            return {"meta": {"changes": result.rowcount}}
+
+    class Database:
+        def prepare(self, sql):
+            return Statement(sql)
+
+    calls = []
+
+    async def handler(purchase, execution):
+        calls.append((purchase, execution))
+        return "provider-id"
+
+    dispatcher = D1Dispatcher(Database(), "store", "test", {"email": handler})
+    actions = (
+        Action("first", ("one",), "email", "private/one", "a" * 64),
+        Action("second", ("two",), "email", "private/two", "b" * 64),
+    )
+    assert asyncio.run(dispatcher.dispatch("order1", actions)) == {"first": "accepted", "second": "accepted"}
+    assert asyncio.run(dispatcher.dispatch("order1", actions)) == {
+        "first": "already_claimed",
+        "second": "already_claimed",
+    }
+    assert [call[1].workflow_key for call in calls] == ["first", "second"]
+    assert db.execute("SELECT delivered_at FROM outbox").fetchone()[0] is None
+
+
+@pytest.mark.parametrize("fault", ["claim_response_lost", "acceptance_write_failed"])
+def test_d1_ambiguous_write_never_blindly_resends(fault):
+    import asyncio
+
+    from cartray.post_purchase import D1Dispatcher
+
+    db = setup_store()
+    db.row_factory = sqlite3.Row
+    state = {"fault": fault}
+
+    class Statement:
+        def __init__(self, sql):
+            self.sql, self.args = sql, ()
+
+        def bind(self, *args):
+            self.args = args
+            return self
+
+        async def all(self):
+            return {"results": [dict(row) for row in db.execute(self.sql, self.args).fetchall()]}
+
+        async def run(self):
+            if state["fault"] == "acceptance_write_failed" and "state='accepted'" in self.sql:
+                state["fault"] = None
+                raise TimeoutError("simulated write failure")
+            result = db.execute(self.sql, self.args)
+            db.commit()
+            if state["fault"] == "claim_response_lost" and "INSERT OR IGNORE" in self.sql:
+                state["fault"] = None
+                raise TimeoutError("simulated lost claim response")
+            return {"meta": {"changes": result.rowcount}}
+
+    class Database:
+        def prepare(self, sql):
+            return Statement(sql)
+
+    calls = []
+    dispatcher = D1Dispatcher(Database(), "store", "test", {"email": lambda *args: calls.append(args) or "provider"})
+    action = (Action("first", ("one",), "email", "config", "a" * 64),)
+    if fault == "claim_response_lost":
+        with pytest.raises(TimeoutError):
+            asyncio.run(dispatcher.dispatch("order1", action))
+        assert len(calls) == 0
+    else:
+        assert asyncio.run(dispatcher.dispatch("order1", action)) == {"first": "uncertain"}
+        assert len(calls) == 1
+    assert asyncio.run(dispatcher.dispatch("order1", action)) == {"first": "already_claimed"}
+    assert len(calls) == (0 if fault == "claim_response_lost" else 1)
