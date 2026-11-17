@@ -95,6 +95,8 @@ def test_products_and_variants_remain_separate_from_checkout_authority():
     assert product["variations"][0]["key"] == "ep:woo:offer:2"
     assert not product["checkout_authorized"] and not product["variations"][0]["checkout_authorized"]
     assert product["canonical_url"] is None and "bad()" not in product["description"]
+    assert "<p>Real content</p>" in product["description_html"]
+    assert "script" not in product["description_html"]
 
 
 def test_rejects_unreconciled_or_nonpublished_source_identity():

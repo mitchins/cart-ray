@@ -10,10 +10,13 @@ import argparse
 import hashlib
 import html
 import json
+import re
 import tarfile
 from collections import Counter
 from html.parser import HTMLParser
 from pathlib import Path, PurePosixPath
+
+APPROVED_SHA256 = "fd004ca15d26a0562fada8fcbd4fc0ab8f7a86a3b87abd89ed63668016307285"
 
 
 class TextOnly(HTMLParser):
@@ -50,6 +53,79 @@ def plain(value):
     return html.unescape(parser.text())
 
 
+class SafeSourceHTML(HTMLParser):
+    """Preserve basic source layout while disabling links and active markup."""
+
+    allowed = {
+        "p",
+        "br",
+        "div",
+        "span",
+        "strong",
+        "b",
+        "em",
+        "i",
+        "ul",
+        "ol",
+        "li",
+        "h2",
+        "h3",
+        "h4",
+        "h5",
+        "table",
+        "thead",
+        "tbody",
+        "tr",
+        "th",
+        "td",
+        "blockquote",
+    }
+    blocked = {"script", "style", "iframe", "object", "embed", "form"}
+
+    def __init__(self, media_by_ref):
+        super().__init__(convert_charrefs=True)
+        self.media_by_ref = media_by_ref
+        self.output = []
+        self.suppressed = 0
+
+    def handle_starttag(self, tag, attrs):
+        if tag in self.blocked:
+            self.suppressed += 1
+            return
+        if self.suppressed:
+            return
+        if tag == "a":
+            self.output.append("<span>")
+        elif tag == "img":
+            attrs = dict(attrs)
+            match = re.search(r"(?:^|\s)wp-image-(\d+)(?:\s|$)", attrs.get("class") or "")
+            item = self.media_by_ref.get("ep:woo:media:" + match.group(1)) if match else None
+            if item:
+                self.output.append(
+                    '<img loading="lazy" src="/'
+                    + html.escape(item["path"], quote=True)
+                    + '" alt="'
+                    + html.escape(attrs.get("alt") or "", quote=True)
+                    + '">'
+                )
+            else:
+                self.output.append("<span>Source image unavailable in UAT.</span>")
+        elif tag in self.allowed:
+            self.output.append("<" + tag + ">")
+
+    def handle_endtag(self, tag):
+        if tag in self.blocked and self.suppressed:
+            self.suppressed -= 1
+        elif not self.suppressed and tag == "a":
+            self.output.append('</span><span class="muted"> [source link disabled in UAT]</span>')
+        elif not self.suppressed and tag in self.allowed and tag != "br":
+            self.output.append("</" + tag + ">")
+
+    def handle_data(self, data):
+        if not self.suppressed:
+            self.output.append(html.escape(data))
+
+
 def read_archive(path):
     """Verify every declared byte and reject unexpected members before reading data."""
     blobs = {}
@@ -83,11 +159,20 @@ def prepare(blobs, archive_hash):
     for entry in media:
         if entry["kind"] not in {"public_image", "free_native_brochure"}:
             raise ValueError("unsupported media kind")
+        path = PurePosixPath(entry["path"])
+        if path.is_absolute() or len(path.parts) != 2 or path.parts[0] != "media" or ".." in path.parts:
+            raise ValueError("unsafe public media path")
         raw = blobs.get(entry["path"])
         if raw is None or hashlib.sha256(raw).hexdigest() != entry["sha256"]:
             raise ValueError(f"media mismatch {entry['path']}")
     if len({x["key"] for x in offers}) != len(offers):
         raise ValueError("duplicate offer identities")
+    if len({x["legacyWooId"] for x in offers}) != len(offers) or any(
+        x["key"] != f"ep:woo:offer:{x['legacyWooId']}" for x in offers
+    ):
+        raise ValueError("source offer IDs do not reconcile with identities")
+    if len({x["key"] for x in identities}) != len(identities):
+        raise ValueError("duplicate lifecycle identities")
     published = {x["key"] for x in identities if x["uatOffer"] and x["sourceStatus"] == "publish"}
     if {x["key"] for x in offers} != published or any(x["sourceStatus"] != "publish" for x in offers):
         raise ValueError("published lifecycle identities do not reconcile")
@@ -99,7 +184,10 @@ def prepare(blobs, archive_hash):
     product_keys = {x["key"] for x in products}
     if any(x["parentKey"] not in product_keys for x in variants):
         raise ValueError("variation has no published parent")
-    if any(x["urlResolution"].get("canonicalUrl") or x["urlResolution"].get("permalinkUrl") for x in offers):
+    if any(
+        x["urlResolution"].get("canonicalUrl") is not None or x["urlResolution"].get("permalinkUrl") is not None
+        for x in offers
+    ):
         raise ValueError("source canonical contract changed; review before proceeding")
     result = []
     for p in products:
@@ -128,12 +216,22 @@ def prepare(blobs, archive_hash):
                 continue
             if not child["variationAttributes"] or child["urlResolution"]["canonicalUrl"] is not None:
                 raise ValueError(f"unresolved variation identity {child['key']}")
+            child_images = []
+            if child["imageId"]:
+                reference = "ep:woo:media:" + str(child["imageId"])
+                if reference not in media_by_ref:
+                    raise ValueError(f"missing variation image {reference}")
+                item = media_by_ref[reference]
+                child_images.append(
+                    {"path": item["path"], "sha256": item["sha256"], "alt": image_alts.get(reference) or child["title"]}
+                )
             options.append(
                 {
                     "key": child["key"],
                     "attributes": child["variationAttributes"],
                     "source_price": child["commerce"].get("_price"),
                     "description": plain(child["commerce"].get("_variation_description", "")),
+                    "images": child_images,
                     "checkout_authorized": False,
                 }
             )
@@ -151,10 +249,13 @@ def prepare(blobs, archive_hash):
         if free_file:
             action = "free_download"
         cta = p.get("externalCatalogueCta") or {}
+        safe_html = SafeSourceHTML(media_by_ref)
+        safe_html.feed(p["contentHtml"] or "")
         result.append(
             {
                 "key": p["key"],
                 "source_id": p["legacyWooId"],
+                "source_content_sha256": p.get("sourceContentSha256"),
                 "title": p["title"],
                 "source_sku": p["commerce"].get("_sku"),
                 "source_slug": p["slug"],
@@ -171,6 +272,7 @@ def prepare(blobs, archive_hash):
                 "checkout_authorized": False,
                 "summary": plain(p["excerptHtml"]),
                 "description": plain(p["contentHtml"]),
+                "description_html": "".join(safe_html.output),
                 "categories": categories,
                 "images": images,
                 "variations": options,
@@ -209,8 +311,11 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("archive", type=Path)
     parser.add_argument("output", type=Path)
+    parser.add_argument("--expected-sha256", default=APPROVED_SHA256)
     args = parser.parse_args()
     raw = args.archive.read_bytes()
+    if hashlib.sha256(raw).hexdigest() != args.expected_sha256:
+        raise ValueError("archive does not match the explicitly approved SHA-256")
     if hashlib.sha256(raw).hexdigest() == "824cf47fa8c57af588a767d655db38f351de2f5d191518dbaa28af1ba82b5f3f":
         raise ValueError("superseded handoff archive is not permitted")
     blobs, _ = read_archive(args.archive)

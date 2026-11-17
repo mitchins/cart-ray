@@ -53,3 +53,13 @@ def test_local_build_rejects_tampered_media_and_checkout_flag(tmp_path):
     (source / "catalogue.json").write_text(json.dumps(data))
     with pytest.raises(ValueError, match="checkout"):
         module.build(source, tmp_path / "out", "minimal")
+
+
+def test_source_markup_rejects_active_or_undeclared_content():
+    for markup in (
+        "<script>alert(1)</script>",
+        '<img src="/media/other.png" alt="" loading="lazy">',
+        '<p onclick="alert(1)">Text</p>',
+    ):
+        with pytest.raises(ValueError):
+            module.SourceMarkupCheck(set()).feed(markup)

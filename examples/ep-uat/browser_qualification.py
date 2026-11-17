@@ -11,6 +11,7 @@ import statistics
 import subprocess
 import sys
 import time
+import traceback
 from pathlib import Path
 
 from playwright.sync_api import sync_playwright
@@ -23,11 +24,13 @@ def main():
     parser.add_argument("--classic", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--engines", default="chromium,firefox,webkit")
+    parser.add_argument("--themes", default="minimal,studio,classic")
+    parser.add_argument("--expected-products", type=int, default=121)
     args = parser.parse_args()
     args.output.mkdir(parents=True, exist_ok=True)
     report = {"platform": platform.platform(), "python": sys.version.split()[0], "runs": [], "failures": []}
     with sync_playwright() as pw:
-        for theme in ("minimal", "studio", "classic"):
+        for theme in args.themes.split(","):
             root = getattr(args, theme)
             sock = socket.socket()
             sock.bind(("127.0.0.1", 0))
@@ -53,7 +56,7 @@ def main():
                             page.goto(f"http://127.0.0.1:{port}/", wait_until="load", timeout=30000)
                             initial_ms = (time.perf_counter() - start) * 1000
                             page.wait_for_selector("#products .product-card")
-                            assert page.locator("#products .product-card").count() == 121
+                            assert page.locator("#products .product-card").count() == args.expected_products
                             assert page.evaluate("document.documentElement.scrollWidth <= innerWidth+1")
                             page.screenshot(path=str(args.output / f"{theme}-{engine}-{layout}-catalogue.png"))
                             times = []
@@ -61,7 +64,9 @@ def main():
                                 start = time.perf_counter()
                                 page.locator("#search").fill("consulting")
                                 page.wait_for_function(
-                                    "document.querySelector('#results-status').textContent !== '121 products'"
+                                    "count => document.querySelector('#results-status').textContent "
+                                    "!== `${count} products`",
+                                    arg=args.expected_products,
                                 )
                                 times.append((time.perf_counter() - start) * 1000)
                                 page.locator("#search").fill("")
@@ -82,6 +87,8 @@ def main():
                             page.reload()
                             assert variant.input_value() == "ep:woo:offer:7527"
                             assert "Checkout unavailable" in page.locator("#variant-status").inner_text()
+                            assert "120" in page.locator("#variant-price").inner_text()
+                            assert page.locator("#variant-description").inner_text()
                             page.screenshot(path=str(args.output / f"{theme}-{engine}-{layout}-variation.png"))
                             page.goto(f"http://127.0.0.1:{port}/products/woo-30/", wait_until="load")
                             assert page.locator("a[download]").count() == 1
@@ -101,8 +108,10 @@ def main():
                                 }
                             )
                             page.close()
-                    except Exception as error:
-                        report["failures"].append({"theme": theme, "engine": engine, "error": str(error)[:500]})
+                    except Exception:
+                        report["failures"].append(
+                            {"theme": theme, "engine": engine, "error": traceback.format_exc()[-1500:]}
+                        )
                     finally:
                         if browser:
                             browser.close()

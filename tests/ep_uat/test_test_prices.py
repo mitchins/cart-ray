@@ -24,6 +24,7 @@ def test_source_price_and_test_mode_are_enforced():
                 "key": "ep:woo:offer:171",
                 "title": "Test product",
                 "source_sku": "coremod",
+                "images": [{"path": "media/image.png"}],
             }
         ],
     }
@@ -38,6 +39,9 @@ def test_source_price_and_test_mode_are_enforced():
         return {
             "id": "price_Test",
             "livemode": False,
+            "active": True,
+            "type": "one_time",
+            "recurring": None,
             "unit_amount": 134900,
             "currency": "aud",
             "lookup_key": data["lookup_key"],
@@ -59,7 +63,51 @@ def test_source_price_and_test_mode_are_enforced():
         module.provision(catalogue, [171], "sk_test_example", "acct_Test", transport)
 
 
+def test_invalid_second_offer_causes_no_provider_calls():
+    catalogue = {
+        "source_currency": "AUD",
+        "source_archive_sha256": "a" * 64,
+        "products": [
+            {
+                "source_id": 171,
+                "source_type": "simple",
+                "source_delivery_kind": "uat_dummy_transfer",
+                "source_price": "10",
+                "images": [{"path": "media/a.png"}],
+            },
+            {
+                "source_id": 172,
+                "source_type": "simple",
+                "source_delivery_kind": "uat_dummy_transfer",
+                "source_price": "",
+                "images": [{"path": "media/b.png"}],
+            },
+        ],
+    }
+    calls = []
+    with pytest.raises(ValueError, match="price"):
+        module.provision(catalogue, [171, 172], "sk_test_example", "acct_Test", lambda *a, **k: calls.append(a))
+    assert calls == []
+
+
 def test_fractional_and_invalid_prices_are_not_guessed():
     for value in ("0", "-1", "1.001", "NaN", ""):
         with pytest.raises(ValueError):
             module.amount_minor(value)
+
+
+def test_followup_fixture_is_dummy_and_never_automatically_sent():
+    import json
+
+    data = {"products": [{"source_id": 171, "key": "ep:woo:offer:171", "source_workflow_keys": ["ep:woo:workflow:1"]}]}
+    workflow = {
+        "key": "ep:woo:workflow:1",
+        "matchingOfferKeys": ["ep:woo:offer:171"],
+        "actions": [{"kind": "uat_dummy_transfer", "sendEnabled": False, "url": "https://www.dropbox.com/t/ABCDEFG"}],
+    }
+    blobs = {"workflows.json": json.dumps([workflow]).encode()}
+    result = module.dummy_followups(blobs, data, [171])
+    assert result[0]["send_enabled"] is False
+    workflow["actions"][0]["sendEnabled"] = True
+    with pytest.raises(ValueError, match="dummy transfer"):
+        module.dummy_followups({"workflows.json": json.dumps([workflow]).encode()}, data, [171])
