@@ -236,7 +236,7 @@ class TestLane:
             self.catalogue,
             self.store,
             StripeCheckoutGateway(self.client, CheckoutMetadataSealer("test", "ep-uat-local", self.crypto)),
-            success_url="https://example.com/" if no_return else f"http://localhost:{port}/uat-return/",
+            success_url=f"http://localhost:{port + 1}/" if no_return else f"http://localhost:{port}/uat-return/",
             cancel_url=f"http://localhost:{port}/cart/",
         )
         self.reconciler = StripeReconciliationService(
@@ -603,6 +603,20 @@ def read_secret(key_file, keychain_service, site):
     return None
 
 
+class NoReturnHandler(SimpleHTTPRequestHandler):
+    """A separate local landing for Stripe redirects; it never reconciles an order."""
+
+    def log_message(self, format, *args):
+        pass
+
+    def do_GET(self):
+        self.send_response(200)
+        self.send_header("Content-Type", "text/plain; charset=utf-8")
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        self.wfile.write(b"Test payment complete. You may close this page.")
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--site", type=Path, required=True)
@@ -634,6 +648,9 @@ def main():
         lane.test_delivery_config = (mail_key, "uat@mitchellcurrie.com", "test-1034@mitchellcurrie.com")
         TestDelivery(lane.connection, lane.client, *lane.test_delivery_config)
         threading.Thread(target=lane.run_test_automation, daemon=True).start()
+    if args.no_return_test:
+        neutral = ThreadingHTTPServer(("127.0.0.1", args.port + 1), NoReturnHandler)
+        threading.Thread(target=neutral.serve_forever, daemon=True).start()
     server = ThreadingHTTPServer(("127.0.0.1", args.port), partial(Handler, directory=str(site), lane=lane))
     print(f"Local-only UAT server on http://localhost:{args.port}; test email is restricted and opt-in.", flush=True)
     server.serve_forever()

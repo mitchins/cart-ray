@@ -167,3 +167,10 @@ def test_two_concurrent_consumers_claim_one_action(tmp_path):
         results = list(pool.map(lambda _: worker(), range(2)))
     assert sorted(result["first"] for result in results) == ["accepted", "already_claimed"]
     assert len(calls) == 1
+
+
+def test_config_references_allow_namespaces_but_reject_traversal():
+    action = Action("delivery", ("one",), "email", "private/merchant/dummy-delivery", "a" * 64)
+    assert action.config_ref == "private/merchant/dummy-delivery"
+    with pytest.raises(ValueError, match="invalid post-purchase action"):
+        Action("delivery", ("one",), "email", "private/../credentials", "a" * 64)

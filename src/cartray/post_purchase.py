@@ -15,6 +15,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 
 _IDENTIFIER = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$")
+_CONFIG_REF = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,255}$")
 
 
 @dataclass(frozen=True)
@@ -33,7 +34,8 @@ class Action:
             or len(set(self.offer_keys)) != len(self.offer_keys)
             or any(not _IDENTIFIER.fullmatch(offer) for offer in self.offer_keys)
             or not _IDENTIFIER.fullmatch(self.handler)
-            or not _IDENTIFIER.fullmatch(self.config_ref)
+            or not _CONFIG_REF.fullmatch(self.config_ref)
+            or any(part in ("", ".", "..") for part in self.config_ref.split("/"))
             or not re.fullmatch(r"[0-9a-f]{64}", self.config_digest)
         ):
             raise ValueError("invalid post-purchase action")
