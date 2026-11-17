@@ -431,6 +431,12 @@ class Installation:
         self.save()
         return self.state["resources"]
 
+    def prepare_queue_transition(self):
+        """Pause consumers and retain recovery state before changing releases."""
+        self.state["queue_recovery_required"] = True
+        self.save()
+        self.configure_queues(pause_processing=True)
+
     def configure_queues(self, pause_processing=False):
         # The verifier requires explicit false; the API omits its implicit default.
         for role in self.queues:
@@ -880,9 +886,7 @@ class Installation:
         for role in self.roles:
             self.artifact_modules(role, build)
         # A disabled/stale sender must never consume and exhaust durable due hints.
-        self.state["queue_recovery_required"] = True
-        self.save()
-        self.configure_queues(pause_processing=True)
+        self.prepare_queue_transition()
         if "sender" not in progress["versions"]:
             progress["sending"] = False
         self.state["phase"] = "deploying"
@@ -1475,9 +1479,7 @@ class Installation:
             or release["suppression_key_fingerprint"] != self.state["secret_fingerprints"]["recipient_hash"]
         ):
             raise ValueError("rollback schema/key contract is incompatible; databases are never rewound")
-        self.state["queue_recovery_required"] = True
-        self.save()
-        self.configure_queues(pause_processing=True)
+        self.prepare_queue_transition()
         self.state["phase"] = "rolling-back"
         self.save()
         for role, version in release["versions"].items():

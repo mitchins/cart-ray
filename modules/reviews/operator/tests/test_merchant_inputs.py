@@ -115,17 +115,22 @@ def test_merchant_rejects_missing_catalogue_presentation(tmp_path):
         validate(source, ROOT)
 
 
-def test_operator_pins_merchant_inputs_and_fails_closed_on_change(tmp_path):
-    source = merchant(tmp_path / "source")
+def plan_merchant(tmp_path, source, *, reviews=False, mapped=False, **options):
     lock = tmp_path / "lock.json"
     lock.write_text(json.dumps({"stripe_mode": "test", "catalogue_version": "sha256:" + "b" * 64}))
-    installation = Installation.plan(tmp_path / "installation", {
+    return Installation.plan(tmp_path / "installation", {
         "namespace": "merchant-test", "account_id": "a" * 32, "stripe_account_id": "acct_Test",
-        "preflight_lock": str(lock), "reviews_enabled": False, "merchant_name": "Merchant",
+        "preflight_lock": str(lock), "reviews_enabled": reviews, "merchant_name": "Merchant",
         "store_key": "merchant-one", "merchant_inputs": str(source),
-        "subject_map": {"MERCHANT-ONE": "product-one"},
-        "subject_details": [["product-one", "/products/one/", "Product"]],
+        "subject_map": {"MERCHANT-ONE": "product-one"} if mapped else {},
+        "subject_details": [["product-one", "/products/one/", "Product"]] if mapped else [],
+        **options,
     })
+
+
+def test_operator_pins_merchant_inputs_and_fails_closed_on_change(tmp_path):
+    source = merchant(tmp_path / "source")
+    installation = plan_merchant(tmp_path, source, mapped=True)
     shutil.rmtree(source)
     resumed = Installation(installation.directory)
     resumed.verify_merchant_inputs()
@@ -152,13 +157,7 @@ def test_commerce_fingerprint_matches_builder_for_nested_assets(tmp_path):
 
 def test_cached_build_and_deploy_reject_changed_merchant_configuration(tmp_path):
     source = merchant(tmp_path / "source")
-    lock = tmp_path / "lock.json"
-    lock.write_text(json.dumps({"stripe_mode": "test", "catalogue_version": "sha256:" + "b" * 64}))
-    p = Installation.plan(tmp_path / "installation", {
-        "namespace": "merchant-test", "account_id": "a" * 32, "stripe_account_id": "acct_Test",
-        "preflight_lock": str(lock), "reviews_enabled": False, "merchant_name": "Merchant",
-        "store_key": "merchant-one", "merchant_inputs": str(source), "subject_map": {}, "subject_details": [],
-    })
+    p = plan_merchant(tmp_path, source)
     p.vault = lambda: {}
     p.check_schema = lambda: None
     p.state["pages_subdomain"] = "merchant-test.pages.dev"
@@ -201,16 +200,8 @@ def test_merchant_reviews_require_correct_subject_pages_and_native_clients(tmp_p
             '<button data-dialog-confirm></button></dialog>'
             '<script type="module" src="/theme/review-presenter.mjs"></script>'
         )
-    lock = tmp_path / "lock.json"
-    lock.write_text(json.dumps({"stripe_mode": "test", "catalogue_version": "sha256:" + "b" * 64}))
-    installation = Installation.plan(tmp_path / "installation", {
-        "namespace": "merchant-test", "account_id": "a" * 32, "stripe_account_id": "acct_Test",
-        "preflight_lock": str(lock), "reviews_enabled": True, "merchant_name": "Merchant",
-        "review_invitation_default_checked": False,
-        "store_key": "merchant-one", "merchant_inputs": str(source),
-        "subject_map": {"MERCHANT-ONE": "product-one"},
-        "subject_details": [["product-one", "/products/one/", "Product"]],
-    })
+    installation = plan_merchant(tmp_path, source, reviews=True, mapped=True,
+                                 review_invitation_default_checked=False)
     installation.verify_merchant_inputs()
     calls = []
 
