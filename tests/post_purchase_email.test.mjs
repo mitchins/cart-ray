@@ -88,3 +88,14 @@ test('disabled, forged credentials and provider timeout fail closed', async () =
   assert.equal((await handle(request(), env, p.fetch)).status, 503);
   assert.equal(p.calls.filter(c => c.url.includes('smtp2go')).length, 1);
 });
+
+test('provider redirects are not followed and cannot trigger a send', async () => {
+  let calls = 0;
+  const response = await handle(request(), env, async (_url, options) => {
+    calls++;
+    assert.equal(options.redirect, 'manual');
+    return new Response(null, {status:302, headers:{Location:'https://unexpected.example/'}});
+  });
+  assert.equal(response.status, 403);
+  assert.equal(calls, 1);
+});
