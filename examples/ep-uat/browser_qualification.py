@@ -100,6 +100,8 @@ def main():
             try:
                 for engine in args.engines.split(","):
                     browser = None
+                    page = None
+                    errors = []
                     try:
                         browser = getattr(pw, engine).launch(timeout=20000)
                         for layout, w, h in [("desktop", 1440, 900), ("mobile", 390, 844)]:
@@ -111,6 +113,8 @@ def main():
                             start = time.perf_counter()
                             page.goto(f"http://127.0.0.1:{port}/", wait_until="load", timeout=30000)
                             initial_ms = (time.perf_counter() - start) * 1000
+                            cdp = page.context.new_cdp_session(page) if engine == "chromium" else None
+                            initial_heap = cdp.send("Runtime.getHeapUsage")["usedSize"] if cdp else None
                             initial_resource_bytes = page.evaluate(
                                 "performance.getEntriesByType('resource').reduce((n, r) => n + r.transferSize, 0)"
                             )
@@ -164,6 +168,7 @@ def main():
                                     dom_content_loaded_ms: n.domContentLoadedEventEnd || null} : null;
                             }""")
                             memory = page.evaluate("performance.memory ? performance.memory.usedJSHeapSize : null")
+                            final_heap = cdp.send("Runtime.getHeapUsage")["usedSize"] if cdp else None
                             page.goto(f"http://127.0.0.1:{port}/products/woo-4311/", wait_until="load")
                             variant = page.locator("#variant")
                             assert variant.locator("option").count() == 4
@@ -212,12 +217,26 @@ def main():
                                         memory - initial_memory
                                         if memory is not None and initial_memory is not None else None
                                     ),
+                                    "chromium_js_heap_before_bytes": initial_heap,
+                                    "chromium_js_heap_after_bytes": final_heap,
+                                    "chromium_js_heap_growth_bytes": (
+                                        final_heap - initial_heap
+                                        if final_heap is not None and initial_heap is not None else None
+                                    ),
                                 }
                             )
                             page.close()
                     except Exception:
+                        diagnostic = {"page_errors": errors[-5:]}
+                        if page:
+                            try:
+                                diagnostic["search_value"] = page.locator("#search").input_value(timeout=1000)
+                                diagnostic["status_text"] = page.locator("#results-status").inner_text(timeout=1000)
+                            except Exception:
+                                diagnostic["status_text"] = "unavailable"
                         report["failures"].append(
-                            {"theme": theme, "engine": engine, "error": traceback.format_exc()[-1500:]}
+                            {"theme": theme, "engine": engine, "error": traceback.format_exc()[-1500:],
+                             "diagnostic": diagnostic}
                         )
                     finally:
                         if browser:
