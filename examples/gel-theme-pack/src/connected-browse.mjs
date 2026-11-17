@@ -15,7 +15,8 @@ try {
     button.disabled = false;
     button.addEventListener('click', () => {
       const added = adapter.add(key);
-      if (message) message.textContent = added ? 'Added to your cart.' : 'This item cannot be added right now.';
+      if (message) message.textContent = added ? 'Added to your cart.' : adapter.attemptPending
+        ? 'A checkout is already in progress. Visit your cart to retry it.' : 'This item cannot be added right now.';
     });
   }
 } catch {

@@ -472,11 +472,15 @@ def main(on_customer_ready=None, public_store_name="Example Store", public_names
             assert call(landing, capability) == (
                 200,
                 {
-                    "store_name": "Example Store",
+                    "store_name": public_store_name,
                     "draft_scope": draft_scope,
                     "subjects": [
-                        {"subject_id": "example-bundle", "public_name": "Example bundle", "progress": "available"},
-                        {"subject_id": "example-policy", "public_name": "Example policy", "progress": "available"},
+                        {"subject_id": "example-bundle",
+                         "public_name": (public_names or {}).get("example-bundle", "Example bundle"),
+                         "progress": "available"},
+                        {"subject_id": "example-policy",
+                         "public_name": (public_names or {}).get("example-policy", "Example policy"),
+                         "progress": "available"},
                     ],
                 },
             )
@@ -549,7 +553,7 @@ def main(on_customer_ready=None, public_store_name="Example Store", public_names
                 delivery_token=DELIVERY_TOKEN,
                 resolve_recipient=trusted_recipients.get,
                 mailbox_path=mailbox_path,
-                store_name="Example Store",
+                store_name=public_store_name,
                 landing_url="http://127.0.0.1:3000/review/",
             ) == {"status": "accepted"}
             inbox = mailbox.Maildir(mailbox_path, create=False)
@@ -619,7 +623,7 @@ def main(on_customer_ready=None, public_store_name="Example Store", public_names
                 acquisition_id=fresh["acquisition_id"],
                 expected_recipient_hash=recipient_hashes[1],
                 resolve_recipient=trusted_recipients.get,
-                store_name="Example Store",
+                store_name=public_store_name,
                 landing_url="http://127.0.0.1:3000/review/",
                 token=fresh["token"],
             )
