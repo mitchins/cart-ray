@@ -17,3 +17,5 @@ The UAT GEL now comes from a separately supplied, validated EP manifest rather t
 A synthetic merchant snapshot update removed a retired listing and changed an image while retaining the remaining product identity and explicit Reviews subject; a mapping to the removed product was rejected. This exercises rebuild behavior only; it does not qualify a deployed merchant operator workflow.
 
 **Fulfilment parity gate:** the approved source snapshot describes immediately triggered transactional emails for all 15 published workflows. This UAT currently shows the dummy link only in the purchaser browser and has no email or cross-device recovery. That is a potential loss of access relative to configured Woo behavior and blocks any real fulfilment cutover until an independently recoverable delivery channel is qualified. See `FOLLOW-UP-COMPARISON.md`.
+
+A second synthetic merchant, with its own name, GEL identity, string product identity, local route and NZD display currency, builds across all three themes without EP or Acorn branding. This demonstrates reusable browse input and presentation only; it is not an installed or checkout-qualified second merchant.

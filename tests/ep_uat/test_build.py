@@ -193,3 +193,27 @@ def test_search_index_supports_both_original_and_casefolded_unicode(tmp_path):
     module.build(source, out, "minimal")
     page = (out / "index.html").read_text()
     assert "straße" in page and "strasse" in page
+
+
+@pytest.mark.parametrize("theme", ["minimal", "studio", "classic"])
+def test_second_merchant_uses_own_listing_identity_gel_and_currency(tmp_path, theme):
+    source = tmp_path / "source"
+    data = make_source(source)
+    data["merchant_name"] = "Harbour Workshop"
+    data["source_currency"] = "NZD"
+    product = data["products"][0]
+    product.update({"key": "harbour:product:item7", "source_id": "item7",
+                    "navigation_path": "/products/workshop-item/"})
+    product["variations"][0]["key"] = "harbour:offer:blue"
+    (source / "catalogue.json").write_text(json.dumps(data))
+    gel = json.loads((ROOT / "examples/ep-uat/gel.json").read_text())
+    gel["identity"].update({"key": "harbour-uat", "name": "Harbour Workshop", "short_name": "Harbour",
+                            "wordmark_descriptor": "WORKSHOP", "currency": "NZD", "locale": "en-NZ"})
+    gel_path = tmp_path / "harbour.json"
+    gel_path.write_text(json.dumps(gel))
+    output = tmp_path / "output"
+    module.build(source, output, theme, gel_file=gel_path)
+    page = (output / "products/workshop-item/index.html").read_text()
+    assert "Harbour Workshop" in page and "harbour:offer:blue" in page and "NZD" in page
+    assert "Effective Policy" not in page and "Squirrel" not in page and "Acorn" not in page
+    assert 'rel="canonical"' not in page and "data-uat-add=" not in page
