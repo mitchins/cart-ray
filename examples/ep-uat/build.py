@@ -296,9 +296,9 @@ def build(source, output, theme, test_fixture=None, review_fixture=None, gel_fil
             raise ValueError("invalid product identity")
         ids.add(str(source_id))
         navigation = path(product)
-        if navigation in navigation_paths:
+        if navigation.casefold() in navigation_paths:
             raise ValueError("duplicate product navigation path")
-        navigation_paths.add(navigation)
+        navigation_paths.add(navigation.casefold())
         if product["checkout_authorized"] or product["canonical_url"] is not None:
             raise ValueError("browse-only build cannot grant checkout or canonical authority")
         if any(variant["checkout_authorized"] for variant in product["variations"]):

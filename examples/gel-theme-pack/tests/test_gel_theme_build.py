@@ -104,6 +104,8 @@ class GelTests(unittest.TestCase):
         self.assertNotIn('data-cart-count', output)
         with self.assertRaisesRegex(ValueError, "navigation"):
             header(self.gel, "classic", "/", False, nav_links=(("//other.example/", "Products"),))
+        with self.assertRaisesRegex(ValueError, "navigation"):
+            header(self.gel, "classic", "/", False, nav_links=(("/product/../cart/", "Products"),))
 
     def test_wordmark_descriptor_matches_schema_limit(self):
         self.gel["identity"]["wordmark_descriptor"] = "x" * 40

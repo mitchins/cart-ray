@@ -4,7 +4,7 @@
 
 from html import escape as esc
 
-from cartray.merchant_contract import page_seo
+from cartray.merchant_contract import merchant_path, page_seo
 
 
 def icon(name, size=22):
@@ -44,12 +44,20 @@ def search(base, label="Search products", value=""):
 def header(gel, theme, base, preview, *, nav_links=None, header_search=True, cart_count=True):
     i = gel["identity"]
     logo = f'''<a class="brand" href="{base}" aria-label="{esc(i["name"])} — home"><img src="{base + gel["assets"]["logo"]}" width="38" height="38" alt=""><span>{esc(i["short_name"])}<small>{esc(i["wordmark_descriptor"])}</small></span></a>'''
+    supplied_nav = nav_links is not None
     if nav_links is None:
         nav_links = ((f"{base}shop/", "Shop all"), (f"{base}#our-story", "Our story"), (f"{base}help/", "Help & care"))
     if any(not isinstance(url, str) or not url.startswith("/") or url.startswith("//") or "\\" in url
            or any(ord(ch) < 33 for ch in url) or not isinstance(label, str) or not label.strip()
            for url, label in nav_links):
         raise ValueError("navigation links must be local paths with labels")
+    if supplied_nav:
+        try:
+            for url, _label in nav_links:
+                if url != "/":
+                    merchant_path(url)
+        except ValueError as error:
+            raise ValueError("navigation links must use safe local paths") from error
     links = "".join(f'<a href="{esc(url, quote=True)}">{esc(label)}</a>' for url, label in nav_links)
     nav = f'<nav class="desktop-nav" aria-label="Main navigation">{links}</nav>'
     count = '<span data-cart-count class="cart-count">0</span>' if cart_count else ""

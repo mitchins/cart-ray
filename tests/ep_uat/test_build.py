@@ -142,6 +142,20 @@ def test_listing_accepts_explicit_merchant_identity_and_navigation(tmp_path):
         module.build(source, tmp_path / "missing-path", "minimal")
 
 
+def test_uat_rejects_case_colliding_product_paths(tmp_path):
+    import copy
+
+    source = tmp_path / "source"
+    data = make_source(source)
+    data["products"][0]["navigation_path"] = "/product/Example/"
+    other = copy.deepcopy(data["products"][0])
+    other.update({"source_id": 3, "key": "merchant:other:3", "navigation_path": "/product/example/"})
+    data["products"].append(other)
+    (source / "catalogue.json").write_text(json.dumps(data))
+    with pytest.raises(ValueError, match="duplicate product navigation"):
+        module.build(source, tmp_path / "output", "minimal")
+
+
 def test_merchant_currency_comes_from_catalogue_and_gel(tmp_path):
     source = tmp_path / "source"
     data = make_source(source)
