@@ -27,6 +27,7 @@ function provider(options = {}) {
       mode:'payment', status:'complete', metadata:{cr_order_id:options.order || 'order-one'},
       payment_status:options.status || 'paid', customer_details:{email:options.recipient || 'recipient@example.test'}});
     if (options.failSend) throw new Error('provider timeout');
+    if (url.includes('api.cloudflare.com')) return Response.json(options.cloudflareResponse, {status:options.sendStatus || 200});
     return Response.json({data:{succeeded:1, failed:0, email_id:'receipt-one'}});
   }};
 }
@@ -41,6 +42,84 @@ test('confirmed approved test purchase delivers configured dummy links', async (
   assert.equal(p.calls[0].init.signal, p.calls[1].init.signal);
   assert.equal(p.calls[1].init.signal, p.calls[2].init.signal);
   assert.deepEqual(JSON.parse(p.calls[2].init.body).to, ['recipient@example.test']);
+});
+
+const cloudflareEnv = {...env, EMAIL_PROVIDER:'cloudflare', CLOUDFLARE_EMAIL_ACCOUNT_ID:'a'.repeat(32),
+  CLOUDFLARE_EMAIL_API_TOKEN:'v1.0-fixture-'.repeat(4), SMTP2GO_API_KEY:undefined};
+const cloudflareReceipt = {success:true, errors:[], result:{message_id:'<receipt@example.test>',
+  delivered:['recipient@example.test'], queued:[], permanent_bounces:[], suppressed_recipients:[]}};
+
+test('Cloudflare accepts exactly one delivered OR queued recipient and retains the shared deadline', async () => {
+  for (const queued of [false,true]) {
+    const receipt=structuredClone(cloudflareReceipt);
+    if (queued) {receipt.result.queued=receipt.result.delivered;receipt.result.delivered=[];}
+    const p=provider({cloudflareResponse:receipt});
+    const response=await handle(request(),cloudflareEnv,p.fetch);
+    assert.equal(response.status,200);
+    assert.deepEqual(await response.json(),{provider_reference:'<receipt@example.test>'});
+    assert.equal(p.calls.length,3);
+    const last=p.calls[2];
+    assert.equal(last.url,`https://api.cloudflare.com/client/v4/accounts/${'a'.repeat(32)}/email/sending/send`);
+    assert.equal(last.init.headers.Authorization,`Bearer ${cloudflareEnv.CLOUDFLARE_EMAIL_API_TOKEN}`);
+    assert.deepEqual(JSON.parse(last.init.body),{from:action.sender,to:action.recipient,subject:action.subject,
+      text:'This test purchase contains dummy materials only.\n\n'+action.links.join('\n')});
+    assert.ok(p.calls.every(c=>c.init.redirect==='manual' && c.init.signal===last.init.signal));
+    assert.equal(last.init.headers['X-Smtp2go-Api-Key'],undefined);
+  }
+});
+
+test('Cloudflare bounce, suppression, extra/duplicate recipients and ambiguous receipts never succeed or retry', async () => {
+  const changes=[
+    {message_id:undefined},{message_id:123},{message_id:'bad\nreference'},
+    {delivered:[],queued:[]},{delivered:['other@example.test']},
+    {queued:['recipient@example.test']},{delivered:['recipient@example.test','other@example.test']},
+    {delivered:['recipient@example.test','recipient@example.test']},
+    {permanent_bounces:['recipient@example.test']},{suppressed_recipients:['recipient@example.test']},
+    {delivered:null},{queued:undefined},{permanent_bounces:undefined},{suppressed_recipients:'invalid'},
+    {suppressed_recipients:undefined},
+  ];
+  const receipts=changes.map(change=>({...cloudflareReceipt,result:{...cloudflareReceipt.result,...change}}));
+  receipts.push({...cloudflareReceipt,success:false},{...cloudflareReceipt,errors:[{code:10001}]},
+    {...cloudflareReceipt,result:null},{...cloudflareReceipt,errors:undefined});
+  for (const receipt of receipts) {
+    const p=provider({cloudflareResponse:receipt});
+    assert.equal((await handle(request(),cloudflareEnv,p.fetch)).status,502);
+    assert.equal(p.calls.length,3);
+  }
+  for (const options of [{failSend:true},{cloudflareResponse:cloudflareReceipt,sendStatus:302},
+    {cloudflareResponse:cloudflareReceipt,sendStatus:403}]) {
+    const p=provider(options);
+    assert.notEqual((await handle(request(),cloudflareEnv,p.fetch)).status,200);
+    assert.equal(p.calls.length,3);
+  }
+});
+
+test('Cloudflare retains all test scope, receipt digest and recipient/Stripe guards; no fallback provider', async () => {
+  for (const [payload,settings,options] of [
+    [{...body,config_digest:'0'.repeat(64)},cloudflareEnv,{}],
+    [body,{...cloudflareEnv,APPROVED_TEST_RECIPIENT:'other@example.test'},{}],
+    [body,{...cloudflareEnv,APPROVED_TEST_SENDER:'other@example.test'},{}],
+    [body,{...cloudflareEnv,STRIPE_API_KEY:'sk_live_bad'},{}],
+    [body,{...cloudflareEnv,DELIVERY_MODE:'disabled'},{}],
+    [body,{...cloudflareEnv,EMAIL_PROVIDER:'unknown',SMTP2GO_API_KEY:'api-fixture'},{}],
+    [body,{...cloudflareEnv,CLOUDFLARE_EMAIL_ACCOUNT_ID:'../other'},{}],
+    [body,{...cloudflareEnv,CLOUDFLARE_EMAIL_API_TOKEN:'bad\nheader'},{}],
+    [body,cloudflareEnv,{account:'acct_other'}],
+    [body,cloudflareEnv,{status:'unpaid'}],
+    [body,cloudflareEnv,{order:'other-order'}],
+    [body,cloudflareEnv,{recipient:'other@example.test'}],
+    [{...body,items:[['other',1]]},cloudflareEnv,{}],
+    [{...body,session_id:'cs_live_123'},cloudflareEnv,{}],
+  ]) {
+    const p=provider(options);
+    assert.notEqual((await handle(request(payload),settings,p.fetch)).status,200);
+    assert.ok(!p.calls.some(c=>c.url.includes('cloudflare') || c.url.includes('smtp2go')));
+  }
+  const unsafeAction={...action,links:['https://example.test/not-dummy']};
+  const payload={...body,config_digest:createHash('sha256').update(JSON.stringify(unsafeAction)).digest('hex')};
+  const p=provider();
+  assert.equal((await handle(request(payload),{...cloudflareEnv,DELIVERY_CONFIG:JSON.stringify({actions:[unsafeAction]})},p.fetch)).status,400);
+  assert.equal(p.calls.length,0);
 });
 
 test('forged scope, unapproved recipient, wrong account and unpaid purchases never send', async () => {

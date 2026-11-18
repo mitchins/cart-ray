@@ -2,8 +2,11 @@
 
 import importlib.util
 import json
+import os
 import sqlite3
+import stat
 import subprocess
+import sys
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -135,51 +138,217 @@ def test_backend_must_be_correct_test_binding_with_processing_disabled(mode, env
         installer.validate_backend(installation, api)
 
 
-def test_real_d1_batch_rolls_back_both_rows_on_failure():
-    # Local workerd D1, not a synthetic REST transaction assumption or remote write.
-    script = """
-import {Miniflare} from 'miniflare';
-let raw='';for await(const chunk of process.stdin)raw+=chunk;
-const input=JSON.parse(raw);
-const worker=`export default {async fetch(request,env){
- const input=await request.json(),db=env.DB;
- for(const sql of input.schema)await db.prepare(sql).run();
- const prepared=items=>items.map(item=>item.params.length
-  ?db.prepare(item.sql).bind(...item.params):db.prepare(item.sql));
- const broken=structuredClone(input.queries);broken[2]={sql:'INSERT INTO missing_table VALUES (1)',params:[]};
- let failed=false;try{await db.batch(prepared(broken));}catch{failed=true;}
- if(!failed)throw Error('expected batch failure');
- const count=await db.prepare('SELECT COUNT(*) AS n FROM post_purchase_installation').first();
- if(count.n!==0)throw Error('partial commit');
- const result=await db.batch(prepared(input.queries));
- if(result.at(-1).results[0].activation_watermark!==7)throw Error('wrong fence');
- const repeat=await db.batch(prepared(input.queries));
- if(repeat.at(-1).results[0].last_outbox_id!==7)throw Error('changed fence');
- await db.prepare("INSERT INTO post_purchase_executions VALUES ('other','live')").run();
- let rejected=false;try{await db.batch(prepared(input.queries));}catch{rejected=true;}
- if(!rejected)throw Error('foreign execution accepted');
- const status=await db.prepare(input.queries.at(-1).sql).bind('merchant').first();
- if(status.foreign_execution_count!==1)throw Error('foreign execution not reported');
- return Response.json({ok:true});
-}}`;
-const mf=new Miniflare({workers:[{config:{name:'pp-initialisation-test',type:'worker',
- compatibilityDate:'2026-08-31',env:{DB:{type:'d1',name:'test-db',id:'test-db'}},
- manifest:{mainModule:'worker.mjs',modules:{'worker.mjs':{type:'esm',
- contents:worker}}}}}]});
-try {
- const response=await mf.dispatchFetch('https://local.invalid/',{method:'POST',body:JSON.stringify(input)});
- if(response.status!==200)throw Error(await response.text());
-}finally{await mf.dispose();}
-"""
-    schema = ["CREATE TABLE outbox(id INTEGER PRIMARY KEY)", "INSERT INTO outbox VALUES (7)",
-              "CREATE TABLE orders(order_id TEXT PRIMARY KEY)",
-              "CREATE TABLE post_purchase_installation(singleton INTEGER PRIMARY KEY CHECK(singleton=1),"
-              "merchant_id TEXT NOT NULL,environment TEXT NOT NULL)",
-              "CREATE TABLE post_purchase_checkpoint(singleton INTEGER PRIMARY KEY CHECK(singleton=1),"
-              "merchant_id TEXT NOT NULL,environment TEXT NOT NULL,activation_watermark INTEGER NOT NULL,"
-              "last_outbox_id INTEGER NOT NULL)",
-              "CREATE TABLE post_purchase_executions(merchant_id TEXT,environment TEXT)"]
-    result = subprocess.run(["node", "--input-type=module", "-e", script], cwd=ROOT,
-                            input=json.dumps({"schema": schema, "queries": installer.statements("merchant", True)}),
-                            text=True, capture_output=True, timeout=60)
-    assert result.returncode == 0, result.stderr
+@pytest.mark.parametrize("apply", [False, True])
+def test_cli_uses_rest_for_status_and_one_import_for_apply(monkeypatch, capsys, apply):
+    args = ["post_purchase_installation.py", "--directory", "inventory", "--credentials", "handoff"]
+    if apply:
+        args += ["--apply", "--confirm-processing-disabled"]
+    monkeypatch.setattr(sys, "argv", args)
+    monkeypatch.setattr(installer, "Installation", lambda path: SimpleNamespace(
+        config={"account_id": "test-account", "store_key": "merchant"}))
+    monkeypatch.setattr(installer, "read_private", lambda path: {"cloudflare_api_token": "fixture-token"})
+    calls = []
+    with database() as db:
+        db.execute("INSERT INTO outbox VALUES (7)")
+
+        def query(database_id, sql, params):
+            calls.append(("query", database_id, sql, params))
+            return [dict(row) for row in db.execute(sql, params)]
+
+        api = SimpleNamespace(query=query)
+        monkeypatch.setattr(installer, "API", lambda account, token: api)
+
+        def validate_backend(installation, seen_api):
+            assert seen_api is api
+            calls.append(("validate",))
+            return "fixture-db", "merchant-test-commerce"
+
+        def remote_import(account, db_id, name, token, merchant, diagnostics=None):
+            assert apply, "dry run must not start a D1 import"
+            calls.append(("import", account, db_id, name, merchant))
+            with db:
+                for statement in installer.fence_import_sql(merchant).strip().rstrip(";").split(";\n"):
+                    db.execute(statement)
+
+        monkeypatch.setattr(installer, "validate_backend", validate_backend)
+        monkeypatch.setattr(installer, "remote_import", remote_import)
+        installer.main()
+        receipt = json.loads(capsys.readouterr().out)
+        assert receipt["applied"] is apply and receipt["sendingEnabled"] is False
+        assert receipt["state"] == ("retained" if apply else "uninitialised")
+        assert receipt["current_outbox_id"] == 7
+        writes = [("import", "test-account", "fixture-db", "merchant-test-commerce", "merchant")] if apply else []
+        assert calls == [("validate",), *writes, ("query", "fixture-db", installer.STATUS_SQL, ["merchant"])]
+        if apply:
+            assert receipt["activation_watermark"] == 7
+        else:
+            assert receipt["activation_watermark"] is None
+            assert db.execute("SELECT COUNT(*) FROM post_purchase_installation").fetchone()[0] == 0
+
+
+# Captured retained-import output, with the bookmark and storage metrics replaced.
+IMPORT_PROGRESS = "\u251c Checking if file needs uploading\n\u2502\n"
+IMPORT_RECEIPT = json.dumps([{
+    "results": [{"Total queries executed": 3, "Rows read": 4, "Rows written": 0, "Database size (MB)": 0.5}],
+    "success": True, "finalBookmark": "redacted-bookmark", "meta": {"rows_written": 0, "changed_db": False},
+}], indent=2)
+
+
+@pytest.mark.parametrize("stdout,exit_code,success", [
+    ('[{"success": true, "finalBookmark": "fixture", "results": [{"Total queries executed": 3}]}]', 0, True),
+    ('[{"success": true, "finalBookmark": "fixture", "results": [{"Total queries executed": 2}]}]', 0, False),
+    ('[{"success": true}]', 0, False),
+    ('[{"success": false, "finalBookmark": "fixture"}]', 0, False),
+    ('[{"success": true, "finalBookmark": "fixture"}]', 1, False),
+    pytest.param(IMPORT_PROGRESS + IMPORT_RECEIPT + "\n", 0, True, id="captured-retained-import"),
+    pytest.param(IMPORT_PROGRESS + "\u251c Uploading file\n\u2502 Uploading complete.\n" + IMPORT_RECEIPT,
+                 0, True, id="multiple-progress-lines"),
+    pytest.param(IMPORT_PROGRESS + IMPORT_RECEIPT + "\ntrailing garbage", 0, False, id="trailing-garbage"),
+    pytest.param(IMPORT_PROGRESS + IMPORT_RECEIPT + "\n\u2502\n", 0, False, id="trailing-progress"),
+    pytest.param(IMPORT_RECEIPT + "\n" + IMPORT_RECEIPT, 0, False, id="two-json-receipts"),
+    pytest.param("unexpected prefix\n" + IMPORT_RECEIPT, 0, False, id="unexpected-prefix"),
+    pytest.param(IMPORT_PROGRESS + IMPORT_RECEIPT[:-1], 0, False, id="malformed-json"),
+    pytest.param(IMPORT_PROGRESS, 0, False, id="missing-json"),
+    pytest.param(IMPORT_PROGRESS + json.dumps(json.loads(IMPORT_RECEIPT) * 2), 0, False, id="two-results"),
+    pytest.param(IMPORT_PROGRESS + IMPORT_RECEIPT.replace('"success": true', '"success": false'),
+                 0, False, id="failed-result"),
+    pytest.param(IMPORT_PROGRESS + IMPORT_RECEIPT.replace('"success": true', '"success": false, "success": true'),
+                 0, False, id="duplicate-key"),
+    pytest.param(IMPORT_PROGRESS + IMPORT_RECEIPT.replace('"changed_db": false', '"changed_db": NaN'),
+                 0, False, id="invalid-json-constant"),
+])
+def test_remote_import_uses_locked_wrangler_sql_file_and_requires_completion(
+        monkeypatch, stdout, exit_code, success):
+    calls = []
+
+    def run(command, **options):
+        assert command[0] == str(ROOT / "node_modules/.bin/wrangler")
+        assert command[1:5] == ["d1", "execute", "DB", "--config"]
+        assert command[6:8] == ["--remote", "--file"]
+        assert command[9:] == ["--yes", "--json"]
+        assert json.loads(Path(command[5]).read_text())["d1_databases"] == [
+            {"binding": "DB", "database_id": "fixture-id", "database_name": "merchant-test-commerce"}
+        ]
+        assert json.loads(Path(command[5]).read_text())["account_id"] == "fixture-account"
+        calls.append(Path(command[8]).read_text())
+        assert options["env"]["CLOUDFLARE_API_TOKEN"] == "fixture-token"
+        assert options["env"]["WRANGLER_LOG_SANITIZE"] == "true"
+        assert options["env"]["WRANGLER_LOG"] == "log"
+        assert "fixture-token" not in command
+        assert options["stdin"] == subprocess.DEVNULL and options["capture_output"]
+        return SimpleNamespace(returncode=exit_code, stdout=stdout, stderr="fixture-private")
+
+    monkeypatch.setattr(installer.subprocess, "run", run)
+    args = ("fixture-account", "fixture-id", "merchant-test-commerce", "fixture-token", "merchant")
+    if success:
+        installer.remote_import(*args)
+    else:
+        with pytest.raises(RuntimeError, match="D1 import") as error:
+            installer.remote_import(*args)
+        assert "fixture-private" not in str(error.value)
+    assert calls == [installer.fence_import_sql("merchant")]
+
+
+def test_sql_file_rejects_literals_outside_merchant_identifier_grammar():
+    with pytest.raises(ValueError, match="invalid merchant identity"):
+        installer.fence_import_sql("merchant'; DROP TABLE outbox; --")
+
+
+@pytest.mark.parametrize("timed_out", [False, True])
+def test_diagnostics_capture_redacted_import_failure_without_overwriting(monkeypatch, capsys, tmp_path, timed_out):
+    diagnostic = tmp_path / "diagnostics.jsonl"
+    monkeypatch.setattr(sys, "argv", [
+        "post_purchase_installation.py", "--directory", "inventory", "--credentials", "handoff",
+        "--apply", "--confirm-processing-disabled", "--diagnostics", str(diagnostic),
+    ])
+    monkeypatch.setattr(installer, "Installation", lambda path: SimpleNamespace(
+        config={"account_id": "fixture-account", "store_key": "merchant"}))
+    monkeypatch.setattr(installer, "read_private", lambda path: {"cloudflare_api_token": "fixture-cf-token"})
+    monkeypatch.setattr(installer, "validate_backend", lambda *_: ("fixture-db", "merchant-test-commerce"))
+    monkeypatch.setattr(installer, "API", lambda *_: SimpleNamespace(
+        query=lambda *_: pytest.fail("failed import must not proceed to readback")))
+    calls = []
+    stderr = "import error: Bearer fixture-cf-token https://upload.example.test/path?signature=private-grant"
+
+    def run(command, **options):
+        calls.append(command)
+        if timed_out:
+            raise subprocess.TimeoutExpired(command, 120, output=b"partial output", stderr=stderr.encode())
+        return SimpleNamespace(returncode=1, stdout="partial output", stderr=stderr)
+
+    monkeypatch.setattr(installer.subprocess, "run", run)
+    with pytest.raises(SystemExit) as error:
+        installer.main()
+    assert error.value.code == 1 and len(calls) == 1
+    assert stat.S_IMODE(diagnostic.stat().st_mode) == 0o600
+    saved = diagnostic.read_text()
+    records = [json.loads(line) for line in saved.splitlines()]
+    assert records[-2]["event"] == ("wrangler-timeout" if timed_out else "wrangler-exit")
+    assert records[-2]["stdout"] == "partial output"
+    assert records[-2]["stderr"] == "import error: Bearer [REDACTED] https://upload.example.test/path?[REDACTED]"
+    assert records[-1]["stage"] == "wrangler-import"
+    assert not capsys.readouterr().out
+    with pytest.raises(SystemExit):
+        installer.main()
+    assert len(calls) == 1
+    assert diagnostic.read_text() == saved
+    assert "no D1 operations were attempted" in capsys.readouterr().err
+
+
+def test_wrangler_local_sql_file_rolls_back_and_preserves_fence(tmp_path):
+    # Exercise the real Wrangler SQL-file parser and workerd D1 with no remote credentials.
+    config = tmp_path / "wrangler.json"
+    config.write_text(json.dumps({"name": "fence-test", "compatibility_date": "2026-08-31",
+                                  "d1_databases": [{"binding": "DB", "database_name": "fence-test",
+                                                    "database_id": "00000000-0000-4000-8000-000000000001"}]}))
+    env = {key: value for key, value in os.environ.items() if not key.startswith(("CLOUDFLARE_", "CF_"))}
+    env.update(WRANGLER_SEND_METRICS="false", WRANGLER_LOG_PATH=str(tmp_path / "wrangler.log"))
+    sql_file = tmp_path / "fence.sql"
+
+    def execute(flag, value, *, succeeds=True, log_level="log"):
+        result = subprocess.run([str(installer.WRANGLER), "d1", "execute", "DB", "--config", str(config),
+                                 "--local", "--persist-to", str(tmp_path / "d1"), "--yes", "--json", flag, value],
+                                cwd=tmp_path, env={**env, "WRANGLER_LOG": log_level},
+                                capture_output=True, text=True, timeout=30)
+        if succeeds:
+            assert result.returncode == 0, result.stderr or result.stdout
+            if log_level != "log":
+                assert result.stdout == "" and result.stderr == ""
+                return None
+            return json.loads(result.stdout)[-1]["results"]
+        assert result.returncode != 0
+
+    def run_file(sql, *, succeeds=True):
+        sql_file.write_text(sql)
+        return execute("--file", str(sql_file), succeeds=succeeds)
+
+    def status():
+        return execute("--command", installer.STATUS_SQL.replace("?1", "'merchant'"))[0]
+
+    # The same JSON output path is used for local and remote d1 execute.
+    for log_level in ("error", "info"):
+        execute("--command", "SELECT 1 AS ok", log_level=log_level)
+    assert execute("--command", "SELECT 1 AS ok") == [{"ok": 1}]
+
+    schema = ("CREATE TABLE outbox(id INTEGER PRIMARY KEY); INSERT INTO outbox VALUES (7);"
+              "CREATE TABLE orders(order_id TEXT PRIMARY KEY);")
+    for migration in ("0006_post_purchase_actions.sql", "0007_post_purchase_checkpoint.sql"):
+        schema += "\n" + (ROOT / "migrations" / migration).read_text()
+    run_file(schema)
+    sql = installer.fence_import_sql("merchant")
+    broken = sql[:sql.index("INSERT INTO post_purchase_checkpoint")] + "SELECT json('invalid JSON');"
+    run_file(broken, succeeds=False)
+    assert installer.classify(status(), "merchant") == "uninitialised"
+    run_file(sql)
+    first = status()
+    assert installer.classify(first, "merchant") == "retained"
+    assert first["activation_watermark"] == first["last_outbox_id"] == 7
+
+    execute("--command", "INSERT INTO outbox VALUES (8); UPDATE post_purchase_checkpoint SET last_outbox_id=8;"
+            "INSERT INTO orders VALUES ('order'); INSERT INTO post_purchase_executions VALUES "
+            "('merchant','test','order','test-workflow','" + ("a" * 64) + "','claimed',NULL,0,0);")
+    run_file(sql)
+    retained = status()
+    assert (retained["activation_watermark"], retained["last_outbox_id"], retained["execution_count"]) == (7, 8, 1)
+    run_file(installer.fence_import_sql("foreign"), succeeds=False)
+    assert status() == retained

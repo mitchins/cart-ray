@@ -20,8 +20,16 @@ from cloud import API, CloudError, stripe
 from merchant_inputs import ConnectedShell, commerce_build_hash, javascript_json, tree_hash
 from merchant_inputs import snapshot as snapshot_merchant_inputs
 from merchant_inputs import validate as validate_merchant_inputs
-from post_purchase_operator import OFF, ON, POST_PURCHASE_ROLES, PostPurchaseOperator, eligible_offers
-from topology import POST_PURCHASE_SECRET_BINDINGS, graph, secret_bindings, validate_post_purchase, wrangler_config
+from post_purchase_operator import (
+    OFF,
+    ON,
+    POST_PURCHASE_ROLES,
+    PROVIDER_KEYS,
+    PostPurchaseOperator,
+    eligible_offers,
+    validate_email_credential,
+)
+from topology import graph, post_purchase_secret_bindings, secret_bindings, validate_post_purchase, wrangler_config
 
 ROOT = Path(__file__).resolve().parents[3]
 ROLES = ("source", "reviews", "consumer", "producer", "evidence", "scheduler", "sender")
@@ -105,6 +113,7 @@ def validate_config(config):
         "source_api_path",
         "post_purchase_config",
         "post_purchase_config_sha256",
+        "post_purchase_email_provider",
     }
     if not isinstance(config, dict) or set(config) - required - optional or required - set(config):
         raise ValueError("installation config has missing or unknown fields")
@@ -202,6 +211,8 @@ def validate_config(config):
     elif config.get("review_invitation_default_checked", True) is not True:
         raise ValueError("custom invitation checkbox default requires a merchant inputs package")
     if "post_purchase_config" in config:
+        if config.get("post_purchase_email_provider", "smtp2go") not in PROVIDER_KEYS:
+            raise ValueError("unsupported post-purchase email provider")
         snapshot = config["post_purchase_config"]
         if (not isinstance(snapshot, str) or not snapshot.strip()
                 or config.get("store_key") != "effective-policy-uat"
@@ -214,7 +225,7 @@ def validate_config(config):
                 not isinstance(config["post_purchase_config_sha256"], str)
                 or not re.fullmatch(r"[a-f0-9]{64}", config["post_purchase_config_sha256"])):
             raise ValueError("invalid post-purchase configuration fingerprint")
-    elif "post_purchase_config_sha256" in config:
+    elif "post_purchase_config_sha256" in config or "post_purchase_email_provider" in config:
         raise ValueError("post-purchase fingerprint requires a protected action file")
     return {
         "reviews_enabled": True,
@@ -229,7 +240,7 @@ def validate_config(config):
 
 
 class Installation(PostPurchaseOperator):
-    def __init__(self, directory, credentials=None, api=None):
+    def __init__(self, directory, credentials=None, api=None, *, credential_provider=None):
         self.directory = Path(directory).resolve()
         self.state_path = self.directory / "inventory.json"
         self.vault_path = self.directory / "secrets.json"
@@ -261,6 +272,10 @@ class Installation(PostPurchaseOperator):
                 "test_sender",
             }
             mailing = self.config["reviews_enabled"] or self.has_post_purchase
+            provider = credential_provider or self.post_purchase_email_provider
+            if self.has_post_purchase and not self.config["reviews_enabled"]:
+                required.remove("smtp2go_api_key")
+                required.add(PROVIDER_KEYS[provider])
             if not mailing:
                 required -= {"smtp2go_api_key", "approved_test_email", "test_sender"}
             if not required.issubset(credentials) or any(
@@ -269,8 +284,8 @@ class Installation(PostPurchaseOperator):
                 raise ValueError("credential handoff is incomplete; use the documented private JSON schema")
             if not credentials["stripe_test_key"].startswith(("sk_test_", "rk_test_")):
                 raise ValueError("only a Stripe test credential is accepted")
-            if mailing and not credentials["smtp2go_api_key"].startswith("api-"):
-                raise ValueError("invalid test SMTP2GO credential")
+            if mailing:
+                validate_email_credential(credentials, provider)
             for field in ("approved_test_email", "test_sender") if mailing else ():
                 if not re.fullmatch(r"[^\s@<>]+@[^\s@<>]+\.[A-Za-z]{2,}", credentials[field]):
                     raise ValueError(f"invalid approved test mailbox field {field}")
@@ -851,6 +866,8 @@ class Installation(PostPurchaseOperator):
                                                          "webhook_url", "source_mode", "source_api_path",
                                                          "post_purchase_config_sha256")
                          if key in self.config})
+        if "post_purchase_email_provider" in self.config:
+            identity["post_purchase_email_provider"] = self.config["post_purchase_email_provider"]
         encoded = json.dumps(identity, sort_keys=True, separators=(",", ":"))
         return digest(encoded.encode())
 
@@ -1114,6 +1131,9 @@ class Installation(PostPurchaseOperator):
                     raise ValueError("; ".join(errors))
             self.record_post_purchase_off(build)
         self.state["deployment"]["complete"] = True
+        migration = self.state.pop("post_purchase_provider_migration", None)
+        if migration:
+            self.state.setdefault("post_purchase_provider_migrations", []).append({**migration, "status": "complete"})
         self.state["phase"] = "deployed"
         self.save()
         return {"commit": build["commit"], "versions": progress["versions"], "activated": False}
@@ -1549,7 +1569,7 @@ class Installation(PostPurchaseOperator):
             ):
                 errors.append(f"{role}.vars.{name}: differs from inventory")
         if self.has_post_purchase:
-            for name in POST_PURCHASE_SECRET_BINDINGS[role]:
+            for name in post_purchase_secret_bindings(role, expected["vars"].get("EMAIL_PROVIDER", "smtp2go")):
                 if observed.get(name, {}).get("type") != "secret_text":
                     errors.append(f"{role}.bindings.{name}: missing/wrong secret type")
         return errors
@@ -1921,6 +1941,10 @@ def main():
     )
     pp_activation.add_argument("--enable-test-delivery", action="store_true")
     commands.add_parser("post-purchase-disable", help="stop EP source processing, settle, then disable its handler")
+    pp_provider = commands.add_parser(
+        "post-purchase-reconfigure-provider", help="explicit OFF-only local provider/vault migration; never sends")
+    pp_provider.add_argument("--provider", required=True, choices=tuple(PROVIDER_KEYS))
+    pp_provider.add_argument("--allow-sender-change", action="store_true")
     rollback = commands.add_parser("rollback", help="compatible recorded Worker versions only; never rewind D1")
     rollback.add_argument("--release", type=int, default=-2, help="inventory release index (default previous)")
     request = commands.add_parser("request", help="operator-side call to the existing private Reviews service")
@@ -1949,13 +1973,16 @@ def main():
                 }
             else:
                 credentials = read_private(args.credentials) if args.credentials else None
-                installation = Installation(args.directory, credentials)
+                installation = Installation(args.directory, credentials, credential_provider=(
+                    args.provider if args.command == "post-purchase-reconfigure-provider" else None))
                 if args.command == "activate":
                     result = installation.activate(args.enable_test_delivery)
                 elif args.command == "post-purchase-activate":
                     result = installation.post_purchase_activate(args.enable_test_delivery)
                 elif args.command == "post-purchase-disable":
                     result = installation.post_purchase_disable()
+                elif args.command == "post-purchase-reconfigure-provider":
+                    result = installation.post_purchase_reconfigure_provider(args.provider, args.allow_sender_change)
                 elif args.command == "rollback":
                     result = installation.rollback(args.release)
                 elif args.command == "upgrade":

@@ -83,7 +83,15 @@ POST_PURCHASE_SECRET_BINDINGS = {
 }
 
 
-def graph(installation, versions=None, sending=False, post_purchase_modes=None):
+def post_purchase_secret_bindings(role, provider="smtp2go"):
+    names = POST_PURCHASE_SECRET_BINDINGS[role]
+    if role == "post-purchase" and provider == "cloudflare":
+        return tuple("CLOUDFLARE_EMAIL_API_TOKEN" if name == "SMTP2GO_API_KEY" else name for name in names)
+    return names
+
+
+def graph(installation, versions=None, sending=False, post_purchase_modes=None,
+          email_provider=None, actions_override=None):
     config, state = installation.config, installation.state
     versions = versions or {}
     db = installation.db
@@ -258,7 +266,7 @@ def graph(installation, versions=None, sending=False, post_purchase_modes=None):
     if config["reviews_enabled"]:
         nodes = review_nodes
     if "post_purchase_config" in config:
-        actions = installation.post_purchase_actions()
+        actions = actions_override if actions_override is not None else installation.post_purchase_actions()
         modes = post_purchase_modes if post_purchase_modes is not None else state.get("post_purchase_modes", {})
         nodes["source"]["vars"].update(
             CARTRAY_POST_PURCHASE_MODE=modes.get("source", "disabled"),
@@ -270,6 +278,10 @@ def graph(installation, versions=None, sending=False, post_purchase_modes=None):
             "vars": {"ENVIRONMENT": "test", "DELIVERY_MODE": modes.get("post-purchase", "disabled"),
                      "STRIPE_ACCOUNT_ID": config["stripe_account_id"]},
         }
+        provider = email_provider or config.get("post_purchase_email_provider", "smtp2go")
+        if provider == "cloudflare":
+            nodes["post-purchase"]["vars"].update(
+                EMAIL_PROVIDER="cloudflare", CLOUDFLARE_EMAIL_ACCOUNT_ID=config["account_id"])
     for node in nodes.values():
         bindings = [
             {
@@ -380,8 +392,11 @@ def secret_bindings(installation, role):
             APPROVED_TEST_RECIPIENT=vault["post_purchase_approved_test_email"],
             APPROVED_TEST_SENDER=vault["post_purchase_test_sender"],
             STRIPE_API_KEY=vault["post_purchase_stripe_test_key"],
-            SMTP2GO_API_KEY=vault["post_purchase_smtp2go_api_key"],
         )
+        if installation.config.get("post_purchase_email_provider", "smtp2go") == "cloudflare":
+            result["CLOUDFLARE_EMAIL_API_TOKEN"] = vault["post_purchase_cloudflare_email_api_token"]
+        else:
+            result["SMTP2GO_API_KEY"] = vault["post_purchase_smtp2go_api_key"]
     return [{"type": "secret_text", "name": name, "text": value} for name, value in result.items()]
 
 

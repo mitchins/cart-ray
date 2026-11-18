@@ -3,6 +3,7 @@
 import csv
 import hashlib
 import json
+import re
 import secrets
 import sys
 import time
@@ -17,6 +18,20 @@ ON = dict.fromkeys(POST_PURCHASE_ROLES, "test")
 # has a shared 7s provider budget inside that drain.
 SETTLE_SECONDS = 30
 HANDOFF_FIELDS = ("stripe_test_key", "smtp2go_api_key", "approved_test_email", "test_sender")
+PROVIDER_KEYS = {"smtp2go": "smtp2go_api_key", "cloudflare": "cloudflare_email_api_token"}
+COMMON_HANDOFF_FIELDS = ("stripe_test_key", "approved_test_email", "test_sender")
+
+
+def email_handoff_fields(provider):
+    return (*COMMON_HANDOFF_FIELDS, PROVIDER_KEYS[provider])
+
+
+def validate_email_credential(credentials, provider):
+    value = credentials.get(PROVIDER_KEYS[provider], "")
+    valid = (isinstance(value, str) and value.startswith("api-") if provider == "smtp2go" else
+             isinstance(value, str) and re.fullmatch(r"[!-~]{20,1024}", value))
+    if not valid:
+        raise ValueError("invalid test email provider credential")
 
 
 def eligible_offers(merchant_inputs, lock):
@@ -37,10 +52,15 @@ class PostPurchaseOperator:
         return "post_purchase_config" in self.config
 
     @property
+    def post_purchase_email_provider(self):
+        return self.config.get("post_purchase_email_provider", "smtp2go")
+
+    @property
     def post_purchase_vault_fields(self):
         if not self.has_post_purchase:
             return ()
-        return ("post_purchase_token", *("post_purchase_" + field for field in HANDOFF_FIELDS))
+        return ("post_purchase_token", *("post_purchase_" + field
+                                        for field in email_handoff_fields(self.post_purchase_email_provider)))
 
     def initial_post_purchase_secrets(self):
         actions = self.post_purchase_actions()
@@ -48,14 +68,124 @@ class PostPurchaseOperator:
                 or a["sender"].lower() != self.credentials["test_sender"].lower() for a in actions)):
             raise ValueError("protected post-purchase sender/recipient differ from the approved credential handoff")
         return {"post_purchase_token": secrets.token_hex(32),
-                **{"post_purchase_" + key: self.credentials[key] for key in HANDOFF_FIELDS}}
+                **{"post_purchase_" + key: self.credentials[key]
+                   for key in email_handoff_fields(self.post_purchase_email_provider)}}
 
     def check_post_purchase_handoff(self):
         if self.has_post_purchase:
             vault = self.vault()
             if not self.credentials or any(self.credentials.get(key) != vault["post_purchase_" + key]
-                                           for key in HANDOFF_FIELDS):
+                                           for key in email_handoff_fields(self.post_purchase_email_provider)):
                 raise ValueError("post-purchase credential handoff differs from the pinned test vault")
+
+    def provider_migration_bundle(self, migration):
+        from operate import digest, read_private
+
+        path = self.directory / "inputs" / migration["bundle"]
+        if path.parent != self.directory / "inputs" or path.name != migration["bundle"]:
+            raise ValueError("unsafe email provider migration snapshot")
+        raw = read_private(path, raw=True)
+        if digest(raw) != migration["bundle_sha256"]:
+            raise ValueError("protected email provider migration snapshot changed")
+        return json.loads(raw)
+
+    def post_purchase_reconfigure_provider(self, provider, allow_sender_change=False):
+        """Journal an explicit local provider/sender change; never publish, send or write D1."""
+        from operate import atomic_json, digest, read_private
+
+        if not self.has_post_purchase or provider not in PROVIDER_KEYS or not self.credentials:
+            raise ValueError("email reconfiguration requires a protected post-purchase installation and credentials")
+        self.require_post_purchase_off()
+        validate_email_credential(self.credentials, provider)
+        key = "post_purchase_" + PROVIDER_KEYS[provider]
+        value = self.credentials[PROVIDER_KEYS[provider]]
+        checksum = digest(value.encode())
+        migration = self.state.get("post_purchase_provider_migration")
+        if migration and (migration["to"] != provider or migration["credential_sha256"] != checksum):
+            raise ValueError("resume the original email provider migration with its pinned credential")
+        if migration and (self.state.get("phase") in ("deploying", "rolling-back")
+                          or not self.state.get("deployment", {}).get("complete")
+                          or self.state["deployment"]["versions"] != migration["disabled_versions"]):
+            raise ValueError("finish the interrupted OFF deployment, not email reconfiguration")
+        if not migration:
+            vault = self.vault()
+            if any(self.credentials.get(field) != vault["post_purchase_" + field]
+                   for field in ("stripe_test_key", "approved_test_email")):
+                raise ValueError("email reconfiguration cannot change the pinned Stripe key or recipient")
+            sender_changed = self.credentials["test_sender"] != vault["post_purchase_test_sender"]
+            if sender_changed and not allow_sender_change:
+                raise ValueError("sender change requires explicit --allow-sender-change")
+            if key in vault and vault[key] != value:
+                raise ValueError("provider credential already pinned; token rotation is not supported")
+            if not sender_changed and provider == self.post_purchase_email_provider:
+                self.check_post_purchase_handoff()
+                return {"post_purchase": "provider-unchanged", "provider": provider}
+            deployment, disabled, _ = self.post_purchase_runtime()
+            if deployment["versions"] != disabled:
+                raise ValueError("email reconfiguration requires both recorded OFF versions")
+            self.check_current_post_purchase_off()
+            for role in POST_PURCHASE_ROLES:
+                if self.worker_visibility_errors(role):
+                    raise ValueError("email reconfiguration requires both Workers and previews to remain private")
+            actions = self.post_purchase_actions()
+            action_value = {"schema": 1, "actions": [{**a, "sender": self.credentials["test_sender"]} for a in actions]}
+            raw_actions = (json.dumps(action_value, indent=2) + "\n").encode()
+            self.parse_post_purchase_snapshot(raw_actions, self.config, Path(self.config["merchant_inputs"]),
+                                              json.loads(Path(self.config["preflight_lock"]).read_text()))
+            bundle = {"old_vault": vault, "new_vault": {
+                **vault, key: value, "post_purchase_test_sender": self.credentials["test_sender"]},
+                "old_actions_raw": read_private(Path(self.config["post_purchase_config"]), raw=True).decode(),
+                "new_actions": action_value}
+            revision = len(self.state.get("post_purchase_provider_migrations", []))
+            bundle_name = f"email-provider-{revision}.json"
+            bundle_raw = (json.dumps(bundle, indent=2) + "\n").encode()
+            if len(bundle_raw) > 32768:
+                raise ValueError("protected email migration snapshot exceeds bounds")
+            bundle_path = self.directory / "inputs" / bundle_name
+            if bundle_path.exists() and read_private(bundle_path, raw=True) != bundle_raw:
+                raise ValueError("unrecorded email migration snapshot differs; restore before continuing")
+            atomic_json(bundle_path, bundle)
+            migration = {"from": self.post_purchase_email_provider, "to": provider, "status": "staging",
+                         "credential_sha256": checksum, "disabled_versions": dict(disabled),
+                         "bundle": bundle_name, "bundle_sha256": digest(bundle_raw),
+                         "old_action_sha256": self.config["post_purchase_config_sha256"],
+                         "new_action_sha256": digest(raw_actions)}
+            self.state["post_purchase_provider_migration"] = migration
+            self.save()
+        bundle = self.provider_migration_bundle(migration)
+        old, new = bundle["old_vault"], bundle["new_vault"]
+        if any(self.credentials.get(field) != new["post_purchase_" + field]
+               for field in email_handoff_fields(provider)):
+            raise ValueError("resume email migration with its unchanged protected handoff")
+        if old["post_purchase_test_sender"] != new["post_purchase_test_sender"] and not allow_sender_change:
+            raise ValueError("sender change requires explicit --allow-sender-change")
+        current = read_private(self.vault_path)
+        if current not in (old, new):
+            raise ValueError("vault differs from both recorded email migration snapshots")
+        actions_path = Path(self.config["post_purchase_config"])
+        current_action_hash = digest(read_private(actions_path, raw=True))
+        if current_action_hash not in (migration["old_action_sha256"], migration["new_action_sha256"]):
+            raise ValueError("actions differ from both recorded email migration snapshots")
+        self.check_current_post_purchase_off()
+        for role in POST_PURCHASE_ROLES:
+            if self.worker_visibility_errors(role):
+                raise ValueError("email reconfiguration requires both Workers and previews to remain private")
+        # The write-ahead bundle authenticates both sides of each local rename.
+        # Only this explicit command may resume across the multi-file boundary.
+        atomic_json(self.vault_path, new)
+        atomic_json(actions_path, bundle["new_actions"])
+        if digest(read_private(actions_path, raw=True)) != migration["new_action_sha256"]:
+            raise ValueError("email migration action serialization differs")
+        self.state["secret_fingerprints"].update({
+            key: checksum, "post_purchase_test_sender": digest(new["post_purchase_test_sender"].encode())})
+        self.config["post_purchase_email_provider"] = provider
+        self.state["config"]["post_purchase_email_provider"] = provider
+        self.config["post_purchase_config_sha256"] = migration["new_action_sha256"]
+        self.state["config"]["post_purchase_config_sha256"] = migration["new_action_sha256"]
+        migration["status"] = "awaiting-off-deploy"
+        self.state.pop("build", None)
+        self.save()
+        return {"post_purchase": "provider-configured", "provider": provider, "next": "fresh OFF build/deploy"}
 
     def require_post_purchase_off(self):
         if self.has_post_purchase and (self.state.get("post_purchase_transition")
@@ -122,8 +252,9 @@ class PostPurchaseOperator:
         self.check_post_purchase_release(build)
         return deployment, disabled, build
 
-    def check_post_purchase_version(self, role, mode, actual, version):
-        nodes, _ = graph(self, post_purchase_modes={role: mode})
+    def check_post_purchase_version(self, role, mode, actual, version, email_provider=None, actions_override=None):
+        nodes, _ = graph(self, post_purchase_modes={role: mode}, email_provider=email_provider,
+                         actions_override=actions_override)
         errors = self.worker_binding_errors(role, nodes[role], actual, version)
         if errors:
             raise ValueError("; ".join(errors))
@@ -138,7 +269,13 @@ class PostPurchaseOperator:
             recovering = (rollback_targets or {}).get(role)
             if actual["id"] not in {known, recovering}:
                 raise ValueError(f"{role}: not running a recorded OFF version; resolve drift before release changes")
-            self.check_post_purchase_version(role, "disabled", actual, actual["id"])
+            migration = self.state.get("post_purchase_provider_migration", {})
+            previous = (migration.get("from") if actual["id"] == migration.get("disabled_versions", {}).get(role)
+                        else None)
+            actions = ([dict(sorted(a.items())) for a in
+                        json.loads(self.provider_migration_bundle(migration)["old_actions_raw"])["actions"]]
+                       if previous else None)
+            self.check_post_purchase_version(role, "disabled", actual, actual["id"], previous, actions)
 
     def post_purchase_live_version(self, role, deployment, transition):
         actual = self.api.version(self.name(role))
@@ -175,6 +312,8 @@ class PostPurchaseOperator:
                 "activation_watermark": self.state.get("post_purchase_watermark")}
 
     def post_purchase_activate(self, enable_test_delivery=False):
+        if self.state.get("post_purchase_provider_migration"):
+            raise ValueError("finish a fresh OFF build/deploy after email provider reconfiguration before activation")
         if not enable_test_delivery:
             raise ValueError("post-purchase activation requires explicit --enable-test-delivery")
         deployment, disabled, build = self.post_purchase_runtime()

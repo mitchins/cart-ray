@@ -212,6 +212,142 @@ def initialise(install, db):
             db.execute(query["sql"], query["params"]).fetchall()
 
 
+CF_CREDS = {**CREDS, "cloudflare_email_api_token": "v1.0-account-email-fixture-" * 3,
+            "test_sender": "enquiry@effectivepolicy.com.au"}
+
+
+def email_migration_install(install, api, credentials=None):
+    handoff = deepcopy(CF_CREDS if credentials is None else credentials)
+    handoff.pop("smtp2go_api_key", None)
+    return Installation(install.directory, handoff, api, credential_provider="cloudflare")
+
+
+def test_explicit_off_provider_sender_migration_then_fresh_off_deploy(deployed):
+    original, api, db = deployed
+    original.post_purchase_fence()
+    initialise(original, db)
+    before_db = list(db.iterdump())
+    before_vault = original.vault()
+    previous_actions = original.post_purchase_actions()
+    previous_hash = original.config["post_purchase_config_sha256"]
+    before_events = list(api.events)
+    install = email_migration_install(original, api)
+    with pytest.raises(ValueError, match="allow-sender-change"):
+        install.post_purchase_reconfigure_provider("cloudflare")
+    assert install.post_purchase_reconfigure_provider("cloudflare", True)["next"] == "fresh OFF build/deploy"
+    assert list(db.iterdump()) == before_db
+    assert api.events == before_events  # Reads only: no upload, publish, send or D1 write.
+    assert "build" not in install.state
+    assert install.state["post_purchase_modes"] == OFF
+    assert install.config["post_purchase_config_sha256"] != previous_hash
+    assert install.post_purchase_actions() == [{**a, "sender": CF_CREDS["test_sender"]} for a in previous_actions]
+    for key, value in before_vault.items():
+        assert install.vault()[key] == (CF_CREDS["test_sender"] if key == "post_purchase_test_sender" else value)
+    assert CF_CREDS["cloudflare_email_api_token"] not in install.state_path.read_text()
+    assert CF_CREDS["test_sender"] not in install.state_path.read_text()
+    secrets = {b["name"]: b["text"] for b in secret_bindings(install, "post-purchase")}
+    assert secrets["CLOUDFLARE_EMAIL_API_TOKEN"] == CF_CREDS["cloudflare_email_api_token"]
+    assert "SMTP2GO_API_KEY" not in secrets
+    assert graph(install)[0]["post-purchase"]["vars"]["EMAIL_PROVIDER"] == "cloudflare"
+    install.check_current_post_purchase_off()  # Retained old provider/action digest is still verifiable.
+    with pytest.raises(ValueError, match="fresh OFF"):
+        install.post_purchase_activate(True)
+    assert install.post_purchase_reconfigure_provider("cloudflare", True)["provider"] == "cloudflare"
+    capture_build(install, "cloudflare-new-clean-commit")
+    install.deploy()
+    assert "post_purchase_provider_migration" not in install.state
+    assert install.state["post_purchase_provider_migrations"][-1]["status"] == "complete"
+    assert install.doctor()["healthy"]
+    assert install.post_purchase_activate(True)["modes"] == ON
+    install.post_purchase_disable()
+    with pytest.raises(ValueError, match="retained release differs"):
+        install.rollback(-2)  # Cannot restore a mismatched provider/sender/digest contract.
+
+
+@pytest.mark.parametrize("boundary", ["vault", "actions", "inventory"])
+def test_email_migration_resumes_after_each_local_write_boundary(deployed, monkeypatch, boundary):
+    import operate
+
+    original, api, db = deployed
+    before_db = list(db.iterdump())
+    install = email_migration_install(original, api)
+    write = operate.atomic_json
+    failed = False
+
+    def interrupted(path, value):
+        nonlocal failed
+        is_target = ((boundary == "vault" and path == install.vault_path)
+                     or (boundary == "actions" and path == Path(install.config["post_purchase_config"]))
+                     or (boundary == "inventory" and path == install.state_path
+                         and value.get("post_purchase_provider_migration", {}).get("status") == "awaiting-off-deploy"))
+        if is_target and not failed:
+            failed = True
+            if boundary != "inventory":
+                write(path, value)
+            raise OSError("simulated local rename interruption")
+        write(path, value)
+
+    monkeypatch.setattr(operate, "atomic_json", interrupted)
+    with pytest.raises(OSError, match="interruption"):
+        install.post_purchase_reconfigure_provider("cloudflare", True)
+    monkeypatch.setattr(operate, "atomic_json", write)
+    resumed = email_migration_install(original, api)
+    assert resumed.state["post_purchase_provider_migration"]["status"] == "staging"
+    assert resumed.post_purchase_reconfigure_provider("cloudflare", True)["provider"] == "cloudflare"
+    assert resumed.vault()["post_purchase_test_sender"] == CF_CREDS["test_sender"]
+    resumed.check_current_post_purchase_off()
+    assert list(db.iterdump()) == before_db
+
+
+@pytest.mark.parametrize("change", [{"approved_test_email": "other@example.test"},
+                                   {"stripe_test_key": "sk_test_different"}])
+def test_email_migration_cannot_change_recipient_or_stripe_identity(deployed, change):
+    original, api, _ = deployed
+    install = email_migration_install(original, api, {**CF_CREDS, **change})
+    with pytest.raises(ValueError, match="cannot change"):
+        install.post_purchase_reconfigure_provider("cloudflare", True)
+    assert "post_purchase_provider_migration" not in install.state
+
+
+def test_email_migration_rejects_active_runtime_and_public_visibility(deployed):
+    original, api, db = deployed
+    original.post_purchase_fence()
+    initialise(original, db)
+    original.post_purchase_activate(True)
+    install = email_migration_install(original, api)
+    with pytest.raises(ValueError, match="post-purchase-disable"):
+        install.post_purchase_reconfigure_provider("cloudflare", True)
+    original.post_purchase_disable()
+    api.visibility[original.name("source")] = {"enabled": True, "previews_enabled": False}
+    install = email_migration_install(original, api)
+    with pytest.raises(ValueError, match="remain private"):
+        install.post_purchase_reconfigure_provider("cloudflare", True)
+    assert "post_purchase_provider_migration" not in install.state
+
+
+def test_email_migration_rejects_modified_snapshot_and_changed_resume_credential(deployed):
+    original, api, _ = deployed
+    install = email_migration_install(original, api)
+    install.post_purchase_reconfigure_provider("cloudflare", True)
+    install.credentials["cloudflare_email_api_token"] = "another-token-value" * 3
+    with pytest.raises(ValueError, match="pinned credential"):
+        install.post_purchase_reconfigure_provider("cloudflare", True)
+    install.credentials = deepcopy(CF_CREDS)
+    bundle = install.directory / "inputs" / install.state["post_purchase_provider_migration"]["bundle"]
+    bundle.write_bytes(bundle.read_bytes() + b"\n")
+    with pytest.raises(ValueError, match="snapshot changed"):
+        install.post_purchase_reconfigure_provider("cloudflare", True)
+
+
+def test_email_migration_cannot_restart_during_replacement_deployment(deployed):
+    original, api, _ = deployed
+    install = email_migration_install(original, api)
+    install.post_purchase_reconfigure_provider("cloudflare", True)
+    install.state["phase"] = "deploying"
+    with pytest.raises(ValueError, match="interrupted OFF deployment"):
+        install.post_purchase_reconfigure_provider("cloudflare", True)
+
+
 def test_disabled_deploy_and_real_handler_digest(deployed):
     install, api, _ = deployed
     nodes, urls = graph(install)
