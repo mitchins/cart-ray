@@ -37,7 +37,20 @@ new secret binding, or customer-data table.
 policy as `/catalogue` and `/checkout`. It accepts no request body and permits no custom request
 headers. It sends `Cache-Control: no-store`.
 
-Its only successful response is:
+The Worker validates the session identifier before any database access and applies the
+`CHECKOUT_STATUS_RATE_LIMITER` Cloudflare binding per connecting IP (IPv6 /64). Missing
+client identity or limiter fails closed. Requests without an Origin use the same budget;
+CORS does not provide admission control. Provision this binding when deploying the Worker.
+The public `/health` endpoint is process liveness only and does not probe D1.
+
+`GET /catalogue` serves the public projection compiled from validated deployment inputs.
+Connected commerce requires the reviewed Stripe preflight lock; synthetic fixture bundles
+are for local fixtures and cannot authorize a connected checkout.
+Refreshing prices or presentation requires rebuilding and deploying a new catalogue bundle;
+responses are `no-store`. Checkout independently resolves authoritative Stripe prices and
+checks the catalogue version, so an old display snapshot cannot authorize a stale amount.
+
+The only successful `/checkout-status` response is:
 
 ```json
 {"state":"pending"}

@@ -133,6 +133,10 @@ service = {q(c["producer_worker"])}
 name = "CHECKOUT_RATE_LIMITER"
 namespace_id = "20261107"
 simple = {{ limit = 20, period = 60 }}
+[[ratelimits]]
+name = "CHECKOUT_STATUS_RATE_LIMITER"
+namespace_id = "20261120"
+simple = {{ limit = 60, period = 60 }}
 """
     reviews = f"""name = {q(c["reviews_worker"])}
 {common}main = {q(str(ROOT / "modules/reviews/src/worker.py"))}

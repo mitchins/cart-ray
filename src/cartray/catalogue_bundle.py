@@ -35,6 +35,11 @@ class CompiledCatalogueBundle:
     catalogue_sources: tuple[CatalogSource, ...]
     fulfilment_expansions: Mapping[str, tuple[str, ...]]
     presentation_sources: tuple[PresentationSource, ...]
+    public_manifest_json: str
+
+    def public_manifest(self) -> dict:
+        """Return the validated public snapshot compiled for this release."""
+        return json.loads(self.public_manifest_json)
 
     @property
     def catalogue_source_adapter(self) -> CatalogueSourceAdapter:
@@ -73,6 +78,7 @@ async def compile_catalogue_bundle(
         catalogue_sources=catalogue_sources,
         fulfilment_expansions={key: tuple(value) for key, value in sorted(fulfilment_expansions.items())},
         presentation_sources=presentation_sources,
+        public_manifest_json=json.dumps(presented.public_manifest(), sort_keys=True, separators=(",", ":")),
     )
 
 
@@ -109,6 +115,7 @@ def render_compiled_catalogue_module(bundle: CompiledCatalogueBundle) -> str:
         "expected_presentation_version": bundle.expected_presentation_version,
         "fulfilment_expansions": {key: list(value) for key, value in bundle.fulfilment_expansions.items()},
         "presentation_sources": [presentation_source_payload(source) for source in bundle.presentation_sources],
+        "public_manifest_json": bundle.public_manifest_json,
     }
     encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
     return f"""# ruff: noqa: E501
@@ -132,6 +139,7 @@ COMPILED_CATALOGUE = CompiledCatalogueBundle(
     catalogue_sources=tuple(CatalogSource(**source) for source in _PAYLOAD["catalogue_sources"]),
     fulfilment_expansions={{key: tuple(value) for key, value in _PAYLOAD["fulfilment_expansions"].items()}},
     presentation_sources=tuple(PresentationSource(**source) for source in _PAYLOAD["presentation_sources"]),
+    public_manifest_json=_PAYLOAD["public_manifest_json"],
 )
 """
 
