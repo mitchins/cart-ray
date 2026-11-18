@@ -17,6 +17,18 @@ def merchant_path(value, *, product=False):
     return value
 
 
+def register_path(value, prefixes):
+    """Reject inconsistent casing of shared directory prefixes on any filesystem."""
+    merchant_path(value)
+    parts = value.strip("/").split("/")
+    for index in range(1, len(parts) + 1):
+        prefix = "/" + "/".join(parts[:index]) + "/"
+        folded = prefix.casefold()
+        if folded in prefixes and prefixes[folded] != prefix:
+            raise ValueError("conflicting route directory casing")
+        prefixes[folded] = prefix
+
+
 def page_seo(value):
     """Validate a small allowlist; return a safe JSON-LD string separately."""
     required = {"title", "description", "canonical_url", "robots"}

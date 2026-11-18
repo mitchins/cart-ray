@@ -154,6 +154,10 @@ def test_uat_rejects_case_colliding_product_paths(tmp_path):
     (source / "catalogue.json").write_text(json.dumps(data))
     with pytest.raises(ValueError, match="duplicate product navigation"):
         module.build(source, tmp_path / "output", "minimal")
+    other["navigation_path"] = "/Product/different/"
+    (source / "catalogue.json").write_text(json.dumps(data))
+    with pytest.raises(ValueError, match="casing"):
+        module.build(source, tmp_path / "other-output", "minimal")
 
 
 def test_merchant_currency_comes_from_catalogue_and_gel(tmp_path):

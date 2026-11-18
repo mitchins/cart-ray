@@ -288,7 +288,9 @@ def build(source, output, theme, test_fixture=None, review_fixture=None, gel_fil
             raise ValueError(f"source media fingerprint mismatch: {relative}")
     if data["brand_logo"] not in declared:
         raise ValueError("source logo is not declared")
-    ids, navigation_paths = set(), set()
+    from cartray.merchant_contract import register_path
+
+    ids, navigation_paths, prefixes = set(), set(), {}
     for product in data["products"]:
         source_id = product.get("source_id")
         if not ((type(source_id) is int and source_id > 0) or
@@ -299,6 +301,7 @@ def build(source, output, theme, test_fixture=None, review_fixture=None, gel_fil
         if navigation.casefold() in navigation_paths:
             raise ValueError("duplicate product navigation path")
         navigation_paths.add(navigation.casefold())
+        register_path(navigation, prefixes)
         if product["checkout_authorized"] or product["canonical_url"] is not None:
             raise ValueError("browse-only build cannot grant checkout or canonical authority")
         if any(variant["checkout_authorized"] for variant in product["variations"]):

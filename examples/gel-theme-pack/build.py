@@ -13,7 +13,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
-from cartray.merchant_contract import merchant_path, page_seo  # noqa: E402
+from cartray.merchant_contract import merchant_path, page_seo, register_path  # noqa: E402
 
 if __package__:
     from .src import templates as t
@@ -51,10 +51,12 @@ def load_inputs(gel_path, catalogue_path, assets_root=ROOT):
     links = catalogue.get("category_links", [])
     if not isinstance(links, list) or len(links) > 100:
         raise ValueError("invalid category navigation")
+    prefixes = {}
     for link in links:
         if not isinstance(link, dict) or set(link) != {"path", "label"} or not isinstance(link["label"], str) or not link["label"].strip():
             raise ValueError("invalid category navigation")
         merchant_path(link["path"], product=True)
+        register_path(link["path"], prefixes)
     if len({link["path"].casefold() for link in links}) != len(links):
         raise ValueError("duplicate category navigation path")
     if not isinstance(catalogue["version"], str) or not catalogue["version"]:
@@ -95,6 +97,7 @@ def load_inputs(gel_path, catalogue_path, assets_root=ROOT):
         keys.add(p["product_key"])
         slugs.add(p["slug"])
         route = merchant_path(p.get("path", f'/products/{p["slug"]}/'), product=True)
+        register_path(route, prefixes)
         if route.casefold() in routes or route.casefold() in {link["path"].casefold() for link in links}:
             raise ValueError("duplicate or conflicting product route")
         routes.add(route.casefold())

@@ -8,7 +8,7 @@ import shutil
 from pathlib import Path
 from urllib.parse import urlsplit
 
-from cartray.merchant_contract import merchant_path
+from cartray.merchant_contract import merchant_path, register_path
 
 from .src import templates
 
@@ -48,7 +48,7 @@ def install(
                 or any(char.isspace() for char in api_origin)):
             raise ValueError("checkout API must be an HTTPS origin")
         api_origin = api_origin.rstrip("/")
-    source_ids, paths = set(), set()
+    source_ids, paths, prefixes = set(), set(), {}
     for offer in offers:
         if (
             not re.fullmatch(r"[A-Z0-9-]{1,64}", offer["product_key"])
@@ -65,6 +65,7 @@ def install(
             raise ValueError("invalid connected offer presentation")
         source_ids.add(str(offer["source_id"]))
         paths.add(offer["path"].casefold())
+        register_path(offer["path"], prefixes)
     theme_dir = output / "theme"
     for name in (
         "app.mjs",
@@ -120,6 +121,7 @@ def install(
     category_links = category_links or []
     for path, label in category_links:
         merchant_path(path, product=True)
+        register_path(path, prefixes)
         if not isinstance(label, str) or not label.strip():
             raise ValueError("invalid category label")
     if (len({path.casefold() for path, _ in category_links}) != len(category_links)

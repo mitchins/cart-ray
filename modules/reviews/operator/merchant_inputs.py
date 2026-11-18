@@ -8,7 +8,7 @@ from html.parser import HTMLParser
 from pathlib import Path
 
 from cartray.fingerprints import fingerprint_entries
-from cartray.merchant_contract import merchant_path
+from cartray.merchant_contract import merchant_path, register_path
 
 
 class ConnectedShell(HTMLParser):
@@ -164,8 +164,10 @@ def validate(root, repo):
         if (site / relative).read_bytes() != (repo / source).read_bytes():
             raise ValueError(f"merchant storefront has unrecognised connected code: {relative}")
     sources = {row["productKey"]: str(row["sourceId"]) for row in browse}
+    prefixes = {}
     for key, path in config["productPaths"].items():
         merchant_path(path, product=True)
+        register_path(path, prefixes)
         if not (site / path.lstrip("/") / "index.html").is_file():
             raise ValueError("merchant product route is missing")
         page = ConnectedShell()

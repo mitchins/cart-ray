@@ -1,6 +1,6 @@
 import pytest
 
-from cartray.merchant_contract import merchant_path, page_seo
+from cartray.merchant_contract import merchant_path, page_seo, register_path
 
 
 @pytest.mark.parametrize("path", ["//evil/", "/product/../cart/", "/product/%2e%2e/", "/cart/", "/api/orders/",
@@ -14,6 +14,14 @@ def test_accept_explicit_merchant_case_and_underscore():
     assert merchant_path("/product/Policy_Template/", product=True) == "/product/Policy_Template/"
     with pytest.raises(ValueError):
         merchant_path("/Cart/", product=True)
+
+
+def test_shared_path_prefix_casing_must_be_consistent():
+    seen = {}
+    register_path("/product/first/", seen)
+    register_path("/product/second/", seen)
+    with pytest.raises(ValueError, match="casing"):
+        register_path("/Product/third/", seen)
 
 
 def test_metadata_rejects_unapproved_claims_and_unsafe_canonicals():

@@ -21,7 +21,7 @@ from merchant_inputs import snapshot as snapshot_merchant_inputs
 from merchant_inputs import validate as validate_merchant_inputs
 from topology import graph, secret_bindings, wrangler_config
 
-from cartray.merchant_contract import merchant_path
+from cartray.merchant_contract import merchant_path, register_path
 
 ROOT = Path(__file__).resolve().parents[3]
 ROLES = ("source", "reviews", "consumer", "producer", "evidence", "scheduler", "sender")
@@ -152,6 +152,9 @@ def validate_config(config):
                 or len({x[1].casefold() for x in details}) != len(details)
                 or not set(mapping.values()).issubset({x[0] for x in details})):
             raise ValueError("invalid merchant review subject mappings")
+        prefixes = {}
+        for _subject, route, _label in details:
+            register_path(route, prefixes)
         if "merchant_inputs_sha256" in config and not re.fullmatch(r"[a-f0-9]{64}", config["merchant_inputs_sha256"]):
             raise ValueError("invalid merchant inputs fingerprint")
     elif any(k in config for k in ("merchant_inputs_sha256", "store_key", "subject_map", "subject_details")):
@@ -673,7 +676,11 @@ class Installation:
             raise ValueError("merchant storefront theme differs from installation")
         if not set(self.config["subject_map"]).issubset(storefront["productPaths"]):
             raise ValueError("review subject mapping refers to an unauthorised commerce product")
+        prefixes = {}
+        for route in storefront["productPaths"].values():
+            register_path(route, prefixes)
         for subject, route, _label in self.config["subject_details"]:
+            register_path(route, prefixes)
             product = next((k for k, v in self.config["subject_map"].items() if v == subject), None)
             if product is not None and storefront["productPaths"][product] != route:
                 raise ValueError("review subject route differs from its merchant product route")
