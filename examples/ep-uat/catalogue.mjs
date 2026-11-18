@@ -48,4 +48,3 @@ if(script){
     select.addEventListener('change',setVariant);setVariant();
   }
 }
-
