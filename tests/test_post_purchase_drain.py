@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import sqlite3
+import time
 from pathlib import Path
 
 import pytest
@@ -136,6 +137,67 @@ def test_drain_bounds_external_calls_and_resumes_overlapping_workflows():
     assert db.execute("SELECT last_outbox_id FROM post_purchase_checkpoint").fetchone()[0] == 1
     assert asyncio.run(drain_confirmed_d1(dispatcher, actions, max_new_claims=2)) == 1
     assert calls == ["flow-0", "flow-1", "flow-2"]
+
+
+def test_drain_does_not_claim_when_time_budget_is_insufficient():
+    db = setup_database()
+    calls = []
+    dispatcher = D1Dispatcher(Database(db), "store", "test", {"service": lambda *_: calls.append(1) or "ok"})
+    action = Action("workflow", ("product",), "service", "private/config", "a" * 64)
+    assert asyncio.run(drain_confirmed_d1(dispatcher, (action,), deadline=time.monotonic() + 5)) == 0
+    assert not calls
+    assert db.execute("SELECT COUNT(*) FROM post_purchase_executions").fetchone()[0] == 0
+    assert asyncio.run(drain_confirmed_d1(dispatcher, (action,))) == 1
+    assert len(calls) == 1
+
+
+def test_many_actions_do_not_require_one_validation_query_each():
+    class D1BoundedStatement(Statement):
+        def bind(self, *args):
+            assert len(args) <= 100
+            return super().bind(*args)
+
+    class CountingDatabase(Database):
+        count = 0
+
+        def prepare(self, sql):
+            self.count += 1
+            return D1BoundedStatement(self.db, sql)
+
+    database = CountingDatabase(setup_database())
+    dispatcher = D1Dispatcher(database, "store", "test", {"service": lambda *_: "ok"})
+    actions = tuple(Action(f"flow-{n}", ("product",), "service", f"private/{n}", "a" * 64) for n in range(100))
+    outcomes = asyncio.run(dispatcher.dispatch("after", actions, max_new_claims=2))
+    assert list(outcomes.values()).count("accepted") == 2
+    assert list(outcomes.values()).count("deferred") == 98
+    assert database.count <= 9
+
+
+def test_cancelled_handler_is_held_before_checkpoint_replay():
+    db = setup_database()
+    calls = []
+
+    async def scenario():
+        entered = asyncio.Event()
+
+        async def handler(*_):
+            calls.append(1)
+            entered.set()
+            await asyncio.Event().wait()
+
+        dispatcher = D1Dispatcher(Database(db), "store", "test", {"service": handler})
+        action = Action("workflow", ("product",), "service", "private/config", "a" * 64)
+        task = asyncio.create_task(drain_confirmed_d1(dispatcher, (action,)))
+        await entered.wait()
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        assert db.execute("SELECT state FROM post_purchase_executions").fetchone()[0] == "uncertain"
+        assert db.execute("SELECT last_outbox_id FROM post_purchase_checkpoint").fetchone()[0] == 1
+        assert await drain_confirmed_d1(dispatcher, (action,)) == 1
+
+    asyncio.run(scenario())
+    assert len(calls) == 1
 
 
 def test_invalid_event_never_calls_handler_or_advances_checkpoint():

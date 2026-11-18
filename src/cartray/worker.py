@@ -4,6 +4,7 @@ import asyncio
 import hmac
 import json
 import re
+import time
 from dataclasses import dataclass
 from urllib.parse import parse_qsl, urlparse
 
@@ -532,7 +533,10 @@ async def _drain_post_purchase(env):
             return result.get("provider_reference")
 
         dispatcher = D1Dispatcher(env.DB, merchant, environment, {"service": service_handler})
-        await asyncio.wait_for(drain_confirmed_d1(dispatcher, actions, limit=10, max_new_claims=2), timeout=22)
+        await asyncio.wait_for(
+            drain_confirmed_d1(dispatcher, actions, limit=10, max_new_claims=2, deadline=time.monotonic() + 21),
+            timeout=22,
+        )
     except Exception:
         # Checkout is already committed; cron retries the durable checkpoint.
         return

@@ -6,6 +6,7 @@ is never automatically retried: an unknown outcome requires operator review.
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import re
@@ -232,7 +233,8 @@ class D1Dispatcher:
         return rows[0] if rows else None
 
     async def dispatch(
-        self, order_id: str, actions: tuple[Action, ...], *, max_new_claims: int | None = None
+        self, order_id: str, actions: tuple[Action, ...], *, max_new_claims: int | None = None,
+        deadline: float | None = None,
     ) -> dict[str, str]:
         from inspect import isawaitable
 
@@ -269,34 +271,33 @@ class D1Dispatcher:
             tuple((row["product_key"], row["quantity"]) for row in _results(result)),
         )
         purchased = {product for product, _ in purchase.items}
-        digests = {}
-        for action in actions:
-            digest = _action_digest(action)
-            existing = await self._first(
-                """SELECT action_digest FROM post_purchase_executions
-                WHERE merchant_id=? AND environment=? AND order_id=? AND workflow_key=?""",
-                self.merchant,
-                self.environment,
-                order_id,
-                action.workflow_key,
+        digests = {action.workflow_key: _action_digest(action) for action in actions}
+        existing_by_key = {}
+        # D1 permits at most 100 bound parameters; reserve three for scope.
+        for start in range(0, len(actions), 97):
+            batch = actions[start:start + 97]
+            placeholders = ",".join("?" for _ in batch)
+            result = await (
+                self.database.prepare(
+                    """SELECT workflow_key,action_digest,state FROM post_purchase_executions
+                    WHERE merchant_id=? AND environment=? AND order_id=? AND workflow_key IN ("""
+                    + placeholders + ")"
+                )
+                .bind(self.merchant, self.environment, order_id, *(action.workflow_key for action in batch))
+                .all()
             )
-            if existing and existing["action_digest"] != digest:
+            existing_by_key.update({row["workflow_key"]: row for row in _results(result)})
+            if any(digests[key] != row["action_digest"] for key, row in existing_by_key.items()):
                 raise ValueError("existing workflow identity has different configuration")
-            digests[action.workflow_key] = digest
         outcomes = {}
         new_claims = 0
         for action in actions:
             if not purchased.intersection(action.offer_keys):
                 continue
             digest, now = digests[action.workflow_key], int(time.time())
-            if max_new_claims is not None and new_claims >= max_new_claims:
-                existing = await self._first(
-                    """SELECT action_digest,state FROM post_purchase_executions
-                    WHERE merchant_id=? AND environment=? AND order_id=? AND workflow_key=?""",
-                    self.merchant, self.environment, order_id, action.workflow_key,
-                )
-                if existing and existing["action_digest"] != digest:
-                    raise ValueError("existing workflow identity has different configuration")
+            if ((max_new_claims is not None and new_claims >= max_new_claims)
+                    or (deadline is not None and time.monotonic() + 11 >= deadline)):
+                existing = existing_by_key.get(action.workflow_key)
                 outcomes[action.workflow_key] = (
                     "deferred" if not existing else
                     "pending_claim" if existing["state"] == "claimed" else "already_claimed"
@@ -348,21 +349,33 @@ class D1Dispatcher:
                 if _changes(updated) != 1:
                     raise RuntimeError("execution acceptance was not recorded")
                 outcomes[action.workflow_key] = "accepted"
+            except asyncio.CancelledError:
+                # A handler might still have reached its provider. Preserve a
+                # held outcome where possible; never release the claim for retry.
+                try:
+                    await asyncio.wait_for(self._mark_uncertain(order_id, action.workflow_key), timeout=1)
+                except Exception:
+                    pass  # A remaining claimed row is resolved by the operator.
+                raise
             except Exception:
-                await (
-                    self.database.prepare(
-                        """UPDATE post_purchase_executions SET state='uncertain',updated_at=?
-                    WHERE merchant_id=? AND environment=? AND order_id=? AND workflow_key=? AND state='claimed'"""
-                    )
-                    .bind(int(time.time()), self.merchant, self.environment, order_id, action.workflow_key)
-                    .run()
-                )
+                await self._mark_uncertain(order_id, action.workflow_key)
                 outcomes[action.workflow_key] = "uncertain"
         return outcomes
 
+    async def _mark_uncertain(self, order_id, workflow_key):
+        await (
+            self.database.prepare(
+                """UPDATE post_purchase_executions SET state='uncertain',updated_at=?
+                WHERE merchant_id=? AND environment=? AND order_id=? AND workflow_key=? AND state='claimed'"""
+            )
+            .bind(int(time.time()), self.merchant, self.environment, order_id, workflow_key)
+            .run()
+        )
+
 
 async def drain_confirmed_d1(
-    dispatcher: D1Dispatcher, actions: tuple[Action, ...], *, limit: int = 10, max_new_claims: int = 2
+    dispatcher: D1Dispatcher, actions: tuple[Action, ...], *, limit: int = 10, max_new_claims: int = 2,
+    deadline: float | None = None,
 ) -> int:
     """Consume a bounded batch from an explicitly activated independent checkpoint."""
     from cartray.store import _changes, _results
@@ -400,7 +413,8 @@ async def drain_confirmed_d1(
             or payload.get("items_digest") != event["items_digest"]
         ):
             raise ValueError("confirmed event does not match the immutable purchase")
-        outcomes = await dispatcher.dispatch(event["order_id"], actions, max_new_claims=remaining_claims)
+        outcomes = await dispatcher.dispatch(event["order_id"], actions, max_new_claims=remaining_claims,
+                                             deadline=deadline)
         remaining_claims -= sum(state in ("accepted", "uncertain") for state in outcomes.values())
         if "pending_claim" in outcomes.values() or "deferred" in outcomes.values():
             return processed
