@@ -4,7 +4,7 @@ import json
 import re
 from urllib.parse import urlsplit
 
-_PATH = re.compile(r"/(?:[a-z0-9]+(?:-[a-z0-9]+)*/)+")
+_PATH = re.compile(r"/(?:[A-Za-z0-9_-]+/)+")
 _RESERVED = {"cart", "purchase-return", "review", "reviews", "unsubscribe", "checkout", "checkout-status",
              "stripe", "api", "theme", "assets", "shop", "help", "inbox", "checkout-preview", "uat-return"}
 
@@ -12,7 +12,7 @@ _RESERVED = {"cart", "purchase-return", "review", "reviews", "unsubscribe", "che
 def merchant_path(value, *, product=False):
     """Accept explicit, canonical local paths without encoded or ambiguous segments."""
     if (not isinstance(value, str) or len(value) > 512 or not _PATH.fullmatch(value)
-            or (product and value.split('/')[1] in _RESERVED)):
+            or (product and value.split('/')[1].lower() in _RESERVED)):
         raise ValueError("invalid or reserved merchant path")
     return value
 

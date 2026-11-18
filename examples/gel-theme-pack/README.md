@@ -117,7 +117,7 @@ A connected catalogue product may set `path` to its approved local route, for
 example `/product/policy-template/`. Omitting it preserves the original
 `/products/<slug>/` behavior. Paths are presentation only: the existing product
 key, checkout catalogue and Reviews subject mapping remain the authority. Product
-paths must be distinct, slash-terminated, lowercase local paths without encoded
+paths must be distinct, slash-terminated local paths without encoded
 segments, traversal, query strings or reserved application route prefixes. An
 operator's `productPaths` and `subject_details` must agree with the approved route.
 Listings that cannot be purchased can still use explicit paths in the UAT builder.

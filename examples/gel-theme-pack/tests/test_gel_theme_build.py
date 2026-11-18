@@ -61,7 +61,7 @@ class GelTests(unittest.TestCase):
             source.write_text(json.dumps(catalogue))
             with self.assertRaises(ValueError):
                 load_inputs(ROOT / "gel/squirrel.json", source)
-            catalogue["products"][0]["path"] = "/products/woodland-planter/"
+            catalogue["products"][0]["path"] = "/products/WOODLAND-PLANTER/"
             source.write_text(json.dumps(catalogue))
             with self.assertRaisesRegex(ValueError, "conflicting"):
                 load_inputs(ROOT / "gel/squirrel.json", source)

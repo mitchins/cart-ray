@@ -149,7 +149,7 @@ def validate_config(config):
                        or not x[2].strip() or len(x[2]) > 200 for x in details)
                 or len(set(mapping.values())) != len(mapping)
                 or len({x[0] for x in details}) != len(details)
-                or len({x[1] for x in details}) != len(details)
+                or len({x[1].casefold() for x in details}) != len(details)
                 or not set(mapping.values()).issubset({x[0] for x in details})):
             raise ValueError("invalid merchant review subject mappings")
         if "merchant_inputs_sha256" in config and not re.fullmatch(r"[a-f0-9]{64}", config["merchant_inputs_sha256"]):

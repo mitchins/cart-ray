@@ -53,7 +53,7 @@ def install(
         if (
             not re.fullmatch(r"[A-Z0-9-]{1,64}", offer["product_key"])
             or not merchant_path(offer["path"], product=True)
-            or offer["path"] in paths
+            or offer["path"].casefold() in paths
             or not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", str(offer["source_id"]))
             or str(offer["source_id"]) in source_ids
             or not re.fullmatch(r"/[A-Za-z0-9_./-]+", offer["image"])
@@ -64,7 +64,7 @@ def install(
         ):
             raise ValueError("invalid connected offer presentation")
         source_ids.add(str(offer["source_id"]))
-        paths.add(offer["path"])
+        paths.add(offer["path"].casefold())
     theme_dir = output / "theme"
     for name in (
         "app.mjs",
@@ -122,8 +122,8 @@ def install(
         merchant_path(path, product=True)
         if not isinstance(label, str) or not label.strip():
             raise ValueError("invalid category label")
-    if (len({path for path, _ in category_links}) != len(category_links)
-            or any(path in paths.values() for path, _ in category_links)):
+    if (len({path.casefold() for path, _ in category_links}) != len(category_links)
+            or any(path.casefold() in {value.casefold() for value in paths.values()} for path, _ in category_links)):
         raise ValueError("duplicate or conflicting category path")
     for route, page in (("cart/index.html", "cart"), ("purchase-return/index.html", "purchase-return")):
         content = templates.simple_page(page, gel, "/")

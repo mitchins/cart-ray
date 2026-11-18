@@ -10,6 +10,12 @@ def test_reject_unsafe_or_reserved_product_paths(path):
         merchant_path(path, product=True)
 
 
+def test_accept_explicit_merchant_case_and_underscore():
+    assert merchant_path("/product/Policy_Template/", product=True) == "/product/Policy_Template/"
+    with pytest.raises(ValueError):
+        merchant_path("/Cart/", product=True)
+
+
 def test_metadata_rejects_unapproved_claims_and_unsafe_canonicals():
     seo = {"title": "Product", "description": "Description", "canonical_url": "https://example.test/product/p/",
            "robots": "noindex,nofollow"}

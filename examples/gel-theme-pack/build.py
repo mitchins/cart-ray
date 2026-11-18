@@ -55,7 +55,7 @@ def load_inputs(gel_path, catalogue_path, assets_root=ROOT):
         if not isinstance(link, dict) or set(link) != {"path", "label"} or not isinstance(link["label"], str) or not link["label"].strip():
             raise ValueError("invalid category navigation")
         merchant_path(link["path"], product=True)
-    if len({link["path"] for link in links}) != len(links):
+    if len({link["path"].casefold() for link in links}) != len(links):
         raise ValueError("duplicate category navigation path")
     if not isinstance(catalogue["version"], str) or not catalogue["version"]:
         raise ValueError("catalogue version required")
@@ -95,9 +95,9 @@ def load_inputs(gel_path, catalogue_path, assets_root=ROOT):
         keys.add(p["product_key"])
         slugs.add(p["slug"])
         route = merchant_path(p.get("path", f'/products/{p["slug"]}/'), product=True)
-        if route in routes or route in {link["path"] for link in links}:
+        if route.casefold() in routes or route.casefold() in {link["path"].casefold() for link in links}:
             raise ValueError("duplicate or conflicting product route")
-        routes.add(route)
+        routes.add(route.casefold())
         if catalogue.get("seo_qualified") and "seo" not in p:
             raise ValueError("SEO-qualified products require metadata")
         if "seo" in p:
