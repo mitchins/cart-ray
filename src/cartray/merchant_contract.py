@@ -3,6 +3,7 @@
 import ipaddress
 import json
 import re
+from html import escape
 from urllib.parse import urlsplit
 
 _PATH = re.compile(r"/(?:[A-Za-z0-9_-]+/)+")
@@ -34,12 +35,15 @@ def register_path(value, prefixes):
 
 def page_seo(value):
     """Validate a small allowlist; return a safe JSON-LD string separately."""
-    required = {"title", "description", "canonical_url", "robots"}
-    if not isinstance(value, dict) or not required <= value.keys() or value.keys() - required - {"structured_data"}:
+    required = {"title", "canonical_url", "robots"}
+    if (not isinstance(value, dict) or not required <= value.keys()
+            or value.keys() - required - {"description", "structured_data"}):
         raise ValueError("invalid page SEO fields")
-    for key, limit in (("title", 200), ("description", 500)):
-        if not isinstance(value[key], str) or not value[key].strip() or len(value[key]) > limit:
-            raise ValueError("invalid page SEO text")
+    if not isinstance(value["title"], str) or not value["title"].strip() or len(value["title"]) > 200:
+        raise ValueError("invalid page SEO text")
+    description = value.get("description")
+    if description is not None and (not isinstance(description, str) or len(description) > 16384):
+        raise ValueError("invalid page SEO text")
     try:
         url = urlsplit(value["canonical_url"])
         port = url.port
@@ -72,3 +76,17 @@ def page_seo(value):
         data = json.dumps({"@context": "https://schema.org", **data}, ensure_ascii=True, separators=(",", ":"))
         data = data.replace("<", "\\u003c").replace(">", "\\u003e").replace("&", "\\u0026")
     return data
+
+
+def seo_head(value, *, force_noindex=False):
+    """Render the validated metadata only; absent descriptions remain absent."""
+    structured = page_seo(value)
+    robots = "noindex,nofollow" if force_noindex else value["robots"]
+    result = f'<meta name="robots" content="{robots}">'
+    result += f'<title>{escape(value["title"])}</title>'
+    if value.get("description") is not None:
+        result += f'<meta name="description" content="{escape(value["description"], quote=True)}">'
+    result += f'<link rel="canonical" href="{escape(value["canonical_url"], quote=True)}">'
+    if structured:
+        result += f'<script type="application/ld+json">{structured}</script>'
+    return result

@@ -78,3 +78,25 @@ Inspection lists claimed executions first, then uncertain executions, 100 at a t
 The CartRay dispatcher owns the durable `(merchant, order, workflow)` claim. The handler is stateless and is not safe to call or retry independently: timeouts and unknown provider outcomes stay held for operator reconciliation. This remains a test adapter; a supported installation and hosted event-to-email qualification are not established by its presence.
 
 An operator-facing activation/install workflow, deployed handler, recipient lookup and real provider integration for this boundary are not yet qualified. The local smoke uses a synthetic in-process service, not an independently deployed service binding. Production use remains disabled.
+
+### Offline parity and head composition
+
+The same UAT product and catalogue renderer can create an **offline-only,
+noindex** candidate using `--offline-seo /absolute/path/seo.json`. The JSON has
+`schema_version: 1`, an explicit same-origin `catalogue_path`, and a `pages`
+object mapping each product navigation path and the catalogue path to the shared
+page SEO object. The canonical URL in each object must match its path; all
+canonical origins must match. Missing routes fail before output is created.
+Metadata comes from an independently approved source; the builder does not infer
+canonical URLs from product keys, source IDs or UAT paths. Descriptions are
+preserved, including absence. Product-only structured data is restricted to the
+CartRay allowlist; a host that owns the HTML head can supply its independently
+verified richer graph separately.
+
+This mode forces `noindex,nofollow`, removes UAT notices and test-cart fixture
+configuration, and rejects `--test-fixture` and `--review-fixture`. Product
+purchase controls are represented by a `data-cartray-purchase-action` placeholder
+for the host's supported commerce integration; they are not functional checkout
+or fulfilment authority. This is a renderer and metadata qualification artifact,
+not a deployable production approval. Default UAT output remains noindex and does
+not emit canonical tags.

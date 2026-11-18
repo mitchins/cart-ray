@@ -141,3 +141,18 @@ regardless of the supplied directive. The EP UAT builder retains its independent
 noindex policy. An external site generator that owns the document head can consume
 the same metadata via `cartray.merchant_contract.page_seo` without rendering a
 second head.
+
+A merchant can make the document boundary explicit with `owned_pages`, for
+example `{"shop":"/policies-and-templates/"}`, and `catalogue_path` set to the
+same path. CartRay then emits only the listed home/shop/help content pages;
+product pages remain explicit. In an SEO-qualified build `pages_seo` must cover
+exactly the owned content pages and each product needs its own `seo`. Omitting
+`owned_pages` preserves the original Acorn/Northline home, shop and help pages.
+A host may own the catalogue page too: omit `shop` from `owned_pages` and supply
+its verified `catalogue_path`. Utility and checkout pages remain separate.
+
+`description` may be absent or null, which emits no meta-description tag; an
+explicit empty string is preserved. Descriptions up to 16,384 characters are
+accepted without truncation. `seo_head` is available to a host that owns the
+HTML head. It validates the same limited schema and can force `noindex`; the
+host owns any independently sourced structured-data graph outside that contract.

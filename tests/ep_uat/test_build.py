@@ -142,6 +142,47 @@ def test_listing_accepts_explicit_merchant_identity_and_navigation(tmp_path):
         module.build(source, tmp_path / "missing-path", "minimal")
 
 
+def test_offline_parity_uses_same_product_renderer_with_no_test_authority(tmp_path):
+    source = tmp_path / "source"
+    data = make_source(source)
+    product = data["products"][0]
+    product["navigation_path"] = "/product/approved-route/"
+    (source / "catalogue.json").write_text(json.dumps(data))
+    def seo(route, description=None):
+        return {"title": 'Real <title>', "description": description,
+                "canonical_url": "https://merchant.example" + route, "robots": "index,follow"}
+    description = 'Long & " description ' * 200
+    fixture = tmp_path / "seo.json"
+    fixture.write_text(json.dumps({"schema_version": 1, "catalogue_path": "/policies-and-templates/",
+                                   "pages": {"/policies-and-templates/": seo("/policies-and-templates/"),
+                                             product["navigation_path"]:
+                                                 seo(product["navigation_path"], description)}}))
+    output = tmp_path / "parity"
+    module.build(source, output, "minimal", offline_seo=fixture)
+    html = (output / "product/approved-route/index.html").read_text()
+    assert '<h1>A product</h1>' in html and 'data-product-gallery' in html
+    assert 'name="robots" content="noindex,nofollow"' in html
+    assert 'rel="canonical" href="https://merchant.example/product/approved-route/"' in html
+    assert 'Long &amp; &quot; description' in html and len(description) > 3000
+    assert 'UAT catalogue' not in html and 'Stripe test mode' not in html
+    assert 'uat-test-products' not in html and 'data-uat-add' not in html
+    assert not (output / "theme/uat.mjs").exists()
+    assert (output / "theme/catalogue.mjs").exists()
+    assert 'href="/policies-and-templates/"' in html
+    assert (output / "policies-and-templates/index.html").is_file()
+    assert not (output / "uat-return/index.html").exists()
+    cat = (output / "policies-and-templates/index.html").read_text()
+    assert 'name="description"' not in cat
+    with pytest.raises(ValueError, match="cannot use test checkout"):
+        module.build(source, tmp_path / "bad", "minimal", test_fixture="unused", offline_seo=fixture)
+    payload = json.loads(fixture.read_text())
+    del payload["pages"][product["navigation_path"]]
+    fixture.write_text(json.dumps(payload))
+    with pytest.raises(ValueError, match="cover each"):
+        module.build(source, tmp_path / "missing", "minimal", offline_seo=fixture)
+    assert not (tmp_path / "missing").exists()
+
+
 def test_uat_rejects_case_colliding_product_paths(tmp_path):
     import copy
 
