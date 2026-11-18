@@ -47,7 +47,8 @@ def test_source_length_and_absent_description_are_preserved():
     description = ('Long & " text ' * 250) + " end"
     assert len(description) > 3000
     rendered = seo_head({**seo, "description": description}, force_noindex=True)
-    assert 'Long &amp; &quot; text' in rendered and " end" in rendered
+    assert 'Long &amp; &quot; text' in rendered
+    assert " end" in rendered
     assert 'content="noindex,nofollow"' in rendered
     assert 'name="description" content=""' in seo_head({**seo, "description": ""})
     with pytest.raises(ValueError):

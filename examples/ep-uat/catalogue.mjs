@@ -3,6 +3,7 @@ const products=document.querySelector('#products');
 if(products){
   const original=[...products.querySelectorAll('.product-card')];
   const search=document.querySelector('#search'),category=document.querySelector('#category'),sort=document.querySelector('#sort');
+  search.value=(new URLSearchParams(location.search).get('q')||'').slice(0,100);
   function update(){
     const query=search.value.trim().toLowerCase(),choice=category.value;
     let visible=0;
@@ -20,6 +21,7 @@ if(products){
     document.querySelector('#results-status').textContent=`${visible} products`;
   }
   search.addEventListener('input',update);category.addEventListener('change',update);sort.addEventListener('change',update);
+  if(search.value)update();
 }
 const script=document.querySelector('#product-data');
 if(script){

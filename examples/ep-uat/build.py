@@ -234,7 +234,8 @@ def detail(p, test_ids=(), review_subject=None, currency="AUD", *, offline_parit
     return f"""<div class="wrap breadcrumb"><a href="{esc(catalogue_path)}">Catalogue</a> / {esc(p["title"])}</div><section class="product-detail wrap">{gallery}<div class="detail-copy"><h1>{esc(p["title"])}</h1><p id="variant-price">{price(p["source_price"], p["source_id"] in test_ids, currency, offline_parity=offline_parity)}</p><p>{esc(p["summary"])}</p>{choices}{action}<div class="uat-description">{description}</div></div></section>{reviews}<script type="application/json" id="product-data">{payload}</script>{reader}"""
 
 
-def build(source, output, theme, test_fixture=None, review_fixture=None, gel_file=None, *, offline_seo=None):
+def build(source, output, theme, test_fixture=None, review_fixture=None, gel_file=None, *, offline_seo=None,
+          catalogue_path=None):
     source, output = Path(source), Path(output)
     if output.exists():
         raise ValueError("output already exists")
@@ -327,12 +328,16 @@ def build(source, output, theme, test_fixture=None, review_fixture=None, gel_fil
         validator.feed(product["description_html"])
         validator.close()
     seo_pages = None
-    catalogue_path = "/shop/"
+    requested_catalogue_path = catalogue_path
+    catalogue_path = merchant_path(catalogue_path if catalogue_path is not None else "/shop/",
+                                   product=catalogue_path not in (None, "/shop/"))
     if offline_seo is not None:
         config = json.loads(Path(offline_seo).read_text())
         if not isinstance(config, dict) or set(config) != {"schema_version", "catalogue_path", "pages"} or type(config["schema_version"]) is not int or config["schema_version"] != 1:
             raise ValueError("invalid offline SEO contract")
         catalogue_path = merchant_path(config["catalogue_path"], product=config["catalogue_path"] != "/shop/")
+        if requested_catalogue_path is not None and requested_catalogue_path != catalogue_path:
+            raise ValueError("catalogue path conflicts with offline SEO")
         seo_pages = config["pages"]
         expected = {path(p) for p in data["products"]} | {catalogue_path}
         if catalogue_path.casefold() in navigation_paths or not isinstance(seo_pages, dict) or set(seo_pages) != expected:
@@ -347,6 +352,10 @@ def build(source, output, theme, test_fixture=None, review_fixture=None, gel_fil
             origins.add((url.scheme, url.hostname, url.port or 443))
         if len(origins) != 1:
             raise ValueError("offline SEO canonical origins must match")
+    elif catalogue_path.casefold() in navigation_paths:
+        raise ValueError("catalogue path conflicts with a product route")
+    else:
+        register_path(catalogue_path, prefixes)
     gel = json.loads(Path(gel_file or Path(__file__).with_name("gel.json")).read_text())
     if gel.get("identity", {}).get("name") != data["merchant_name"] or gel["identity"].get("currency") != data["source_currency"]:
         raise ValueError("GEL merchant identity or currency does not match the UAT catalogue")
@@ -388,7 +397,7 @@ def build(source, output, theme, test_fixture=None, review_fixture=None, gel_fil
     products = data["products"]
     standard_pages = [
         ("index.html", catalogue(products, data["merchant_name"], test_ids, data["source_currency"])),
-        ("shop/index.html", catalogue(products, data["merchant_name"], test_ids, data["source_currency"])),
+        (catalogue_path.lstrip("/") + "index.html", catalogue(products, data["merchant_name"], test_ids, data["source_currency"])),
         (
             "cart/index.html",
             '<section class="wrap"><h1>Test cart</h1><div id="uat-cart"><p>Checkout is not available.</p></div></section>' if test_ids else '<section class="wrap"><h1>Cart</h1><p>Checkout is not yet enabled for this UAT catalogue.</p></section>',
@@ -415,7 +424,8 @@ def build(source, output, theme, test_fixture=None, review_fixture=None, gel_fil
                     '<script type="module" src="/theme/review-presenter.mjs"></script>')
             file = output / route
             file.parent.mkdir(parents=True, exist_ok=True)
-            file.write_text(shell(gel, heading, body, test_products, theme, bool(review_subjects)))
+            file.write_text(shell(gel, heading, body, test_products, theme, bool(review_subjects),
+                                  catalogue_path=catalogue_path))
     for p in products:
         file = output / path(p).lstrip("/") / "index.html"
         file.parent.mkdir(parents=True, exist_ok=True)
@@ -436,6 +446,7 @@ def build(source, output, theme, test_fixture=None, review_fixture=None, gel_fil
         importlib.import_module("cartray_gel.connected_flows").install(
             output, ROOT, gel, theme, test_products, context_path="/__uat/context",
             return_extension="/theme/return-grants.mjs", reviews_enabled=bool(review_subjects),
+            catalogue_path=catalogue_path,
         )
     (output / "provenance.json").write_text(
         json.dumps(
@@ -458,6 +469,7 @@ if __name__ == "__main__":
     parser.add_argument("--review-fixture", type=Path)
     parser.add_argument("--gel", type=Path, help="merchant-specific GEL manifest (defaults to EP UAT)")
     parser.add_argument("--offline-seo", type=Path, help="explicit offline-only SEO metadata contract")
+    parser.add_argument("--catalogue-path", help="explicit local catalogue route (default /shop/)")
     args = parser.parse_args()
     build(args.source, args.output, args.theme, args.test_fixture, args.review_fixture, args.gel,
-          offline_seo=args.offline_seo)
+          offline_seo=args.offline_seo, catalogue_path=args.catalogue_path)
