@@ -676,6 +676,25 @@ def test_post_purchase_webhook_wakeup_is_opt_in_and_checkout_independent(monkeyp
     assert captured == []
 
 
+def test_gets_never_wake_review_or_post_purchase_work(monkeypatch):
+    async def fake_app(request, env):
+        return SimpleNamespace(status=200)
+
+    class Context:
+        def waitUntil(self, work):
+            raise AssertionError("GET must not schedule background delivery")
+
+    monkeypatch.setattr(worker_module, "app", fake_app)
+    entry = worker_module.Default()
+    entry.ctx = Context()
+    entry.env = SimpleNamespace(
+        CARTRAY_POST_PURCHASE_MODE="test", CARTRAY_REVIEWS_PRODUCER="test", CARTRAY_ENVIRONMENT="test"
+    )
+    for path in ("/catalogue", "/checkout-status?session_id=cs_test_x", "/health", "/stripe/webhook"):
+        result = asyncio.run(entry.fetch(SimpleNamespace(method="GET", url="https://store.test" + path)))
+        assert result.status == 200
+
+
 def test_missing_post_purchase_service_is_rejected_before_claims(monkeypatch):
     action = {
         "workflow_key": "delivery",
