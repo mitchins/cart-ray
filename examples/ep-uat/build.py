@@ -110,7 +110,8 @@ def shell(gel, title, body, test_products=(), theme="minimal", review_enabled=Fa
     name = esc(gel["identity"]["name"])
     test_data = json.dumps(list(test_products), ensure_ascii=True).replace("<", "\\u003c")
     locale = esc(gel["identity"]["locale"])
-    header = theme_header(gel, theme, "/", False, nav_links=((catalogue_path, "Catalogue"),), header_search=False, cart_count=False)
+    header = theme_header(gel, theme, "/", False, nav_links=((catalogue_path, "Catalogue"),), header_search=False,
+                          cart_count=False, cart_link=seo is None, brand_path=catalogue_path if seo is not None else None)
     footer = "Selected products use Stripe test mode only. Review invitations are disabled." if test_products else "Browsing qualification only. Purchases and review invitations are disabled."
     connected = ('<script src="/storefront-config.js" defer></script><script src="/site-config.js" defer></script>'
                  '<script type="module" src="/theme/connected-browse.mjs"></script>') if test_products else (

@@ -255,6 +255,7 @@ def build_site(output, gel_path, catalogue_path, theme="minimal", base="/", asse
         "gel": gel,
         "catalogue": catalogue,
         "cataloguePath": catalogue.get("catalogue_path", catalogue.get("owned_pages", {}).get("shop", "/shop/")),
+        "helpPath": catalogue.get("owned_pages", {"help": "/help/"}).get("help"),
     }
     write(
         output / "site-config.js",

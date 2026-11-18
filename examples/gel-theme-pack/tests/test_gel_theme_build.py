@@ -116,6 +116,7 @@ class GelTests(unittest.TestCase):
             source = root / "catalogue.json"
             source.write_text(json.dumps(catalogue))
             build_site(root / "site", ROOT / "gel/squirrel.json", source)
+            self.assertIn('"helpPath": "/care/"', (root / "site/site-config.js").read_text())
             for page in ("index.html", "products/acorn-growing-kit/index.html"):
                 html = (root / "site" / page).read_text()
                 self.assertIn('href="/care/"', html)
@@ -123,6 +124,7 @@ class GelTests(unittest.TestCase):
             catalogue["owned_pages"] = {"home": "/"}
             source.write_text(json.dumps(catalogue))
             build_site(root / "no-help", ROOT / "gel/squirrel.json", source)
+            self.assertIn('"helpPath": null', (root / "no-help/site-config.js").read_text())
             self.assertNotIn('href="/help/"', (root / "no-help/index.html").read_text())
             catalogue["owned_pages"] = {"help": "/items/"}
             source.write_text(json.dumps(catalogue))
