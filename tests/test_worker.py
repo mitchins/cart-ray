@@ -80,6 +80,7 @@ STORE_ENV = {
     "CARTRAY_STOREFRONT_ORIGIN": STOREFRONT_ORIGIN,
     "CHECKOUT_RATE_LIMITER": FixtureRateLimiter(True),
     "CHECKOUT_STATUS_RATE_LIMITER": FixtureRateLimiter(True),
+    "CARTRAY_SIGNING_KEY_ID": "fixture-installation",
 }
 
 
@@ -398,11 +399,20 @@ def test_status_normalizes_ipv4_mapped_and_ipv6_client_budgets():
 
     limiter = RecordingLimiter()
     for address in ("192.0.2.1", "::ffff:192.0.2.1", "2001:db8::1", "2001:db8::2", "192.0.2.2", "2001:db8:1::1"):
-        request = SimpleNamespace(env=SimpleNamespace(CHECKOUT_STATUS_RATE_LIMITER=limiter), header=lambda _: address)
+        request = SimpleNamespace(
+            env=SimpleNamespace(CHECKOUT_STATUS_RATE_LIMITER=limiter, CARTRAY_SIGNING_KEY_ID="store-one"),
+            header=lambda _: address,
+        )
         assert asyncio.run(worker_module._checkout_status_rate_limit(request))
     assert limiter.keys[0] == limiter.keys[1]
     assert limiter.keys[2] == limiter.keys[3]
     assert len({limiter.keys[0], limiter.keys[2], limiter.keys[4], limiter.keys[5]}) == 4
+    other = SimpleNamespace(
+        env=SimpleNamespace(CHECKOUT_STATUS_RATE_LIMITER=limiter, CARTRAY_SIGNING_KEY_ID="store-two"),
+        header=lambda _: "192.0.2.1",
+    )
+    assert asyncio.run(worker_module._checkout_status_rate_limit(other))
+    assert limiter.keys[-1] != limiter.keys[0]
 
 
 def test_public_catalogue_snapshot_needs_neither_stripe_nor_d1(monkeypatch):
