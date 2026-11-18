@@ -417,7 +417,8 @@ async def _checkout_status_rate_limit(request) -> bool:
     address = ipaddress.ip_address(request.header("cf-connecting-ip") or "")
     if address.version == 6:
         address = address.ipv4_mapped or ipaddress.ip_network(f"{address}/64", strict=False).network_address
-    result = await limiter.limit({"key": "checkout-status:" + str(address)})
+    installation = _required_env(request.env, "CARTRAY_SIGNING_KEY_ID")
+    result = await limiter.limit({"key": "checkout-status:" + installation + ":" + str(address)})
     success = result.get("success") if isinstance(result, dict) else getattr(result, "success", None)
     return success is True
 
