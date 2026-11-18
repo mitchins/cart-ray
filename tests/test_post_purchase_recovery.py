@@ -61,7 +61,11 @@ def test_many_uncertain_rows_do_not_hide_claimed_executions(monkeypatch):
     db.execute("CREATE TABLE post_purchase_checkpoint (merchant_id TEXT, environment TEXT, "
                "last_outbox_id INTEGER, activation_watermark INTEGER)")
     db.execute("CREATE TABLE outbox (id INTEGER, order_id TEXT, event_type TEXT)")
+    db.execute("CREATE TABLE orders (order_id TEXT)")
+    db.execute("CREATE TABLE checkout_sessions (order_id TEXT)")
     db.execute("INSERT INTO post_purchase_checkpoint VALUES ('merchant','test',4,0)")
+    db.execute("INSERT INTO orders VALUES ('blocked')")
+    db.execute("INSERT INTO checkout_sessions VALUES ('blocked')")
     db.execute("INSERT INTO outbox VALUES (5,'blocked','OrderConfirmed')")
     checkpoint_query = calls[0][0][0][-1].split(";", 1)[0]
     assert db.execute(checkpoint_query).fetchone() == (4, 0, 5, "blocked")

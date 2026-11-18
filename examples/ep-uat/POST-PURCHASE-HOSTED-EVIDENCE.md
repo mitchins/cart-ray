@@ -67,6 +67,13 @@ in local Workerd/D1, not hosted: Cloudflare rejected a 16 KB registry as a
 single Worker secret because that binding is limited to approximately 5 KB.
 Hosted configuration must fit the provider's binding limit.
 
+A final clean build from `52c98ffb774bfb1605180dfc4d6af67f4c1efdb9`,
+bundle SHA-256 `30c5517631ab1f401484056213194e096223ee908ceed507e4c88bbebdc46fb0`,
+was deployed as source version `e9267155-6557-4840-bc92-c36e9629c70d`.
+With the handler disabled, a signed synthetic wakeup returned HTTP 200 and
+the synthetic execution was recorded as `uncertain`. This smoke did not
+induce cancellation or slow D1; those paths were exercised locally.
+
 The final test source and handler were deployed with delivery disabled. The
 test schedule was removed and verified absent through the Cloudflare API. The
 test D1 and paused Workers remain available for review; their identities above
