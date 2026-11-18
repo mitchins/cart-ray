@@ -681,7 +681,8 @@ class Installation:
                 raise ValueError("review subject route is missing from the merchant storefront")
         if self.config["reviews_enabled"]:
             approved_routes = {route: subject for subject, route, _label in self.config["subject_details"]}
-            for product_page in (site / "products").rglob("index.html"):
+            # Product and non-checkout listing routes can live outside /products/.
+            for product_page in site.rglob("index.html"):
                 page = ConnectedShell()
                 page.feed(product_page.read_text())
                 if not page.product_data:

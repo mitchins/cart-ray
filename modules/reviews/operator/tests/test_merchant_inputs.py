@@ -283,3 +283,12 @@ def test_merchant_reviews_require_correct_subject_pages_and_native_clients(tmp_p
     installation.config["merchant_inputs_sha256"] = validate(snap, ROOT)
     with pytest.raises(ValueError, match="unapproved review subject"):
         installation.verify_merchant_inputs()
+    shutil.rmtree(unrelated)
+    unrelated = snap / "storefront/product/unrelated"
+    unrelated.mkdir(parents=True)
+    (unrelated / "index.html").write_text(
+        '<script type="application/json" id="product-data">{"review_subject":"product-one"}</script>'
+    )
+    installation.config["merchant_inputs_sha256"] = validate(snap, ROOT)
+    with pytest.raises(ValueError, match="unapproved review subject"):
+        installation.verify_merchant_inputs()
