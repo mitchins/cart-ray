@@ -26,6 +26,7 @@ command = "uv run python scripts/sync_worker_source.py"
 cwd = "/tmp/old"
 [vars]
 CARTRAY_ENVIRONMENT = "test"
+CARTRAY_SIGNING_KEY_ID = "acorn-test"
 [[d1_databases]]
 binding = "DB"
 database_id = "db-one"
@@ -47,10 +48,15 @@ def test_normalize_forces_archive_source_and_only_allows_test_configuration():
         build.normalized_config(CONFIG.replace("scripts/sync_worker_source.py", "scripts/other.py"))
     missing_limiter = CONFIG.replace('name = "CHECKOUT_STATUS_RATE_LIMITER"', 'name = "OTHER"')
     loose_limiter = CONFIG.replace("limit = 60, period = 60", "limit = 600, period = 60")
+    missing_identity = CONFIG.replace('CARTRAY_SIGNING_KEY_ID = "acorn-test"', "")
+    empty_identity = CONFIG.replace('CARTRAY_SIGNING_KEY_ID = "acorn-test"', 'CARTRAY_SIGNING_KEY_ID = ""')
     with pytest.raises(ValueError, match="CHECKOUT_STATUS_RATE_LIMITER"):
         build.normalized_config(missing_limiter)
     with pytest.raises(ValueError, match="CHECKOUT_STATUS_RATE_LIMITER"):
         build.normalized_config(loose_limiter)
+    for invalid in (missing_identity, empty_identity):
+        with pytest.raises(ValueError, match="CARTRAY_SIGNING_KEY_ID"):
+            build.normalized_config(invalid)
     with pytest.raises(ValueError):
         build.normalized_config(
             CONFIG.replace('CARTRAY_ENVIRONMENT = "test"', 'CARTRAY_ENVIRONMENT = "test"\nSTRIPE_API_KEY = "oops"')
@@ -112,6 +118,7 @@ def test_attestation_rejects_changed_modules_bindings_or_split_version(tmp_path,
                 "simple": {"limit": 60, "period": 60},
             },
             {"name": "CARTRAY_ENVIRONMENT", "type": "plain_text", "text": "test"},
+            {"name": "CARTRAY_SIGNING_KEY_ID", "type": "plain_text", "text": "acorn-test"},
             *[
                 {"name": name, "type": "secret_text"}
                 for name in (

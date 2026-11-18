@@ -51,7 +51,8 @@ def snapshot_merchant_inputs(source: Path, destination: Path, lock_bytes: bytes)
         raise ValueError("merchant product-assets must be a local directory")
     paths = list(assets.rglob("*"))
     if len(paths) > 5000 or any(
-        path.is_symlink() or (not path.is_file() and not path.is_dir())
+        path.is_symlink()
+        or (not path.is_file() and not path.is_dir())
         or (path.is_file() and path.stat().st_size > 20_000_000)
         for path in paths
     ):
@@ -106,6 +107,11 @@ def checked_config(raw: str) -> dict:
         raise ValueError("unexpected Worker build command")
     if not config.get("name") or not config.get("account_id"):
         raise ValueError("Worker and account identity are required")
+    if (
+        not isinstance(config.get("vars", {}).get("CARTRAY_SIGNING_KEY_ID"), str)
+        or not config["vars"]["CARTRAY_SIGNING_KEY_ID"].strip()
+    ):
+        raise ValueError("CARTRAY_SIGNING_KEY_ID is required for checkout status admission")
     if any(re.search(r"SECRET|PASSWORD|PRIVATE|API_KEY|TOKEN", name, re.I) for name in config.get("vars", {})):
         raise ValueError("sensitive values must not be stored in Worker vars")
     dbs = [item for item in config.get("d1_databases", []) if item.get("binding") == "DB"]
@@ -216,8 +222,18 @@ def repair_missing_pywrangler_vendor(project: Path, env: dict[str, str], package
         return False
     target = project / "locked-vendor-target"
     run(
-        ["uv", "pip", "install", "--no-build", "--target", str(target), "-r", str(project / "pylock.toml"),
-         "--preview-features", "pylock"],
+        [
+            "uv",
+            "pip",
+            "install",
+            "--no-build",
+            "--target",
+            str(target),
+            "-r",
+            str(project / "pylock.toml"),
+            "--preview-features",
+            "pylock",
+        ],
         project,
         env,
     )
