@@ -109,18 +109,19 @@ def collection(gel, products, theme, base, shop=False):
     return f"""<section class="collection wrap">{top}{search(base) if shop and theme != "classic" else ""}<div class="catalogue-layout">{controls}<div><p id="results-status" class="results-status" role="status" aria-live="polite">{len(products)} products</p><div id="products" class="product-grid">{"".join(card(p, base) for p in products)}</div><div id="no-results" class="empty-state" hidden><h2>No little things found.</h2><p>Try another search or show the whole collection.</p><button type="button" id="reset-filter">Clear filters</button></div></div></div></section>"""
 
 
-def story(gel, base):
-    return f'''<section id="our-story" class="story wrap"><div><p class="eyebrow">A SMALL STORE, BY DESIGN</p><h2>Fewer things.<br>More thought.</h2></div><div><p>{esc(gel["identity"]["description"])}</p><p>Browse at your pace. Choose what suits you. No account to create, no noisy extras.</p><a class="text-link" href="{base}help/">A little help along the way {icon("arrow", 18)}</a></div></section>'''
+def story(gel, base, *, help_path="/help/"):
+    link = f'<a class="text-link" href="{esc(base + help_path.lstrip("/"), quote=True)}">A little help along the way {icon("arrow", 18)}</a>' if help_path else ""
+    return f'''<section id="our-story" class="story wrap"><div><p class="eyebrow">A SMALL STORE, BY DESIGN</p><h2>Fewer things.<br>More thought.</h2></div><div><p>{esc(gel["identity"]["description"])}</p><p>Browse at your pace. Choose what suits you. No account to create, no noisy extras.</p>{link}</div></section>'''
 
 
-def product_page(gel, p, base, preview, *, help_enabled=True):
+def product_page(gel, p, base, preview, *, help_path="/help/"):
     specs = "".join(f"<div><dt>{esc(k)}</dt><dd>{esc(v)}</dd></div>" for k, v in p["specs"].items())
     public_reviews = (
         f"""<section class="public-reviews wrap" id="reviews" {"hidden" if not preview else ""} aria-labelledby="reviews-heading"><div class="section-heading"><div><p class="eyebrow">FROM PEOPLE WHO CHOSE IT</p><h2 id="reviews-heading">Customer reviews</h2></div><span class="tag">{"Preview data" if preview else "Customer experiences"}</span></div><p id="reviews-status" role="status" aria-live="polite">{"Illustrative review only — not a real customer rating." if preview else ""}</p><div id="review-list">{('<article class="quote-card"><span class="stars" aria-label="5 out of 5 stars">★★★★★</span><h3>A lovely little beginning</h3><p>“A simple project to slow down with. The instructions made getting started feel easy.”</p><p class="muted">Alex · Sample reviewer</p></article>') if preview else ""}</div><button id="reviews-more" type="button" hidden>Load more reviews</button></section>"""
         if p.get("review_subject")
         else ""
     )
-    help_info = f'<details class="product-info"><summary>A little help</summary><p>Questions before you choose? <a href="{base}help/">Get in touch with the store.</a></p></details>' if help_enabled else ""
+    help_info = f'<details class="product-info"><summary>A little help</summary><p>Questions before you choose? <a href="{esc(base + help_path.lstrip("/"), quote=True)}">Get in touch with the store.</a></p></details>' if help_path else ""
     return f'''<div class="wrap breadcrumb"><a href="{base}shop/">The collection</a><span aria-hidden="true">/</span><span>{esc(p["title"])}</span></div><section class="product-detail wrap"><figure class="detail-art" data-product-gallery aria-label="{esc(p["title"])} images"><div class="gallery-stage"><img data-gallery-image src="{esc(p["image"] if p["image"].startswith(("/", "https://", "http://")) else base + p["image"])}" alt="{esc(p["image_alt"])}" width="800" height="720" fetchpriority="high"><p data-gallery-fallback hidden>Image unavailable</p></div><div data-gallery-controls hidden></div><figcaption class="sr-only" data-gallery-status role="status" aria-live="polite" aria-atomic="true"></figcaption></figure><div class="detail-copy"><p class="eyebrow">{esc(p["eyebrow"])}</p><h1>{esc(p["title"])}</h1><p class="detail-price">{money(p)} <small>{esc(p["currency"]) if p["amount_minor"] else "digital guide"}</small></p><p class="lead">{esc(p["short_description"])}</p><p>{esc(p["details"])}</p><ul class="feature-list">{"".join("<li>" + icon("check", 18) + esc(x) + "</li>" for x in p["features"])}</ul><button type="button" class="button wide" data-add="{esc(p["product_key"])}">Add to cart {icon("bag")}</button><p class="muted small">{"Sample product, price and illustration." if preview else "Final price and availability are confirmed at checkout."}</p><details class="product-info"><summary>The details</summary><dl>{specs}</dl></details>{help_info}</div></section>{public_reviews}'''
 
 

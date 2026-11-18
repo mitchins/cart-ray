@@ -62,6 +62,8 @@ def load_inputs(gel_path, catalogue_path, assets_root=ROOT):
         merchant_path(catalogue_path, product=True)
     if "shop" in owned_pages and owned_pages["shop"] != catalogue_path:
         raise ValueError("catalogue path differs from owned shop route")
+    if any(name != "shop" and path.casefold() == catalogue_path.casefold() for name, path in owned_pages.items()):
+        raise ValueError("catalogue path conflicts with an owned page")
     if not isinstance(pages_seo, dict) or pages_seo.keys() - {"home", "shop", "help"}:
         raise ValueError("invalid page SEO mapping")
     if pages_seo.keys() - owned_pages.keys():
@@ -265,7 +267,7 @@ def build_site(output, gel_path, catalogue_path, theme="minimal", base="/", asse
         "index.html": (
             "home",
             "Home",
-            t.hero(gel, theme, base) + t.collection(gel, products, theme, base) + t.story(gel, base),
+            t.hero(gel, theme, base) + t.collection(gel, products, theme, base) + t.story(gel, base, help_path=owned.get("help")),
         ),
         "shop/index.html": ("shop", "The collection", t.collection(gel, products, theme, base, True)),
         "help/index.html": ("help", "Help & care", t.help_page(gel, base, preview)),
@@ -311,7 +313,7 @@ def build_site(output, gel_path, catalogue_path, theme="minimal", base="/", asse
                 base,
                 "product",
                 p["title"],
-                t.product_page(gel, p, base, preview, help_enabled="help" in owned),
+                t.product_page(gel, p, base, preview, help_path=owned.get("help")),
                 preview,
                 p["product_key"],
                 nav_links=nav_links,

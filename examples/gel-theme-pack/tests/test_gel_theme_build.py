@@ -107,6 +107,28 @@ class GelTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "explicit catalogue path"):
                 load_inputs(ROOT / "gel/squirrel.json", source)
 
+    def test_owned_help_route_and_catalogue_collision(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            catalogue = json.loads((ROOT / "content/squirrel.json").read_text())
+            catalogue["owned_pages"] = {"home": "/", "shop": "/items/", "help": "/care/"}
+            catalogue["catalogue_path"] = "/items/"
+            source = root / "catalogue.json"
+            source.write_text(json.dumps(catalogue))
+            build_site(root / "site", ROOT / "gel/squirrel.json", source)
+            for page in ("index.html", "products/acorn-growing-kit/index.html"):
+                html = (root / "site" / page).read_text()
+                self.assertIn('href="/care/"', html)
+                self.assertNotIn('href="/help/"', html)
+            catalogue["owned_pages"] = {"home": "/"}
+            source.write_text(json.dumps(catalogue))
+            build_site(root / "no-help", ROOT / "gel/squirrel.json", source)
+            self.assertNotIn('href="/help/"', (root / "no-help/index.html").read_text())
+            catalogue["owned_pages"] = {"help": "/items/"}
+            source.write_text(json.dumps(catalogue))
+            with self.assertRaisesRegex(ValueError, "conflicts with an owned page"):
+                load_inputs(ROOT / "gel/squirrel.json", source)
+
     def test_seo_qualified_catalogue_requires_complete_metadata(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
