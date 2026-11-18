@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import hmac
+import inspect
 import ipaddress
 import json
 import re
@@ -42,6 +43,7 @@ from cartray.workers_transport import WorkersFetchTransport
 MAX_CHECKOUT_BODY_BYTES = 16_384
 _BROWSER_ROUTES = {"/catalogue": "GET", "/checkout": "POST", "/checkout-status": "GET"}
 _CHECKOUT_SESSION_ID_RE = re.compile(r"^cs_[A-Za-z0-9_]+$")
+_STATUS_UNAVAILABLE = "checkout status unavailable"
 
 
 class CorsRejected(Exception):
@@ -137,7 +139,9 @@ def create_app(
         except RuntimeError:
             return Response({"error": "catalogue unavailable"}, status=503)
         try:
-            resolved_catalogue = await catalogue_factory(request.env)
+            resolved_catalogue = catalogue_factory(request.env)
+            if inspect.isawaitable(resolved_catalogue):
+                resolved_catalogue = await resolved_catalogue
         except Exception:
             return Response({"error": "catalogue unavailable"}, status=503, headers=cors.response_headers())
         return Response(
@@ -185,20 +189,20 @@ def create_app(
         except CorsRejected:
             return Response({"error": "origin not allowed"}, status=403)
         except RuntimeError:
-            return Response({"error": "checkout status unavailable"}, status=503)
+            return Response({"error": _STATUS_UNAVAILABLE}, status=503)
         session_id = _checkout_status_session_id(request)
         if session_id is None:
             return Response({"error": "checkout not found"}, status=404, headers=_status_headers(cors))
         try:
             allowed = await _checkout_status_rate_limit(request)
         except Exception:
-            return Response({"error": "checkout status unavailable"}, status=503, headers=_status_headers(cors))
+            return Response({"error": _STATUS_UNAVAILABLE}, status=503, headers=_status_headers(cors))
         if not allowed:
-            return Response({"error": "checkout status unavailable"}, status=429, headers=_status_headers(cors))
+            return Response({"error": _STATUS_UNAVAILABLE}, status=429, headers=_status_headers(cors))
         try:
             state = await (await status_store_factory(request.env)).checkout_status(session_id)
         except Exception:
-            return Response({"error": "checkout status unavailable"}, status=503, headers=_status_headers(cors))
+            return Response({"error": _STATUS_UNAVAILABLE}, status=503, headers=_status_headers(cors))
         if state not in {"pending", "confirmed", "expired"}:
             return Response({"error": "checkout not found"}, status=404, headers=_status_headers(cors))
         return Response({"state": state}, headers=_status_headers(cors))
@@ -283,7 +287,7 @@ async def catalogue_from_environment(env):
     return await build_runtime_catalogue(COMPILED_CATALOGUE, StripePriceResolver(client))
 
 
-async def public_catalogue_from_environment(env):
+def public_catalogue_from_environment(env):
     _test_environment(env)
     _require_locked_catalogue()
     return COMPILED_CATALOGUE
