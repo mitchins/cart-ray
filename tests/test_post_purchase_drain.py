@@ -260,3 +260,51 @@ def test_worker_drain_calls_scoped_handler_and_never_replays(monkeypatch, respon
     )
     assert db.execute("SELECT state FROM post_purchase_executions").fetchone()[0] == expected_state
     assert db.execute("SELECT last_outbox_id FROM post_purchase_checkpoint").fetchone()[0] == 2
+
+
+def test_worker_handler_timeout_is_held_and_never_resent(monkeypatch):
+    import sys
+    from types import ModuleType, SimpleNamespace
+
+    import cartray.worker as worker
+
+    db = setup_database()
+    calls = []
+
+    class Request:
+        @staticmethod
+        def new(url, options):
+            return SimpleNamespace(url=url, options=options)
+
+    class Service:
+        async def fetch(self, request):
+            calls.append(request)
+            await asyncio.sleep(1)
+
+    js = ModuleType("js")
+    js.Request = Request
+    js.Object = SimpleNamespace(fromEntries=lambda value: value)
+    pyodide = ModuleType("pyodide")
+    ffi = ModuleType("pyodide.ffi")
+    ffi.to_js = lambda value, **kwargs: value
+    monkeypatch.setitem(sys.modules, "js", js)
+    monkeypatch.setitem(sys.modules, "pyodide", pyodide)
+    monkeypatch.setitem(sys.modules, "pyodide.ffi", ffi)
+    original_wait_for = asyncio.wait_for
+
+    async def short_handler_timeout(awaitable, timeout):
+        return await original_wait_for(awaitable, timeout=0.01 if timeout == 8 else timeout)
+
+    monkeypatch.setattr(worker.asyncio, "wait_for", short_handler_timeout)
+    action = {"workflow_key": "delivery", "offer_keys": ["product"], "handler": "service",
+              "config_ref": "private/config", "config_digest": "a" * 64}
+    env = SimpleNamespace(
+        DB=Database(db), CARTRAY_ENVIRONMENT="test", CARTRAY_POST_PURCHASE_MODE="test",
+        CARTRAY_POST_PURCHASE_TOKEN="t" * 32, POST_PURCHASE_HANDLER=Service(),
+        CARTRAY_POST_PURCHASE_CONFIG=json.dumps({"merchant": "store", "environment": "test", "actions": [action]}),
+    )
+    asyncio.run(worker._drain_post_purchase(env))
+    asyncio.run(worker._drain_post_purchase(env))
+    assert len(calls) == 1
+    assert db.execute("SELECT state FROM post_purchase_executions").fetchone()[0] == "uncertain"
+    assert db.execute("SELECT last_outbox_id FROM post_purchase_checkpoint").fetchone()[0] == 2
