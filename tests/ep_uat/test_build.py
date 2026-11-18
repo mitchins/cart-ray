@@ -345,3 +345,8 @@ def test_connected_flow_uses_explicit_merchant_path(tmp_path, monkeypatch):
                   category_links=[("/category/parent/child/", "Child")])
     assert '"PRODUCT-1": "/product/approved-route/"' in (tmp_path / "storefront-config.js").read_text()
     assert '"path": "/product/approved-route/"' in (tmp_path / "site-config.js").read_text()
+    previous = (tmp_path / "site-config.js").read_text()
+    with pytest.raises(ValueError, match="conflicting category"):
+        flows.install(tmp_path, ROOT, {"identity": {"name": "Merchant"}}, "minimal", [offer],
+                      category_links=[("/product/approved-route/", "Conflict")])
+    assert (tmp_path / "site-config.js").read_text() == previous

@@ -1,5 +1,6 @@
 """Validated merchant presentation paths and document metadata, not commerce authority."""
 
+import ipaddress
 import json
 import re
 from urllib.parse import urlsplit
@@ -12,6 +13,7 @@ _RESERVED = {"cart", "purchase-return", "review", "reviews", "unsubscribe", "che
 def merchant_path(value, *, product=False):
     """Accept explicit, canonical local paths without encoded or ambiguous segments."""
     if (not isinstance(value, str) or len(value) > 512 or not _PATH.fullmatch(value)
+            or any(len(part) > 255 for part in value.strip("/").split("/"))
             or (product and value.split('/')[1].lower() in _RESERVED)):
         raise ValueError("invalid or reserved merchant path")
     return value
@@ -46,6 +48,15 @@ def page_seo(value):
             or port not in (None, 443) or not re.fullmatch(r"[A-Za-z0-9.-]+", url.hostname)
             or any(ord(c) <= 32 for c in value["canonical_url"])):
         raise ValueError("invalid canonical URL")
+    host = url.hostname.rstrip(".")
+    if (not host or len(host) > 253 or any(len(label) > 63 or not re.fullmatch(
+            r"[a-z0-9](?:[a-z0-9-]*[a-z0-9])?", label) for label in host.split("."))):
+        raise ValueError("invalid canonical URL host")
+    if re.fullmatch(r"[0-9.]+", host):
+        try:
+            ipaddress.IPv4Address(host)
+        except ValueError as error:
+            raise ValueError("invalid canonical URL host") from error
     if url.path != "/":
         merchant_path(url.path)
     if value["robots"] not in ("index,follow", "noindex,nofollow"):

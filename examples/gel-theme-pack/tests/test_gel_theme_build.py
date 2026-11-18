@@ -94,6 +94,19 @@ class GelTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "products require metadata"):
                 load_inputs(ROOT / "gel/squirrel.json", source)
 
+    def test_nonproduct_structured_data_rejected_before_build(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            catalogue = json.loads((ROOT / "content/squirrel.json").read_text())
+            catalogue["pages_seo"] = {"shop": {"title": "Shop", "description": "Products",
+                "canonical_url": "https://example.test/shop/", "robots": "noindex,nofollow",
+                "structured_data": {"@type": "Product", "name": "Kit"}}}
+            source = root / "catalogue.json"
+            source.write_text(json.dumps(catalogue))
+            with self.assertRaisesRegex(ValueError, "product page"):
+                build_site(root / "site", ROOT / "gel/squirrel.json", source, preview=True)
+            self.assertFalse((root / "site").exists())
+
     def test_defaults_validate(self):
         self.assertGreater(len(validate(self.gel, ROOT)["contrast"]), 10)
 

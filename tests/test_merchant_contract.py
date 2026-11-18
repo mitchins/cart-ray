@@ -14,6 +14,8 @@ def test_accept_explicit_merchant_case_and_underscore():
     assert merchant_path("/product/Policy_Template/", product=True) == "/product/Policy_Template/"
     with pytest.raises(ValueError):
         merchant_path("/Cart/", product=True)
+    with pytest.raises(ValueError):
+        merchant_path("/product/" + "a" * 256 + "/", product=True)
 
 
 def test_shared_path_prefix_casing_must_be_consistent():
@@ -29,6 +31,7 @@ def test_metadata_rejects_unapproved_claims_and_unsafe_canonicals():
            "robots": "noindex,nofollow"}
     page_seo(seo)
     for value in ("javascript:alert(1)", "https://example.test@evil.test/product/p/",
+                  "https://999.1.2.3/product/p/", "https://bad..host/product/p/",
                   "https://example.test/product/../p/", "https://example.test/product/p/?x=1"):
         with pytest.raises(ValueError):
             page_seo({**seo, "canonical_url": value})

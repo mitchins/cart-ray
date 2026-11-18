@@ -66,6 +66,17 @@ def install(
         source_ids.add(str(offer["source_id"]))
         paths.add(offer["path"].casefold())
         register_path(offer["path"], prefixes)
+    category_links = category_links or []
+    for path, label in category_links:
+        merchant_path(path, product=True)
+        register_path(path, prefixes)
+        if not isinstance(label, str) or not label.strip():
+            raise ValueError("invalid category label")
+    if (len({path.casefold() for path, _ in category_links}) != len(category_links)
+            or any(path.casefold() in paths for path, _ in category_links)):
+        raise ValueError("duplicate or conflicting category path")
+    if return_extension and not (output / return_extension.lstrip("/")).is_file():
+        raise ValueError("return extension is missing from the storefront")
     theme_dir = output / "theme"
     for name in (
         "app.mjs",
@@ -89,8 +100,6 @@ def install(
         }
         for offer in offers
     ]
-    if return_extension and not (output / return_extension.lstrip("/")).is_file():
-        raise ValueError("return extension is missing from the storefront")
     config = {
         "schemaVersion": 1,
         "preview": False,
@@ -118,15 +127,6 @@ def install(
         + json.dumps(storefront, ensure_ascii=True)
         + "; window.CARTRAY_STOREFRONT.apiBaseUrl = " + api + "; window.CARTRAY_CONNECTED_CATALOGUE = true;\n"
     )
-    category_links = category_links or []
-    for path, label in category_links:
-        merchant_path(path, product=True)
-        register_path(path, prefixes)
-        if not isinstance(label, str) or not label.strip():
-            raise ValueError("invalid category label")
-    if (len({path.casefold() for path, _ in category_links}) != len(category_links)
-            or any(path.casefold() in {value.casefold() for value in paths.values()} for path, _ in category_links)):
-        raise ValueError("duplicate or conflicting category path")
     for route, page in (("cart/index.html", "cart"), ("purchase-return/index.html", "purchase-return")):
         content = templates.simple_page(page, gel, "/")
         html = templates.page_shell(

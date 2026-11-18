@@ -695,7 +695,10 @@ class Installation:
                 if not page.product_data:
                     continue
                 try:
-                    actual = json.loads(page.product_data).get("review_subject")
+                    data = json.loads(page.product_data)
+                    if not isinstance(data, dict):
+                        continue
+                    actual = data.get("review_subject")
                 except (ValueError, AttributeError) as error:
                     raise ValueError("merchant product review presentation is invalid") from error
                 route = "/" + str(product_page.parent.relative_to(site)) + "/"

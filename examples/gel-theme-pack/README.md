@@ -4,7 +4,7 @@ A working visual implementation for Codex: **Minimal**, **Studio** and **Classic
 
 ## Start with the preview
 
-From the repository root (Python 3.10+, no build-time dependencies):
+From the repository root (Python 3.12+, no build-time dependencies):
 
 ```sh
 cd examples/gel-theme-pack
@@ -121,6 +121,8 @@ paths must be distinct even ignoring case, slash-terminated local paths with
 ASCII letters, digits, hyphens or underscores in each segment. Encoded segments,
 traversal, query strings and reserved application route prefixes are rejected. An
 operator's `productPaths` and `subject_details` must agree with the approved route.
+The connected theme builder requires a source build with matching `productPaths`.
+The Acorn example builder produces Acorn's routes, not another merchant's paths.
 Listings that cannot be purchased can still use explicit paths in the UAT builder.
 
 Optional `category_links` is an ordered list of `{ "path":

@@ -43,7 +43,8 @@ def load_inputs(gel_path, catalogue_path, assets_root=ROOT):
         raise ValueError("SEO-qualified pages require metadata")
     from urllib.parse import urlsplit
     for page, seo in pages_seo.items():
-        page_seo(seo)
+        if page_seo(seo) is not None:
+            raise ValueError("product structured data requires a product page")
         if seo["robots"] == "index,follow" and not catalogue.get("seo_qualified"):
             raise ValueError("indexable SEO requires an SEO-qualified catalogue")
         if urlsplit(seo["canonical_url"]).path != {"home": "/", "shop": "/shop/", "help": "/help/"}[page]:

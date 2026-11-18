@@ -275,6 +275,11 @@ def test_merchant_reviews_require_correct_subject_pages_and_native_clients(tmp_p
     with pytest.raises(ValueError, match="review page does not load"):
         installation.verify_merchant_inputs()
     manage.write_text(original_manage)
+    category = snap / "storefront/category/example"
+    category.mkdir(parents=True)
+    (category / "index.html").write_text('<script type="application/json" id="product-data">[]</script>')
+    installation.config["merchant_inputs_sha256"] = validate(snap, ROOT)
+    installation.verify_merchant_inputs()
     unrelated = snap / "storefront/products/unrelated"
     unrelated.mkdir()
     (unrelated / "index.html").write_text(
