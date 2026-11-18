@@ -360,6 +360,48 @@ def test_status_budget_stops_originless_requests_before_database():
     assert limiter.calls == 10
 
 
+def test_status_rejects_bad_queries_and_missing_edge_admission_before_database():
+    store = RecordingStatusStore({"cs_test_pending": "pending"})
+
+    async def status_factory(_env):
+        return store
+
+    client = TestClient(create_app(status_store_factory=status_factory), env=STORE_ENV)
+    for query in ("?session_id=" + "x" * 300, "?a=1&b=2&session_id=cs_test_pending"):
+        status, headers, _ = client.request("GET", "/checkout-status" + query)
+        assert status == 404
+        assert headers["Cache-Control"] == "no-store"
+    status, headers, _ = client.request("GET", "/checkout-status?session_id=cs_test_pending")
+    assert status == 503
+    assert headers["Cache-Control"] == "no-store"
+    assert store.calls == 0
+
+    env = {**STORE_ENV, "CHECKOUT_STATUS_RATE_LIMITER": None}
+    client = TestClient(create_app(status_store_factory=status_factory), env=env)
+    status, _, _ = client.request(
+        "GET", "/checkout-status?session_id=cs_test_pending", headers={"cf-connecting-ip": "192.0.2.1"}
+    )
+    assert status == 503
+    assert store.calls == 0
+
+
+def test_status_normalizes_ipv4_mapped_and_ipv6_client_budgets():
+    class RecordingLimiter:
+        def __init__(self):
+            self.keys = []
+
+        async def limit(self, options):
+            self.keys.append(options["key"])
+            return {"success": True}
+
+    limiter = RecordingLimiter()
+    for address in ("192.0.2.1", "::ffff:192.0.2.1", "2001:db8::1", "2001:db8::2"):
+        request = SimpleNamespace(env=SimpleNamespace(CHECKOUT_STATUS_RATE_LIMITER=limiter), header=lambda _: address)
+        assert asyncio.run(worker_module._checkout_status_rate_limit(request))
+    assert limiter.keys[0] == limiter.keys[1]
+    assert limiter.keys[2] == limiter.keys[3]
+
+
 def test_public_catalogue_snapshot_needs_neither_stripe_nor_d1(monkeypatch):
     def forbidden(_env):
         raise AssertionError("public read attempted to contact Stripe")
