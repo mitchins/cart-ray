@@ -112,7 +112,11 @@ def checked_config(raw: str) -> dict:
     if len(dbs) != 1 or not dbs[0].get("database_id"):
         raise ValueError("exactly one identified commerce D1 binding is required")
     limiters = [item for item in config.get("ratelimits", []) if item.get("name") == "CHECKOUT_STATUS_RATE_LIMITER"]
-    if len(limiters) != 1 or not limiters[0].get("namespace_id") or not limiters[0].get("simple"):
+    if (
+        len(limiters) != 1
+        or not limiters[0].get("namespace_id")
+        or limiters[0].get("simple") != {"limit": 60, "period": 60}
+    ):
         raise ValueError("CHECKOUT_STATUS_RATE_LIMITER binding is required for checkout returns")
     return config
 
