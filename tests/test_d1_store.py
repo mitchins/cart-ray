@@ -367,6 +367,7 @@ def test_d1_store_expires_a_known_pending_session_idempotently_without_outbox(fi
     assert asyncio.run(store.expire_checkout(**expiry)) is False
     assert asyncio.run(store.expire_checkout(**expiry)) is True
     assert asyncio.run(store.checkout_status(expiry["session_id"])) == "expired"
+    assert asyncio.run(store.checkout_receipt(expiry["session_id"])) is None
     row = asyncio.run(
         d1_database.prepare(
             "SELECT expiration_event_id, expired_at FROM checkout_sessions WHERE order_id = ?"
@@ -554,6 +555,8 @@ def test_d1_store_confirms_once_and_preserves_the_first_delivery_for_a_reseriali
     )
     assert asyncio.run(store.checkout_status("cs_d1_settlement")) == "pending"
     assert asyncio.run(store.checkout_status("cs_d1_unknown")) is None
+    assert asyncio.run(store.checkout_receipt("cs_d1_settlement")) is None
+    assert asyncio.run(store.checkout_receipt("cs_d1_unknown")) is None
 
     kwargs = {
         "order_id": order_id,
@@ -584,6 +587,10 @@ def test_d1_store_confirms_once_and_preserves_the_first_delivery_for_a_reseriali
     assert asyncio.run(store.confirm_settlement(**changed)) is False
     assert asyncio.run(store.confirm_settlement(**changed)) is True
     assert asyncio.run(store.checkout_status("cs_d1_settlement")) == "confirmed"
+    assert asyncio.run(store.checkout_receipt("cs_d1_settlement")) == {
+        "currency": "aud",
+        "items": [{"product_key": "TEST-TEMPLATE", "quantity": 1, "unit_amount_minor": 2500}],
+    }
     asyncio.run(
         store.record_settlement_rejection(
             event_id=kwargs["event_id"],

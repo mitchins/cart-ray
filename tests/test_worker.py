@@ -70,10 +70,15 @@ class FixtureRateLimiter:
 class RecordingStatusStore:
     states: dict[str, str]
     calls: int = 0
+    receipt: dict | None = None
 
     async def checkout_status(self, session_id):
         self.calls += 1
         return self.states.get(session_id)
+
+    async def checkout_receipt(self, session_id):
+        assert self.states.get(session_id) == "confirmed"
+        return self.receipt
 
 
 STORE_ENV = {"CARTRAY_STOREFRONT_ORIGIN": STOREFRONT_ORIGIN, "CHECKOUT_RATE_LIMITER": FixtureRateLimiter(True)}
@@ -325,6 +330,29 @@ def test_checkout_status_is_a_minimal_d1_only_browser_read():
     assert status == 404
     assert json.loads(body) == {"error": "checkout not found"}
     assert store.calls == 4
+
+
+def test_checkout_status_only_includes_receipt_for_confirmed_sessions():
+    receipt = {"currency": "AUD", "items": [
+        {"product_key": "TEST-TEMPLATE", "quantity": 2, "unit_amount_minor": 2500}
+    ]}
+    store = RecordingStatusStore(
+        {"cs_test_pending": "pending", "cs_test_confirmed": "confirmed", "cs_test_expired": "expired"},
+        receipt=receipt,
+    )
+
+    async def status_factory(_env):
+        return store
+
+    client = TestClient(create_app(status_store_factory=status_factory), env=STORE_ENV)
+    for state in ("pending", "confirmed", "expired", "unknown"):
+        status, headers, body = client.request("GET", f"/checkout-status?session_id=cs_test_{state}")
+        assert headers["Cache-Control"] == "no-store"
+        assert status == (404 if state == "unknown" else 200)
+        expected = {"error": "checkout not found"} if state == "unknown" else {"state": state}
+        if state == "confirmed":
+            expected["receipt"] = receipt
+        assert json.loads(body) == expected
 
 
 def test_checkout_status_rejects_foreign_origins_and_has_route_specific_preflight():

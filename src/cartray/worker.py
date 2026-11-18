@@ -189,12 +189,14 @@ def create_app(
         if session_id is None:
             return Response({"error": "checkout not found"}, status=404, headers=_status_headers(cors))
         try:
-            state = await (await status_store_factory(request.env)).checkout_status(session_id)
+            store = await status_store_factory(request.env)
+            state = await store.checkout_status(session_id)
+            receipt = await store.checkout_receipt(session_id) if state == "confirmed" else None
         except Exception:
             return Response({"error": "checkout status unavailable"}, status=503, headers=_status_headers(cors))
         if state not in {"pending", "confirmed", "expired"}:
             return Response({"error": "checkout not found"}, status=404, headers=_status_headers(cors))
-        return Response({"state": state}, headers=_status_headers(cors))
+        return Response({"state": state, **({"receipt": receipt} if receipt else {})}, headers=_status_headers(cors))
 
     @app.post("/stripe/webhook")
     async def stripe_webhook(request):

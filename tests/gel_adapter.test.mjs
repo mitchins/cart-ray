@@ -41,6 +41,20 @@ test('confirmed mismatching cart is retained, expired and cancelled unlock',asyn
   const expired=await createAdapter(presentation);assert.equal((await expired.returnState()).state,'expired');assert.equal(expired.add('ACORN-KIT'),true);
   setup('?checkout=cancelled');const cancelled=await createAdapter(presentation);assert.equal((await cancelled.returnState()).state,'cancelled');assert.equal(cancelled.add('ACORN-KIT'),true);
 });
+test('connected return displays only durable purchased items with a changed cart or no storage',async()=>{
+  for(const denied of [false,true]){
+    const {storage}=setup('?checkout=complete&session_id=cs_test_receipt',denied);
+    if(!denied)storage.setItem('cartray.cart.v1',JSON.stringify({catalogueVersion:catalogue.version,revision:3,items:[['ACORN-KIT',3]]}));
+    const receipt={currency:'aud',items:[{product_key:'RETIRED-PURCHASE',quantity:2,unit_amount_minor:1750},
+      {product_key:'ACORN-KIT',quantity:1,unit_amount_minor:1750}]};
+    globalThis.fetch=async url=>({ok:true,json:async()=>String(url).endsWith('/catalogue')?catalogue:{state:'confirmed',receipt}});
+    const adapter=await createAdapter(presentation);const result=await adapter.returnState();
+    assert.deepEqual(result.receipt,receipt);assert.match(result.purchasedItems[0],/^RETIRED-PURCHASE × 2 /);
+    assert.equal(result.purchasedItems.length,2);assert.equal(adapter.count(),denied?0:3);
+    assert.match(result.purchasedItems[1],/^Authoritative title \(ACORN-KIT\) × 1 .*17\.50/);
+    assert.deepEqual(result.receipt,receipt);
+  }
+});
 test('pending authoritative return retains cart and locks mutation',async()=>{
   const {storage}=setup('?checkout=complete&session_id=cs_test_pending');
   storage.setItem('cartray.cart.v1',JSON.stringify({catalogueVersion:catalogue.version,revision:2,items:[['ACORN-KIT',1]]}));

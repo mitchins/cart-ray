@@ -2,11 +2,88 @@
 
 import hashlib
 import json
+import re
 
 SUBJECTS = {"ACORN-KIT": "acorn-growing-kit", "ACORN-PLANTER": "woodland-planter"}
 
 
-def graph(installation, versions=None, sending=False):
+def validate_post_purchase(value, config, commerce_keys):
+    """Validate explicit operator-approved test actions, never infer workflows from copy."""
+    fields = {"environment", "merchant", "workflow_key", "config_ref", "offer_keys", "links",
+              "recipient", "sender", "subject", "stripe_account"}
+    if (not isinstance(value, dict) or set(value) != {"schema", "actions"}
+            or type(value["schema"]) is not int or value["schema"] != 1
+            or not isinstance(value["actions"], list) or not 1 <= len(value["actions"]) <= 100):
+        raise ValueError("invalid protected post-purchase action file")
+    actions, workflows, recipients, senders = [], set(), set(), set()
+    for action in value["actions"]:
+        if not isinstance(action, dict) or set(action) != fields:
+            raise ValueError("invalid post-purchase action fields")
+        if (action["environment"] != "test" or action["merchant"] != config["store_key"]
+                or action["stripe_account"] != config["stripe_account_id"]):
+            raise ValueError("post-purchase action scope differs from installation")
+        for key in ("workflow_key", "config_ref"):
+            pattern = (r"[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}" if key == "workflow_key"
+                       else r"[A-Za-z0-9][A-Za-z0-9_.:/-]{0,255}")
+            if (not isinstance(action[key], str) or not re.fullmatch(pattern, action[key])
+                    or any(part in ("", ".", "..") for part in action[key].split("/"))):
+                raise ValueError("invalid post-purchase workflow/config reference")
+        if action["workflow_key"] in workflows:
+            raise ValueError("duplicate post-purchase workflow")
+        workflows.add(action["workflow_key"])
+        offers = action["offer_keys"]
+        if (not isinstance(offers, list) or not offers or len(offers) > 100
+                or any(not isinstance(key, str) or key not in commerce_keys for key in offers)
+                or len(set(offers)) != len(offers)):
+            raise ValueError("post-purchase offers must be an authorised commerce subset")
+        links = action["links"]
+        if (not isinstance(links, list) or not 1 <= len(links) <= 20
+                or any(not isinstance(link, str) or not re.fullmatch(r"https://www\.dropbox\.com/t/[A-Za-z0-9]+", link)
+                       for link in links)):
+            raise ValueError("only explicit dummy Dropbox Transfer links are supported")
+        for key in ("recipient", "sender"):
+            if (not isinstance(action[key], str) or not action[key].isascii() or len(action[key]) > 254
+                    or not re.fullmatch(r"[^\s@<>]+@[^\s@<>]+\.[A-Za-z]{2,}", action[key])):
+                raise ValueError("post-purchase requires explicit approved recipient and preflighted sender")
+        if not isinstance(action["subject"], str) or not re.fullmatch(r"[ -~]{1,180}", action["subject"]):
+            raise ValueError("post-purchase subject must be bounded ASCII text")
+        recipients.add(action["recipient"].lower())
+        senders.add(action["sender"].lower())
+        # Bound the EP lane to the explicitly approved source flow, not product titles.
+        if config["store_key"] == "effective-policy-uat" and (
+                action["workflow_key"] != "ep:woo:workflow:8681" or offers != ["EP-UAT-171"]
+                or links != ["https://www.dropbox.com/t/N86okpWEWSXWDx9X"]
+                or action["recipient"].lower() != "test@mitchellcurrie.com"):
+            raise ValueError("EP test delivery is restricted to the approved 171/AW8681 dummy flow")
+        actions.append(dict(sorted(action.items())))
+    if len(recipients) != 1 or len(senders) != 1:
+        raise ValueError("post-purchase requires one approved recipient and sender")
+    if max(len(post_purchase_handler_config(actions)), len(post_purchase_source_config(actions))) > 16384:
+        raise ValueError("post-purchase action configuration exceeds runtime bounds")
+    return actions
+
+
+def post_purchase_source_config(actions):
+    # These action values contain only strings and string arrays; serialization matches JSON.stringify.
+    return json.dumps({"merchant": actions[0]["merchant"], "environment": "test", "actions": [
+        {"workflow_key": a["workflow_key"], "offer_keys": a["offer_keys"], "handler": "service",
+         "config_ref": a["config_ref"],
+         "config_digest": hashlib.sha256(json.dumps(a, ensure_ascii=False, separators=(",", ":")).encode()).hexdigest()}
+        for a in actions]}, separators=(",", ":"))
+
+
+def post_purchase_handler_config(actions):
+    return json.dumps({"actions": actions}, ensure_ascii=False, separators=(",", ":"))
+
+
+POST_PURCHASE_SECRET_BINDINGS = {
+    "source": ("CARTRAY_POST_PURCHASE_TOKEN",),
+    "post-purchase": ("HANDLER_TOKEN", "DELIVERY_CONFIG", "APPROVED_TEST_RECIPIENT", "APPROVED_TEST_SENDER",
+                      "STRIPE_API_KEY", "SMTP2GO_API_KEY"),
+}
+
+
+def graph(installation, versions=None, sending=False, post_purchase_modes=None):
     config, state = installation.config, installation.state
     versions = versions or {}
     db = installation.db
@@ -17,8 +94,13 @@ def graph(installation, versions=None, sending=False):
 
     source_origin = f"https://{worker('source')}.{state['workers_subdomain']}.workers.dev"
     sender_origin = f"https://{worker('sender')}.{state['workers_subdomain']}.workers.dev"
-    storefront = "https://" + state["pages_subdomain"]
+    storefront = config["storefront_origin"] if "storefront_origin" in config else "https://" + state["pages_subdomain"]
+    private_source = config.get("source_mode", "public") == "private"
+    if private_source:
+        source_origin = storefront + config["source_api_path"]
     return_path = "/purchase-return/" if "merchant_inputs" in config else "/"
+    success_path = config.get("success_path", return_path)
+    cancel_path = config.get("cancel_path", return_path)
     catalogue = json.loads(open(config["preflight_lock"]).read())["catalogue_version"]
     store = config.get("store_key", "acorn-store")
     mapping = json.dumps({catalogue: config.get("subject_map", SUBJECTS)}, separators=(",", ":"))
@@ -27,14 +109,14 @@ def graph(installation, versions=None, sending=False):
     if not config["reviews_enabled"]:
         source = {
             "main": "src/cartray/worker.py",
-            "public": True,
+            "public": not private_source,
             "python": True,
             "vars": {
                 "CARTRAY_ENVIRONMENT": "test",
                 "CARTRAY_SIGNING_KEY_ID": config["namespace"],
                 "CARTRAY_STOREFRONT_ORIGIN": storefront,
-                "CARTRAY_SUCCESS_URL": storefront + return_path + "?checkout=complete",
-                "CARTRAY_CANCEL_URL": storefront + return_path + "?checkout=cancelled",
+                "CARTRAY_SUCCESS_URL": storefront + success_path + "?checkout=complete",
+                "CARTRAY_CANCEL_URL": storefront + cancel_path + "?checkout=cancelled",
             },
             "db": {"DB": "commerce"},
             "ratelimits": {"CHECKOUT_RATE_LIMITER": ("20261110", 20)},
@@ -68,7 +150,7 @@ def graph(installation, versions=None, sending=False):
     review_nodes = {
         "source": {
             "main": "src/cartray/worker.py",
-            "public": True,
+            "public": not private_source,
             "python": True,
             "vars": {
                 "CARTRAY_ENVIRONMENT": "test",
@@ -76,8 +158,8 @@ def graph(installation, versions=None, sending=False):
                 "CARTRAY_REVIEWS_PRODUCER": "test",
                 "CARTRAY_SIGNING_KEY_ID": config["namespace"],
                 "CARTRAY_STOREFRONT_ORIGIN": storefront,
-                "CARTRAY_SUCCESS_URL": storefront + return_path + "?checkout=complete",
-                "CARTRAY_CANCEL_URL": storefront + return_path + "?checkout=cancelled",
+                "CARTRAY_SUCCESS_URL": storefront + success_path + "?checkout=complete",
+                "CARTRAY_CANCEL_URL": storefront + cancel_path + "?checkout=cancelled",
                 "CARTRAY_REVIEW_INVITATION_MODE": "automatic",
                 "CARTRAY_REVIEW_INVITATION_DEFAULT": (
                     "checked" if config.get("review_invitation_default_checked", True) else "unchecked"
@@ -175,6 +257,19 @@ def graph(installation, versions=None, sending=False):
     }
     if config["reviews_enabled"]:
         nodes = review_nodes
+    if "post_purchase_config" in config:
+        actions = installation.post_purchase_actions()
+        modes = post_purchase_modes if post_purchase_modes is not None else state.get("post_purchase_modes", {})
+        nodes["source"]["vars"].update(
+            CARTRAY_POST_PURCHASE_MODE=modes.get("source", "disabled"),
+            CARTRAY_POST_PURCHASE_CONFIG=post_purchase_source_config(actions),
+        )
+        nodes["source"].setdefault("services", {})["POST_PURCHASE_HANDLER"] = "post-purchase"
+        nodes["post-purchase"] = {
+            "main": "modules/post-purchase/transactional-email/worker.mjs", "public": False,
+            "vars": {"ENVIRONMENT": "test", "DELIVERY_MODE": modes.get("post-purchase", "disabled"),
+                     "STRIPE_ACCOUNT_ID": config["stripe_account_id"]},
+        }
     for node in nodes.values():
         bindings = [
             {
@@ -255,9 +350,12 @@ def secret_bindings(installation, role):
             "REVIEWS_DELIVERY_TOKEN": "delivery",
             "AUTOMATION_RECIPIENT_TOKEN": "automation_recipient",
         },
+        "post-purchase": {},
     }
     if role == "source" and not installation.config["reviews_enabled"]:
         names[role] = {}
+    if "post_purchase_config" in installation.config and role in ("source", "post-purchase"):
+        names[role]["CARTRAY_POST_PURCHASE_TOKEN" if role == "source" else "HANDLER_TOKEN"] = "post_purchase_token"
     result = {name: vault[key] for name, key in names[role].items()}
     if role == "source":
         result.update(
@@ -275,6 +373,14 @@ def secret_bindings(installation, role):
             SMTP2GO_API_KEY=credentials["smtp2go_api_key"],
             APPROVED_TEST_EMAIL=credentials["approved_test_email"],
             TEST_SENDER=credentials["test_sender"],
+        )
+    if role == "post-purchase":
+        result.update(
+            DELIVERY_CONFIG=post_purchase_handler_config(installation.post_purchase_actions()),
+            APPROVED_TEST_RECIPIENT=vault["post_purchase_approved_test_email"],
+            APPROVED_TEST_SENDER=vault["post_purchase_test_sender"],
+            STRIPE_API_KEY=vault["post_purchase_stripe_test_key"],
+            SMTP2GO_API_KEY=vault["post_purchase_smtp2go_api_key"],
         )
     return [{"type": "secret_text", "name": name, "text": value} for name, value in result.items()]
 
