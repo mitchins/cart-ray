@@ -367,8 +367,10 @@ def test_status_rejects_bad_queries_and_missing_edge_admission_before_database()
         return store
 
     client = TestClient(create_app(status_store_factory=status_factory), env=STORE_ENV)
-    for query in ("?session_id=" + "x" * 300, "?a=1&b=2&session_id=cs_test_pending"):
-        status, headers, _ = client.request("GET", "/checkout-status" + query)
+    for query in ("?session_id=cs_test_" + "x" * 300, "?a=1&b=2&session_id=cs_test_pending"):
+        status, headers, _ = client.request(
+            "GET", "/checkout-status" + query, headers={"cf-connecting-ip": "192.0.2.1"}
+        )
         assert status == 404
         assert headers["Cache-Control"] == "no-store"
     status, headers, _ = client.request("GET", "/checkout-status?session_id=cs_test_pending")
@@ -395,11 +397,12 @@ def test_status_normalizes_ipv4_mapped_and_ipv6_client_budgets():
             return {"success": True}
 
     limiter = RecordingLimiter()
-    for address in ("192.0.2.1", "::ffff:192.0.2.1", "2001:db8::1", "2001:db8::2"):
+    for address in ("192.0.2.1", "::ffff:192.0.2.1", "2001:db8::1", "2001:db8::2", "192.0.2.2", "2001:db8:1::1"):
         request = SimpleNamespace(env=SimpleNamespace(CHECKOUT_STATUS_RATE_LIMITER=limiter), header=lambda _: address)
         assert asyncio.run(worker_module._checkout_status_rate_limit(request))
     assert limiter.keys[0] == limiter.keys[1]
     assert limiter.keys[2] == limiter.keys[3]
+    assert len({limiter.keys[0], limiter.keys[2], limiter.keys[4], limiter.keys[5]}) == 4
 
 
 def test_public_catalogue_snapshot_needs_neither_stripe_nor_d1(monkeypatch):
