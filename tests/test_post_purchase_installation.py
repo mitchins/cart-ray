@@ -254,12 +254,24 @@ def test_sql_file_rejects_literals_outside_merchant_identifier_grammar():
         installer.fence_import_sql("merchant'; DROP TABLE outbox; --")
 
 
+@pytest.fixture
+def operator_home(monkeypatch, tmp_path):
+    home = tmp_path / "operator-home"
+    home.mkdir(mode=0o700)
+    monkeypatch.setattr(installer, "pwd", SimpleNamespace(getpwuid=lambda _: SimpleNamespace(pw_dir=str(home))))
+    monkeypatch.setenv("HOME", str(tmp_path / "not-the-account-home"))
+    return home
+
+
 @pytest.mark.parametrize("timed_out", [False, True])
-def test_diagnostics_capture_redacted_import_failure_without_overwriting(monkeypatch, capsys, tmp_path, timed_out):
-    diagnostic = tmp_path / "diagnostics.jsonl"
+def test_diagnostics_capture_redacted_import_failure_without_overwriting(
+        monkeypatch, capsys, operator_home, timed_out):
+    monkeypatch.setattr(installer, "uuid4", lambda: SimpleNamespace(hex="a" * 32))
+    directory = operator_home / ".cartray-operator-diagnostics"
+    diagnostic = directory / ("post-purchase-" + "a" * 32 + ".jsonl")
     monkeypatch.setattr(sys, "argv", [
         "post_purchase_installation.py", "--directory", "inventory", "--credentials", "handoff",
-        "--apply", "--confirm-processing-disabled", "--diagnostics", str(diagnostic),
+        "--apply", "--confirm-processing-disabled", "--diagnostics",
     ])
     monkeypatch.setattr(installer, "Installation", lambda path: SimpleNamespace(
         config={"account_id": "fixture-account", "store_key": "merchant"}))
@@ -280,6 +292,8 @@ def test_diagnostics_capture_redacted_import_failure_without_overwriting(monkeyp
     with pytest.raises(SystemExit) as error:
         installer.main()
     assert error.value.code == 1 and len(calls) == 1
+    assert directory.stat().st_uid == os.geteuid()
+    assert stat.S_IMODE(directory.stat().st_mode) == 0o700
     assert stat.S_IMODE(diagnostic.stat().st_mode) == 0o600
     saved = diagnostic.read_text()
     records = [json.loads(line) for line in saved.splitlines()]
@@ -287,12 +301,61 @@ def test_diagnostics_capture_redacted_import_failure_without_overwriting(monkeyp
     assert records[-2]["stdout"] == "partial output"
     assert records[-2]["stderr"] == "import error: Bearer [REDACTED] https://upload.example.test/path?[REDACTED]"
     assert records[-1]["stage"] == "wrangler-import"
-    assert not capsys.readouterr().out
+    console = capsys.readouterr()
+    assert not console.out and f"Protected diagnostics: {diagnostic}" in console.err
+    assert "fixture-cf-token" not in console.err and "private-grant" not in console.err
     with pytest.raises(SystemExit):
         installer.main()
     assert len(calls) == 1
     assert diagnostic.read_text() == saved
     assert "no D1 operations were attempted" in capsys.readouterr().err
+
+
+def test_diagnostics_generate_unique_names_under_the_os_account_home(operator_home):
+    stream, first = installer.open_diagnostics()
+    stream.close()
+    stream, second = installer.open_diagnostics()
+    stream.close()
+    assert first.parent == second.parent == operator_home / ".cartray-operator-diagnostics"
+    assert first != second
+    for path in (first, second):
+        assert path.name.startswith("post-purchase-") and path.suffix == ".jsonl"
+        assert stat.S_IMODE(path.stat().st_mode) == 0o600
+
+
+@pytest.mark.parametrize("unsafe", ["symlink", "permissions", "writable-home"])
+def test_cli_refuses_unsafe_diagnostics_directory_before_d1(monkeypatch, capsys, operator_home, unsafe):
+    directory = operator_home / ".cartray-operator-diagnostics"
+    target = operator_home / "other"
+    if unsafe == "symlink":
+        target.mkdir(mode=0o700)
+        directory.symlink_to(target, target_is_directory=True)
+    elif unsafe == "permissions":
+        directory.mkdir()
+        directory.chmod(0o755)
+    else:
+        operator_home.chmod(0o770)
+    monkeypatch.setattr(sys, "argv", [
+        "post_purchase_installation.py", "--directory", "inventory", "--credentials", "handoff", "--diagnostics",
+    ])
+    monkeypatch.setattr(installer, "Installation", lambda _: pytest.fail("must fail before inventory or D1"))
+    with pytest.raises(SystemExit) as error:
+        installer.main()
+    assert error.value.code == 1
+    assert "no D1 operations were attempted" in capsys.readouterr().err
+    assert not list(directory.glob("*.jsonl"))
+
+
+def test_cli_rejects_caller_supplied_diagnostic_path(monkeypatch, tmp_path):
+    path = tmp_path / "outside.jsonl"
+    monkeypatch.setattr(sys, "argv", [
+        "post_purchase_installation.py", "--directory", "inventory", "--credentials", "handoff",
+        "--diagnostics", str(path),
+    ])
+    monkeypatch.setattr(installer, "Installation", lambda _: pytest.fail("must fail before inventory or D1"))
+    with pytest.raises(SystemExit) as error:
+        installer.main()
+    assert error.value.code == 2 and not path.exists()
 
 
 def test_wrangler_local_sql_file_rolls_back_and_preserves_fence(tmp_path):

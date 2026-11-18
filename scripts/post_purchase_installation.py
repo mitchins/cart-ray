@@ -8,14 +8,18 @@ Never enables sending, provisions a handler, resets claims, or repairs partial s
 import argparse
 import json
 import os
+import pwd
 import re
+import stat
 import subprocess
 import sys
 import tempfile
 from pathlib import Path
+from uuid import uuid4
 
 ROOT = Path(__file__).resolve().parents[1]
 WRANGLER = ROOT / "node_modules/.bin/wrangler"
+DIAGNOSTICS_DIR = ".cartray-operator-diagnostics"
 sys.path.insert(0, str(ROOT / "modules/reviews/operator"))
 from cloud import API, CloudError  # noqa: E402
 from operate import Installation, read_private  # noqa: E402
@@ -107,11 +111,33 @@ def fence_import_sql(merchant):
     return "".join(query["sql"].replace("?1", f"'{merchant}'") + ";\n" for query in writes)
 
 
-def open_diagnostics(path):
-    if path.resolve().is_relative_to(ROOT):
-        raise ValueError("diagnostic file must be outside the worktree")
-    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
-    return os.fdopen(fd, "w", encoding="utf-8")
+def open_diagnostics():
+    uid = os.geteuid()
+    home = Path(pwd.getpwuid(uid).pw_dir)
+    if not home.is_absolute():
+        raise ValueError("operator account home must be absolute")
+    directory_flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+    home_fd = os.open(home, directory_flags)
+    try:
+        home_stat = os.fstat(home_fd)
+        if home_stat.st_uid != uid or home_stat.st_mode & 0o022:
+            raise ValueError("operator account home must not be writable by other users")
+        try:
+            os.mkdir(DIAGNOSTICS_DIR, 0o700, dir_fd=home_fd)
+        except FileExistsError:
+            pass
+        directory_fd = os.open(DIAGNOSTICS_DIR, directory_flags, dir_fd=home_fd)
+        try:
+            directory_stat = os.fstat(directory_fd)
+            if directory_stat.st_uid != uid or stat.S_IMODE(directory_stat.st_mode) != 0o700:
+                raise ValueError("diagnostic directory must be owned by the operator and mode 0700")
+            name = f"post-purchase-{uuid4().hex}.jsonl"
+            fd = os.open(name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600, dir_fd=directory_fd)
+        finally:
+            os.close(directory_fd)
+    finally:
+        os.close(home_fd)
+    return os.fdopen(fd, "w", encoding="utf-8"), home / DIAGNOSTICS_DIR / name
 
 
 def diagnostic_text(value, token):
@@ -199,7 +225,8 @@ def main():
     parser.add_argument("--credentials", type=Path, required=True, help="existing protected operator credential JSON")
     parser.add_argument("--apply", action="store_true", help="explicitly initialise the atomic no-backfill fence")
     parser.add_argument("--confirm-processing-disabled", action="store_true")
-    parser.add_argument("--diagnostics", type=Path, help="new 0600 file outside the worktree for redacted diagnostics")
+    parser.add_argument("--diagnostics", action="store_true",
+                        help=f"create a redacted 0600 receipt under the operator account home ({DIAGNOSTICS_DIR}/)")
     args = parser.parse_args()
     if args.apply and not args.confirm_processing_disabled:
         parser.error("--apply requires --confirm-processing-disabled after prior drains have stopped")
@@ -216,7 +243,8 @@ def main():
 
     try:
         if args.diagnostics:
-            stream = open_diagnostics(args.diagnostics)
+            stream, path = open_diagnostics()
+            print(f"Protected diagnostics: {path}", file=sys.stderr)
         stage = "inventory-and-credentials"
         record(stage, apply=args.apply)
         installation = Installation(args.directory)
