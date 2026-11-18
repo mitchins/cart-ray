@@ -49,6 +49,14 @@ at `4`; the unmatched order still had zero executions. No provider action was
 made for either synthetic record. The first state was injected to exercise
 recovery; it was not represented as a real Stripe purchase.
 
+For a separate outage check, the private handler was disabled and another
+explicitly synthetic matching record was inserted. Its signed wakeup received
+HTTP 200 even though the handler rejected the call. The execution became
+`uncertain`, the checkpoint reached `6`, and the real order still had one
+execution. The approved mailbox still contained one matching message. This
+tests isolation from an unavailable private handler; it does not assert that a
+real SMTP2GO outage was induced.
+
 The final test source and handler were deployed with delivery disabled. The
 test schedule was removed and verified absent through the Cloudflare API. The
 test D1 and paused Workers remain available for review; their identities above
