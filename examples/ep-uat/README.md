@@ -73,7 +73,7 @@ uv run --locked python scripts/post_purchase_recovery.py hold \
   --confirm-worker-paused
 ```
 
-The hold atomically records an immutable audit entry and changes only the matching old `claimed` execution to `uncertain`. It never deletes or retries the claim, assumes delivery failure, or rewinds the checkpoint. Accepted and already uncertain outcomes cannot be held again, and a changed action digest cannot be substituted. After reviewing the recorded result, restore the permitted test configuration; the next scheduled drain can progress to later purchases. A delayed or ambiguous provider outcome remains an operator matter. Production use is not enabled by this command.
+Inspection lists claimed executions first, then uncertain executions, 100 at a time; use `--offset 100` for the next page. The hold atomically records an immutable audit entry and changes only the matching old `claimed` execution to `uncertain`. It never deletes or retries the claim, assumes delivery failure, or rewinds the checkpoint. Accepted and already uncertain outcomes cannot be held again, and a changed action digest cannot be substituted. After reviewing the recorded result, restore the permitted test configuration; the next scheduled drain can progress to later purchases. A delayed or ambiguous provider outcome remains an operator matter. Production use is not enabled by this command.
 
 The CartRay dispatcher owns the durable `(merchant, order, workflow)` claim. The handler is stateless and is not safe to call or retry independently: timeouts and unknown provider outcomes stay held for operator reconciliation. This remains a test adapter; a supported installation and hosted event-to-email qualification are not established by its presence.
 

@@ -19,6 +19,7 @@ def main():
     parser.add_argument("--account", required=True, help="Cloudflare test account ID")
     parser.add_argument("--database", required=True, help="explicit test D1 name")
     parser.add_argument("--merchant", required=True)
+    parser.add_argument("--offset", type=int, default=0, help="inspection page offset (100 records per page)")
     parser.add_argument("--local", action="store_true", help="use the local Wrangler D1 instead of remote")
     parser.add_argument("--order")
     parser.add_argument("--workflow")
@@ -30,7 +31,7 @@ def main():
     if (not re.fullmatch(r"[a-f0-9]{32}", args.account)
             or not re.fullmatch(r"[a-z0-9-]{1,63}", args.database)
             or "test" not in args.database.split("-")
-            or not IDENTIFIER.fullmatch(args.merchant)):
+            or not IDENTIFIER.fullmatch(args.merchant) or not 0 <= args.offset <= 1_000_000):
         parser.error("a test database, account and merchant identity are required")
     merchant = literal(args.merchant)
     if args.action == "inspect":
@@ -39,7 +40,8 @@ def main():
             "CAST(strftime('%s','now') AS INTEGER)-updated_at AS age_seconds "
             "FROM post_purchase_executions WHERE merchant_id=" + merchant
             + " AND environment='test' AND state IN ('claimed','uncertain') "
-            "ORDER BY updated_at LIMIT 100;"
+            "ORDER BY CASE state WHEN 'claimed' THEN 0 ELSE 1 END,updated_at,order_id,workflow_key "
+            f"LIMIT 100 OFFSET {args.offset};"
         )
     else:
         if (not args.confirm_worker_paused or not args.order or not IDENTIFIER.fullmatch(args.order)
