@@ -119,8 +119,9 @@ example `/product/policy-template/`. Omitting it preserves the original
 key, checkout catalogue and Reviews subject mapping remain the authority. Product
 paths must be distinct even ignoring case, slash-terminated local paths with
 ASCII letters, digits, hyphens or underscores in each segment. Encoded segments,
-traversal, query strings and reserved application route prefixes are rejected. An
-operator's `productPaths` and `subject_details` must agree with the approved route.
+traversal, query strings and reserved application route prefixes are rejected.
+A shared directory must have consistent casing across all routes. An operator's
+`productPaths` and `subject_details` must agree with the approved route.
 The connected theme builder requires a source build with matching `productPaths`.
 The Acorn example builder produces Acorn's routes, not another merchant's paths.
 Listings that cannot be purchased can still use explicit paths in the UAT builder.

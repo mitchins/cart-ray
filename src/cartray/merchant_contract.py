@@ -7,7 +7,8 @@ from urllib.parse import urlsplit
 
 _PATH = re.compile(r"/(?:[A-Za-z0-9_-]+/)+")
 _RESERVED = {"cart", "purchase-return", "review", "reviews", "unsubscribe", "checkout", "checkout-status",
-             "stripe", "api", "theme", "assets", "shop", "help", "inbox", "checkout-preview", "uat-return"}
+             "stripe", "api", "theme", "assets", "shop", "help", "inbox", "checkout-preview", "uat-return",
+             "_headers", "_redirects", "_worker"}
 
 
 def merchant_path(value, *, product=False):

@@ -4,7 +4,8 @@ from cartray.merchant_contract import merchant_path, page_seo, register_path
 
 
 @pytest.mark.parametrize("path", ["//evil/", "/product/../cart/", "/product/%2e%2e/", "/cart/", "/api/orders/",
-                                  "/uat-return/", "/product/name/?x=1", "/product/name#x/", "/product//"])
+                                  "/uat-return/", "/_headers/", "/_redirects/", "/_worker/",
+                                  "/product/name/?x=1", "/product/name#x/", "/product//"])
 def test_reject_unsafe_or_reserved_product_paths(path):
     with pytest.raises(ValueError):
         merchant_path(path, product=True)
