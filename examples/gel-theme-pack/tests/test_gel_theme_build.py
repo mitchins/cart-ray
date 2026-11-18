@@ -12,7 +12,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "src"))
 from build import ROOT, build_site, load_inputs
 from connect import BOOT, EXPORTS, connect
 from src.gel import contrast, tokens, validate, validate_asset
-from src.templates import header, money
+from src.templates import header, money, page_shell
 
 from cartray.models import PresentationSource
 from cartray.presentation import fingerprint_presentation_assets
@@ -21,6 +21,91 @@ from cartray.presentation import fingerprint_presentation_assets
 class GelTests(unittest.TestCase):
     def setUp(self):
         self.gel = json.loads((ROOT / "gel/squirrel.json").read_text())
+
+    def test_merchant_paths_and_seo_are_rendered_safely(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            catalogue = json.loads((ROOT / "content/squirrel.json").read_text())
+            product = catalogue["products"][0]
+            product["path"] = "/product/example/"
+            product["seo"] = {"title": 'Title <& "', "description": 'Text " <tag>',
+                              "canonical_url": "https://shop.example/product/example/",
+                              "robots": "noindex,nofollow", "structured_data": {"@type": "Product",
+                              "name": "</script><script>alert(1)</script>"}}
+            catalogue["category_links"] = [{"path": "/category/policies/templates/", "label": "Templates"}]
+            source = tmp / "catalogue.json"
+            source.write_text(json.dumps(catalogue))
+            output = tmp / "output"
+            build_site(output, ROOT / "gel/squirrel.json", source, preview=True)
+            page = (output / "product/example/index.html").read_text()
+            self.assertIn('<title>Title &lt;&amp; &quot;</title>', page)
+            self.assertIn('content="Text &quot; &lt;tag&gt;"', page)
+            self.assertIn('rel="canonical" href="https://shop.example/product/example/"', page)
+            self.assertIn('content="noindex,nofollow"', page)
+            self.assertIn('\\u003c/script\\u003e', page)
+            self.assertNotIn('</script><script>alert(1)</script>', page)
+            self.assertIn('href="/category/policies/templates/"', page)
+            self.assertIn('href="/product/example/"', (output / "shop/index.html").read_text())
+            self.assertTrue((output / "products/woodland-planter/index.html").is_file())
+
+    def test_seo_qualification_and_product_route_conflicts(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp) / "catalogue.json"
+            catalogue = json.loads((ROOT / "content/squirrel.json").read_text())
+            catalogue["seo_qualified"] = True
+            source.write_text(json.dumps(catalogue))
+            with self.assertRaisesRegex(ValueError, "require metadata"):
+                load_inputs(ROOT / "gel/squirrel.json", source)
+            catalogue.pop("seo_qualified")
+            catalogue["products"][0]["path"] = "/cart/"
+            source.write_text(json.dumps(catalogue))
+            with self.assertRaises(ValueError):
+                load_inputs(ROOT / "gel/squirrel.json", source)
+            catalogue["products"][0]["path"] = "/products/WOODLAND-PLANTER/"
+            source.write_text(json.dumps(catalogue))
+            with self.assertRaisesRegex(ValueError, "conflicting"):
+                load_inputs(ROOT / "gel/squirrel.json", source)
+
+    def test_preview_robots_override_approved_indexing(self):
+        seo = {"title": "Title", "description": "Description", "canonical_url": "https://example.test/product/p/",
+               "robots": "index,follow"}
+        result = page_shell(self.gel, "minimal", "/", "product", "Product", "", True, seo=seo)
+        self.assertIn('name="robots" content="noindex,nofollow"', result)
+        self.assertNotIn('name="robots" content="index,follow"', result)
+
+    def test_seo_qualified_catalogue_requires_complete_metadata(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            catalogue = json.loads((ROOT / "content/squirrel.json").read_text())
+            catalogue["seo_qualified"] = True
+            def seo(path):
+                return {"title": "Title", "description": "Description",
+                        "canonical_url": "https://example.test" + path, "robots": "index,follow"}
+            catalogue["pages_seo"] = {"home": seo("/"), "shop": seo("/shop/"), "help": seo("/help/")}
+            for product in catalogue["products"]:
+                product["seo"] = seo(f'/products/{product["slug"]}/')
+            source = root / "catalogue.json"
+            source.write_text(json.dumps(catalogue))
+            build_site(root / "site", ROOT / "gel/squirrel.json", source, preview=True)
+            output = (root / "site/products/acorn-growing-kit/index.html").read_text()
+            self.assertIn('name="robots" content="noindex,nofollow"', output)
+            del catalogue["products"][0]["seo"]
+            source.write_text(json.dumps(catalogue))
+            with self.assertRaisesRegex(ValueError, "products require metadata"):
+                load_inputs(ROOT / "gel/squirrel.json", source)
+
+    def test_nonproduct_structured_data_rejected_before_build(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            catalogue = json.loads((ROOT / "content/squirrel.json").read_text())
+            catalogue["pages_seo"] = {"shop": {"title": "Shop", "description": "Products",
+                "canonical_url": "https://example.test/shop/", "robots": "noindex,nofollow",
+                "structured_data": {"@type": "Product", "name": "Kit"}}}
+            source = root / "catalogue.json"
+            source.write_text(json.dumps(catalogue))
+            with self.assertRaisesRegex(ValueError, "product page"):
+                build_site(root / "site", ROOT / "gel/squirrel.json", source, preview=True)
+            self.assertFalse((root / "site").exists())
 
     def test_defaults_validate(self):
         self.assertGreater(len(validate(self.gel, ROOT)["contrast"]), 10)
@@ -32,6 +117,8 @@ class GelTests(unittest.TestCase):
         self.assertNotIn('data-cart-count', output)
         with self.assertRaisesRegex(ValueError, "navigation"):
             header(self.gel, "classic", "/", False, nav_links=(("//other.example/", "Products"),))
+        with self.assertRaisesRegex(ValueError, "navigation"):
+            header(self.gel, "classic", "/", False, nav_links=(("/product/../cart/", "Products"),))
 
     def test_wordmark_descriptor_matches_schema_limit(self):
         self.gel["identity"]["wordmark_descriptor"] = "x" * 40

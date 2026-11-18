@@ -122,16 +122,42 @@ def test_listing_accepts_explicit_merchant_identity_and_navigation(tmp_path):
     data = make_source(source)
     product = data["products"][0]
     product["source_id"] = "merchant-item-7"
-    product["navigation_path"] = "/products/merchant-item-seven/"
+    product["navigation_path"] = "/product/merchant-item-seven/"
     (source / "catalogue.json").write_text(json.dumps(data))
     output = tmp_path / "output"
     module.build(source, output, "minimal")
-    assert (output / "products/merchant-item-seven/index.html").is_file()
-    assert 'rel="canonical"' not in (output / "products/merchant-item-seven/index.html").read_text()
+    assert (output / "product/merchant-item-seven/index.html").is_file()
+    assert 'rel="canonical"' not in (output / "product/merchant-item-seven/index.html").read_text()
     product["navigation_path"] = "/products/../checkout/"
     (source / "catalogue.json").write_text(json.dumps(data))
     with pytest.raises(ValueError, match="navigation"):
         module.build(source, tmp_path / "unsafe", "minimal")
+    product["navigation_path"] = "/uat-return/"
+    (source / "catalogue.json").write_text(json.dumps(data))
+    with pytest.raises(ValueError, match="navigation"):
+        module.build(source, tmp_path / "reserved", "minimal")
+    del product["navigation_path"]
+    (source / "catalogue.json").write_text(json.dumps(data))
+    with pytest.raises(ValueError, match="navigation"):
+        module.build(source, tmp_path / "missing-path", "minimal")
+
+
+def test_uat_rejects_case_colliding_product_paths(tmp_path):
+    import copy
+
+    source = tmp_path / "source"
+    data = make_source(source)
+    data["products"][0]["navigation_path"] = "/product/Example/"
+    other = copy.deepcopy(data["products"][0])
+    other.update({"source_id": 3, "key": "merchant:other:3", "navigation_path": "/product/example/"})
+    data["products"].append(other)
+    (source / "catalogue.json").write_text(json.dumps(data))
+    with pytest.raises(ValueError, match="duplicate product navigation"):
+        module.build(source, tmp_path / "output", "minimal")
+    other["navigation_path"] = "/Product/different/"
+    (source / "catalogue.json").write_text(json.dumps(data))
+    with pytest.raises(ValueError, match="casing"):
+        module.build(source, tmp_path / "other-output", "minimal")
 
 
 def test_merchant_currency_comes_from_catalogue_and_gel(tmp_path):
@@ -293,3 +319,34 @@ def test_generic_connected_flow_rejects_protocol_relative_context_and_images(tmp
     flows.install(tmp_path, ROOT, {"identity": {"name": "Merchant"}}, "minimal", [offer],
                   api_origin="https://checkout.example.test/")
     assert 'apiBaseUrl = "https://checkout.example.test"' in (tmp_path / "storefront-config.js").read_text()
+
+
+def test_connected_flow_uses_explicit_merchant_path(tmp_path, monkeypatch):
+    import importlib
+    import sys
+
+    pack = ROOT / "examples/gel-theme-pack"
+    if "cartray_gel" not in sys.modules:
+        spec = importlib.util.spec_from_file_location(
+            "cartray_gel", pack / "__init__.py", submodule_search_locations=[str(pack)]
+        )
+        package = importlib.util.module_from_spec(spec)
+        sys.modules[spec.name] = package
+        spec.loader.exec_module(package)
+    flows = importlib.import_module("cartray_gel.connected_flows")
+    (tmp_path / "theme").mkdir()
+    monkeypatch.setattr(flows.templates, "simple_page", lambda *args: "content")
+    monkeypatch.setattr(flows.templates, "page_shell", lambda *args, **kwargs:
+                        '<body class="test"><script src="/site-config.js" defer></script>'
+                        '<script type="module" src="/theme/app.mjs"></script></body>')
+    offer = {"product_key": "PRODUCT-1", "source_id": 1, "path": "/product/approved-route/",
+             "image": "/media/product.png", "image_alt": "Product", "category": "Products"}
+    flows.install(tmp_path, ROOT, {"identity": {"name": "Merchant"}}, "minimal", [offer],
+                  category_links=[("/category/parent/child/", "Child")])
+    assert '"PRODUCT-1": "/product/approved-route/"' in (tmp_path / "storefront-config.js").read_text()
+    assert '"path": "/product/approved-route/"' in (tmp_path / "site-config.js").read_text()
+    previous = (tmp_path / "site-config.js").read_text()
+    with pytest.raises(ValueError, match="conflicting category"):
+        flows.install(tmp_path, ROOT, {"identity": {"name": "Merchant"}}, "minimal", [offer],
+                      category_links=[("/product/approved-route/", "Conflict")])
+    assert (tmp_path / "site-config.js").read_text() == previous

@@ -8,6 +8,8 @@ import shutil
 from pathlib import Path
 from urllib.parse import urlsplit
 
+from cartray.merchant_contract import merchant_path, register_path
+
 from .src import templates
 
 ROOT = Path(__file__).resolve().parent
@@ -24,6 +26,7 @@ def install(
     return_extension: str | None = None,
     api_origin: str | None = None,
     reviews_enabled: bool = False,
+    category_links: list[tuple[str, str]] | None = None,
 ):
     """Install shared cart/return UI; offers are presentation only, never checkout authority."""
     if not offers or len({offer["product_key"] for offer in offers}) != len(offers):
@@ -45,12 +48,12 @@ def install(
                 or any(char.isspace() for char in api_origin)):
             raise ValueError("checkout API must be an HTTPS origin")
         api_origin = api_origin.rstrip("/")
-    source_ids, paths = set(), set()
+    source_ids, paths, prefixes = set(), set(), {}
     for offer in offers:
         if (
             not re.fullmatch(r"[A-Z0-9-]{1,64}", offer["product_key"])
-            or not re.fullmatch(r"/products/[a-z0-9]+(?:-[a-z0-9]+)*/", offer["path"])
-            or offer["path"] in paths
+            or not merchant_path(offer["path"], product=True)
+            or offer["path"].casefold() in paths
             or not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", str(offer["source_id"]))
             or str(offer["source_id"]) in source_ids
             or not re.fullmatch(r"/[A-Za-z0-9_./-]+", offer["image"])
@@ -61,7 +64,19 @@ def install(
         ):
             raise ValueError("invalid connected offer presentation")
         source_ids.add(str(offer["source_id"]))
-        paths.add(offer["path"])
+        paths.add(offer["path"].casefold())
+        register_path(offer["path"], prefixes)
+    category_links = category_links or []
+    for path, label in category_links:
+        merchant_path(path, product=True)
+        register_path(path, prefixes)
+        if not isinstance(label, str) or not label.strip():
+            raise ValueError("invalid category label")
+    if (len({path.casefold() for path, _ in category_links}) != len(category_links)
+            or any(path.casefold() in paths for path, _ in category_links)):
+        raise ValueError("duplicate or conflicting category path")
+    if return_extension and not (output / return_extension.lstrip("/")).is_file():
+        raise ValueError("return extension is missing from the storefront")
     theme_dir = output / "theme"
     for name in (
         "app.mjs",
@@ -78,14 +93,13 @@ def install(
         {
             "product_key": offer["product_key"],
             "slug": offer["path"].split("/")[-2],
+            "path": offer["path"],
             "image": offer["image"],
             "image_alt": offer["image_alt"],
             "category": offer["category"],
         }
         for offer in offers
     ]
-    if return_extension and not (output / return_extension.lstrip("/")).is_file():
-        raise ValueError("return extension is missing from the storefront")
     config = {
         "schemaVersion": 1,
         "preview": False,
@@ -123,7 +137,7 @@ def install(
             page.replace("-", " ").title(),
             content,
             False,
-            nav_links=(("/shop/", "Catalogue"),),
+            nav_links=(("/shop/", "Catalogue"), *category_links),
             minimal_footer=True,
         )
         for old, new in (

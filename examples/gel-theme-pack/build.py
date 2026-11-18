@@ -9,7 +9,11 @@ import argparse
 import hashlib
 import json
 import shutil
+import sys
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
+from cartray.merchant_contract import merchant_path, page_seo, register_path  # noqa: E402
 
 if __package__:
     from .src import templates as t
@@ -27,8 +31,35 @@ def load_inputs(gel_path, catalogue_path, assets_root=ROOT):
     gel = json.loads(Path(gel_path).read_text(encoding="utf8"))
     report = validate(gel, Path(assets_root))
     catalogue = json.loads(Path(catalogue_path).read_text(encoding="utf8"))
-    if set(catalogue) != {"version", "review_invitation_default_checked", "products"}:
+    required_catalogue = {"version", "review_invitation_default_checked", "products"}
+    if not required_catalogue <= set(catalogue) or set(catalogue) - required_catalogue - {"seo_qualified", "category_links", "pages_seo"}:
         raise ValueError("invalid catalogue fields")
+    if type(catalogue.get("seo_qualified", False)) is not bool:
+        raise ValueError("invalid SEO qualification flag")
+    pages_seo = catalogue.get("pages_seo", {})
+    if not isinstance(pages_seo, dict) or pages_seo.keys() - {"home", "shop", "help"}:
+        raise ValueError("invalid page SEO mapping")
+    if catalogue.get("seo_qualified") and set(pages_seo) != {"home", "shop", "help"}:
+        raise ValueError("SEO-qualified pages require metadata")
+    from urllib.parse import urlsplit
+    for page, seo in pages_seo.items():
+        if page_seo(seo) is not None:
+            raise ValueError("product structured data requires a product page")
+        if seo["robots"] == "index,follow" and not catalogue.get("seo_qualified"):
+            raise ValueError("indexable SEO requires an SEO-qualified catalogue")
+        if urlsplit(seo["canonical_url"]).path != {"home": "/", "shop": "/shop/", "help": "/help/"}[page]:
+            raise ValueError("canonical URL must match the page route")
+    links = catalogue.get("category_links", [])
+    if not isinstance(links, list) or len(links) > 100:
+        raise ValueError("invalid category navigation")
+    prefixes = {}
+    for link in links:
+        if not isinstance(link, dict) or set(link) != {"path", "label"} or not isinstance(link["label"], str) or not link["label"].strip():
+            raise ValueError("invalid category navigation")
+        merchant_path(link["path"], product=True)
+        register_path(link["path"], prefixes)
+    if len({link["path"].casefold() for link in links}) != len(links):
+        raise ValueError("duplicate category navigation path")
     if not isinstance(catalogue["version"], str) or not catalogue["version"]:
         raise ValueError("catalogue version required")
     if type(catalogue["review_invitation_default_checked"]) is not bool:
@@ -39,6 +70,7 @@ def load_inputs(gel_path, catalogue_path, assets_root=ROOT):
 
     keys = set()
     slugs = set()
+    routes = set()
     for p in catalogue["products"]:
         required = {
             "product_key",
@@ -57,7 +89,7 @@ def load_inputs(gel_path, catalogue_path, assets_root=ROOT):
             "features",
             "specs",
         }
-        if not isinstance(p, dict) or not required <= set(p) or set(p) - required - {"images"}:
+        if not isinstance(p, dict) or not required <= set(p) or set(p) - required - {"images", "path", "seo"}:
             raise ValueError("invalid product fields")
         if not re.fullmatch(r"[A-Z0-9-]{1,64}", p["product_key"]) or p["product_key"] in keys:
             raise ValueError("invalid product key")
@@ -65,6 +97,19 @@ def load_inputs(gel_path, catalogue_path, assets_root=ROOT):
             raise ValueError("invalid product slug")
         keys.add(p["product_key"])
         slugs.add(p["slug"])
+        route = merchant_path(p.get("path", f'/products/{p["slug"]}/'), product=True)
+        register_path(route, prefixes)
+        if route.casefold() in routes or route.casefold() in {link["path"].casefold() for link in links}:
+            raise ValueError("duplicate or conflicting product route")
+        routes.add(route.casefold())
+        if catalogue.get("seo_qualified") and "seo" not in p:
+            raise ValueError("SEO-qualified products require metadata")
+        if "seo" in p:
+            page_seo(p["seo"])
+            if p["seo"]["robots"] == "index,follow" and not catalogue.get("seo_qualified"):
+                raise ValueError("indexable SEO requires an SEO-qualified catalogue")
+            if urlsplit(p["seo"]["canonical_url"]).path != route:
+                raise ValueError("canonical URL must match the product route")
         if type(p["amount_minor"]) is not int or not 0 <= p["amount_minor"] <= 100_000_000:
             raise ValueError("invalid preview amount")
         if type(p["max_quantity"]) is not int or not 1 <= p["max_quantity"] <= 100:
@@ -205,11 +250,15 @@ def build_site(output, gel_path, catalogue_path, theme="minimal", base="/", asse
         )
     for path, page in flow.items():
         pages[path] = (page, page.replace("-", " ").title(), t.simple_page(page, gel, base))
+    nav_links = None
+    if catalogue.get("category_links"):
+        nav_links = [(f"{base}shop/", "Shop all"), *((link["path"], link["label"]) for link in catalogue["category_links"])]
     for path, (page, title, content) in pages.items():
-        write(output / path, t.page_shell(gel, theme, base, page, title, content, preview))
+        write(output / path, t.page_shell(gel, theme, base, page, title, content, preview, nav_links=nav_links,
+                                          seo=catalogue.get("pages_seo", {}).get(page)))
     for p in products:
         write(
-            output / "products" / p["slug"] / "index.html",
+            output / p.get("path", f'/products/{p["slug"]}/').lstrip("/") / "index.html",
             t.page_shell(
                 gel,
                 theme,
@@ -219,6 +268,8 @@ def build_site(output, gel_path, catalogue_path, theme="minimal", base="/", asse
                 t.product_page(gel, p, base, preview),
                 preview,
                 p["product_key"],
+                nav_links=nav_links,
+                seo=p.get("seo"),
             ),
         )
     write(

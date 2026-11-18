@@ -73,6 +73,23 @@ def test_merchant_snapshot_preserves_inputs_and_detects_changes(tmp_path):
     assert validate(destination, ROOT) != fingerprint
 
 
+def test_explicit_merchant_product_path_preserves_identity(tmp_path):
+    source = merchant(tmp_path / "source")
+    site = source / "storefront"
+    config = site / "storefront-config.js"
+    config.write_text(config.read_text().replace('/products/one/', '/product/merchant-one/'))
+    theme = site / "site-config.js"
+    theme.write_text(theme.read_text().replace('"slug": "one"',
+                                               '"slug": "one", "path": "/product/merchant-one/"'))
+    destination = site / "product/merchant-one"
+    destination.parent.mkdir()
+    (site / "products/one").rename(destination)
+    assert validate(source, ROOT)
+    theme.write_text(theme.read_text().replace('/product/merchant-one/', '/product/other/'))
+    with pytest.raises(ValueError, match="product route"):
+        validate(source, ROOT)
+
+
 def test_merchant_rejects_unapproved_offers_preview_code_and_symlinks(tmp_path):
     source = merchant(tmp_path / "source")
     config = source / "storefront/storefront-config.js"
@@ -258,8 +275,22 @@ def test_merchant_reviews_require_correct_subject_pages_and_native_clients(tmp_p
     with pytest.raises(ValueError, match="review page does not load"):
         installation.verify_merchant_inputs()
     manage.write_text(original_manage)
+    category = snap / "storefront/category/example"
+    category.mkdir(parents=True)
+    (category / "index.html").write_text('<script type="application/json" id="product-data">[]</script>')
+    installation.config["merchant_inputs_sha256"] = validate(snap, ROOT)
+    installation.verify_merchant_inputs()
     unrelated = snap / "storefront/products/unrelated"
     unrelated.mkdir()
+    (unrelated / "index.html").write_text(
+        '<script type="application/json" id="product-data">{"review_subject":"product-one"}</script>'
+    )
+    installation.config["merchant_inputs_sha256"] = validate(snap, ROOT)
+    with pytest.raises(ValueError, match="unapproved review subject"):
+        installation.verify_merchant_inputs()
+    shutil.rmtree(unrelated)
+    unrelated = snap / "storefront/product/unrelated"
+    unrelated.mkdir(parents=True)
     (unrelated / "index.html").write_text(
         '<script type="application/json" id="product-data">{"review_subject":"product-one"}</script>'
     )

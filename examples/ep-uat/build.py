@@ -25,6 +25,7 @@ from urllib.parse import urlsplit
 
 ROOT = Path(__file__).resolve().parents[2]
 PACK = ROOT / "examples/gel-theme-pack"
+sys.path.insert(0, str(ROOT / "src"))
 sys.path.insert(0, str(PACK))
 from src.gel import tokens, validate  # noqa: E402
 from src.templates import header as theme_header  # noqa: E402
@@ -119,10 +120,12 @@ def shell(gel, title, body, test_products=(), theme="minimal", review_enabled=Fa
 def path(p):
     # Audit navigation is explicitly supplied and never treated as canonical.
     result = p.get("navigation_path")
-    if result is None and type(p.get("source_id")) is int:
-        result = f"/products/woo-{p['source_id']}/"  # Earlier UAT snapshot compatibility.
-    if not isinstance(result, str) or not re.fullmatch(r"/products/[a-z0-9]+(?:-[a-z0-9]+)*/", result):
-        raise ValueError("invalid product navigation path")
+    from cartray.merchant_contract import merchant_path
+
+    try:
+        merchant_path(result, product=True)
+    except ValueError as error:
+        raise ValueError("invalid product navigation path") from error
     return result
 
 
@@ -285,7 +288,9 @@ def build(source, output, theme, test_fixture=None, review_fixture=None, gel_fil
             raise ValueError(f"source media fingerprint mismatch: {relative}")
     if data["brand_logo"] not in declared:
         raise ValueError("source logo is not declared")
-    ids, navigation_paths = set(), set()
+    from cartray.merchant_contract import register_path
+
+    ids, navigation_paths, prefixes = set(), set(), {}
     for product in data["products"]:
         source_id = product.get("source_id")
         if not ((type(source_id) is int and source_id > 0) or
@@ -293,9 +298,10 @@ def build(source, output, theme, test_fixture=None, review_fixture=None, gel_fil
             raise ValueError("invalid product identity")
         ids.add(str(source_id))
         navigation = path(product)
-        if navigation in navigation_paths:
+        if navigation.casefold() in navigation_paths:
             raise ValueError("duplicate product navigation path")
-        navigation_paths.add(navigation)
+        navigation_paths.add(navigation.casefold())
+        register_path(navigation, prefixes)
         if product["checkout_authorized"] or product["canonical_url"] is not None:
             raise ValueError("browse-only build cannot grant checkout or canonical authority")
         if any(variant["checkout_authorized"] for variant in product["variations"]):
