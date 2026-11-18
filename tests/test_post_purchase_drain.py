@@ -58,6 +58,7 @@ def setup_database():
         )
     db.executescript((ROOT / "migrations/0006_post_purchase_actions.sql").read_text())
     db.executescript((ROOT / "migrations/0007_post_purchase_checkpoint.sql").read_text())
+    db.executescript((ROOT / "migrations/0008_post_purchase_recovery.sql").read_text())
     db.execute("INSERT INTO post_purchase_installation VALUES (1,'store','test')")
     db.execute("INSERT INTO post_purchase_checkpoint VALUES (1,'store','test',1,1)")
     db.commit()
@@ -86,6 +87,55 @@ def test_unresolved_claim_stops_checkpoint_without_resending():
     dispatcher.handlers["service"] = lambda *_: pytest.fail("must not resend an unresolved claim")
     assert asyncio.run(drain_confirmed_d1(dispatcher, (action,))) == 0
     assert db.execute("SELECT last_outbox_id FROM post_purchase_checkpoint").fetchone()[0] == 1
+
+
+def test_operator_hold_of_stale_claim_unblocks_later_purchase_without_resend():
+    db = setup_database()
+    action = Action("workflow", ("product",), "service", "private/config", "a" * 64)
+    calls = []
+    dispatcher = D1Dispatcher(Database(db), "store", "test", {"service": lambda p, _: calls.append(p.order_id) or "ok"})
+    assert asyncio.run(dispatcher.dispatch("after", (action,))) == {"workflow": "accepted"}
+    db.execute("UPDATE post_purchase_executions SET state='claimed', provider_reference=NULL")
+    audit = """INSERT INTO post_purchase_recovery_audit
+        SELECT merchant_id,environment,order_id,workflow_key,action_digest,'operator','receipt unknown',
+               CAST(strftime('%s','now') AS INTEGER)
+        FROM post_purchase_executions WHERE order_id='after'"""
+    with pytest.raises(sqlite3.IntegrityError, match="not old enough"):
+        db.execute(audit)
+    db.execute("UPDATE post_purchase_executions SET updated_at=CAST(strftime('%s','now') AS INTEGER)-1201")
+    with pytest.raises(sqlite3.IntegrityError, match="mismatched"):
+        db.execute("""INSERT INTO post_purchase_recovery_audit
+          SELECT merchant_id,environment,order_id,workflow_key,'wrong','operator','receipt unknown',
+            CAST(strftime('%s','now') AS INTEGER) FROM post_purchase_executions WHERE order_id='after'""")
+    db.execute(audit)
+    db.execute("INSERT INTO orders VALUES ('later','later-digest')")
+    db.execute("INSERT INTO checkout_sessions VALUES ('later','later-session','confirmed')")
+    db.execute("INSERT INTO order_items VALUES ('later','product',1)")
+    db.execute("INSERT INTO outbox VALUES (3,'later','OrderConfirmed',?,NULL)",
+               (json.dumps({"order_id": "later", "session_id": "later-session", "items_digest": "later-digest"}),))
+    db.commit()
+    assert asyncio.run(drain_confirmed_d1(dispatcher, (action,))) == 2
+    assert calls == ["after", "later"]
+    assert db.execute("SELECT state FROM post_purchase_executions WHERE order_id='after'").fetchone()[0] == "uncertain"
+    assert db.execute("SELECT operator,evidence FROM post_purchase_recovery_audit").fetchone()[:] == (
+        "operator", "receipt unknown"
+    )
+    with pytest.raises(sqlite3.IntegrityError, match="immutable"):
+        db.execute("DELETE FROM post_purchase_recovery_audit")
+
+
+def test_drain_bounds_external_calls_and_resumes_overlapping_workflows():
+    db = setup_database()
+    calls = []
+    dispatcher = D1Dispatcher(
+        Database(db), "store", "test", {"service": lambda _, e: calls.append(e.workflow_key) or "ok"}
+    )
+    actions = tuple(Action(f"flow-{n}", ("product",), "service", f"private/{n}", "a" * 64) for n in range(3))
+    assert asyncio.run(drain_confirmed_d1(dispatcher, actions, max_new_claims=2)) == 0
+    assert calls == ["flow-0", "flow-1"]
+    assert db.execute("SELECT last_outbox_id FROM post_purchase_checkpoint").fetchone()[0] == 1
+    assert asyncio.run(drain_confirmed_d1(dispatcher, actions, max_new_claims=2)) == 1
+    assert calls == ["flow-0", "flow-1", "flow-2"]
 
 
 def test_invalid_event_never_calls_handler_or_advances_checkpoint():

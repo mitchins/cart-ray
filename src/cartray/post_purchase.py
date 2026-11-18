@@ -231,12 +231,15 @@ class D1Dispatcher:
         rows = _results(result)
         return rows[0] if rows else None
 
-    async def dispatch(self, order_id: str, actions: tuple[Action, ...]) -> dict[str, str]:
+    async def dispatch(
+        self, order_id: str, actions: tuple[Action, ...], *, max_new_claims: int | None = None
+    ) -> dict[str, str]:
         from inspect import isawaitable
 
         from cartray.store import _changes, _results
 
-        if not _IDENTIFIER.fullmatch(order_id) or len(actions) > 100:
+        if (not _IDENTIFIER.fullmatch(order_id) or len(actions) > 100
+                or (max_new_claims is not None and not 0 <= max_new_claims <= 100)):
             raise ValueError("invalid dispatch request")
         if len({action.workflow_key for action in actions}) != len(actions):
             raise ValueError("duplicate workflow identity")
@@ -281,10 +284,24 @@ class D1Dispatcher:
                 raise ValueError("existing workflow identity has different configuration")
             digests[action.workflow_key] = digest
         outcomes = {}
+        new_claims = 0
         for action in actions:
             if not purchased.intersection(action.offer_keys):
                 continue
             digest, now = digests[action.workflow_key], int(time.time())
+            if max_new_claims is not None and new_claims >= max_new_claims:
+                existing = await self._first(
+                    """SELECT action_digest,state FROM post_purchase_executions
+                    WHERE merchant_id=? AND environment=? AND order_id=? AND workflow_key=?""",
+                    self.merchant, self.environment, order_id, action.workflow_key,
+                )
+                if existing and existing["action_digest"] != digest:
+                    raise ValueError("existing workflow identity has different configuration")
+                outcomes[action.workflow_key] = (
+                    "deferred" if not existing else
+                    "pending_claim" if existing["state"] == "claimed" else "already_claimed"
+                )
+                continue
             result = (
                 await self.database.prepare(
                     """INSERT OR IGNORE INTO post_purchase_executions
@@ -308,6 +325,7 @@ class D1Dispatcher:
                 # A concurrent or interrupted claimant may still be running.
                 outcomes[action.workflow_key] = "pending_claim" if existing["state"] == "claimed" else "already_claimed"
                 continue
+            new_claims += 1
             try:
                 reference = self.handlers[action.handler](
                     purchase,
@@ -343,11 +361,13 @@ class D1Dispatcher:
         return outcomes
 
 
-async def drain_confirmed_d1(dispatcher: D1Dispatcher, actions: tuple[Action, ...], *, limit: int = 10) -> int:
+async def drain_confirmed_d1(
+    dispatcher: D1Dispatcher, actions: tuple[Action, ...], *, limit: int = 10, max_new_claims: int = 2
+) -> int:
     """Consume a bounded batch from an explicitly activated independent checkpoint."""
     from cartray.store import _changes, _results
 
-    if not 1 <= limit <= 50:
+    if not 1 <= limit <= 50 or not 1 <= max_new_claims <= 10:
         raise ValueError("invalid post-purchase batch limit")
     checkpoint = await dispatcher._first(
         """SELECT merchant_id,environment,activation_watermark,last_outbox_id
@@ -370,6 +390,7 @@ async def drain_confirmed_d1(dispatcher: D1Dispatcher, actions: tuple[Action, ..
         .all()
     )
     processed = 0
+    remaining_claims = max_new_claims
     for event in _results(result):
         payload = json.loads(event["payload_json"])
         if (
@@ -379,8 +400,9 @@ async def drain_confirmed_d1(dispatcher: D1Dispatcher, actions: tuple[Action, ..
             or payload.get("items_digest") != event["items_digest"]
         ):
             raise ValueError("confirmed event does not match the immutable purchase")
-        outcomes = await dispatcher.dispatch(event["order_id"], actions)
-        if "pending_claim" in outcomes.values():
+        outcomes = await dispatcher.dispatch(event["order_id"], actions, max_new_claims=remaining_claims)
+        remaining_claims -= sum(state in ("accepted", "uncertain") for state in outcomes.values())
+        if "pending_claim" in outcomes.values() or "deferred" in outcomes.values():
             return processed
         advanced = (
             await dispatcher.database.prepare(

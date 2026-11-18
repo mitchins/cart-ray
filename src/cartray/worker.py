@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import hmac
 import json
 import re
@@ -520,10 +521,10 @@ async def _drain_post_purchase(env):
                 separators=(",", ":"),
             )
             request = _internal_post("https://post-purchase-handler.internal/", token, body)
-            response = await service.fetch(request)
+            response = await asyncio.wait_for(service.fetch(request), timeout=8)
             if response.status != 200:
                 raise RuntimeError("post-purchase handler outcome uncertain")
-            result = await response.json()
+            result = await asyncio.wait_for(response.json(), timeout=2)
             if hasattr(result, "to_py"):
                 result = result.to_py()
             if not isinstance(result, dict):
@@ -531,7 +532,7 @@ async def _drain_post_purchase(env):
             return result.get("provider_reference")
 
         dispatcher = D1Dispatcher(env.DB, merchant, environment, {"service": service_handler})
-        await drain_confirmed_d1(dispatcher, actions)
+        await asyncio.wait_for(drain_confirmed_d1(dispatcher, actions, limit=10, max_new_claims=2), timeout=22)
     except Exception:
         # Checkout is already committed; cron retries the durable checkpoint.
         return

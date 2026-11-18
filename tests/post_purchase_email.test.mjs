@@ -37,6 +37,9 @@ test('confirmed approved test purchase delivers configured dummy links', async (
   assert.equal(result.status, 200);
   assert.deepEqual(await result.json(), {provider_reference:'receipt-one'});
   assert.equal(p.calls.length, 3);
+  assert.ok(p.calls[0].init.signal instanceof AbortSignal);
+  assert.equal(p.calls[0].init.signal, p.calls[1].init.signal);
+  assert.equal(p.calls[1].init.signal, p.calls[2].init.signal);
   assert.deepEqual(JSON.parse(p.calls[2].init.body).to, ['recipient@example.test']);
 });
 
