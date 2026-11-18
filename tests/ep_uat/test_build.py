@@ -174,6 +174,7 @@ def test_offline_parity_uses_same_product_renderer_with_no_test_authority(tmp_pa
     assert (output / "theme/catalogue.mjs").exists()
     assert 'href="/policies-and-templates/"' in html
     assert 'class="brand" href="/policies-and-templates/"' in html
+    assert '— catalogue"' in html
     assert 'class="header-cart"' not in html
     assert (output / "policies-and-templates/index.html").is_file()
     assert not (output / "uat-return/index.html").exists()

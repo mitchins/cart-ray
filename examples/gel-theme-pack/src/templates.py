@@ -44,7 +44,8 @@ def search(base, label="Search products", value=""):
 def header(gel, theme, base, preview, *, nav_links=None, header_search=True, cart_count=True, cart_link=True, brand_path=None):
     i = gel["identity"]
     brand = merchant_path(brand_path) if brand_path is not None else base
-    logo = f'''<a class="brand" href="{esc(brand, quote=True)}" aria-label="{esc(i["name"])} — home"><img src="{base + gel["assets"]["logo"]}" width="38" height="38" alt=""><span>{esc(i["short_name"])}<small>{esc(i["wordmark_descriptor"])}</small></span></a>'''
+    brand_destination = "catalogue" if brand_path is not None else "home"
+    logo = f'''<a class="brand" href="{esc(brand, quote=True)}" aria-label="{esc(i["name"])} — {brand_destination}"><img src="{base + gel["assets"]["logo"]}" width="38" height="38" alt=""><span>{esc(i["short_name"])}<small>{esc(i["wordmark_descriptor"])}</small></span></a>'''
     supplied_nav = nav_links is not None
     if nav_links is None:
         nav_links = ((f"{base}shop/", "Shop all"), (f"{base}#our-story", "Our story"), (f"{base}help/", "Help & care"))
