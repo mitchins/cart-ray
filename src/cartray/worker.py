@@ -537,8 +537,9 @@ async def _drain_post_purchase(env):
             drain_confirmed_d1(dispatcher, actions, limit=10, max_new_claims=2, deadline=time.monotonic() + 21),
             timeout=22,
         )
-    except Exception:
+    except Exception as error:
         # Checkout is already committed; cron retries the durable checkpoint.
+        print(f"Post-purchase drain failed: {type(error).__name__}")
         return
 
 

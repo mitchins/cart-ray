@@ -13,13 +13,14 @@ return or browser-triggered reconciliation was used.
 - Source Worker: `ep-pp-test-source-a1c9d6`, exercised version `99b72417-825e-44a3-9f08-ae9952110050`.
 - Private handler: `ep-pp-test-handler-a1c9d6`, exercised version `7654fcd6-64c4-4638-8906-c9f057d4e280`. Its public workers.dev route returned 404.
 - Stripe sandbox account: `acct_1UYzlzPheThyzcxa`; its test API credential was independently checked against the approved test-price fixture. The disposable Stripe webhook endpoint was removed after qualification.
-- Clean commerce build source: `ae784e6e2f42fcd11a96fe95a1df09e4bde1a45e`; retained bundle SHA-256 `af23176c10f18ce8cf6ad38dc8497d00797fd72ac08d1142131099f0eaa444cc`. The application and migration files match the later PR head; changes since that build are tests, the operator inspection interface and documentation.
+- The real purchase used clean commerce build source `ae784e6e2f42fcd11a96fe95a1df09e4bde1a45e`, bundle SHA-256 `af23176c10f18ce8cf6ad38dc8497d00797fd72ac08d1142131099f0eaa444cc`. After review, a second clean build from `d19edfc28c1e2f10e13b159b56720b711cdbe191`, bundle SHA-256 `734228ee62e4645e7581bccfe7216ffa2faaec901dbd49fb7b345d1b149604a2`, was deployed as version `8bf3264c-1452-4b35-bf0f-9dda899ef47b` for the additional synthetic smoke described below. The real purchase was not repeated after that change.
 - Handler SHA-256 `16ceea56d2571aabafeb915c2e5327fa1e455369eff420cc352fdc941c73fbf9`; recovery migration SHA-256 `5c6ad1985b4ea0401bf3e66cb340d0dcd32bac5b20a87c1f932d38235ae50e2e`. Wrangler `4.127.1`, `kinglet` `1.8.3`, and `workers-runtime-sdk` `1.8.1` were used.
 
 ## Observed journey
 
 The activation watermark and initial checkpoint were both zero in the empty
-test D1. A confirmed, paid test Checkout for one authorised `EP-UAT-171` offer
+test D1. The synthetic recovery test described below occurred first, advancing
+the checkpoint from `0` to `4`. A subsequent confirmed, paid test Checkout for one authorised `EP-UAT-171` offer
 settled at 02:09:53 UTC. The order identity SHA-256 was
 `ebe5ad5bd0bc3eeed5e38bd3c554ab4f830e1bc57414e74e4f2a072e9acf1b6d`;
 the immutable items digest was
@@ -56,6 +57,15 @@ HTTP 200 even though the handler rejected the call. The execution became
 execution. The approved mailbox still contained one matching message. This
 tests isolation from an unavailable private handler; it does not assert that a
 real SMTP2GO outage was induced.
+
+The post-review source version was separately exercised with the private
+handler still disabled. A signed synthetic wakeup returned HTTP 200, recorded
+the matching synthetic execution as `uncertain`, and advanced the checkpoint to
+`7`; the real purchase still had one execution and the mailbox still contained
+one matching message. The 100-action D1 parameter-boundary case was exercised
+in local Workerd/D1, not hosted: Cloudflare rejected a 16 KB registry as a
+single Worker secret because that binding is limited to approximately 5 KB.
+Hosted configuration must fit the provider's binding limit.
 
 The final test source and handler were deployed with delivery disabled. The
 test schedule was removed and verified absent through the Cloudflare API. The

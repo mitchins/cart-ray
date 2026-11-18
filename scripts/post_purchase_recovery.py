@@ -36,6 +36,10 @@ def main():
     merchant = literal(args.merchant)
     if args.action == "inspect":
         sql = (
+            "SELECT c.last_outbox_id,c.activation_watermark,e.id AS next_event_id,e.order_id AS next_order_id "
+            "FROM post_purchase_checkpoint c LEFT JOIN outbox e ON e.id=(SELECT MIN(id) FROM outbox "
+            "WHERE event_type='OrderConfirmed' AND id>c.last_outbox_id) "
+            "WHERE c.merchant_id=" + merchant + " AND c.environment='test'; "
             "SELECT order_id,workflow_key,action_digest,state,provider_reference,created_at,updated_at,"
             "CAST(strftime('%s','now') AS INTEGER)-updated_at AS age_seconds "
             "FROM post_purchase_executions WHERE merchant_id=" + merchant

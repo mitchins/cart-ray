@@ -28,6 +28,7 @@ def test_recovery_requires_test_scope_and_explicit_paused_operator(monkeypatch):
         invoke(monkeypatch, "inspect", "--account", "a" * 32, "--database", "merchant-prod", "--merchant", "merchant")
     calls = invoke(monkeypatch, "inspect", *scope)
     assert "state IN ('claimed','uncertain')" in calls[0][0][0][-1]
+    assert "next_event_id" in calls[0][0][0][-1]
     assert "CASE state WHEN 'claimed' THEN 0" in calls[0][0][0][-1]
     calls = invoke(monkeypatch, "inspect", *scope, "--offset", "100")
     assert "LIMIT 100 OFFSET 100" in calls[0][0][0][-1]
@@ -57,4 +58,12 @@ def test_many_uncertain_rows_do_not_hide_claimed_executions(monkeypatch):
       state TEXT, provider_reference TEXT, created_at INTEGER, updated_at INTEGER)""")
     db.executemany("INSERT INTO post_purchase_executions VALUES ('merchant','test',?,'flow','digest',?,NULL,0,?)",
                    [(f"old-{n}", "uncertain", n) for n in range(100)] + [("blocked", "claimed", 1000)])
-    assert db.execute(calls[0][0][0][-1]).fetchone()[0] == "blocked"
+    db.execute("CREATE TABLE post_purchase_checkpoint (merchant_id TEXT, environment TEXT, "
+               "last_outbox_id INTEGER, activation_watermark INTEGER)")
+    db.execute("CREATE TABLE outbox (id INTEGER, order_id TEXT, event_type TEXT)")
+    db.execute("INSERT INTO post_purchase_checkpoint VALUES ('merchant','test',4,0)")
+    db.execute("INSERT INTO outbox VALUES (5,'blocked','OrderConfirmed')")
+    checkpoint_query = calls[0][0][0][-1].split(";", 1)[0]
+    assert db.execute(checkpoint_query).fetchone() == (4, 0, 5, "blocked")
+    claim_query = calls[0][0][0][-1].split(";", 1)[1]
+    assert db.execute(claim_query).fetchone()[0] == "blocked"

@@ -296,7 +296,7 @@ class D1Dispatcher:
                 continue
             digest, now = digests[action.workflow_key], int(time.time())
             if ((max_new_claims is not None and new_claims >= max_new_claims)
-                    or (deadline is not None and time.monotonic() + 11 >= deadline)):
+                    or (deadline is not None and time.monotonic() + 12 >= deadline)):
                 existing = existing_by_key.get(action.workflow_key)
                 outcomes[action.workflow_key] = (
                     "deferred" if not existing else
@@ -352,15 +352,22 @@ class D1Dispatcher:
             except asyncio.CancelledError:
                 # A handler might still have reached its provider. Preserve a
                 # held outcome where possible; never release the claim for retry.
-                try:
-                    await asyncio.wait_for(self._mark_uncertain(order_id, action.workflow_key), timeout=1)
-                except Exception:
-                    pass  # A remaining claimed row is resolved by the operator.
+                await self._hold_after_cancellation(order_id, action.workflow_key)
                 raise
             except Exception:
-                await self._mark_uncertain(order_id, action.workflow_key)
+                try:
+                    await self._mark_uncertain(order_id, action.workflow_key)
+                except asyncio.CancelledError:
+                    await self._hold_after_cancellation(order_id, action.workflow_key)
+                    raise
                 outcomes[action.workflow_key] = "uncertain"
         return outcomes
+
+    async def _hold_after_cancellation(self, order_id, workflow_key):
+        try:
+            await asyncio.wait_for(self._mark_uncertain(order_id, workflow_key), timeout=1)
+        except Exception:
+            pass  # A remaining claimed row is resolved by the operator.
 
     async def _mark_uncertain(self, order_id, workflow_key):
         await (
@@ -412,9 +419,14 @@ async def drain_confirmed_d1(
             or payload.get("session_id") != event["external_session_id"]
             or payload.get("items_digest") != event["items_digest"]
         ):
+            print(f"Post-purchase event {event['id']}: immutable purchase mismatch")
             raise ValueError("confirmed event does not match the immutable purchase")
-        outcomes = await dispatcher.dispatch(event["order_id"], actions, max_new_claims=remaining_claims,
-                                             deadline=deadline)
+        try:
+            outcomes = await dispatcher.dispatch(event["order_id"], actions, max_new_claims=remaining_claims,
+                                                 deadline=deadline)
+        except ValueError:
+            print(f"Post-purchase event {event['id']}: workflow validation failed")
+            raise
         remaining_claims -= sum(state in ("accepted", "uncertain") for state in outcomes.values())
         if "pending_claim" in outcomes.values() or "deferred" in outcomes.values():
             return processed

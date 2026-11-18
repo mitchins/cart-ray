@@ -144,10 +144,10 @@ def test_drain_does_not_claim_when_time_budget_is_insufficient():
     calls = []
     dispatcher = D1Dispatcher(Database(db), "store", "test", {"service": lambda *_: calls.append(1) or "ok"})
     action = Action("workflow", ("product",), "service", "private/config", "a" * 64)
-    assert asyncio.run(drain_confirmed_d1(dispatcher, (action,), deadline=time.monotonic() + 5)) == 0
+    assert asyncio.run(drain_confirmed_d1(dispatcher, (action,), deadline=time.monotonic() + 12)) == 0
     assert not calls
     assert db.execute("SELECT COUNT(*) FROM post_purchase_executions").fetchone()[0] == 0
-    assert asyncio.run(drain_confirmed_d1(dispatcher, (action,))) == 1
+    assert asyncio.run(drain_confirmed_d1(dispatcher, (action,), deadline=time.monotonic() + 30)) == 1
     assert len(calls) == 1
 
 
@@ -198,6 +198,44 @@ def test_cancelled_handler_is_held_before_checkpoint_replay():
 
     asyncio.run(scenario())
     assert len(calls) == 1
+
+
+def test_cancellation_during_uncertain_write_attempts_the_hold_again():
+    db = setup_database()
+
+    async def scenario():
+        started = asyncio.Event()
+        writes = 0
+
+        class DelayedStatement(Statement):
+            async def run(self):
+                nonlocal writes
+                if "SET state='uncertain'" in self.sql:
+                    writes += 1
+                    if writes == 1:
+                        started.set()
+                        await asyncio.Event().wait()
+                return await super().run()
+
+        class DelayedDatabase(Database):
+            def prepare(self, sql):
+                return DelayedStatement(self.db, sql)
+
+        def unavailable(*_):
+            raise RuntimeError("synthetic provider timeout")
+
+        dispatcher = D1Dispatcher(DelayedDatabase(db), "store", "test", {"service": unavailable})
+        action = Action("workflow", ("product",), "service", "private/config", "a" * 64)
+        task = asyncio.create_task(drain_confirmed_d1(dispatcher, (action,)))
+        await started.wait()
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        assert writes == 2
+        assert db.execute("SELECT state FROM post_purchase_executions").fetchone()[0] == "uncertain"
+        assert db.execute("SELECT last_outbox_id FROM post_purchase_checkpoint").fetchone()[0] == 1
+
+    asyncio.run(scenario())
 
 
 def test_invalid_event_never_calls_handler_or_advances_checkpoint():
