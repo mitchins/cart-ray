@@ -160,6 +160,15 @@ class Default(WorkerEntrypoint):
             and all(set(result) == {"workflow-one", "workflow-two"} for result in runs)
         )
 
+        budget_actions = tuple(
+            Action(f"budget-{n}", ("SMOKE-TEMPLATE",), "email", f"test/{n}", "d" * 64)
+            for n in range(100)
+        )
+        budget_outcomes = await dispatcher.dispatch(
+            order.order_id, budget_actions, max_new_claims=2, deadline=time.monotonic() + 5
+        )
+        budget_deferred = len(budget_outcomes) == 100 and all(value == "deferred" for value in budget_outcomes.values())
+
         signer = WorkersEd25519Signer(TEST_PRIVATE_KEY_PKCS8_B64)
         signature = await signer.sign(TEST_PAYLOAD)
         public_key = await crypto.subtle.importKey(
@@ -186,6 +195,7 @@ class Default(WorkerEntrypoint):
             "signature_verified": bool(signature_verified),
             "verifier_accepted": verifier_accepted,
             "workflows_once": workflows_once,
+            "budget_deferred": budget_deferred,
         }
         expected = {
             "d1_batch_owner": True,
@@ -196,5 +206,6 @@ class Default(WorkerEntrypoint):
             "signature_verified": True,
             "verifier_accepted": True,
             "workflows_once": True,
+            "budget_deferred": True,
         }
         return Response.json(result, status=200 if result == expected else 500)

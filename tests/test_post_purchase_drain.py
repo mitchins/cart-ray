@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import sqlite3
+import time
 from pathlib import Path
 
 import pytest
@@ -58,6 +59,7 @@ def setup_database():
         )
     db.executescript((ROOT / "migrations/0006_post_purchase_actions.sql").read_text())
     db.executescript((ROOT / "migrations/0007_post_purchase_checkpoint.sql").read_text())
+    db.executescript((ROOT / "migrations/0008_post_purchase_recovery.sql").read_text())
     db.execute("INSERT INTO post_purchase_installation VALUES (1,'store','test')")
     db.execute("INSERT INTO post_purchase_checkpoint VALUES (1,'store','test',1,1)")
     db.commit()
@@ -86,6 +88,154 @@ def test_unresolved_claim_stops_checkpoint_without_resending():
     dispatcher.handlers["service"] = lambda *_: pytest.fail("must not resend an unresolved claim")
     assert asyncio.run(drain_confirmed_d1(dispatcher, (action,))) == 0
     assert db.execute("SELECT last_outbox_id FROM post_purchase_checkpoint").fetchone()[0] == 1
+
+
+def test_operator_hold_of_stale_claim_unblocks_later_purchase_without_resend():
+    db = setup_database()
+    action = Action("workflow", ("product",), "service", "private/config", "a" * 64)
+    calls = []
+    dispatcher = D1Dispatcher(Database(db), "store", "test", {"service": lambda p, _: calls.append(p.order_id) or "ok"})
+    assert asyncio.run(dispatcher.dispatch("after", (action,))) == {"workflow": "accepted"}
+    db.execute("UPDATE post_purchase_executions SET state='claimed', provider_reference=NULL")
+    audit = """INSERT INTO post_purchase_recovery_audit
+        SELECT merchant_id,environment,order_id,workflow_key,action_digest,'operator','receipt unknown',
+               CAST(strftime('%s','now') AS INTEGER)
+        FROM post_purchase_executions WHERE order_id='after'"""
+    with pytest.raises(sqlite3.IntegrityError, match="not old enough"):
+        db.execute(audit)
+    db.execute("UPDATE post_purchase_executions SET updated_at=CAST(strftime('%s','now') AS INTEGER)-1201")
+    with pytest.raises(sqlite3.IntegrityError, match="mismatched"):
+        db.execute("""INSERT INTO post_purchase_recovery_audit
+          SELECT merchant_id,environment,order_id,workflow_key,'wrong','operator','receipt unknown',
+            CAST(strftime('%s','now') AS INTEGER) FROM post_purchase_executions WHERE order_id='after'""")
+    db.execute(audit)
+    db.execute("INSERT INTO orders VALUES ('later','later-digest')")
+    db.execute("INSERT INTO checkout_sessions VALUES ('later','later-session','confirmed')")
+    db.execute("INSERT INTO order_items VALUES ('later','product',1)")
+    db.execute("INSERT INTO outbox VALUES (3,'later','OrderConfirmed',?,NULL)",
+               (json.dumps({"order_id": "later", "session_id": "later-session", "items_digest": "later-digest"}),))
+    db.commit()
+    assert asyncio.run(drain_confirmed_d1(dispatcher, (action,))) == 2
+    assert calls == ["after", "later"]
+    assert db.execute("SELECT state FROM post_purchase_executions WHERE order_id='after'").fetchone()[0] == "uncertain"
+    assert db.execute("SELECT operator,evidence FROM post_purchase_recovery_audit").fetchone()[:] == (
+        "operator", "receipt unknown"
+    )
+    with pytest.raises(sqlite3.IntegrityError, match="immutable"):
+        db.execute("DELETE FROM post_purchase_recovery_audit")
+
+
+def test_drain_bounds_external_calls_and_resumes_overlapping_workflows():
+    db = setup_database()
+    calls = []
+    dispatcher = D1Dispatcher(
+        Database(db), "store", "test", {"service": lambda _, e: calls.append(e.workflow_key) or "ok"}
+    )
+    actions = tuple(Action(f"flow-{n}", ("product",), "service", f"private/{n}", "a" * 64) for n in range(3))
+    assert asyncio.run(drain_confirmed_d1(dispatcher, actions, max_new_claims=2)) == 0
+    assert calls == ["flow-0", "flow-1"]
+    assert db.execute("SELECT last_outbox_id FROM post_purchase_checkpoint").fetchone()[0] == 1
+    assert asyncio.run(drain_confirmed_d1(dispatcher, actions, max_new_claims=2)) == 1
+    assert calls == ["flow-0", "flow-1", "flow-2"]
+
+
+def test_drain_does_not_claim_when_time_budget_is_insufficient():
+    db = setup_database()
+    calls = []
+    dispatcher = D1Dispatcher(Database(db), "store", "test", {"service": lambda *_: calls.append(1) or "ok"})
+    action = Action("workflow", ("product",), "service", "private/config", "a" * 64)
+    assert asyncio.run(drain_confirmed_d1(dispatcher, (action,), deadline=time.monotonic() + 12)) == 0
+    assert not calls
+    assert db.execute("SELECT COUNT(*) FROM post_purchase_executions").fetchone()[0] == 0
+    assert asyncio.run(drain_confirmed_d1(dispatcher, (action,), deadline=time.monotonic() + 30)) == 1
+    assert len(calls) == 1
+
+
+def test_many_actions_do_not_require_one_validation_query_each():
+    class D1BoundedStatement(Statement):
+        def bind(self, *args):
+            assert len(args) <= 100
+            return super().bind(*args)
+
+    class CountingDatabase(Database):
+        count = 0
+
+        def prepare(self, sql):
+            self.count += 1
+            return D1BoundedStatement(self.db, sql)
+
+    database = CountingDatabase(setup_database())
+    dispatcher = D1Dispatcher(database, "store", "test", {"service": lambda *_: "ok"})
+    actions = tuple(Action(f"flow-{n}", ("product",), "service", f"private/{n}", "a" * 64) for n in range(100))
+    outcomes = asyncio.run(dispatcher.dispatch("after", actions, max_new_claims=2))
+    assert list(outcomes.values()).count("accepted") == 2
+    assert list(outcomes.values()).count("deferred") == 98
+    assert database.count <= 9
+
+
+def test_cancelled_handler_is_held_before_checkpoint_replay():
+    db = setup_database()
+    calls = []
+
+    async def scenario():
+        entered = asyncio.Event()
+
+        async def handler(*_):
+            calls.append(1)
+            entered.set()
+            await asyncio.Event().wait()
+
+        dispatcher = D1Dispatcher(Database(db), "store", "test", {"service": handler})
+        action = Action("workflow", ("product",), "service", "private/config", "a" * 64)
+        task = asyncio.create_task(drain_confirmed_d1(dispatcher, (action,)))
+        await entered.wait()
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        assert db.execute("SELECT state FROM post_purchase_executions").fetchone()[0] == "uncertain"
+        assert db.execute("SELECT last_outbox_id FROM post_purchase_checkpoint").fetchone()[0] == 1
+        assert await drain_confirmed_d1(dispatcher, (action,)) == 1
+
+    asyncio.run(scenario())
+    assert len(calls) == 1
+
+
+def test_cancellation_during_uncertain_write_attempts_the_hold_again():
+    db = setup_database()
+
+    async def scenario():
+        started = asyncio.Event()
+        writes = 0
+
+        class DelayedStatement(Statement):
+            async def run(self):
+                nonlocal writes
+                if "SET state='uncertain'" in self.sql:
+                    writes += 1
+                    if writes == 1:
+                        started.set()
+                        await asyncio.Event().wait()
+                return await super().run()
+
+        class DelayedDatabase(Database):
+            def prepare(self, sql):
+                return DelayedStatement(self.db, sql)
+
+        def unavailable(*_):
+            raise RuntimeError("synthetic provider timeout")
+
+        dispatcher = D1Dispatcher(DelayedDatabase(db), "store", "test", {"service": unavailable})
+        action = Action("workflow", ("product",), "service", "private/config", "a" * 64)
+        task = asyncio.create_task(drain_confirmed_d1(dispatcher, (action,)))
+        await started.wait()
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        assert writes == 2
+        assert db.execute("SELECT state FROM post_purchase_executions").fetchone()[0] == "uncertain"
+        assert db.execute("SELECT last_outbox_id FROM post_purchase_checkpoint").fetchone()[0] == 1
+
+    asyncio.run(scenario())
 
 
 def test_invalid_event_never_calls_handler_or_advances_checkpoint():
@@ -209,4 +359,52 @@ def test_worker_drain_calls_scoped_handler_and_never_replays(monkeypatch, respon
         "delivery",
     )
     assert db.execute("SELECT state FROM post_purchase_executions").fetchone()[0] == expected_state
+    assert db.execute("SELECT last_outbox_id FROM post_purchase_checkpoint").fetchone()[0] == 2
+
+
+def test_worker_handler_timeout_is_held_and_never_resent(monkeypatch):
+    import sys
+    from types import ModuleType, SimpleNamespace
+
+    import cartray.worker as worker
+
+    db = setup_database()
+    calls = []
+
+    class Request:
+        @staticmethod
+        def new(url, options):
+            return SimpleNamespace(url=url, options=options)
+
+    class Service:
+        async def fetch(self, request):
+            calls.append(request)
+            await asyncio.sleep(1)
+
+    js = ModuleType("js")
+    js.Request = Request
+    js.Object = SimpleNamespace(fromEntries=lambda value: value)
+    pyodide = ModuleType("pyodide")
+    ffi = ModuleType("pyodide.ffi")
+    ffi.to_js = lambda value, **kwargs: value
+    monkeypatch.setitem(sys.modules, "js", js)
+    monkeypatch.setitem(sys.modules, "pyodide", pyodide)
+    monkeypatch.setitem(sys.modules, "pyodide.ffi", ffi)
+    original_wait_for = asyncio.wait_for
+
+    async def short_handler_timeout(awaitable, timeout):
+        return await original_wait_for(awaitable, timeout=0.01 if timeout == 8 else timeout)
+
+    monkeypatch.setattr(worker.asyncio, "wait_for", short_handler_timeout)
+    action = {"workflow_key": "delivery", "offer_keys": ["product"], "handler": "service",
+              "config_ref": "private/config", "config_digest": "a" * 64}
+    env = SimpleNamespace(
+        DB=Database(db), CARTRAY_ENVIRONMENT="test", CARTRAY_POST_PURCHASE_MODE="test",
+        CARTRAY_POST_PURCHASE_TOKEN="t" * 32, POST_PURCHASE_HANDLER=Service(),
+        CARTRAY_POST_PURCHASE_CONFIG=json.dumps({"merchant": "store", "environment": "test", "actions": [action]}),
+    )
+    asyncio.run(worker._drain_post_purchase(env))
+    asyncio.run(worker._drain_post_purchase(env))
+    assert len(calls) == 1
+    assert db.execute("SELECT state FROM post_purchase_executions").fetchone()[0] == "uncertain"
     assert db.execute("SELECT last_outbox_id FROM post_purchase_checkpoint").fetchone()[0] == 2

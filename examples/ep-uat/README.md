@@ -57,7 +57,23 @@ The CartRay Worker has an optional `CARTRAY_POST_PURCHASE_MODE=test` path. When 
 
 `modules/post-purchase/transactional-email/worker.mjs` supplies a test-only private handler for that binding. It is disabled unless `DELIVERY_MODE` and `ENVIRONMENT` both equal `test`, and requires the caller's separate `HANDLER_TOKEN`. Operator-provisioned `DELIVERY_CONFIG` is a JSON object with an `actions` array; each action has `environment`, `merchant`, `workflow_key`, `config_ref`, `offer_keys`, `links`, `recipient`, `sender`, `subject` and `stripe_account`. Set the corresponding core action's `config_digest` to the SHA-256 of the UTF-8 bytes of JavaScript `JSON.stringify(action)`; action identity and digest must match. `APPROVED_TEST_RECIPIENT`, `APPROVED_TEST_SENDER`, `STRIPE_ACCOUNT_ID`, `STRIPE_API_KEY` and `SMTP2GO_API_KEY` are separate private bindings. Configure exactly one approved test sender and recipient. This adapter accepts only dummy Dropbox transfer links, checks the actual Stripe test account and paid session, and returns provider acceptance rather than claiming mailbox delivery. Never expose the handler as a public route.
 
-An interrupted execution can remain `claimed`: the independent checkpoint stops at that purchase, and the dispatcher does not resend it. A concurrent live claimant can also temporarily produce this state. Distinguishing an abandoned claim and resolving it using provider evidence is a hosted-delivery follow-up; this test-only path does not yet provide an operator reconciliation workflow or a bounded webhook execution budget.
+Each webhook or scheduled drain examines at most ten events, starts at most two new handlers, and has a 22-second execution budget. It defers a new claim unless at least thirteen seconds of the overall budget remain, allowing for the eight-second handler wait, two-second response parsing limit and a database margin. The private handler shares a seven-second deadline across Stripe and SMTP2GO; a timeout is an uncertain outcome, never permission to resend. On cancellation the dispatcher attempts to hold a claimed execution as uncertain; an interrupted database operation can still leave a claim pending, and its checkpoint remains at that event until the claim has a recorded outcome. Future scheduled invocations continue bounded batches.
+
+### Recover an interrupted test delivery
+
+The test-only operator CLI uses the operator's existing Cloudflare credentials and a named test D1; it is not a public endpoint. First pause **both** webhook-triggered and scheduled post-purchase processing by deploying the source Worker with `CARTRAY_POST_PURCHASE_MODE` set to `disabled`, and ensure the prior in-flight work has stopped. Wait at least 20 minutes after the claim's last update; the database enforces this minimum. A claim's age does not establish whether mail was sent. Inspect the provider's authoritative history and retain its receipt or record that the outcome remains unknown. Do not put addresses, tokens or other secrets in the audit note.
+
+```sh
+uv run --locked python scripts/post_purchase_recovery.py inspect \
+  --account ACCOUNT_ID --database MERCHANT-test --merchant MERCHANT_ID
+uv run --locked python scripts/post_purchase_recovery.py hold \
+  --account ACCOUNT_ID --database MERCHANT-test --merchant MERCHANT_ID \
+  --order ORDER_ID --workflow WORKFLOW_KEY --digest INSPECTED_ACTION_DIGEST \
+  --operator OPERATOR_ID --evidence 'provider history checked; outcome unknown' \
+  --confirm-worker-paused
+```
+
+Inspection lists claimed executions first, then uncertain executions, 100 at a time; use `--offset 100` for the next page. The hold atomically records an immutable audit entry and changes only the matching old `claimed` execution to `uncertain`. It never deletes or retries the claim, assumes delivery failure, or rewinds the checkpoint. Accepted and already uncertain outcomes cannot be held again, and a changed action digest cannot be substituted. After reviewing the recorded result, restore the permitted test configuration; the next scheduled drain can progress to later purchases. A delayed or ambiguous provider outcome remains an operator matter. Production use is not enabled by this command.
 
 The CartRay dispatcher owns the durable `(merchant, order, workflow)` claim. The handler is stateless and is not safe to call or retry independently: timeouts and unknown provider outcomes stay held for operator reconciliation. This remains a test adapter; a supported installation and hosted event-to-email qualification are not established by its presence.
 

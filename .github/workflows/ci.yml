@@ -170,7 +170,8 @@ jobs:
     name: GEL connected browsers
     # Playwright 1.57 ships browser/dependency builds for Ubuntu 24.04.
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    # Ubuntu dependency downloads can exceed 15 minutes on slow runner mirrors.
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
         with:

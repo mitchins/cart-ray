@@ -82,12 +82,14 @@ export async function handle(request, env, fetcher = fetch) {
         (!env.STRIPE_API_KEY?.startsWith('sk_test_') && !env.STRIPE_API_KEY?.startsWith('rk_test_')) ||
         !env.SMTP2GO_API_KEY?.startsWith('api-')) return fail(400);
 
+    // One shared budget bounds the complete provider sequence, not each request separately.
+    const deadline = AbortSignal.timeout(7000);
     const account = await fetcher('https://api.stripe.com/v1/account', {
-      headers: {Authorization: `Bearer ${env.STRIPE_API_KEY}`}, redirect: 'manual', signal: AbortSignal.timeout(10000),
+      headers: {Authorization: `Bearer ${env.STRIPE_API_KEY}`}, redirect: 'manual', signal: deadline,
     });
     if (!account.ok || (await account.json()).id !== config.stripe_account) return fail(403);
     const stripe = await fetcher(`https://api.stripe.com/v1/checkout/sessions/${body.session_id}`, {
-      headers: {Authorization: `Bearer ${env.STRIPE_API_KEY}`}, redirect: 'manual', signal: AbortSignal.timeout(10000),
+      headers: {Authorization: `Bearer ${env.STRIPE_API_KEY}`}, redirect: 'manual', signal: deadline,
     });
     if (!stripe.ok) return fail(502);
     const session = await stripe.json();
@@ -99,7 +101,7 @@ export async function handle(request, env, fetcher = fetch) {
     // The caller has already durably claimed (merchant, order, workflow).
     // Failure or timeout is uncertain and must never trigger an automatic resend.
     const sent = await fetcher('https://api.smtp2go.com/v3/email/send', {
-      method: 'POST', redirect: 'manual', signal: AbortSignal.timeout(10000),
+      method: 'POST', redirect: 'manual', signal: deadline,
       headers: {'Content-Type': 'application/json', 'X-Smtp2go-Api-Key': env.SMTP2GO_API_KEY},
       body: JSON.stringify({sender: config.sender, to: [config.recipient], subject: config.subject,
         text_body: 'This test purchase contains dummy materials only.\n\n' + config.links.join('\n')}),
