@@ -29,6 +29,10 @@ CARTRAY_ENVIRONMENT = "test"
 [[d1_databases]]
 binding = "DB"
 database_id = "db-one"
+[[ratelimits]]
+name = "CHECKOUT_STATUS_RATE_LIMITER"
+namespace_id = "20261120"
+simple = { limit = 60, period = 60 }
 """
 
 
@@ -41,6 +45,8 @@ def test_normalize_forces_archive_source_and_only_allows_test_configuration():
         build.normalized_config(CONFIG.replace('"test"', '"production"'))
     with pytest.raises(ValueError):
         build.normalized_config(CONFIG.replace("scripts/sync_worker_source.py", "scripts/other.py"))
+    with pytest.raises(ValueError, match="CHECKOUT_STATUS_RATE_LIMITER"):
+        build.normalized_config(CONFIG.replace('name = "CHECKOUT_STATUS_RATE_LIMITER"', 'name = "OTHER"'))
     with pytest.raises(ValueError):
         build.normalized_config(
             CONFIG.replace('CARTRAY_ENVIRONMENT = "test"', 'CARTRAY_ENVIRONMENT = "test"\nSTRIPE_API_KEY = "oops"')
@@ -95,6 +101,12 @@ def test_attestation_rejects_changed_modules_bindings_or_split_version(tmp_path,
         "modules": [{"name": "worker.py", "content_base64": base64.b64encode(b"source").decode()}],
         "bindings": [
             {"name": "DB", "type": "d1", "database_id": "db-one"},
+            {
+                "name": "CHECKOUT_STATUS_RATE_LIMITER",
+                "type": "ratelimit",
+                "namespace_id": "20261120",
+                "simple": {"limit": 60, "period": 60},
+            },
             {"name": "CARTRAY_ENVIRONMENT", "type": "plain_text", "text": "test"},
             *[
                 {"name": name, "type": "secret_text"}
