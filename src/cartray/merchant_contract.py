@@ -48,7 +48,7 @@ def page_seo(value):
             or port not in (None, 443) or not re.fullmatch(r"[A-Za-z0-9.-]+", url.hostname)
             or any(ord(c) <= 32 for c in value["canonical_url"])):
         raise ValueError("invalid canonical URL")
-    host = url.hostname.rstrip(".")
+    host = url.hostname.removesuffix(".")
     if (not host or len(host) > 253 or any(len(label) > 63 or not re.fullmatch(
             r"[a-z0-9](?:[a-z0-9-]*[a-z0-9])?", label) for label in host.split("."))):
         raise ValueError("invalid canonical URL host")

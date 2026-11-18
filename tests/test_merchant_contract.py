@@ -32,6 +32,7 @@ def test_metadata_rejects_unapproved_claims_and_unsafe_canonicals():
     page_seo(seo)
     for value in ("javascript:alert(1)", "https://example.test@evil.test/product/p/",
                   "https://999.1.2.3/product/p/", "https://bad..host/product/p/",
+                  "https://example.test../product/p/",
                   "https://example.test/product/../p/", "https://example.test/product/p/?x=1"):
         with pytest.raises(ValueError):
             page_seo({**seo, "canonical_url": value})
