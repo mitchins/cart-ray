@@ -25,6 +25,7 @@ from urllib.parse import urlsplit
 
 ROOT = Path(__file__).resolve().parents[2]
 PACK = ROOT / "examples/gel-theme-pack"
+sys.path.insert(0, str(ROOT / "src"))
 sys.path.insert(0, str(PACK))
 from src.gel import tokens, validate  # noqa: E402
 from src.templates import header as theme_header  # noqa: E402
@@ -119,10 +120,12 @@ def shell(gel, title, body, test_products=(), theme="minimal", review_enabled=Fa
 def path(p):
     # Audit navigation is explicitly supplied and never treated as canonical.
     result = p.get("navigation_path")
-    if result is None and type(p.get("source_id")) is int:
-        result = f"/products/woo-{p['source_id']}/"  # Earlier UAT snapshot compatibility.
-    if not isinstance(result, str) or not re.fullmatch(r"/products/[a-z0-9]+(?:-[a-z0-9]+)*/", result):
-        raise ValueError("invalid product navigation path")
+    from cartray.merchant_contract import merchant_path
+
+    try:
+        merchant_path(result, product=True)
+    except ValueError as error:
+        raise ValueError("invalid product navigation path") from error
     return result
 
 

@@ -30,7 +30,7 @@ export async function createAdapter(config) {
   const products=catalogue.products.map(p=>{
     const presentation=local.get(p.product_key) || {};
     return {...presentation,...p,images:Array.isArray(p.images)?p.images:[],image:p.image_url || presentation.image,image_alt:p.image_alt || presentation.image_alt || '',
-      slug:presentation.slug,category:presentation.category || 'Products',
+      slug:presentation.slug,path:source.productPaths?.[p.product_key],category:presentation.category || 'Products',
       review_subject:source.reviewSubjects?.[p.product_key] || null};
   });
   let returnResult=null;

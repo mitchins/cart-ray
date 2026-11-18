@@ -55,7 +55,7 @@ def connect(source_site, cartray_root, output, gel, catalogue, theme, assets_roo
     content = json.loads(Path(catalogue).read_text())
     for p in content["products"]:
         key = p["product_key"]
-        expected = "/products/" + p["slug"] + "/"
+        expected = p.get("path", "/products/" + p["slug"] + "/")
         if source_config.get("productPaths", {}).get(key) != expected:
             raise ValueError(f"product route mismatch for {key}")
         if source_config.get("reviewSubjects", {}).get(key) != p["review_subject"]:

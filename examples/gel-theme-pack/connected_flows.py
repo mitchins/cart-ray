@@ -8,6 +8,8 @@ import shutil
 from pathlib import Path
 from urllib.parse import urlsplit
 
+from cartray.merchant_contract import merchant_path
+
 from .src import templates
 
 ROOT = Path(__file__).resolve().parent
@@ -24,6 +26,7 @@ def install(
     return_extension: str | None = None,
     api_origin: str | None = None,
     reviews_enabled: bool = False,
+    category_links: list[tuple[str, str]] | None = None,
 ):
     """Install shared cart/return UI; offers are presentation only, never checkout authority."""
     if not offers or len({offer["product_key"] for offer in offers}) != len(offers):
@@ -49,7 +52,7 @@ def install(
     for offer in offers:
         if (
             not re.fullmatch(r"[A-Z0-9-]{1,64}", offer["product_key"])
-            or not re.fullmatch(r"/products/[a-z0-9]+(?:-[a-z0-9]+)*/", offer["path"])
+            or not merchant_path(offer["path"], product=True)
             or offer["path"] in paths
             or not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", str(offer["source_id"]))
             or str(offer["source_id"]) in source_ids
@@ -78,6 +81,7 @@ def install(
         {
             "product_key": offer["product_key"],
             "slug": offer["path"].split("/")[-2],
+            "path": offer["path"],
             "image": offer["image"],
             "image_alt": offer["image_alt"],
             "category": offer["category"],
@@ -113,6 +117,14 @@ def install(
         + json.dumps(storefront, ensure_ascii=True)
         + "; window.CARTRAY_STOREFRONT.apiBaseUrl = " + api + "; window.CARTRAY_CONNECTED_CATALOGUE = true;\n"
     )
+    category_links = category_links or []
+    for path, label in category_links:
+        merchant_path(path, product=True)
+        if not isinstance(label, str) or not label.strip():
+            raise ValueError("invalid category label")
+    if (len({path for path, _ in category_links}) != len(category_links)
+            or any(path in paths.values() for path, _ in category_links)):
+        raise ValueError("duplicate or conflicting category path")
     for route, page in (("cart/index.html", "cart"), ("purchase-return/index.html", "purchase-return")):
         content = templates.simple_page(page, gel, "/")
         html = templates.page_shell(
@@ -123,7 +135,7 @@ def install(
             page.replace("-", " ").title(),
             content,
             False,
-            nav_links=(("/shop/", "Catalogue"),),
+            nav_links=(("/shop/", "Catalogue"), *category_links),
             minimal_footer=True,
         )
         for old, new in (

@@ -8,6 +8,7 @@ from html.parser import HTMLParser
 from pathlib import Path
 
 from cartray.fingerprints import fingerprint_entries
+from cartray.merchant_contract import merchant_path
 
 
 class ConnectedShell(HTMLParser):
@@ -131,7 +132,8 @@ def validate(root, repo):
         if (not image.startswith("/") or image.startswith("//") or ".." in relative.parts
                 or relative.suffix.lower() not in (".png", ".jpg", ".jpeg", ".webp", ".svg")
                 or not (site / relative).is_file()
-                or config["productPaths"][product["product_key"]] != f'/products/{product["slug"]}/'):
+                or config["productPaths"][product["product_key"]]
+                != product.get("path", f'/products/{product["slug"]}/')):
             raise ValueError("merchant storefront presentation image or product route is invalid")
     browse = theme.get("browseOffers")
     if (not isinstance(browse, list) or any(not isinstance(row, dict) or set(row) != {"sourceId", "productKey"}
@@ -163,8 +165,7 @@ def validate(root, repo):
             raise ValueError(f"merchant storefront has unrecognised connected code: {relative}")
     sources = {row["productKey"]: str(row["sourceId"]) for row in browse}
     for key, path in config["productPaths"].items():
-        if not isinstance(path, str) or not re.fullmatch(r"/products/[a-z0-9]+(?:-[a-z0-9]+)*/", path):
-            raise ValueError("invalid merchant product route")
+        merchant_path(path, product=True)
         if not (site / path.lstrip("/") / "index.html").is_file():
             raise ValueError("merchant product route is missing")
         page = ConnectedShell()

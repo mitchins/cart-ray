@@ -21,6 +21,8 @@ from merchant_inputs import snapshot as snapshot_merchant_inputs
 from merchant_inputs import validate as validate_merchant_inputs
 from topology import graph, secret_bindings, wrangler_config
 
+from cartray.merchant_contract import merchant_path
+
 ROOT = Path(__file__).resolve().parents[3]
 ROLES = ("source", "reviews", "consumer", "producer", "evidence", "scheduler", "sender")
 DATABASES = ("commerce",)
@@ -143,10 +145,11 @@ def validate_config(config):
                        for k, v in mapping.items())
                 or any(not isinstance(x, list) or len(x) != 3 or not all(isinstance(v, str) for v in x)
                        or not re.fullmatch(r"[a-z0-9-]{1,128}", x[0])
-                       or not re.fullmatch(r"/products/[a-z0-9]+(?:-[a-z0-9]+)*/", x[1])
+                       or not merchant_path(x[1], product=True)
                        or not x[2].strip() or len(x[2]) > 200 for x in details)
                 or len(set(mapping.values())) != len(mapping)
                 or len({x[0] for x in details}) != len(details)
+                or len({x[1] for x in details}) != len(details)
                 or not set(mapping.values()).issubset({x[0] for x in details})):
             raise ValueError("invalid merchant review subject mappings")
         if "merchant_inputs_sha256" in config and not re.fullmatch(r"[a-f0-9]{64}", config["merchant_inputs_sha256"]):

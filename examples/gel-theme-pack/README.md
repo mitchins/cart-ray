@@ -110,3 +110,30 @@ and the connected HTTP browser harness. That harness runs all three Squirrel
 themes and an explicit Northline synthetic contract fixture in Chromium, Firefox
 and WebKit. API fixture responses are labelled separately from hosted evidence;
 see `evidence/INTEGRATION.md` for completed runs, screenshots and limitations.
+
+### Merchant URLs and document metadata
+
+A connected catalogue product may set `path` to its approved local route, for
+example `/product/policy-template/`. Omitting it preserves the original
+`/products/<slug>/` behavior. Paths are presentation only: the existing product
+key, checkout catalogue and Reviews subject mapping remain the authority. Product
+paths must be distinct, slash-terminated, lowercase local paths without encoded
+segments, traversal, query strings or reserved application route prefixes. An
+operator's `productPaths` and `subject_details` must agree with the approved route.
+Listings that cannot be purchased can still use explicit paths in the UAT builder.
+
+Optional `category_links` is an ordered list of `{ "path":
+"/category/policies/templates/", "label": "Templates" }` links. CartRay renders
+navigation only; the merchant's site generator owns category pages and ordering.
+
+Products may include an `seo` object; `pages_seo` maps `home`, `shop`, and `help`
+to the same object. It contains `title`, `description`, an absolute HTTPS
+`canonical_url`, and `robots` (`index,follow` or `noindex,nofollow`). Canonical
+paths must match their page routes. Optional `structured_data` is restricted to
+product `@type`, `name`, `description`, and `sku`; review and offer claims are
+not inferred. Setting `seo_qualified: true` requires metadata for every product
+and each of the three owned pages; `index,follow` requires that flag. Preview builds always emit `noindex,nofollow`
+regardless of the supplied directive. The EP UAT builder retains its independent
+noindex policy. An external site generator that owns the document head can consume
+the same metadata via `cartray.merchant_contract.page_seo` without rendering a
+second head.
