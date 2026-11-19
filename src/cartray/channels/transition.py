@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import re
 
 from .feed import google_feed, meta_feed
 from .projection import _text, _url, compare
@@ -33,8 +34,11 @@ def transition_check(source, candidate, record, exceptions=()):
         raise ValueError("replacement must be a separately identified source")
     # Reusing item IDs in a separate data source in the same account can
     # overwrite live items; only a separate account is safe for ingestion rehearsal.
-    if record["staging_account"] == source["account"]:
-        raise ValueError("staging requires a separate channel account")
+    if (
+        not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.:-]{0,149}", record["staging_account"])
+        or record["staging_account"].casefold() == source["account"].casefold()
+    ):
+        raise ValueError("staging requires a distinct channel account identifier")
     evidence = record["ingestion"]
     if not isinstance(evidence, dict) or set(evidence) != {
         "candidate_digest",

@@ -37,5 +37,9 @@ def test_transition_requires_item_level_evidence_in_separate_account_and_records
     record["ingestion"]["accepted_ids"] = []
     assert not transition_check(source, candidate, record)["ready_for_owner_review"]
     record["staging_account"] = source["account"]
-    with pytest.raises(ValueError, match="separate channel account"):
+    with pytest.raises(ValueError, match="distinct channel account"):
         transition_check(source, candidate, record)
+    for ambiguous in (source["account"].upper(), source["account"] + " "):
+        record["staging_account"] = ambiguous
+        with pytest.raises(ValueError, match="distinct channel account"):
+            transition_check(source, candidate, record)
