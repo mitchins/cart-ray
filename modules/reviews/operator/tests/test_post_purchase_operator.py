@@ -496,6 +496,50 @@ def test_credential_replacement_requires_explicit_authorization_on_resume(deploy
     assert result["provider"] == "cloudflare"
 
 
+def test_staging_migration_blocks_build_deploy_upgrade_and_reviews_activation(deployed):
+    install, api, db = deployed
+    install.state["post_purchase_provider_migration"] = {"status": "staging"}
+    install.config["reviews_enabled"] = True
+    before_db, before_events = list(db.iterdump()), list(api.events)
+    for action in (install.build, install.deploy, install.upgrade, lambda: install.rollback(0),
+                   lambda: install.activate(True)):
+        with pytest.raises(ValueError, match="credential reconfiguration"):
+            action()
+    assert list(db.iterdump()) == before_db
+    assert api.events == before_events
+
+
+def test_reviews_activation_rejects_undeployed_selected_build(deployed):
+    install, api, db = deployed
+    install.config["reviews_enabled"] = True
+    install.state["build"] = "not-yet-deployed"
+    before_db, before_events = list(db.iterdump()), list(api.events)
+    with pytest.raises(ValueError, match="deploy the selected build"):
+        install.activate(True)
+    assert list(db.iterdump()) == before_db
+    assert api.events == before_events
+
+
+def test_upgrade_does_not_reactivate_reviews_after_credential_replacement(deployed, monkeypatch):
+    install, api, db = deployed
+    install.config["reviews_enabled"] = True
+    install.state.update(activation_authorized=True, automation_paused=False,
+                         reviews_explicit_activation_required=True)
+    monkeypatch.setattr("operate.subprocess.check_output", lambda *a, **k: "new-reviewed-commit\n")
+    monkeypatch.setattr(install, "migrate", lambda: None)
+    monkeypatch.setattr(install, "build", lambda: None)
+    monkeypatch.setattr(install, "deploy", lambda: None)
+    monkeypatch.setattr(install, "verify", lambda: {"phase": "verified"})
+    monkeypatch.setattr(install, "verifier", lambda mode: {"revision": 1})
+    monkeypatch.setattr(install, "activate", lambda *args: pytest.fail("unexpected Reviews activation"))
+    before_db, before_events = list(db.iterdump()), list(api.events)
+    for _ in range(2):
+        assert install.upgrade()["phase"] == "paused"
+        assert install.state["reviews_explicit_activation_required"] is True
+    assert list(db.iterdump()) == before_db
+    assert api.events == before_events
+
+
 def test_shared_reviews_smtp_credential_cannot_change_via_post_purchase(deployed):
     original, api, _ = deployed
     changed = {**CREDS, "smtp2go_api_key": "api-replacement-fixture"}

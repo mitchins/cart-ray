@@ -768,6 +768,8 @@ class Installation(PostPurchaseOperator):
             raise ValueError("all configured migration ledgers are required")
 
     def upgrade(self):
+        if self.state.get("post_purchase_provider_migration"):
+            raise ValueError("finish credential reconfiguration and OFF deployment before upgrade")
         if self.config["reviews_enabled"]:
             self.check_reviews_handoff()
         current = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip()
@@ -775,7 +777,8 @@ class Installation(PostPurchaseOperator):
             return self.doctor()
         self.require_post_purchase_off()
         was_active = self.state["activation_authorized"]
-        stay_paused = self.state.get("automation_paused", False)
+        stay_paused = (self.state.get("automation_paused", False)
+                       or self.state.get("reviews_explicit_activation_required", False))
         self.migrate()
         self.build()
         self.deploy()
@@ -890,6 +893,8 @@ class Installation(PostPurchaseOperator):
         return digest(encoded.encode())
 
     def build(self):
+        if self.state.get("post_purchase_provider_migration", {}).get("status") == "staging":
+            raise ValueError("resume credential reconfiguration before building")
         self.vault()
         self.check_schema()
         self.verify_merchant_inputs()
@@ -1052,6 +1057,8 @@ class Installation(PostPurchaseOperator):
         return self.api.upload(self.name(role), self.artifact_modules(role, build), metadata)
 
     def deploy(self):
+        if self.state.get("post_purchase_provider_migration", {}).get("status") == "staging":
+            raise ValueError("resume credential reconfiguration before deployment")
         if self.config["reviews_enabled"]:
             self.check_reviews_handoff()
         self.require_post_purchase_off()
@@ -1374,6 +1381,12 @@ class Installation(PostPurchaseOperator):
     def activate(self, enable_test_delivery=False):
         if self.config["reviews_enabled"]:
             self.check_reviews_handoff()
+            if self.state.get("post_purchase_provider_migration"):
+                raise ValueError("finish credential reconfiguration and OFF deployment before Reviews activation")
+            if not self.state.get("deployment", {}).get("complete"):
+                raise ValueError("finish the interrupted deploy before Reviews activation")
+            if self.state.get("build") != self.state["deployment"].get("commit"):
+                raise ValueError("deploy the selected build before Reviews activation")
         if self.state.get("post_purchase_transition"):
             raise ValueError("finish the pending post-purchase transition before activating Reviews")
         if self.has_post_purchase and not self.config["reviews_enabled"]:
@@ -1449,6 +1462,7 @@ class Installation(PostPurchaseOperator):
         self.configure_queues()
         self.state["automation_paused"] = False
         self.state["queue_recovery_required"] = False
+        self.state.pop("reviews_explicit_activation_required", None)
         self.state["phase"] = "active"
         self.save()
         release = {
@@ -1743,6 +1757,10 @@ class Installation(PostPurchaseOperator):
         return result
 
     def rollback(self, index):
+        if self.state.get("post_purchase_provider_migration"):
+            raise ValueError("finish credential reconfiguration and OFF deployment before rollback")
+        if self.config["reviews_enabled"]:
+            self.check_reviews_handoff()
         self.require_post_purchase_off()
         self.check_schema()
         self.pin_suppression()
@@ -1756,9 +1774,9 @@ class Installation(PostPurchaseOperator):
             raise ValueError("rollback schema/key contract is incompatible; databases are never rewound")
         versions = release["versions"]
         release_sending = release.get("sending", bool(release.get("record_revision", 0)))
-        if self.config["reviews_enabled"] and bool(release_sending) != bool(
-            self.state.get("activation_authorized")
-        ):
+        reviews_authorized = (self.state.get("activation_authorized")
+                              and not self.state.get("reviews_explicit_activation_required"))
+        if self.config["reviews_enabled"] and bool(release_sending) != bool(reviews_authorized):
             raise ValueError("rollback release is incompatible with the current Reviews activation state")
         if self.has_post_purchase:
             self.vault()
@@ -1806,7 +1824,9 @@ class Installation(PostPurchaseOperator):
         self.save()
         reviews_ready = self.config["reviews_enabled"] and self.state.get("activation_authorized", False)
         record = self.verifier("record") if reviews_ready or not self.config["reviews_enabled"] else {"revision": 0}
-        paused = self.state.get("automation_paused", False) or (self.config["reviews_enabled"] and not reviews_ready)
+        paused = (self.state.get("automation_paused", False)
+                  or self.state.get("reviews_explicit_activation_required", False)
+                  or (self.config["reviews_enabled"] and not reviews_ready))
         if not paused:
             self.recover_paused_hints()
         self.configure_queues(pause_processing=paused)

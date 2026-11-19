@@ -366,7 +366,10 @@ bindings and paused processing queues, and records keyed fingerprints of the
 Reviews SMTP key, sender and recipient. The receipt is an operator attestation;
 Cloudflare does not reveal the historical secret bytes for comparison. Future
 replacement, deployment and Reviews activation refuse a changed handoff. An
-identical repeat is a no-op; conflicting evidence cannot overwrite the pin.
+identical repeat is a no-op while the original sender remains deployed and the
+other attestation checks still pass. After an OFF redeployment changes that
+version, the existing pin remains valid and re-attestation is unnecessary.
+Conflicting evidence cannot overwrite the pin.
 After `post-purchase-reconfigure-provider`, build from a different reviewed
 commit and deploy the new release with delivery OFF: retained builds are keyed
 by commit and cannot be overwritten with different provider inputs. A sender

@@ -240,6 +240,8 @@ class PostPurchaseOperator:
                          "old_action_sha256": self.config["post_purchase_config_sha256"],
                          "new_action_sha256": digest(raw_actions)}
             self.state["post_purchase_provider_migration"] = migration
+            if self.config["reviews_enabled"]:
+                self.state["reviews_explicit_activation_required"] = True
             self.save()
         bundle = self.provider_migration_bundle(migration)
         old, new = bundle["old_vault"], bundle["new_vault"]
