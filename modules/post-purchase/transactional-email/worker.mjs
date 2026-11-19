@@ -90,9 +90,10 @@ function approvedAccessLinks(body, config, env) {
       config.links.every(allowedLink) ? config.links : null;
   }
   try {
-    const origin = new URL(config.fulfilment_origin);
+    const origin = new URL(env.FULFILMENT_PUBLIC_ORIGIN);
     if (origin.protocol !== 'https:' || origin.username || origin.password || origin.pathname !== '/' ||
         origin.search || origin.hash || origin.origin !== env.FULFILMENT_PUBLIC_ORIGIN ||
+        (config.fulfilment_origin !== undefined && config.fulfilment_origin !== origin.origin) ||
         !Array.isArray(body.access_links) || body.access_links.length < 1 || body.access_links.length > 40) return null;
     const lines = [];
     for (const entry of body.access_links) {

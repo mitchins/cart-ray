@@ -1,4 +1,5 @@
 import asyncio
+import json
 import sqlite3
 import sys
 import time
@@ -9,6 +10,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "modules/reviews/operator"))
 from fulfilment_operator import FulfilmentOperator  # noqa: E402
 from test_fulfilment_access import D1, database  # noqa: E402
+from topology import post_purchase_source_config
 
 from cartray.fulfilment import prepare_notification
 from cartray.post_purchase import Action
@@ -18,7 +20,9 @@ class CloudD1:
     def __init__(self, db):
         self.db = db
 
-    def request(self, path, method, body):
+    def request(self, path, method="GET", body=None):
+        if path == "r2/buckets/private-test-bucket" and method == "GET":
+            return {"name": "private-test-bucket"}
         assert path == "d1/database/test-database/query" and method == "POST"
         self.db.commit()
         try:
@@ -58,6 +62,73 @@ class Installation(FulfilmentOperator):
         assert service == "POST_PURCHASE" and path == "/" and token == "x" * 32
         self.sent.append(body)
         return {"provider_reference": "test-receipt"}
+
+
+def test_register_is_scoped_idempotent_and_keeps_private_configuration_in_vault(tmp_path):
+    db = database(prepopulate=False)
+    installation = Installation(db)
+    installation.state = {"environment": "test", "post_purchase_modes": {}, "secret_fingerprints": {}}
+    installation.vault_path = tmp_path / "vault.json"
+    installation.vault = lambda: (
+        json.loads(installation.vault_path.read_text()) if installation.vault_path.exists() else {}
+    )
+    installation.save = lambda: None
+    action = {"merchant": "store", "workflow_key": "workflow", "offer_keys": ["offer"], "config_ref": "private/config"}
+    installation.post_purchase_actions = lambda: [action]
+    plan = {
+        "actions": json.loads(post_purchase_source_config([action])),
+        "bindings": [
+            {
+                "workflow_key": "workflow",
+                "product_key": "offer",
+                "resources": [{"id": "new-resource", "version": "v1"}, {"id": "private-resource", "version": "v1"}],
+            }
+        ],
+        "no_delivery_offers": [],
+    }
+    package = {
+        "schema": 1,
+        "merchant": "store",
+        "environment": "test",
+        "bucket": "private-test-bucket",
+        "plan": plan,
+        "resources": [
+            {
+                "id": "new-resource",
+                "version": "v1",
+                "provider": "external_link",
+                "config_ref": "new-config",
+                "filename": "manual.pdf",
+                "mime_type": "application/pdf",
+                "config": {"url": "https://example.test/private", "allowed_hosts": ["example.test"]},
+                "expires_at": None,
+            },
+            {
+                "id": "private-resource",
+                "version": "v1",
+                "provider": "private_object",
+                "config_ref": "private-ref",
+                "filename": "private.pdf",
+                "mime_type": "application/pdf",
+                "config": {"bucket_binding": "FULFILMENT_PRIVATE_BUCKET", "key": "private/object"},
+                "expires_at": None,
+            },
+        ],
+    }
+    with pytest.raises(ValueError, match="confirmation"):
+        installation.register_fulfilment(package, False)
+    assert installation.register_fulfilment(package, True)["resources"] == 2
+    assert installation.register_fulfilment(package, True)["resources"] == 2
+    assert db.execute("SELECT count(*) FROM fulfilment_resources WHERE resource_id='new-resource'").fetchone()[0] == 1
+    assert "example.test/private" not in str(list(db.iterdump()))
+    assert installation.vault_path.stat().st_mode & 0o777 == 0o600
+    altered = json.loads(json.dumps(package))
+    altered["resources"][0]["config"]["url"] += "-changed"
+    with pytest.raises(ValueError, match="immutable"):
+        installation.register_fulfilment(altered, True)
+    installation.state["post_purchase_modes"] = {"source": "test"}
+    with pytest.raises(ValueError, match="disable"):
+        installation.register_fulfilment(package, True)
 
 
 def test_operator_recovery_uses_shared_fence_and_never_prints_capabilities(capsys):

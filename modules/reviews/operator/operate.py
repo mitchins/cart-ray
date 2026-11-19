@@ -1621,6 +1621,8 @@ class Installation(PostPurchaseOperator, FulfilmentOperator):
                 errors.append(f"{role}.bindings.{name}: wrong service")
             elif kind == "queue" and value.get("queue_name") != binding["queue_name"]:
                 errors.append(f"{role}.bindings.{name}: wrong queue")
+            elif kind == "r2_bucket" and value.get("bucket_name") != binding["bucket_name"]:
+                errors.append(f"{role}.bindings.{name}: wrong private bucket")
             elif kind == "ratelimit" and (
                 str(value.get("namespace_id", "")) != str(binding["namespace_id"])
                 or value.get("simple") != binding["simple"]
@@ -1632,6 +1634,10 @@ class Installation(PostPurchaseOperator, FulfilmentOperator):
                 errors.append(f"{role}.vars.{name}: differs from inventory")
         if self.has_post_purchase and role in POST_PURCHASE_ROLES:
             for name in post_purchase_secret_bindings(role, expected["vars"].get("EMAIL_PROVIDER", "smtp2go")):
+                if observed.get(name, {}).get("type") != "secret_text":
+                    errors.append(f"{role}.bindings.{name}: missing/wrong secret type")
+        if role == "source" and "fulfilment" in self.state:
+            for name in ("CARTRAY_FULFILMENT_CHECKOUT_PLAN", "CARTRAY_FULFILMENT_PROVIDER_CONFIG"):
                 if observed.get(name, {}).get("type") != "secret_text":
                     errors.append(f"{role}.bindings.{name}: missing/wrong secret type")
         return errors
@@ -2030,6 +2036,9 @@ def main():
     handoff_pin.add_argument("--original-handoff", type=Path, required=True)
     handoff_pin.add_argument("--expected-sender-version", required=True)
     handoff_pin.add_argument("--attest-original-handoff", action="store_true")
+    register = commands.add_parser("fulfilment-register", help="register an immutable private test fulfilment package")
+    register.add_argument("--package", type=Path, required=True)
+    register.add_argument("--confirm-test-registration", action="store_true")
     revocation = commands.add_parser("fulfilment-revoke", help="revoke one test entitlement with audit")
     revocation.add_argument("--order", required=True)
     revocation.add_argument("--workflow", required=True)
@@ -2086,6 +2095,9 @@ def main():
                 elif args.command == "attest-reviews-handoff":
                     result = installation.attest_reviews_handoff(
                         args.original_handoff, args.expected_sender_version, args.attest_original_handoff)
+                elif args.command == "fulfilment-register":
+                    result = installation.register_fulfilment(
+                        read_private(args.package), args.confirm_test_registration)
                 elif args.command == "fulfilment-revoke":
                     result = installation.revoke_fulfilment(
                         args.order, args.workflow, args.product, args.ordinal, args.operator,

@@ -201,6 +201,17 @@ test('pinned access capabilities are rendered with filenames and restricted to t
   }
 });
 
+test('existing action configuration uses the separately provisioned fulfilment origin', async () => {
+  const settings = {...env, FULFILMENT_PUBLIC_ORIGIN:'https://store.example.test'};
+  const payload = {...body, access_links:[['manual.pdf',
+    `https://store.example.test/fulfilment/access?token=${'a'.repeat(43)}`]]};
+  const p = provider();
+  assert.equal((await handle(request(payload), settings, p.fetch)).status, 200);
+  const denied = provider();
+  assert.notEqual((await handle(request(payload), {...settings, FULFILMENT_PUBLIC_ORIGIN:'https://wrong.example'}, denied.fetch)).status, 200);
+  assert.equal(denied.calls.length, 0);
+});
+
 test('pinned older workflow revision remains usable after a newer revision is installed', async () => {
   const revised = {...action, subject:'New version'};
   const settings = {...env, DELIVERY_CONFIG:JSON.stringify({actions:[action,revised]})};

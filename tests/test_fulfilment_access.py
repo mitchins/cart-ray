@@ -255,6 +255,14 @@ def test_registered_third_provider_works_via_the_ordinary_http_route():
     )
 
 
+def test_pausing_delivery_does_not_disable_checkout_configuration():
+    from cartray.worker import _fulfilment_checkout_config
+
+    env = SimpleNamespace(CARTRAY_FULFILMENT_MODE="test", CARTRAY_ENVIRONMENT="test",
+                          CARTRAY_POST_PURCHASE_MODE="disabled")
+    assert _fulfilment_checkout_config(env) is None
+
+
 def test_claim_prepares_multiple_grants_atomically_without_raw_capability_storage():
     db = database(prepopulate=False)
     action = Action("workflow", ("offer",), "service", "private/config", "a" * 64)

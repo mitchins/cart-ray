@@ -91,6 +91,29 @@ def test_combined_topology_preserves_independent_delivery_controls(tmp_path):
     assert nodes["sender"]["vars"]["INITIAL_SEND_MODE"] == "disabled"
 
 
+def test_fulfilment_topology_is_test_only_and_checks_bucket_binding(tmp_path):
+    options = handoff(tmp_path)
+    install = Installation.plan(tmp_path / "installation", options)
+    install.state["workers_subdomain"] = "example"
+    install.state["resources"]["database:commerce"] = {"id": "db"}
+    install.state["fulfilment"] = {"bucket": "private-test-bucket"}
+    nodes, _ = graph(install, post_purchase_modes=OFF)
+    # Existing entitlement links remain usable while new delivery is paused.
+    assert nodes["source"]["vars"]["CARTRAY_FULFILMENT_MODE"] == "test"
+    assert {"name": "FULFILMENT_PRIVATE_BUCKET", "type": "r2_bucket",
+            "bucket_name": "private-test-bucket"} in nodes["source"]["bindings"]
+    nodes, _ = graph(install, post_purchase_modes={"source": "test"})
+    assert nodes["source"]["vars"]["CARTRAY_FULFILMENT_MODE"] == "test"
+    expected = nodes["source"]
+    actual = {"id": "release", "resources": {"bindings": [
+        {**b, **({"database_id": b["id"]} if b["type"] == "d1" else {})} for b in expected["bindings"]
+    ]}}
+    assert any("wrong private bucket" in message for message in install.worker_binding_errors(
+        "source", expected, {"id": "release", "resources": {"bindings": [
+            {**b, "bucket_name": "wrong"} if b["type"] == "r2_bucket" else b
+            for b in actual["resources"]["bindings"]]}}, "release"))
+
+
 def test_post_purchase_transition_reverifies_before_resuming_reviews(tmp_path, monkeypatch):
     from types import SimpleNamespace
 

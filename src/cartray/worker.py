@@ -357,9 +357,12 @@ def _fulfilment_checkout_config(env):
     mode = getattr(env, "CARTRAY_FULFILMENT_MODE", "disabled")
     if mode == "disabled":
         return None
-    if (mode != "test" or _test_environment(env) != "test"
-            or getattr(env, "CARTRAY_POST_PURCHASE_MODE", "disabled") != "test"):
+    if mode != "test" or _test_environment(env) != "test":
         raise RuntimeError("fulfilment mode is unavailable")
+    if getattr(env, "CARTRAY_POST_PURCHASE_MODE", "disabled") == "disabled":
+        return None
+    if getattr(env, "CARTRAY_POST_PURCHASE_MODE", "disabled") != "test":
+        raise RuntimeError("post-purchase mode is unavailable")
     from cartray.fulfilment import checkout_plan
 
     raw = _required_env(env, "CARTRAY_FULFILMENT_CHECKOUT_PLAN")

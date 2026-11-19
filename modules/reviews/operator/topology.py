@@ -284,6 +284,15 @@ def graph(installation, versions=None, sending=False, post_purchase_modes=None,
             "vars": {"ENVIRONMENT": "test", "DELIVERY_MODE": modes.get("post-purchase", "disabled"),
                      "STRIPE_ACCOUNT_ID": config["stripe_account_id"]},
         }
+        if "fulfilment" in state:
+            nodes["source"]["vars"].update(
+                CARTRAY_FULFILMENT_MODE="test",
+                CARTRAY_FULFILMENT_PUBLIC_ORIGIN=storefront,
+            )
+            nodes["source"].setdefault("ratelimits", {})["FULFILMENT_RATE_LIMITER"] = ("20261123", 120)
+            nodes["post-purchase"]["vars"]["FULFILMENT_PUBLIC_ORIGIN"] = storefront
+            if state["fulfilment"]["bucket"]:
+                nodes["source"]["r2"] = {"FULFILMENT_PRIVATE_BUCKET": state["fulfilment"]["bucket"]}
         provider = email_provider or config.get("post_purchase_email_provider", "smtp2go")
         if provider == "cloudflare":
             nodes["post-purchase"]["vars"].update(
@@ -299,6 +308,8 @@ def graph(installation, versions=None, sending=False, post_purchase_modes=None,
         ]
         bindings.append({"name": "CF_VERSION_METADATA", "type": "version_metadata"})
         bindings += [{"name": name, "type": "d1", "id": db(role)} for name, role in node.get("db", {}).items()]
+        bindings += [{"name": name, "type": "r2_bucket", "bucket_name": bucket}
+                     for name, bucket in node.get("r2", {}).items()]
         bindings += [
             {"name": name, "type": "service", "service": worker(role), "environment": "production"}
             for name, role in node.get("services", {}).items()
@@ -374,6 +385,9 @@ def secret_bindings(installation, role):
         names[role] = {}
     if "post_purchase_config" in installation.config and role in ("source", "post-purchase"):
         names[role]["CARTRAY_POST_PURCHASE_TOKEN" if role == "source" else "HANDLER_TOKEN"] = "post_purchase_token"
+    if role == "source" and "fulfilment" in installation.state:
+        names[role].update(CARTRAY_FULFILMENT_CHECKOUT_PLAN="fulfilment_checkout_plan",
+                           CARTRAY_FULFILMENT_PROVIDER_CONFIG="fulfilment_provider_config")
     result = {name: vault[key] for name, key in names[role].items()}
     if role == "source":
         result.update(
@@ -435,6 +449,8 @@ def wrangler_config(installation, role, node):
             lines += ["[[services]]", f"binding = {q(name)}", f"service = {q(binding['service'])}"]
         elif kind == "queue":
             lines += ["[[queues.producers]]", f"binding = {q(name)}", f"queue = {q(binding['queue_name'])}"]
+        elif kind == "r2_bucket":
+            lines += ["[[r2_buckets]]", f"binding = {q(name)}", f"bucket_name = {q(binding['bucket_name'])}"]
         elif kind == "ratelimit":
             lines += [
                 "[[ratelimits]]",
