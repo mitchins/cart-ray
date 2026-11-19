@@ -1,6 +1,6 @@
 import pytest
 
-from cartray.merchant_contract import merchant_path, page_seo, register_path
+from cartray.merchant_contract import merchant_path, page_seo, register_path, seo_head
 
 
 @pytest.mark.parametrize("path", ["//evil/", "/product/../cart/", "/product/%2e%2e/", "/cart/", "/api/orders/",
@@ -39,3 +39,17 @@ def test_metadata_rejects_unapproved_claims_and_unsafe_canonicals():
             page_seo({**seo, "canonical_url": value})
     with pytest.raises(ValueError):
         page_seo({**seo, "structured_data": {"@type": "Product", "name": "P", "aggregateRating": "5"}})
+
+
+def test_source_length_and_absent_description_are_preserved():
+    seo = {"title": "Product", "canonical_url": "https://example.test/product/p/", "robots": "index,follow"}
+    assert 'name="description"' not in seo_head(seo, force_noindex=True)
+    description = ('Long & " text ' * 250) + " end"
+    assert len(description) > 3000
+    rendered = seo_head({**seo, "description": description}, force_noindex=True)
+    assert 'Long &amp; &quot; text' in rendered
+    assert " end" in rendered
+    assert 'content="noindex,nofollow"' in rendered
+    assert 'name="description" content=""' in seo_head({**seo, "description": ""})
+    with pytest.raises(ValueError):
+        page_seo({**seo, "description": "x" * 16385})

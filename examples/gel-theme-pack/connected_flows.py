@@ -27,6 +27,7 @@ def install(
     api_origin: str | None = None,
     reviews_enabled: bool = False,
     category_links: list[tuple[str, str]] | None = None,
+    catalogue_path: str = "/shop/",
 ):
     """Install shared cart/return UI; offers are presentation only, never checkout authority."""
     if not offers or len({offer["product_key"] for offer in offers}) != len(offers):
@@ -66,6 +67,10 @@ def install(
         source_ids.add(str(offer["source_id"]))
         paths.add(offer["path"].casefold())
         register_path(offer["path"], prefixes)
+    merchant_path(catalogue_path, product=catalogue_path != "/shop/")
+    register_path(catalogue_path, prefixes)
+    if catalogue_path.casefold() in paths:
+        raise ValueError("catalogue path conflicts with product path")
     category_links = category_links or []
     for path, label in category_links:
         merchant_path(path, product=True)
@@ -73,7 +78,8 @@ def install(
         if not isinstance(label, str) or not label.strip():
             raise ValueError("invalid category label")
     if (len({path.casefold() for path, _ in category_links}) != len(category_links)
-            or any(path.casefold() in paths for path, _ in category_links)):
+            or any(path.casefold() in paths or path.casefold() == catalogue_path.casefold()
+                   for path, _ in category_links)):
         raise ValueError("duplicate or conflicting category path")
     if return_extension and not (output / return_extension.lstrip("/")).is_file():
         raise ValueError("return extension is missing from the storefront")
@@ -107,6 +113,7 @@ def install(
         "adapter": "/theme/cartray-adapter.mjs",
         "gel": gel,
         "catalogue": {"products": presentations},
+        "cataloguePath": catalogue_path,
         "contextPath": context_path,
         "returnExtension": return_extension,
         "browseOffers": browse,
@@ -137,15 +144,18 @@ def install(
             page.replace("-", " ").title(),
             content,
             False,
-            nav_links=(("/shop/", "Catalogue"), *category_links),
+            nav_links=((catalogue_path, "Catalogue"), *category_links),
             minimal_footer=True,
         )
         for old, new in (
             ("<body class=", '<body data-cartray-presenter="gel" class='),
+            ('action="/shop/"', f'action="{catalogue_path}"'),
             ('<script src="/site-config.js" defer>',
              '<script src="/storefront-config.js" defer></script><script src="/site-config.js" defer>'),
             ('src="/theme/app.mjs"', 'src="/theme/connected-start.mjs"'),
         ):
+            if old == 'action="/shop/"' and theme != "classic":
+                continue
             if html.count(old) != 1:
                 raise ValueError("connected page template is missing an expected unique element")
             html = html.replace(old, new, 1)

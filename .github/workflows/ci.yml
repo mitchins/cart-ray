@@ -204,6 +204,8 @@ jobs:
           done
       - name: Exercise gallery failure and recovery states
         run: uv run --with playwright==1.57.0 python examples/gel-theme-pack/tests/gallery_browser.py --engines chromium,firefox,webkit
+      - name: Exercise connected merchant catalogue route
+        run: uv run --with playwright==1.57.0 python examples/ep-uat/connected_route_regression.py
       - name: Retain browser evidence
         if: always()
         uses: actions/upload-artifact@v4

@@ -73,6 +73,64 @@ class GelTests(unittest.TestCase):
         self.assertIn('name="robots" content="noindex,nofollow"', result)
         self.assertNotIn('name="robots" content="index,follow"', result)
 
+    def test_explicit_owned_pages_and_custom_catalogue_path(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            catalogue = json.loads((ROOT / "content/squirrel.json").read_text())
+            catalogue["owned_pages"] = {"shop": "/policies-and-templates/"}
+            catalogue["catalogue_path"] = "/policies-and-templates/"
+            catalogue["seo_qualified"] = True
+            def seo(path):
+                return {"title": "Title", "canonical_url": "https://example.test" + path,
+                        "robots": "index,follow"}
+            catalogue["pages_seo"] = {"shop": seo(catalogue["catalogue_path"])}
+            for product in catalogue["products"]:
+                product["seo"] = seo(f'/products/{product["slug"]}/')
+            source = root / "catalogue.json"
+            source.write_text(json.dumps(catalogue))
+            build_site(root / "site", ROOT / "gel/squirrel.json", source, preview=True)
+            self.assertTrue((root / "site/policies-and-templates/index.html").is_file())
+            self.assertFalse((root / "site/index.html").exists())
+            self.assertFalse((root / "site/help/index.html").exists())
+            product = (root / "site/products/acorn-growing-kit/index.html").read_text()
+            self.assertIn('href="/policies-and-templates/"', product)
+            self.assertNotIn('name="description"', product)
+            self.assertIn('name="robots" content="noindex,nofollow"', product)
+            catalogue["owned_pages"] = {}
+            catalogue["pages_seo"] = {}
+            source.write_text(json.dumps(catalogue))
+            build_site(root / "product-only", ROOT / "gel/squirrel.json", source, preview=True)
+            self.assertFalse((root / "product-only/policies-and-templates/index.html").exists())
+            self.assertTrue((root / "product-only/products/acorn-growing-kit/index.html").is_file())
+            del catalogue["catalogue_path"]
+            source.write_text(json.dumps(catalogue))
+            with self.assertRaisesRegex(ValueError, "explicit catalogue path"):
+                load_inputs(ROOT / "gel/squirrel.json", source)
+
+    def test_owned_help_route_and_catalogue_collision(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            catalogue = json.loads((ROOT / "content/squirrel.json").read_text())
+            catalogue["owned_pages"] = {"home": "/", "shop": "/items/", "help": "/care/"}
+            catalogue["catalogue_path"] = "/items/"
+            source = root / "catalogue.json"
+            source.write_text(json.dumps(catalogue))
+            build_site(root / "site", ROOT / "gel/squirrel.json", source)
+            self.assertIn('"helpPath": "/care/"', (root / "site/site-config.js").read_text())
+            for page in ("index.html", "products/acorn-growing-kit/index.html"):
+                html = (root / "site" / page).read_text()
+                self.assertIn('href="/care/"', html)
+                self.assertNotIn('href="/help/"', html)
+            catalogue["owned_pages"] = {"home": "/"}
+            source.write_text(json.dumps(catalogue))
+            build_site(root / "no-help", ROOT / "gel/squirrel.json", source)
+            self.assertIn('"helpPath": null', (root / "no-help/site-config.js").read_text())
+            self.assertNotIn('href="/help/"', (root / "no-help/index.html").read_text())
+            catalogue["owned_pages"] = {"help": "/items/"}
+            source.write_text(json.dumps(catalogue))
+            with self.assertRaisesRegex(ValueError, "conflicts with an owned page"):
+                load_inputs(ROOT / "gel/squirrel.json", source)
+
     def test_seo_qualified_catalogue_requires_complete_metadata(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

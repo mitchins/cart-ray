@@ -142,6 +142,54 @@ def test_listing_accepts_explicit_merchant_identity_and_navigation(tmp_path):
         module.build(source, tmp_path / "missing-path", "minimal")
 
 
+def test_offline_parity_uses_same_product_renderer_with_no_test_authority(tmp_path):
+    source = tmp_path / "source"
+    data = make_source(source)
+    product = data["products"][0]
+    product["navigation_path"] = "/product/approved-route/"
+    (source / "catalogue.json").write_text(json.dumps(data))
+    def seo(route, description=None):
+        return {"title": 'Real <title>', "description": description,
+                "canonical_url": "https://merchant.example" + route, "robots": "index,follow"}
+    description = 'Long & " description ' * 200
+    fixture = tmp_path / "seo.json"
+    fixture.write_text(json.dumps({"schema_version": 1, "catalogue_path": "/policies-and-templates/",
+                                   "pages": {"/policies-and-templates/": seo("/policies-and-templates/"),
+                                             product["navigation_path"]:
+                                                 seo(product["navigation_path"], description)}}))
+    output = tmp_path / "parity"
+    module.build(source, output, "minimal", offline_seo=fixture)
+    html = (output / "product/approved-route/index.html").read_text()
+    assert '<h1>A product</h1>' in html
+    assert 'data-product-gallery' in html
+    assert 'name="robots" content="noindex,nofollow"' in html
+    assert 'rel="canonical" href="https://merchant.example/product/approved-route/"' in html
+    assert 'Long &amp; &quot; description' in html
+    assert len(description) > 3000
+    assert 'UAT catalogue' not in html
+    assert 'Stripe test mode' not in html
+    assert 'uat-test-products' not in html
+    assert 'data-uat-add' not in html
+    assert not (output / "theme/uat.mjs").exists()
+    assert (output / "theme/catalogue.mjs").exists()
+    assert 'href="/policies-and-templates/"' in html
+    assert 'class="brand" href="/policies-and-templates/"' in html
+    assert '— catalogue"' in html
+    assert 'class="header-cart"' not in html
+    assert (output / "policies-and-templates/index.html").is_file()
+    assert not (output / "uat-return/index.html").exists()
+    cat = (output / "policies-and-templates/index.html").read_text()
+    assert 'name="description"' not in cat
+    with pytest.raises(ValueError, match="cannot use test checkout"):
+        module.build(source, tmp_path / "bad", "minimal", test_fixture="unused", offline_seo=fixture)
+    payload = json.loads(fixture.read_text())
+    del payload["pages"][product["navigation_path"]]
+    fixture.write_text(json.dumps(payload))
+    with pytest.raises(ValueError, match="cover each"):
+        module.build(source, tmp_path / "missing", "minimal", offline_seo=fixture)
+    assert not (tmp_path / "missing").exists()
+
+
 def test_uat_rejects_case_colliding_product_paths(tmp_path):
     import copy
 
@@ -279,6 +327,34 @@ def test_connected_cart_uses_shared_client_and_only_explicit_offer(tmp_path, the
     assert '"productKey": "EP-UAT-1"' in config and '"sourceId": 1' in config
     assert '"productKey": "EP-UAT-2"' not in config
     assert (output / "purchase-return/index.html").is_file()
+
+
+@pytest.mark.parametrize("theme", ["minimal", "classic"])
+def test_connected_merchant_catalogue_path_is_used_across_pages(tmp_path, theme):
+    source = tmp_path / "source"
+    data = make_source(source)
+    product = data["products"][0]
+    product["source_delivery_kind"] = "uat_dummy_transfer"
+    (source / "catalogue.json").write_text(json.dumps(data))
+    fixture = tmp_path / "fixture.json"
+    fixture.write_text(json.dumps({"livemode": False, "source_archive_sha256": data["source_archive_sha256"],
+        "offers": [{"source_id": 1, "source_key": product["key"], "currency": "aud", "amount_minor": 1200,
+                    "cartray_product_key": "EP-UAT-1"}]}))
+    review_fixture = tmp_path / "reviews.json"
+    review_fixture.write_text(json.dumps({"schema_version": 1, "source_archive_sha256": data["source_archive_sha256"],
+                                          "subjects": {"1": "synthetic-subject"}}))
+    output = tmp_path / "out"
+    module.build(source, output, theme, test_fixture=fixture, review_fixture=review_fixture,
+                 catalogue_path="/policies-and-templates/")
+    assert (output / "policies-and-templates/index.html").is_file()
+    assert not (output / "shop/index.html").exists()
+    assert '"cataloguePath": "/policies-and-templates/"' in (output / "site-config.js").read_text()
+    for path in ("products/woo-1/index.html", "cart/index.html", "purchase-return/index.html",
+                 "review/index.html", "review/manage.html"):
+        assert 'href="/policies-and-templates/"' in (output / path).read_text()
+    assert "catalogueUrl()" in (output / "theme/app.mjs").read_text()
+    if theme == "classic":
+        assert 'action="/policies-and-templates/"' in (output / "cart/index.html").read_text()
 
 
 def test_only_visibility_exclusions_are_labeled_hidden():
