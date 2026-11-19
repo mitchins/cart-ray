@@ -127,7 +127,9 @@ def graph(installation, versions=None, sending=False, post_purchase_modes=None,
                 "CARTRAY_CANCEL_URL": storefront + cancel_path + "?checkout=cancelled",
             },
             "db": {"DB": "commerce"},
-            "ratelimits": {"CHECKOUT_RATE_LIMITER": ("20261110", 20), "CHECKOUT_STATUS_RATE_LIMITER": ("20261120", 60)},
+            "ratelimits": {"CHECKOUT_RATE_LIMITER": ("20261110", 20),
+                           "CHECKOUT_STORE_RATE_LIMITER": ("20261122", 300),
+                           "CHECKOUT_STATUS_RATE_LIMITER": ("20261120", 60)},
         }
         nodes = {"source": source}
     producer = {
@@ -175,7 +177,9 @@ def graph(installation, versions=None, sending=False, post_purchase_modes=None,
             },
             "db": {"DB": "commerce"},
             "services": {"REVIEWS_SOURCE_TRIGGER": "producer"},
-            "ratelimits": {"CHECKOUT_RATE_LIMITER": ("20261110", 20), "CHECKOUT_STATUS_RATE_LIMITER": ("20261120", 60)},
+            "ratelimits": {"CHECKOUT_RATE_LIMITER": ("20261110", 20),
+                           "CHECKOUT_STORE_RATE_LIMITER": ("20261122", 300),
+                           "CHECKOUT_STATUS_RATE_LIMITER": ("20261120", 60)},
         },
         "reviews": {
             "main": "modules/reviews/src/worker.py",

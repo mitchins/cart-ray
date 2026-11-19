@@ -48,7 +48,7 @@ def handoff(tmp_path):
 
 
 @pytest.mark.parametrize("overrides", [
-    {"stripe_account_id": "acct_NotApproved"}, {"store_key": "acorn-store"}, {"reviews_enabled": True},
+    {"stripe_account_id": "acct_NotApproved"}, {"store_key": "acorn-store"},
     {"source_mode": "public", "source_api_path": None},
 ])
 def test_plan_rejects_wrong_installation_lane(tmp_path, overrides):
@@ -58,6 +58,72 @@ def test_plan_rejects_wrong_installation_lane(tmp_path, overrides):
         del options["source_api_path"]
     with pytest.raises(ValueError, match="approved EP"):
         validate_config(options)
+
+
+def test_ep_test_lane_can_enable_reviews_independently(tmp_path):
+    options = handoff(tmp_path)
+    options["reviews_enabled"] = True
+    config = validate_config(options)
+    assert config["reviews_enabled"] is True
+    assert config["source_mode"] == "private"
+
+
+def test_post_purchase_transition_reverifies_before_resuming_reviews(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    from post_purchase_operator import PostPurchaseOperator
+
+    calls = []
+    release = tmp_path / "releases" / "fixture"
+    release.mkdir(parents=True)
+    (release / "build.json").write_text('{"commit":"fixture"}')
+    monkeypatch.setattr("post_purchase_operator.graph", lambda *args, **kwargs: ({"evidence": {}}, {}))
+    live = {"id": "old-evidence"}
+
+    def publish(name, version):
+        calls.append(("publish", name, version))
+        live["id"] = version
+
+    subject = SimpleNamespace(
+        state={"post_purchase_transition": {"reviews_phase": "active"}, "post_purchase_watermark": 42,
+               "phase": "post-purchase-transition"},
+        config={"reviews_enabled": True},
+        directory=tmp_path,
+        name=lambda role: role,
+        upload_worker=lambda *args: {"id": "new-evidence"},
+        api=SimpleNamespace(version=lambda name: dict(live), request=lambda path: {"id": "new-evidence"},
+                            publish=publish),
+        worker_binding_errors=lambda role, node, actual, version: [] if actual["id"] == version else ["drift"],
+        save=lambda: calls.append("save"),
+        verifier=lambda mode: calls.append("verify:" + mode) or {"revision": 1},
+        recover_paused_hints=lambda: calls.append("recover"),
+        configure_queues=lambda pause_processing: calls.append(("queue", pause_processing)),
+    )
+    deployment = {"versions": {"evidence": "old-evidence"}, "commit": "fixture"}
+    result = PostPurchaseOperator.finish_post_purchase_transition(subject, deployment, "active", ON)
+    assert deployment["versions"]["evidence"] == "new-evidence"
+    assert calls.index(("publish", "evidence", "new-evidence")) < calls.index("verify:record")
+    assert calls.index("verify:record") < calls.index(("queue", False))
+    assert calls.index("recover") < calls.index(("queue", False))
+    assert subject.state["phase"] == "active"
+    assert subject.state["post_purchase_watermark"] == 42
+    assert result["modes"] == ON
+
+    calls.clear()
+    live["id"] = "old-evidence"
+    deployment["versions"]["evidence"] = "old-evidence"
+    subject.state["post_purchase_transition"] = {}
+    PostPurchaseOperator.finish_post_purchase_transition(subject, deployment, "active", ON)
+    assert deployment["versions"]["evidence"] == "new-evidence"
+    assert "verify:record" not in calls
+    assert not any(isinstance(call, tuple) and call[0] == "queue" for call in calls)
+
+    calls.clear()
+    live["id"] = "unrecorded"
+    subject.state["post_purchase_transition"] = {"reviews_phase": "active", "evidence_version": "new-evidence"}
+    with pytest.raises(ValueError, match="unrecorded deployed version"):
+        PostPurchaseOperator.finish_post_purchase_transition(subject, deployment, "active", ON)
+    assert not any(isinstance(call, tuple) and call[0] == "queue" for call in calls)
 
 
 @pytest.mark.parametrize("change", [
@@ -465,6 +531,10 @@ def test_disable_resumes_source_first_and_never_touches_the_database(deployed, m
     assert api.events == [("publish", install.name("source")), ("settle", SETTLE_SECONDS),
                           ("publish", install.name("post-purchase"))]
     assert list(db.iterdump()) == before
+    events, releases = list(api.events), list(reload.state["releases"])
+    assert reload.post_purchase_disable()["post_purchase"] == "already-disabled"
+    assert api.events == events
+    assert reload.state["releases"] == releases
 
 
 def test_pending_activation_can_be_disabled_and_reactivation_cannot_skip_settle(deployed):

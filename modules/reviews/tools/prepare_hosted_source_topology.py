@@ -134,6 +134,10 @@ name = "CHECKOUT_RATE_LIMITER"
 namespace_id = "20261107"
 simple = {{ limit = 20, period = 60 }}
 [[ratelimits]]
+name = "CHECKOUT_STORE_RATE_LIMITER"
+namespace_id = "20261122"
+simple = {{ limit = 300, period = 60 }}
+[[ratelimits]]
 name = "CHECKOUT_STATUS_RATE_LIMITER"
 namespace_id = "20261120"
 simple = {{ limit = 60, period = 60 }}

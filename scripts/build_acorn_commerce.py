@@ -124,6 +124,14 @@ def checked_config(raw: str) -> dict:
         or limiters[0].get("simple") != {"limit": 60, "period": 60}
     ):
         raise ValueError("CHECKOUT_STATUS_RATE_LIMITER binding is required for checkout returns")
+    for name, limit in (("CHECKOUT_RATE_LIMITER", 20), ("CHECKOUT_STORE_RATE_LIMITER", 300)):
+        matches = [item for item in config.get("ratelimits", []) if item.get("name") == name]
+        if (
+            len(matches) != 1
+            or not matches[0].get("namespace_id")
+            or matches[0].get("simple") != {"limit": limit, "period": 60}
+        ):
+            raise ValueError(f"{name} binding is required for bounded checkout admission")
     return config
 
 

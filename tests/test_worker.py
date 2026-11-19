@@ -84,6 +84,7 @@ class RecordingStatusStore:
 STORE_ENV = {
     "CARTRAY_STOREFRONT_ORIGIN": STOREFRONT_ORIGIN,
     "CHECKOUT_RATE_LIMITER": FixtureRateLimiter(True),
+    "CHECKOUT_STORE_RATE_LIMITER": FixtureRateLimiter(True),
     "CHECKOUT_STATUS_RATE_LIMITER": FixtureRateLimiter(True),
     "CARTRAY_SIGNING_KEY_ID": "fixture-installation",
 }
@@ -139,7 +140,7 @@ def test_checkout_route_accepts_only_valid_json_and_returns_a_redirect(fixture_c
         "items": [{"product_key": "TEST-TEMPLATE", "quantity": 1}],
     }
     status, headers, body = client.request(
-        "POST", "/checkout", json_data=payload, headers={"origin": STOREFRONT_ORIGIN}
+        "POST", "/checkout", json_data=payload, headers={"origin": STOREFRONT_ORIGIN, "cf-connecting-ip": "192.0.2.1"}
     )
 
     assert status == 201
@@ -152,13 +153,19 @@ def test_checkout_route_accepts_only_valid_json_and_returns_a_redirect(fixture_c
     assert headers["Vary"] == "Origin"
 
     status, _headers, _body = client.request(
-        "POST", "/checkout", json_data={**payload, "amount_minor": 1}, headers={"origin": STOREFRONT_ORIGIN}
+        "POST",
+        "/checkout",
+        json_data={**payload, "amount_minor": 1},
+        headers={"origin": STOREFRONT_ORIGIN, "cf-connecting-ip": "192.0.2.1"},
     )
     assert status == 400
     assert service.redirects == 1
 
     status, _headers, _body = client.request(
-        "POST", "/checkout", data="{}", headers={"content-type": "text/plain", "origin": STOREFRONT_ORIGIN}
+        "POST",
+        "/checkout",
+        data="{}",
+        headers={"content-type": "text/plain", "origin": STOREFRONT_ORIGIN, "cf-connecting-ip": "192.0.2.1"},
     )
     assert status == 400
 
@@ -166,7 +173,7 @@ def test_checkout_route_accepts_only_valid_json_and_returns_a_redirect(fixture_c
         "POST",
         "/checkout",
         json_data={**payload, "items": [{"product_key": "TEST-TEMPLATE", "quantity": 1, "amount": 1}]},
-        headers={"origin": STOREFRONT_ORIGIN},
+        headers={"origin": STOREFRONT_ORIGIN, "cf-connecting-ip": "192.0.2.1"},
     )
     assert status == 400
 
@@ -174,7 +181,7 @@ def test_checkout_route_accepts_only_valid_json_and_returns_a_redirect(fixture_c
         "POST",
         "/checkout",
         data="x" * 16_385,
-        headers={"content-type": "application/json", "origin": STOREFRONT_ORIGIN},
+        headers={"content-type": "application/json", "origin": STOREFRONT_ORIGIN, "cf-connecting-ip": "192.0.2.1"},
     )
     assert status == 400
 
@@ -192,7 +199,7 @@ def test_checkout_route_maps_domain_validation_to_bad_request(fixture_catalogue)
             "manifest_version": fixture_catalogue.version,
             "items": [{"product_key": "TEST-TEMPLATE", "quantity": 1}],
         },
-        headers={"origin": STOREFRONT_ORIGIN},
+        headers={"origin": STOREFRONT_ORIGIN, "cf-connecting-ip": "192.0.2.1"},
     )
 
     assert status == 400
@@ -203,11 +210,13 @@ def test_checkout_route_maps_domain_validation_to_bad_request(fixture_catalogue)
 def test_checkout_rate_limit_rejects_before_invoking_the_checkout_service(fixture_catalogue):
     service = RecordingCheckoutService()
     limiter = FixtureRateLimiter(False)
+    backstop = FixtureRateLimiter(True)
 
     async def factory(_env):
         return service
 
-    client = TestClient(create_app(factory), env={**STORE_ENV, "CHECKOUT_RATE_LIMITER": limiter})
+    client = TestClient(create_app(factory), env={**STORE_ENV, "CHECKOUT_RATE_LIMITER": limiter,
+                                                   "CHECKOUT_STORE_RATE_LIMITER": backstop})
     status, headers, body = client.request(
         "POST",
         "/checkout",
@@ -216,14 +225,38 @@ def test_checkout_rate_limit_rejects_before_invoking_the_checkout_service(fixtur
             "manifest_version": fixture_catalogue.version,
             "items": [{"product_key": "TEST-TEMPLATE", "quantity": 1}],
         },
-        headers={"origin": STOREFRONT_ORIGIN},
+        headers={"origin": STOREFRONT_ORIGIN, "cf-connecting-ip": "192.0.2.1"},
     )
 
     assert status == 429
     assert json.loads(body) == {"error": "checkout rate limit exceeded"}
     assert headers["Access-Control-Allow-Origin"] == STOREFRONT_ORIGIN
     assert limiter.calls == 1
+    assert backstop.calls == 0
     assert service.redirects == 0
+
+
+def test_checkout_budgets_are_scoped_to_actor_and_installation():
+    class Limiter:
+        def __init__(self):
+            self.keys = []
+
+        async def limit(self, options):
+            self.keys.append(options["key"])
+            return {"success": True}
+
+    limiter = Limiter()
+    for installation, ip in (("a", "192.0.2.1"), ("a", "192.0.2.2"), ("b", "192.0.2.1")):
+        request = SimpleNamespace(
+            env=SimpleNamespace(
+                CHECKOUT_RATE_LIMITER=limiter,
+                CHECKOUT_STORE_RATE_LIMITER=FixtureRateLimiter(True),
+                CARTRAY_SIGNING_KEY_ID=installation,
+            ),
+            header=lambda _: ip,
+        )
+        assert asyncio.run(worker_module._checkout_rate_limit(request))
+    assert len(set(limiter.keys)) == 3
 
 
 def test_checkout_route_fails_closed_for_unavailable_configuration(fixture_catalogue):
@@ -239,7 +272,7 @@ def test_checkout_route_fails_closed_for_unavailable_configuration(fixture_catal
             "manifest_version": fixture_catalogue.version,
             "items": [{"product_key": "TEST-TEMPLATE", "quantity": 1}],
         },
-        headers={"origin": STOREFRONT_ORIGIN},
+        headers={"origin": STOREFRONT_ORIGIN, "cf-connecting-ip": "192.0.2.1"},
     )
 
     assert status == 503
@@ -348,9 +381,7 @@ def test_checkout_status_is_a_minimal_d1_only_browser_read():
 
 
 def test_checkout_status_only_includes_receipt_for_confirmed_sessions():
-    receipt = {"currency": "AUD", "items": [
-        {"product_key": "TEST-TEMPLATE", "quantity": 2, "unit_amount_minor": 2500}
-    ]}
+    receipt = {"currency": "AUD", "items": [{"product_key": "TEST-TEMPLATE", "quantity": 2, "unit_amount_minor": 2500}]}
     store = RecordingStatusStore(
         {"cs_test_pending": "pending", "cs_test_confirmed": "confirmed", "cs_test_expired": "expired"},
         receipt=receipt,
@@ -361,7 +392,9 @@ def test_checkout_status_only_includes_receipt_for_confirmed_sessions():
 
     client = TestClient(create_app(status_store_factory=status_factory), env=STORE_ENV)
     for state in ("pending", "confirmed", "expired", "unknown"):
-        status, headers, body = client.request("GET", f"/checkout-status?session_id=cs_test_{state}", headers={"cf-connecting-ip": "192.0.2.1"})
+        status, headers, body = client.request(
+            "GET", f"/checkout-status?session_id=cs_test_{state}", headers={"cf-connecting-ip": "192.0.2.1"}
+        )
         assert headers["Cache-Control"] == "no-store"
         assert status == (404 if state == "unknown" else 200)
         expected = {"error": "checkout not found"} if state == "unknown" else {"state": state}
@@ -461,8 +494,6 @@ def test_public_catalogue_snapshot_needs_neither_stripe_nor_d1(monkeypatch):
 def test_unlocked_fixture_cannot_be_used_as_connected_commerce():
     with pytest.raises(RuntimeError, match="preflight"):
         worker_module._require_locked_catalogue()
-
-
 
 
 def test_checkout_status_rejects_foreign_origins_and_has_route_specific_preflight():

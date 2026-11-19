@@ -223,9 +223,9 @@ def validate_config(config):
         if (not isinstance(snapshot, str) or not snapshot.strip()
                 or config.get("store_key") != "effective-policy-uat"
                 or config["stripe_account_id"] != "acct_1Ud2XZBKRMfYblCU"
-                or config.get("reviews_enabled") is not False or config.get("source_mode") != "private"):
+                or config.get("source_mode") != "private"):
             raise ValueError(
-                "post-purchase requires the approved EP Stripe test account, private source and Reviews off"
+                "post-purchase requires the approved EP Stripe test account and private source"
             )
         if "post_purchase_config_sha256" in config and (
                 not isinstance(config["post_purchase_config_sha256"], str)
@@ -279,8 +279,9 @@ class Installation(PostPurchaseOperator):
             }
             mailing = self.config["reviews_enabled"] or self.has_post_purchase
             provider = credential_provider or self.post_purchase_email_provider
-            if self.has_post_purchase and not self.config["reviews_enabled"]:
-                required.remove("smtp2go_api_key")
+            if self.has_post_purchase:
+                if not self.config["reviews_enabled"]:
+                    required.remove("smtp2go_api_key")
                 required.add(PROVIDER_KEYS[provider])
             if not mailing:
                 required -= {"smtp2go_api_key", "approved_test_email", "test_sender"}
@@ -292,6 +293,8 @@ class Installation(PostPurchaseOperator):
                 raise ValueError("only a Stripe test credential is accepted")
             if mailing:
                 validate_email_credential(credentials, provider)
+                if self.config["reviews_enabled"] and provider != "smtp2go":
+                    validate_email_credential(credentials, "smtp2go")
             for field in ("approved_test_email", "test_sender") if mailing else ():
                 if not re.fullmatch(r"[^\s@<>]+@[^\s@<>]+\.[A-Za-z]{2,}", credentials[field]):
                     raise ValueError(f"invalid approved test mailbox field {field}")
@@ -422,7 +425,7 @@ class Installation(PostPurchaseOperator):
     @property
     def roles(self):
         if self.config["reviews_enabled"]:
-            return ROLES
+            return (*ROLES, "post-purchase") if self.has_post_purchase else ROLES
         return ("source", "post-purchase") if self.has_post_purchase else ("source",)
 
     @staticmethod
@@ -1366,7 +1369,9 @@ class Installation(PostPurchaseOperator):
         }
 
     def activate(self, enable_test_delivery=False):
-        if self.has_post_purchase:
+        if self.state.get("post_purchase_transition"):
+            raise ValueError("finish the pending post-purchase transition before activating Reviews")
+        if self.has_post_purchase and not self.config["reviews_enabled"]:
             raise ValueError("use post-purchase-activate for the independent EP test delivery lane")
         if not self.config["reviews_enabled"]:
             if not self.state.get("deployment", {}).get("complete"):
@@ -1445,6 +1450,9 @@ class Installation(PostPurchaseOperator):
             **build,
             "versions": dict(self.state["deployment"]["versions"]),
             "record_revision": record["revision"],
+            "sending": True,
+            **({"post_purchase_modes": dict(self.state.get("post_purchase_modes", OFF))}
+               if self.has_post_purchase else {}),
         }
         if not self.state["releases"] or self.state["releases"][-1] != release:
             self.state["releases"].append(release)
@@ -1536,6 +1544,9 @@ class Installation(PostPurchaseOperator):
         if not self.state.get("automation_paused"):
             self.state.pop("pause_recovery", None)
         self.state["automation_paused"] = True
+        transition = self.state.get("post_purchase_transition")
+        if transition and transition.get("reviews_phase"):
+            transition["reviews_phase"] = "paused"
         self.state["queue_recovery_required"] = True
         self.state["phase"] = "pausing"
         self.save()
@@ -1578,11 +1589,16 @@ class Installation(PostPurchaseOperator):
                 errors.append(f"{role}.bindings.{name}: wrong service")
             elif kind == "queue" and value.get("queue_name") != binding["queue_name"]:
                 errors.append(f"{role}.bindings.{name}: wrong queue")
+            elif kind == "ratelimit" and (
+                str(value.get("namespace_id", "")) != str(binding["namespace_id"])
+                or value.get("simple") != binding["simple"]
+            ):
+                errors.append(f"{role}.bindings.{name}: rate-limit policy differs or cannot be verified")
             elif kind in ("plain_text", "json") and value.get("text", value.get("json")) != binding.get(
                 "text", binding.get("json")
             ):
                 errors.append(f"{role}.vars.{name}: differs from inventory")
-        if self.has_post_purchase:
+        if self.has_post_purchase and role in POST_PURCHASE_ROLES:
             for name in post_purchase_secret_bindings(role, expected["vars"].get("EMAIL_PROVIDER", "smtp2go")):
                 if observed.get(name, {}).get("type") != "secret_text":
                     errors.append(f"{role}.bindings.{name}: missing/wrong secret type")
@@ -1609,7 +1625,9 @@ class Installation(PostPurchaseOperator):
                 modes = self.state.get("post_purchase_modes", OFF)
                 delivery["modes"] = modes
                 delivery["fence"] = self.post_purchase_fence()
-                if modes not in (OFF, ON) or (modes == OFF and deployment["versions"] != disabled):
+                if modes not in (OFF, ON) or (modes == OFF and any(
+                    deployment["versions"][role] != disabled[role] for role in POST_PURCHASE_ROLES
+                )):
                     errors.append("post-purchase: modes differ from the retained deployment")
                 if modes == ON and (delivery["fence"]["status"] != "retained"
                                     or "post_purchase_watermark" not in self.state):
@@ -1732,11 +1750,16 @@ class Installation(PostPurchaseOperator):
         ):
             raise ValueError("rollback schema/key contract is incompatible; databases are never rewound")
         versions = release["versions"]
+        release_sending = release.get("sending", bool(release.get("record_revision", 0)))
+        if self.config["reviews_enabled"] and bool(release_sending) != bool(
+            self.state.get("activation_authorized")
+        ):
+            raise ValueError("rollback release is incompatible with the current Reviews activation state")
         if self.has_post_purchase:
             self.vault()
             self.verify_merchant_inputs()
             self.check_post_purchase_release(release)
-            if release.get("post_purchase_modes") != OFF or set(versions) != set(POST_PURCHASE_ROLES):
+            if release.get("post_purchase_modes") != OFF or set(versions) != set(self.roles):
                 raise ValueError("post-purchase rollback requires a recorded compatible OFF release")
             for role in POST_PURCHASE_ROLES:
                 self.artifact_modules(role, release)
@@ -1747,7 +1770,7 @@ class Installation(PostPurchaseOperator):
         self.prepare_queue_transition()
         self.state["phase"] = "rolling-back"
         self.save()
-        publish_roles = POST_PURCHASE_ROLES if self.has_post_purchase else versions
+        publish_roles = versions
         for role in publish_roles:
             version = versions[role]
             private = role == "post-purchase" or (
@@ -1769,19 +1792,24 @@ class Installation(PostPurchaseOperator):
             "commit": release["commit"],
             "versions": dict(versions),
             "complete": True,
-            "sending": not self.has_post_purchase,
+            "sending": release_sending if self.config["reviews_enabled"] else not self.has_post_purchase,
         }
         if self.has_post_purchase:
-            self.state["deployment"]["post_purchase_disabled_versions"] = dict(versions)
+            self.state["deployment"]["post_purchase_disabled_versions"] = {
+                role: versions[role] for role in POST_PURCHASE_ROLES
+            }
         self.save()
-        record = self.verifier("record")
-        paused = self.state.get("automation_paused", False)
+        reviews_ready = self.config["reviews_enabled"] and self.state.get("activation_authorized", False)
+        record = self.verifier("record") if reviews_ready or not self.config["reviews_enabled"] else {"revision": 0}
+        paused = self.state.get("automation_paused", False) or (self.config["reviews_enabled"] and not reviews_ready)
         if not paused:
             self.recover_paused_hints()
         self.configure_queues(pause_processing=paused)
         self.state["queue_recovery_required"] = paused
         self.state["phase"] = "paused" if paused else "active"
-        if self.has_post_purchase:
+        if (self.has_post_purchase and not self.config["reviews_enabled"]) or (
+            self.config["reviews_enabled"] and not reviews_ready
+        ):
             self.state["phase"] = "deployed"
         self.save()
         return {

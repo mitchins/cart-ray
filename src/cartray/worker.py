@@ -157,7 +157,7 @@ def create_app(
         except RuntimeError:
             return Response({"error": "checkout unavailable"}, status=503)
         try:
-            checkout_allowed = await _checkout_rate_limit(request.env)
+            checkout_allowed = await _checkout_rate_limit(request)
         except Exception:
             return Response({"error": "checkout unavailable"}, status=503, headers=cors.response_headers())
         if not checkout_allowed:
@@ -390,11 +390,14 @@ def _d1_success(result) -> bool:
     return bool(success)
 
 
-async def _checkout_rate_limit(env) -> bool:
-    limiter = getattr(env, "CHECKOUT_RATE_LIMITER", None)
+async def _checkout_rate_limit(request) -> bool:
+    if not await _client_rate_limit(request, "CHECKOUT_RATE_LIMITER", "checkout"):
+        return False
+    limiter = getattr(request.env, "CHECKOUT_STORE_RATE_LIMITER", None)
     if limiter is None:
-        raise RuntimeError("missing checkout rate-limit binding")
-    result = await limiter.limit({"key": "cartray-test:checkout"})
+        raise RuntimeError("missing checkout store rate-limit binding")
+    installation = _required_env(request.env, "CARTRAY_SIGNING_KEY_ID")
+    result = await limiter.limit({"key": "checkout-store:" + installation})
     success = result.get("success") if isinstance(result, dict) else getattr(result, "success", None)
     return success is True
 
@@ -413,14 +416,18 @@ def _checkout_status_session_id(request) -> str | None:
 
 
 async def _checkout_status_rate_limit(request) -> bool:
-    limiter = getattr(request.env, "CHECKOUT_STATUS_RATE_LIMITER", None)
+    return await _client_rate_limit(request, "CHECKOUT_STATUS_RATE_LIMITER", "checkout-status")
+
+
+async def _client_rate_limit(request, binding: str, scope: str) -> bool:
+    limiter = getattr(request.env, binding, None)
     if limiter is None:
         raise RuntimeError("missing checkout status limiter")
     address = ipaddress.ip_address(request.header("cf-connecting-ip") or "")
     if address.version == 6:
         address = address.ipv4_mapped or ipaddress.ip_network(f"{address}/64", strict=False).network_address
     installation = _required_env(request.env, "CARTRAY_SIGNING_KEY_ID")
-    result = await limiter.limit({"key": "checkout-status:" + installation + ":" + str(address)})
+    result = await limiter.limit({"key": scope + ":" + installation + ":" + str(address)})
     success = result.get("success") if isinstance(result, dict) else getattr(result, "success", None)
     return success is True
 

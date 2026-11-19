@@ -31,6 +31,14 @@ CARTRAY_SIGNING_KEY_ID = "acorn-test"
 binding = "DB"
 database_id = "db-one"
 [[ratelimits]]
+name = "CHECKOUT_RATE_LIMITER"
+namespace_id = "20261110"
+simple = { limit = 20, period = 60 }
+[[ratelimits]]
+name = "CHECKOUT_STORE_RATE_LIMITER"
+namespace_id = "20261122"
+simple = { limit = 300, period = 60 }
+[[ratelimits]]
 name = "CHECKOUT_STATUS_RATE_LIMITER"
 namespace_id = "20261120"
 simple = { limit = 60, period = 60 }
@@ -119,6 +127,18 @@ def test_attestation_rejects_changed_modules_bindings_or_split_version(tmp_path,
             },
             {"name": "CARTRAY_ENVIRONMENT", "type": "plain_text", "text": "test"},
             {"name": "CARTRAY_SIGNING_KEY_ID", "type": "plain_text", "text": "acorn-test"},
+            {
+                "name": "CHECKOUT_RATE_LIMITER",
+                "type": "ratelimit",
+                "namespace_id": "20261110",
+                "simple": {"limit": 20, "period": 60},
+            },
+            {
+                "name": "CHECKOUT_STORE_RATE_LIMITER",
+                "type": "ratelimit",
+                "namespace_id": "20261122",
+                "simple": {"limit": 300, "period": 60},
+            },
             *[
                 {"name": name, "type": "secret_text"}
                 for name in (

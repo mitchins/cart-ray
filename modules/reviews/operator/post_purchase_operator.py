@@ -105,7 +105,8 @@ class PostPurchaseOperator:
             raise ValueError("resume the original email provider migration with its pinned credential")
         if migration and (self.state.get("phase") in ("deploying", "rolling-back")
                           or not self.state.get("deployment", {}).get("complete")
-                          or self.state["deployment"]["versions"] != migration["disabled_versions"]):
+                          or any(self.state["deployment"]["versions"].get(role)
+                                 != migration["disabled_versions"].get(role) for role in POST_PURCHASE_ROLES)):
             raise ValueError("finish the interrupted OFF deployment, not email reconfiguration")
         if not migration:
             vault = self.vault()
@@ -121,7 +122,7 @@ class PostPurchaseOperator:
                 self.check_post_purchase_handoff()
                 return {"post_purchase": "provider-unchanged", "provider": provider}
             deployment, disabled, _ = self.post_purchase_runtime()
-            if deployment["versions"] != disabled:
+            if any(deployment["versions"][role] != disabled[role] for role in POST_PURCHASE_ROLES):
                 raise ValueError("email reconfiguration requires both recorded OFF versions")
             self.check_current_post_purchase_off()
             for role in POST_PURCHASE_ROLES:
@@ -221,7 +222,7 @@ class PostPurchaseOperator:
                 or build.get("schema") != self.state.get("migration_ledgers")
                 or build.get("post_purchase_vault_fingerprints") != {
                     key: self.state["secret_fingerprints"][key] for key in self.post_purchase_vault_fields}
-                or set(build.get("artifacts", {})) != set(POST_PURCHASE_ROLES)):
+                or set(build.get("artifacts", {})) != set(self.roles)):
             raise ValueError("retained release differs from the post-purchase input, vault or schema contract")
 
     def record_post_purchase_off(self, build):
@@ -231,7 +232,7 @@ class PostPurchaseOperator:
         }
         self.state["post_purchase_modes"] = dict(OFF)
         release = {**build, "versions": dict(deployment["versions"]), "record_revision": 0,
-                   "post_purchase_modes": dict(OFF)}
+                   "sending": deployment.get("sending", False), "post_purchase_modes": dict(OFF)}
         if not self.state["releases"] or self.state["releases"][-1] != release:
             self.state["releases"].append(release)
 
@@ -243,7 +244,7 @@ class PostPurchaseOperator:
         deployment = self.state.get("deployment", {})
         disabled = deployment.get("post_purchase_disabled_versions", {})
         if (not deployment.get("complete") or set(disabled) != set(POST_PURCHASE_ROLES)
-                or set(deployment.get("versions", {})) != set(POST_PURCHASE_ROLES)
+                or set(deployment.get("versions", {})) != set(self.roles)
                 or self.state["phase"] in ("deploying", "rolling-back")):
             raise ValueError("finish the retained OFF deployment before changing post-purchase delivery")
         self.assert_resources()
@@ -252,10 +253,17 @@ class PostPurchaseOperator:
         self.check_post_purchase_release(build)
         return deployment, disabled, build
 
-    def check_post_purchase_version(self, role, mode, actual, version, email_provider=None, actions_override=None):
+    def check_post_purchase_version(self, role, mode, actual, version, email_provider=None, actions_override=None,
+                                    allow_legacy_admission=False):
         nodes, _ = graph(self, post_purchase_modes={role: mode}, email_provider=email_provider,
                          actions_override=actions_override)
         errors = self.worker_binding_errors(role, nodes[role], actual, version)
+        if allow_legacy_admission and role == "source":
+            present = {item["name"] for item in actual["resources"]["bindings"]}
+            for name in ("CHECKOUT_STORE_RATE_LIMITER", "CHECKOUT_STATUS_RATE_LIMITER"):
+                if name not in present:
+                    missing = f"source.bindings.{name}: missing/wrong type"
+                    errors = [error for error in errors if error != missing]
         if errors:
             raise ValueError("; ".join(errors))
 
@@ -275,7 +283,8 @@ class PostPurchaseOperator:
             actions = ([dict(sorted(a.items())) for a in
                         json.loads(self.provider_migration_bundle(migration)["old_actions_raw"])["actions"]]
                        if previous else None)
-            self.check_post_purchase_version(role, "disabled", actual, actual["id"], previous, actions)
+            self.check_post_purchase_version(role, "disabled", actual, actual["id"], previous, actions,
+                                             allow_legacy_admission=True)
 
     def post_purchase_live_version(self, role, deployment, transition):
         actual = self.api.version(self.name(role))
@@ -285,19 +294,22 @@ class PostPurchaseOperator:
         if actual["id"] not in {disabled, recorded, candidate}:
             raise ValueError(f"{role}: active version is not part of the retained post-purchase transition")
         mode = "disabled" if actual["id"] == disabled else "test"
-        self.check_post_purchase_version(role, mode, actual, actual["id"])
+        self.check_post_purchase_version(role, mode, actual, actual["id"],
+                                         allow_legacy_admission=actual["id"] in {disabled, recorded})
         return actual["id"]
 
     def set_post_purchase_version(self, role, target, mode, deployment, transition):
         current = self.post_purchase_live_version(role, deployment, transition)
+        legacy = target == deployment["post_purchase_disabled_versions"][role]
         if current != target:
             staged = self.api.request(f"workers/scripts/{self.name(role)}/versions/{target}")
-            self.check_post_purchase_version(role, mode, staged, target)
+            self.check_post_purchase_version(role, mode, staged, target, allow_legacy_admission=legacy)
         self.set_worker_visibility(role, False)
         if current != target:
             self.api.publish(self.name(role), target)
             self.set_worker_visibility(role, False)
-        self.check_post_purchase_version(role, mode, self.api.version(self.name(role)), target)
+        self.check_post_purchase_version(role, mode, self.api.version(self.name(role)), target,
+                                         allow_legacy_admission=legacy)
         errors = self.worker_visibility_errors(role)
         if errors:
             raise ValueError("; ".join(errors))
@@ -306,6 +318,46 @@ class PostPurchaseOperator:
 
     def finish_post_purchase_transition(self, deployment, operation, modes):
         self.state["post_purchase_modes"] = dict(modes)
+        self.save()
+        transition = self.state["post_purchase_transition"]
+        revision = 0
+        if self.config["reviews_enabled"]:
+            nodes, _ = graph(self, deployment["versions"], sending=deployment.get("sending", False))
+            if "evidence_version" not in transition:
+                build = json.loads((self.directory / "releases" / deployment["commit"] / "build.json").read_text())
+                transition["evidence_version"] = self.upload_worker("evidence", nodes["evidence"], build)["id"]
+                self.save()
+            evidence_version = transition["evidence_version"]
+            actual = self.api.version(self.name("evidence"))
+            if actual["id"] not in {
+                deployment["versions"]["evidence"], evidence_version, transition.get("previous_evidence_version")
+            }:
+                raise ValueError("evidence: unrecorded deployed version; resolve drift before resuming Reviews")
+            if actual["id"] != evidence_version:
+                candidate = self.api.request(f"workers/scripts/{self.name('evidence')}/versions/{evidence_version}")
+                errors = self.worker_binding_errors("evidence", nodes["evidence"], candidate, evidence_version)
+                if errors:
+                    raise ValueError("; ".join(errors))
+                self.api.publish(self.name("evidence"), evidence_version)
+            actual = self.api.version(self.name("evidence"))
+            errors = self.worker_binding_errors("evidence", nodes["evidence"], actual, evidence_version)
+            if errors:
+                raise ValueError("; ".join(errors))
+            deployment["versions"]["evidence"] = evidence_version
+            self.save()
+        if transition.get("reviews_phase"):
+            revision = self.verifier("record")["revision"]
+            if transition["reviews_phase"] == "active":
+                self.recover_paused_hints()
+            self.configure_queues(pause_processing=transition["reviews_phase"] != "active")
+            self.state["queue_recovery_required"] = transition["reviews_phase"] != "active"
+            self.state["phase"] = transition["reviews_phase"]
+        if modes == OFF:
+            build = json.loads((self.directory / "releases" / deployment["commit"] / "build.json").read_text())
+            release = {**build, "versions": dict(deployment["versions"]), "record_revision": revision,
+                       "sending": deployment.get("sending", False), "post_purchase_modes": dict(OFF)}
+            if not self.state["releases"] or self.state["releases"][-1] != release:
+                self.state["releases"].append(release)
         self.state.pop("post_purchase_transition")
         self.save()
         return {"post_purchase": operation, "modes": modes, "versions": dict(deployment["versions"]),
@@ -334,14 +386,19 @@ class PostPurchaseOperator:
             if self.state.get("post_purchase_modes") == ON:
                 return {"post_purchase": "already-active", "versions": dict(deployment["versions"]),
                         "activation_watermark": self.state["post_purchase_watermark"]}
-            if deployment["versions"] != disabled:
+            if any(deployment["versions"][role] != disabled[role] for role in POST_PURCHASE_ROLES):
                 raise ValueError("initial post-purchase activation requires both retained OFF versions")
             for role in POST_PURCHASE_ROLES:
                 self.artifact_modules(role, build)
             transition = {"operation": "activate", "enable_versions": {}}
+            if self.config["reviews_enabled"] and self.state.get("activation_authorized"):
+                transition["reviews_phase"] = self.state["phase"]
+                self.state["phase"] = "post-purchase-transition"
             self.state["post_purchase_transition"] = transition
             self.state["post_purchase_watermark"] = fence["activation_watermark"]
             self.save()
+        if transition.get("reviews_phase"):
+            self.prepare_queue_transition()
         # Validate both sides before any publish. Resume may observe a journalled
         # version already live if the preceding publish succeeded but its reply did not.
         for role in POST_PURCHASE_ROLES:
@@ -358,10 +415,28 @@ class PostPurchaseOperator:
     def post_purchase_disable(self):
         deployment, disabled, _ = self.post_purchase_runtime()
         transition = self.state.get("post_purchase_transition")
+        if not transition and self.state.get("post_purchase_modes", OFF) == OFF:
+            self.check_current_post_purchase_off()
+            errors = [error for role in POST_PURCHASE_ROLES for error in self.worker_visibility_errors(role)]
+            if errors:
+                raise ValueError("; ".join(errors))
+            return {"post_purchase": "already-disabled", "modes": dict(OFF),
+                    "versions": dict(deployment["versions"]),
+                    "activation_watermark": self.state.get("post_purchase_watermark")}
         if not transition or transition["operation"] != "disable":
-            transition = {"operation": "disable", "enable_versions": (transition or {}).get("enable_versions", {})}
+            previous = transition or {}
+            transition = {"operation": "disable", "enable_versions": previous.get("enable_versions", {})}
+            if previous.get("evidence_version") or previous.get("previous_evidence_version"):
+                transition["previous_evidence_version"] = (
+                    previous.get("evidence_version") or previous["previous_evidence_version"]
+                )
+            if self.config["reviews_enabled"] and self.state.get("activation_authorized"):
+                transition["reviews_phase"] = previous.get("reviews_phase", self.state["phase"])
+                self.state["phase"] = "post-purchase-transition"
             self.state["post_purchase_transition"] = transition
             self.save()
+        if transition.get("reviews_phase"):
+            self.prepare_queue_transition()
         self.set_post_purchase_version("source", disabled["source"], "disabled", deployment, transition)
         # Restart the entire interval on resume rather than trusting a persisted
         # wall clock or guessing when a publish with an uncertain response landed.
