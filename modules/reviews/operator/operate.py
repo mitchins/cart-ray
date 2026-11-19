@@ -1161,6 +1161,8 @@ class Installation(PostPurchaseOperator):
         migration = self.state.pop("post_purchase_provider_migration", None)
         if migration:
             self.state.setdefault("post_purchase_provider_migrations", []).append({**migration, "status": "complete"})
+            if self.config["reviews_enabled"]:
+                self.state["reviews_explicit_activation_required"] = True
         self.state["phase"] = "deployed"
         self.save()
         return {"commit": build["commit"], "versions": progress["versions"], "activated": False}

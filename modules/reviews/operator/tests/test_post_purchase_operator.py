@@ -734,6 +734,9 @@ def test_pinned_combined_rotation_survives_restart_and_off_deploy(deployed, monk
     for role in resumed.roles:
         new_build["artifacts"][role] = {"fixture": digest(b"fixture")}
     atomic_json(new_path, new_build)
+    # A journal created by an earlier release may not have the new flag yet.
+    resumed.state.pop("reviews_explicit_activation_required", None)
+    resumed.save()
     resumed.deploy()
     sender = api.version(resumed.name("sender"))["resources"]["bindings"]
     handler = api.version(resumed.name("post-purchase"))["resources"]["bindings"]
@@ -744,6 +747,7 @@ def test_pinned_combined_rotation_survives_restart_and_off_deploy(deployed, monk
     assert sender_values["APPROVED_TEST_EMAIL"] == CF_CREDS["approved_test_email"]
     assert handler_values["CLOUDFLARE_EMAIL_API_TOKEN"] == changed["cloudflare_email_api_token"]
     assert resumed.state["post_purchase_modes"] == OFF and not resumed.state["deployment"]["sending"]
+    assert resumed.state["reviews_explicit_activation_required"] is True
     assert list(db.iterdump()) == before_db
 
 
