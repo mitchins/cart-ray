@@ -127,6 +127,148 @@ Ordinary Worker rollback does not rewind D1 or Pages data. The test-only EP
 package and hosted integration still require qualification; this option is not
 production activation.
 
+### Existing external storefront and private source
+
+Fresh merchant-input installations may opt into an existing site rather than
+provisioning/deploying a Pages project. Defaults are unchanged when omitted:
+
+```json
+{
+  "storefront_origin": "https://shop.example.test",
+  "success_path": "/purchase-return/",
+  "cancel_path": "/purchase-return/",
+  "source_mode": "private",
+  "source_api_path": "/api/commerce",
+  "webhook_url": "https://shop.example.test/api/commerce/stripe/webhook"
+}
+```
+
+The origin must be HTTPS without a path, port, credentials, query or fragment.
+Return paths are local paths without queries; the operator appends the existing
+checkout status query. Defaults remain `/purchase-return/` for merchant packages
+and `/` for the original example. Private source mode requires all three explicit
+origin/API-prefix/webhook fields; the webhook must use the storefront origin.
+Public source mode remains the default and can also specify an external webhook.
+
+External mode requires `merchant_inputs`. It skips Pages creation and upload,
+retains the complete storefront in the release directory, and records its hash
+and `external-operator-required` status in `inventory.json.external_storefront`.
+Display-only HTML remains copied unchanged; checkout identities are still the
+separate authorised commerce set. No browse schema or checkout validation changes.
+
+The existing site's operator must install the retained assets and a narrowly
+routed private service binding to the inventory's source Worker. Strip the API
+prefix when forwarding (`/api/commerce/catalogue` to `/catalogue`, and the explicit
+webhook to `/stripe/webhook`), preserve request bodies/signatures and the browser
+Origin header. Forward Cloudflare's `CF-Connecting-IP` on checkout POST and
+checkout-status GET, and preserve `Content-Length` on checkout POST. Forward
+only the required headers; do not forward browser credentials. The Stripe webhook
+remains a separate signed HTTPS route. This installer does not mutate that site's
+routes, DNS or bindings.
+Source `workers.dev` and preview URLs remain disabled across deployment resume in
+private mode. The exported client uses the configured external API base, while
+the source receives the external storefront origin and checkout return URLs.
+Doctor verifies backend inventory/bindings, not external-site deployment or hosted
+acceptance; qualify those separately. Do not edit a retained inventory to change
+topology. Use a fresh reviewed plan and keep rollback of the external site separate.
+
+### Independent EP UAT post-purchase delivery
+
+For the approved `effective-policy-uat` installation only, set
+`post_purchase_config` in the plan to an absolute, operator-owned `0600` JSON
+file outside Git and outside the merchant package. This requires the private
+external source and Stripe test account
+`acct_1Ud2XZBKRMfYblCU`. The operator snapshots and fingerprints this file at
+plan time. Keep the snapshot and vault with the private installation backup.
+
+The file shape is `{"schema": 1, "actions": [...]}`, containing one action with
+these fields:
+
+| Field | Required value |
+| --- | --- |
+| `environment`, `merchant` | `test`, `effective-policy-uat` |
+| `workflow_key`, `offer_keys` | `ep:woo:workflow:8681`, `["EP-UAT-171"]` (active and paid in the test lock) |
+| `links` | `["https://www.dropbox.com/t/N86okpWEWSXWDx9X"]` |
+| `stripe_account`, `recipient` | `acct_1Ud2XZBKRMfYblCU`, `test@mitchellcurrie.com` |
+| `config_ref`, `subject`, `sender` | Reviewed workflow reference, dummy test subject, and preflighted test sender |
+
+Offer 131 has no email action. The protected credential handoff must supply
+the EP test Stripe key, SMTP2GO key, `approved_test_email` and `test_sender`; the
+mailboxes must match the action. The operator pins those values in the vault
+and binds the existing private transactional-email Worker to the source via a
+shared, independent token. Only the routing fields and action digest go into
+source vars. Set `reviews_enabled` to `true` with explicit approved test subject
+mappings to install Reviews alongside this delivery lane, or to `false` for
+commerce alone. The initial deployment records both post-purchase modes OFF;
+Reviews and post-purchase delivery each require their own explicit activation.
+Disabling one does not authorize the other. Source-version changes pause and
+reverify active Reviews before resuming its queues; checkpoints and activation
+watermarks are retained.
+
+The external site must route only the permitted public Reviews subject lookup,
+summary and contributions GETs to the private Reviews service binding, passing
+`Accept` and Cloudflare's `CF-Connecting-IP` without cookies or authorization
+headers. Checkout admission uses a per-client budget and a larger installation
+backstop; status and Reviews reads have separate per-client budgets. Cloudflare
+enforces these approximately per location, not as a globally strict quota.
+Public catalogue data is compiled with the release and costs no Stripe or D1
+requests to read. Checkout independently resolves Stripe prices. In the
+four-source synthetic fixture, a new checkout used four Price GETs and two
+Session POSTs, plus one PaymentIntent POST when present; a completed retry
+used four Price GETs and no POSTs. A merchant's count depends on its catalogue.
+
+After deployment and before activation, inspect the independent scope:
+
+```sh
+uv run --locked python scripts/post_purchase_installation.py \
+  --directory /private/merchant-install --credentials /private/credentials.json
+```
+
+This defaults to read-only dry-run. It uses `store_key`, account and D1 identity
+from the retained test inventory and the existing protected Cloudflare credential.
+It checks the deployed source version, test environment, DB binding and disabled
+post-purchase mode. Node 24 and locked Wrangler dependencies are required, as for
+the installer. The transient workstation proxy is not a deployed admin endpoint.
+
+With source webhook and scheduled post-purchase drains both OFF, explicitly
+initialise the no-backfill fence:
+
+```sh
+uv run --locked python scripts/post_purchase_installation.py \
+  --directory /private/merchant-install --credentials /private/credentials.json \
+  --apply --confirm-processing-disabled
+```
+
+One D1 `batch()` transaction guards scope, inserts the immutable merchant/test
+binding and sets both cursor fields to the database's current `MAX(outbox.id)`
+(zero when empty). It never trusts a client-supplied fence. Existing matching
+records, including an advanced cursor, remain unchanged. Partial pairs, changed
+scope, invalid cursors and orphan executions fail without repair or rewind.
+An unknown transport outcome must be inspected and the same operation retried,
+not repaired with SQL. No delivery is enabled and no claims are retried or removed.
+
+After reviewing `doctor` and confirming the fence is retained, use the independent
+delivery commands (with Node 24 and locked dependencies):
+
+```sh
+uv run --locked python modules/reviews/operator/operate.py \
+  --directory /private/merchant-install --credentials /private/credentials.json \
+  post-purchase-activate --enable-test-delivery
+uv run --locked python modules/reviews/operator/operate.py \
+  --directory /private/merchant-install --credentials /private/credentials.json \
+  post-purchase-disable
+```
+
+Activation checks the Stripe account and retained test fence, then enables the
+handler before the source. Disable restores the recorded OFF source version
+first (checkout and ordinary reconciliation stay on), waits 30 seconds for
+started drains to settle, then restores the OFF handler. Rerun the same command
+after an interruption; disable can also finish a partial activation. No operation
+rewinds the cursor, resets claims or asserts provider cancellation. While OFF,
+new confirmations remain eligible from the existing checkpoint on reactivation.
+Disable before upgrading, deploying or rolling back; rollback accepts only a
+compatible recorded OFF pair and never changes D1 or the external storefront.
+
 A namespace must end in `-test`. For a merchant package, generate a separate
 test-mode lock with its own catalogue and fulfilment expansions:
 
@@ -191,6 +333,14 @@ inventory; rerun the same command after resolving the reported failure.
 queues and services. The Pages output uses the current public Reviews gateway;
 customer cookies and staff credentials cannot reach public reads. Checkout goes
 directly to the separately bound test source origin.
+
+Changing a test post-purchase email provider is an OFF-only operator action.
+After `post-purchase-reconfigure-provider`, build from a different reviewed
+commit and deploy the new release with delivery OFF: retained builds are keyed
+by commit and cannot be overwritten with different provider inputs. A sender
+change is refused when Reviews shares the sender handoff, or when an execution
+has not yet been passed by the post-purchase checkpoint. Reconcile and advance
+the checkpoint first; never resend an uncertain execution to clear it.
 
 **Verification does not activate the store.** There is no verified runtime
 record before explicit activation, so a source wakeup cannot create the

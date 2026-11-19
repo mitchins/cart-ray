@@ -6,6 +6,7 @@ import {
   addToCart,
   checkoutPayload,
   checkoutStatus,
+  checkoutStatusDetails,
   cancelledCheckoutView,
   confirmedCheckoutView,
   consumePendingCheckout,
@@ -17,6 +18,7 @@ import {
   matchingPendingCheckout,
   persistCart,
   pollCheckoutStatus,
+  pollCheckoutDetails,
   processCheckoutReturn,
   startCheckout,
   storePendingCheckout,
@@ -32,6 +34,69 @@ function memoryStorage() {
     removeItem: (key) => values.delete(key),
   };
 }
+
+const confirmedReceipt = { currency: "aud", items: [
+  { product_key: "ORIGINAL-PURCHASE", quantity: 2, unit_amount_minor: 1250 },
+  { product_key: "FREE-PURCHASE", quantity: 1, unit_amount_minor: 0 },
+] };
+
+test("receipt survives pending polling and is independent of a changed cart or absent storage", async () => {
+  for (const storage of [memoryStorage(), null]) {
+    const cart = new Map([["TEST-SUPPORT-HOURS", 4]]);
+    if (storage) persistCart(storage, catalogue.version, cart, 9);
+    const states = ["pending", "confirmed"];
+    const fetchImpl = async () => ({ ok: true, json: async () => ({ state: states.shift(), receipt: confirmedReceipt }) });
+    const result = await processCheckoutReturn({
+      configuration: {}, sessionId: "cs_test_receipt", storage, catalogue, cart, revision: 9,
+      poll: (...args) => pollCheckoutDetails(...args, fetchImpl, async () => {}),
+    });
+    assert.equal(result.state, "confirmed");
+    assert.equal(result.cleared, false);
+    assert.deepEqual(result.receipt, confirmedReceipt);
+    assert.deepEqual([...cart], [["TEST-SUPPORT-HOURS", 4]]);
+    const view = confirmedCheckoutView(false, result.receipt);
+    assert.match(view.purchasedItems[0], /^ORIGINAL-PURCHASE × 2 /);
+    assert.match(view.purchasedItems[1], /^FREE-PURCHASE × 1 /);
+    assert.ok(view.purchasedItems.every(line => !line.includes("TEST-SUPPORT-HOURS")));
+  }
+});
+
+test("status receipt is allowlisted and never exposed for non-confirmed states", async () => {
+  const fetchResult = result => async () => ({ ok: true, json: async () => result });
+  for (const state of ["pending", "expired"]) {
+    assert.deepEqual(await checkoutStatusDetails({}, "cs_test_receipt", fetchResult({state, receipt: confirmedReceipt})), {state});
+  }
+  const receipt = {...confirmedReceipt, email: "private", download_token: "secret",
+    items: confirmedReceipt.items.map(item => ({...item, fulfilment_resources: ["secret"]}))};
+  assert.deepEqual(await checkoutStatusDetails({}, "cs_test_receipt", fetchResult({state: "confirmed", receipt})),
+    {state: "confirmed", receipt: confirmedReceipt});
+  for (const receipt of [undefined, {}, {...confirmedReceipt, items: []},
+    {...confirmedReceipt, items: [{product_key: "BAD", quantity: -1, unit_amount_minor: 1}]}]) {
+    const result = await checkoutStatusDetails({}, "cs_test_receipt", fetchResult({state: "confirmed", receipt}));
+    assert.deepEqual(result, {state: "confirmed"});
+    assert.equal(confirmedCheckoutView(false, result.receipt).purchasedItems, undefined);
+  }
+  assert.equal(await checkoutStatus({}, "cs_test_receipt", fetchResult({state: "confirmed", receipt})), "confirmed");
+});
+
+test("receipt labels resolve by durable key without replacing quantities, prices or missing keys", () => {
+  const products = [
+    { product_key: "ORIGINAL-PURCHASE", title: "Friendly purchase", quantity: 99, amount_minor: 1 },
+    { product_key: "UNPURCHASED", title: "Changed cart item", quantity: 4, amount_minor: 999 },
+  ];
+  const before = structuredClone(confirmedReceipt);
+  const view = confirmedCheckoutView(false, confirmedReceipt, products);
+  assert.match(view.purchasedItems[0], /^Friendly purchase \(ORIGINAL-PURCHASE\) × 2 .*12\.50/);
+  assert.match(view.purchasedItems[1], /^FREE-PURCHASE × 1 .*0\.00/);
+  assert.ok(view.purchasedItems.every(line => !line.includes("Changed cart item")));
+  assert.deepEqual(view.receipt, before);
+  products[0].quantity = 1; products[0].amount_minor = 50000;
+  assert.deepEqual(confirmedCheckoutView(false, confirmedReceipt, products), view);
+  for (const title of ["", "  ", undefined, 123]) {
+    assert.match(confirmedCheckoutView(false, confirmedReceipt, [{product_key: "ORIGINAL-PURCHASE", title}])
+      .purchasedItems[0], /^ORIGINAL-PURCHASE × 2 /);
+  }
+});
 
 const catalogue = {
   version: "sha256:catalogue",

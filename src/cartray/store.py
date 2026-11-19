@@ -13,6 +13,23 @@ from .models import CheckoutOrder, CheckoutRedirect, OrderItem
 REVIEW_INVITATION_WORDING_VERSION = "review-invitation-v1"
 REVIEW_INVITATION_WORDING = "Email me one request to review my purchase."
 
+# Public receipt allowlist: never select buyer data, provider IDs or fulfilment resources.
+_CHECKOUT_RECEIPT_SQL = """SELECT i.product_key, i.quantity, i.unit_amount_minor, o.currency
+    FROM checkout_sessions AS s
+    JOIN orders AS o USING(order_id)
+    JOIN order_items AS i USING(order_id)
+    WHERE s.external_session_id = ? AND s.settlement_state = 'confirmed'
+    ORDER BY i.product_key"""
+
+
+def _checkout_receipt(rows) -> dict | None:
+    items = [
+        {"product_key": row["product_key"], "quantity": row["quantity"],
+         "unit_amount_minor": row["unit_amount_minor"]}
+        for row in rows
+    ]
+    return {"currency": rows[0]["currency"], "items": items} if items else None
+
 SCHEMA = """
 PRAGMA foreign_keys = ON;
 
@@ -405,6 +422,9 @@ class SqliteOrderStore:
             "SELECT settlement_state FROM checkout_sessions WHERE external_session_id = ?", (session_id,)
         ).fetchone()
         return None if row is None else row["settlement_state"]
+
+    async def checkout_receipt(self, session_id: str) -> dict | None:
+        return _checkout_receipt(self.connection.execute(_CHECKOUT_RECEIPT_SQL, (session_id,)).fetchall())
 
     async def claim_reconciliation_candidates(
         self, *, now: int, stale_before: int, limit: int, lease_seconds: int
@@ -980,6 +1000,10 @@ class D1OrderStore:
             "SELECT settlement_state FROM checkout_sessions WHERE external_session_id = ?", session_id
         )
         return None if row is None else row["settlement_state"]
+
+    async def checkout_receipt(self, session_id: str) -> dict | None:
+        result = await self.database.prepare(_CHECKOUT_RECEIPT_SQL).bind(session_id).all()
+        return _checkout_receipt(_results(result))
 
     async def claim_reconciliation_candidates(
         self, *, now: int, stale_before: int, limit: int, lease_seconds: int

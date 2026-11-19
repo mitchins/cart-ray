@@ -137,6 +137,8 @@ jobs:
         with:
           python-version: "3.12"
       - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6.8.0
+      - name: Install locked Worker test dependencies
+        run: npm ci --ignore-scripts
       - name: Generate coverage reports
         run: |
           mkdir -p coverage

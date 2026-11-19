@@ -1,7 +1,7 @@
 /** Connected presenter. Delegates payment/persistence/return decisions to the existing CartRay client. */
 import {
   loadCatalogue, loadPersistedCart, persistCart, addToCart, cartSnapshot,
-  createCheckoutAndStorePending, processCheckoutReturn, pollCheckoutStatus,
+  createCheckoutAndStorePending, processCheckoutReturn, pollCheckoutDetails,
   confirmedCheckoutView, expiredCheckoutView, unconfirmedCheckoutView, cancelledCheckoutView,
 } from './core-storefront.js';
 
@@ -93,8 +93,8 @@ export async function createAdapter(config) {
         returnResult={state:'cancelled',...cancelledCheckoutView()};return returnResult;
       }
       if(params.get('checkout')!=='complete')return null;
-      const result=await processCheckoutReturn({configuration:source,sessionId:params.get('session_id'),storage,catalogue,cart,revision,poll:pollCheckoutStatus});
-      const view=result.state==='confirmed'?confirmedCheckoutView(result.cleared):result.state==='expired'?expiredCheckoutView():unconfirmedCheckoutView(result.state);
+      const result=await processCheckoutReturn({configuration:source,sessionId:params.get('session_id'),storage,catalogue,cart,revision,poll:pollCheckoutDetails});
+      const view=result.state==='confirmed'?confirmedCheckoutView(result.cleared,result.receipt,products):result.state==='expired'?expiredCheckoutView():unconfirmedCheckoutView(result.state);
       this.checkoutLocked=view.checkoutLocked;
       if(result.cleared)revision=0;
       if(result.state==='confirmed'||result.state==='expired')history.replaceState(null,'',location.pathname);

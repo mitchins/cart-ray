@@ -46,6 +46,13 @@ async function renderReturn(result){
   document.dispatchEvent(new CustomEvent('cartray:checkout-return', {detail:{state}}));
   $('.flow-heading h1').textContent=state==='confirmed'?'Order confirmed.':'Your order';
   $('#content').innerHTML=`<section class="panel state-panel"><div class="state-icon">${icon(data[2])}</div><h2>${data[0]}</h2><p>${h(!adapter.preview&&result?.message?result.message:data[1])}</p>${adapter.preview?'<p class="tag">Simulated state · not evidence of a real payment</p>':''}${state==='confirmed'&&adapter.preview&&adapter.state.order?`<div class="summary-row"><span>Preview reference</span><span>${h(adapter.state.order.reference)}</span></div><p class="muted">${adapter.state.order.invitation?'Your preview purchase includes one review invitation.':'No review invitation will be sent in this preview.'}</p>`:''}<div class="button-row">${['pending','unavailable'].includes(state)?`<a class="button" href="${h(location.pathname+location.search)}">Check order status again</a>`:`<a class="button" href="${state==='confirmed'?h(catalogueUrl()):url('cart/')}">${state==='confirmed'?'Continue shopping':'Return to cart'}</a>`}${adapter.preview&&state==='confirmed'?`<a class="button secondary" href="${url('inbox/')}">View sample email</a>`:''}</div></section>`;
+  if(!adapter.preview && state==='confirmed' && result?.purchasedItems?.length){
+    const receipt=document.createElement('ul');receipt.setAttribute('aria-label','Purchased items');
+    for(const text of result.purchasedItems){
+      const line=document.createElement('li');line.textContent=text;receipt.append(line);
+    }
+    $('#content .button-row').before(receipt);
+  }
 }
 function renderInbox(){
   if(!adapter.preview)return;

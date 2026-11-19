@@ -3,6 +3,49 @@ const fail = status => Response.json({error: 'delivery unavailable'}, {status, h
 const identifier = /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$/;
 const sessionId = /^cs_test_[A-Za-z0-9_]{1,200}$/;
 
+function sendingProvider(env) {
+  const provider = env.EMAIL_PROVIDER ?? 'smtp2go';
+  if (provider === 'smtp2go' && env.SMTP2GO_API_KEY?.startsWith('api-')) return provider;
+  if (provider === 'cloudflare' && /^[a-f0-9]{32}$/.test(env.CLOUDFLARE_EMAIL_ACCOUNT_ID || '') &&
+      typeof env.CLOUDFLARE_EMAIL_API_TOKEN === 'string' &&
+      /^[\x21-\x7e]{20,1024}$/.test(env.CLOUDFLARE_EMAIL_API_TOKEN)) return provider;
+  return null;
+}
+
+async function sendEmail(env, config, provider, deadline, fetcher) {
+  const text = 'This test purchase contains dummy materials only.\n\n' + config.links.join('\n');
+  const cloudflare = provider === 'cloudflare';
+  const sent = await fetcher(cloudflare
+    ? `https://api.cloudflare.com/client/v4/accounts/${env.CLOUDFLARE_EMAIL_ACCOUNT_ID}/email/sending/send`
+    : 'https://api.smtp2go.com/v3/email/send', {
+    method: 'POST', redirect: 'manual', signal: deadline,
+    headers: {'Content-Type': 'application/json', ...(cloudflare
+      ? {Authorization: `Bearer ${env.CLOUDFLARE_EMAIL_API_TOKEN}`}
+      : {'X-Smtp2go-Api-Key': env.SMTP2GO_API_KEY})},
+    body: JSON.stringify(cloudflare
+      ? {from: config.sender, to: config.recipient, subject: config.subject, text}
+      : {sender: config.sender, to: [config.recipient], subject: config.subject, text_body: text}),
+  });
+  if (!sent.ok) return null;
+  const response = await sent.json();
+  if (!cloudflare) {
+    const data = response.data;
+    return data?.succeeded === 1 && data.failed === 0 && typeof data.email_id === 'string' && data.email_id
+      ? data.email_id : null;
+  }
+  const result = response.result;
+  if (response.success !== true || !Array.isArray(response.errors) || response.errors.length || !result ||
+      typeof result.message_id !== 'string' ||
+      !/^[\x21-\x7e]{1,512}$/.test(result.message_id || '') ||
+      !Array.isArray(result.delivered) || !Array.isArray(result.queued) ||
+      !Array.isArray(result.permanent_bounces) || result.permanent_bounces.length ||
+      !Array.isArray(result.suppressed_recipients) || result.suppressed_recipients.length) return null;
+  const accepted = [...result.delivered, ...result.queued];
+  // A queued receipt is provider acceptance, not proof of inbox delivery. No automatic retry follows.
+  return accepted.length === 1 && typeof accepted[0] === 'string' &&
+    accepted[0].toLowerCase() === config.recipient.toLowerCase() ? result.message_id : null;
+}
+
 function constantEqual(a, b) {
   if (typeof a !== 'string' || typeof b !== 'string' || a.length !== b.length) return false;
   let difference = 0;
@@ -47,6 +90,7 @@ export async function handle(request, env, fetcher = fetch) {
       typeof env.HANDLER_TOKEN !== 'string' || env.HANDLER_TOKEN.length < 32 ||
       !constantEqual(request.headers.get('authorization'), `Bearer ${env.HANDLER_TOKEN}`)) return fail(403);
   try {
+    const provider = sendingProvider(env);
     const body = await readBounded(request);
     const raw = env.DELIVERY_CONFIG;
     if (typeof raw !== 'string' || raw.length > 16384) return fail(503);
@@ -80,7 +124,7 @@ export async function handle(request, env, fetcher = fetch) {
         config.sender.toLowerCase() !== env.APPROVED_TEST_SENDER?.toLowerCase() ||
         !/^acct_[A-Za-z0-9]+$/.test(config.stripe_account || '') || config.stripe_account !== env.STRIPE_ACCOUNT_ID ||
         (!env.STRIPE_API_KEY?.startsWith('sk_test_') && !env.STRIPE_API_KEY?.startsWith('rk_test_')) ||
-        !env.SMTP2GO_API_KEY?.startsWith('api-')) return fail(400);
+        !provider) return fail(400);
 
     // One shared budget bounds the complete provider sequence, not each request separately.
     const deadline = AbortSignal.timeout(7000);
@@ -100,16 +144,9 @@ export async function handle(request, env, fetcher = fetch) {
 
     // The caller has already durably claimed (merchant, order, workflow).
     // Failure or timeout is uncertain and must never trigger an automatic resend.
-    const sent = await fetcher('https://api.smtp2go.com/v3/email/send', {
-      method: 'POST', redirect: 'manual', signal: deadline,
-      headers: {'Content-Type': 'application/json', 'X-Smtp2go-Api-Key': env.SMTP2GO_API_KEY},
-      body: JSON.stringify({sender: config.sender, to: [config.recipient], subject: config.subject,
-        text_body: 'This test purchase contains dummy materials only.\n\n' + config.links.join('\n')}),
-    });
-    if (!sent.ok) return fail(502);
-    const data = (await sent.json()).data;
-    if (data?.succeeded !== 1 || data.failed !== 0 || typeof data.email_id !== 'string' || !data.email_id) return fail(502);
-    return Response.json({provider_reference: data.email_id}, {headers: {'Cache-Control': 'no-store'}});
+    const reference = await sendEmail(env, config, provider, deadline, fetcher);
+    if (!reference) return fail(502);
+    return Response.json({provider_reference: reference}, {headers: {'Cache-Control': 'no-store'}});
   } catch { return fail(503); }
 }
 

@@ -133,6 +133,14 @@ service = {q(c["producer_worker"])}
 name = "CHECKOUT_RATE_LIMITER"
 namespace_id = "20261107"
 simple = {{ limit = 20, period = 60 }}
+[[ratelimits]]
+name = "CHECKOUT_STORE_RATE_LIMITER"
+namespace_id = "20261122"
+simple = {{ limit = 300, period = 60 }}
+[[ratelimits]]
+name = "CHECKOUT_STATUS_RATE_LIMITER"
+namespace_id = "20261120"
+simple = {{ limit = 60, period = 60 }}
 """
     reviews = f"""name = {q(c["reviews_worker"])}
 {common}main = {q(str(ROOT / "modules/reviews/src/worker.py"))}
@@ -144,12 +152,18 @@ binding = "CF_VERSION_METADATA"
 REVIEWS_MODE = "verified_acquisition_only"
 REVIEWS_AUTOMATION_INTAKE = "test"
 REVIEWS_ENVIRONMENT = "test"
+REVIEWS_PUBLIC_ADMISSION = "edge"
+REVIEWS_INSTALLATION_ID = {q(c["installation"])}
 REVIEWS_STORE_KEY = {q(c["store"])}
 REVIEWS_SUBJECT_MAPS = {q(mapping_text)}
 [[ratelimits]]
 name = "REVIEWS_INGRESS"
 namespace_id = "20261108"
 simple = {{ limit = 1000, period = 60 }}
+[[ratelimits]]
+name = "REVIEWS_PUBLIC_INGRESS"
+namespace_id = "20261121"
+simple = {{ limit = 120, period = 60 }}
 [[d1_databases]]
 binding = "REVIEWS_DB"
 database_name = {q(c["reviews_db_name"])}

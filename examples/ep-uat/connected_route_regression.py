@@ -8,7 +8,7 @@ import tempfile
 import threading
 from pathlib import Path
 
-from playwright.sync_api import sync_playwright
+from playwright.sync_api import expect, sync_playwright
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "tests/ep_uat"))
@@ -46,6 +46,7 @@ def main():
                 page.goto(origin + "/products/woo-1/")
                 page.wait_for_function("!document.querySelector('[data-uat-add]').disabled")
                 page.locator("[data-uat-add]").click()
+                page.get_by_text("Added to your cart.", exact=True).wait_for()
                 page.goto(origin + "/cart/")
                 page.wait_for_selector(".cart-line")
                 cart_link = page.get_by_role("link", name="Continue shopping")
@@ -62,7 +63,7 @@ def main():
                 page.locator("#site-search").fill("not found")
                 page.locator("#site-search").press("Enter")
                 page.wait_for_url("**/policies-and-templates/?q=not+found")
-                assert page.locator("#results-status").inner_text() == "0 products"
+                expect(page.locator("#results-status")).to_have_text("0 products")
                 browser.close()
                 print("Connected product → cart → confirmed return → merchant catalogue: passed (synthetic API)")
         finally:

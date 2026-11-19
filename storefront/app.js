@@ -132,6 +132,10 @@ export async function createCheckoutAndStorePending({ configuration, catalogueVe
 }
 
 export async function checkoutStatus(configuration, sessionId, fetchImpl = fetch, signal) {
+  return (await checkoutStatusDetails(configuration, sessionId, fetchImpl, signal))?.state ?? null;
+}
+
+export async function checkoutStatusDetails(configuration, sessionId, fetchImpl = fetch, signal) {
   if (!validSessionId(sessionId)) return null;
   try {
     const response = await fetchImpl(
@@ -140,13 +144,21 @@ export async function checkoutStatus(configuration, sessionId, fetchImpl = fetch
     );
     if (!response.ok) return null;
     const result = await response.json();
-    return result?.state === "pending" || result?.state === "confirmed" || result?.state === "expired" ? result.state : null;
+    if (!["pending", "confirmed", "expired"].includes(result?.state)) return null;
+    const receipt = result.state === "confirmed" ? verifiedReceipt(result.receipt) : null;
+    return { state: result.state, ...(receipt ? { receipt } : {}) };
   } catch {
     return null;
   }
 }
 
 export async function pollCheckoutStatus(
+  configuration, sessionId, fetchImpl = fetch, sleep = delay, deadlineMs = 30_000, now = Date.now,
+) {
+  return (await pollCheckoutDetails(configuration, sessionId, fetchImpl, sleep, deadlineMs, now))?.state ?? null;
+}
+
+export async function pollCheckoutDetails(
   configuration, sessionId, fetchImpl = fetch, sleep = delay, deadlineMs = 30_000, now = Date.now,
 ) {
   const deadline = now() + deadlineMs;
@@ -157,16 +169,17 @@ export async function pollCheckoutStatus(
     if (delayMs) await sleep(Math.min(delayMs, beforeSleep));
     const remaining = deadline - now();
     if (remaining <= 0) return lastState;
-    const state = await checkoutStatusBeforeDeadline(configuration, sessionId, fetchImpl, remaining);
-    if (state === "confirmed" || state === "expired") return state;
-    if (state === "pending") lastState = state;
+    const result = await checkoutStatusBeforeDeadline(configuration, sessionId, fetchImpl, remaining);
+    if (result?.state === "confirmed" || result?.state === "expired") return result;
+    if (result?.state === "pending") lastState = result;
     else return lastState;
   }
   return lastState;
 }
 
 export async function processCheckoutReturn({ configuration, sessionId, storage, catalogue, cart, revision, poll }) {
-  const state = await poll(configuration, sessionId);
+  const result = await poll(configuration, sessionId);
+  const state = typeof result === "string" ? result : result?.state ?? null;
   if (state !== "confirmed") return { state, cleared: false };
   const current = loadPersistedCart(storage, catalogue);
   const pending = loadPendingCheckout(storage);
@@ -176,18 +189,28 @@ export async function processCheckoutReturn({ configuration, sessionId, storage,
     try { storage?.removeItem(CART_STORAGE_KEY); } catch { /* storage is optional */ }
   }
   consumePendingCheckout(storage, sessionId);
-  return { state, cleared };
+  const receipt = verifiedReceipt(result?.receipt);
+  return { state, cleared, ...(receipt ? { receipt } : {}) };
 }
 
 export function successReturnPath(pathname, state) {
   return state === "confirmed" || state === "expired" ? pathname : null;
 }
 
-export function confirmedCheckoutView(cleared) {
+export function confirmedCheckoutView(cleared, receipt, products = []) {
+  const verified = verifiedReceipt(receipt);
+  // Current catalogue titles are display labels, not historical receipt data.
+  const titles = new Map(products.map(product => [product.product_key, product.title]));
   return {
     checkoutLocked: false,
     message: cleared ? "Order confirmed. Your cart is ready for another purchase." : "Order confirmed. Your cart was kept.",
     actionLabel: "Continue shopping",
+    ...(verified ? { receipt: verified, purchasedItems: verified.items.map(item => {
+      const title = titles.get(item.product_key);
+      const label = typeof title === "string" && title.trim() ? `${title} (${item.product_key})` : item.product_key;
+      return `${label} × ${item.quantity} (${money(item.unit_amount_minor, verified.currency)} each)`;
+    }),
+    } : {}),
   };
 }
 
@@ -230,6 +253,21 @@ function validSessionId(value) {
   return typeof value === "string" && CHECKOUT_SESSION_ID_RE.test(value);
 }
 
+// Receipts originate only in the status response, never a pending snapshot or current catalogue/cart.
+function verifiedReceipt(value) {
+  if (!value || !/^[A-Za-z]{3}$/.test(value.currency) || !Array.isArray(value.items) || !value.items.length) return null;
+  const keys = new Set();
+  const items = [];
+  for (const item of value.items) {
+    if (!item || typeof item.product_key !== "string" || !item.product_key.trim() || keys.has(item.product_key) ||
+        !Number.isSafeInteger(item.quantity) || item.quantity < 1 ||
+        !Number.isSafeInteger(item.unit_amount_minor) || item.unit_amount_minor < 0) return null;
+    keys.add(item.product_key);
+    items.push({ product_key: item.product_key, quantity: item.quantity, unit_amount_minor: item.unit_amount_minor });
+  }
+  return { currency: value.currency, items };
+}
+
 function validSnapshot(value) {
   return Array.isArray(value) && value.every((item) => Array.isArray(item) && item.length === 2 && typeof item[0] === "string" && Number.isSafeInteger(item[1]) && item[1] > 0);
 }
@@ -253,7 +291,7 @@ async function checkoutStatusBeforeDeadline(configuration, sessionId, fetchImpl,
     }, millisecondsRemaining);
   });
   try {
-    return await Promise.race([checkoutStatus(configuration, sessionId, fetchImpl, controller.signal), timeout]);
+    return await Promise.race([checkoutStatusDetails(configuration, sessionId, fetchImpl, controller.signal), timeout]);
   } finally {
     clearTimeout(timeoutId);
   }
@@ -403,17 +441,27 @@ async function boot() {
       catalogue,
       cart,
       revision,
-      poll: pollCheckoutStatus,
+      poll: pollCheckoutDetails,
     });
     if (result.state === "confirmed") {
       if (result.cleared) revision = 0;
-      const view = confirmedCheckoutView(result.cleared);
+      const view = confirmedCheckoutView(result.cleared, result.receipt, catalogue.products);
       checkoutLocked = view.checkoutLocked;
       window.history.replaceState(null, "", successReturnPath(window.location.pathname, result.state));
       continueShopping.href = window.location.pathname;
       continueShopping.textContent = view.actionLabel;
       continueShopping.hidden = false;
       status.textContent = view.message;
+      if (view.purchasedItems) {
+        const receipt = document.createElement("ul");
+        receipt.setAttribute("aria-label", "Purchased items");
+        for (const text of view.purchasedItems) {
+          const line = document.createElement("li");
+          line.textContent = text;
+          receipt.append(line);
+        }
+        status.after(receipt);
+      }
     } else if (result.state === "expired") {
       const view = expiredCheckoutView();
       checkoutLocked = view.checkoutLocked;
