@@ -269,7 +269,8 @@ def deployed(tmp_path, monkeypatch):
     path = Installation.plan(tmp_path / "installation", options).directory
     db = sqlite3.connect(":memory:")
     db.row_factory = sqlite3.Row
-    db.executescript("CREATE TABLE orders(order_id TEXT PRIMARY KEY); CREATE TABLE outbox(id INTEGER PRIMARY KEY);"
+    db.executescript("CREATE TABLE orders(order_id TEXT PRIMARY KEY); "
+                     "CREATE TABLE outbox(id INTEGER PRIMARY KEY, order_id TEXT, event_type TEXT);"
                      "CREATE TABLE cartray_operator_migrations(namespace TEXT, position INT, path TEXT, checksum TEXT);"
                      "INSERT INTO cartray_operator_migrations VALUES ('commerce', 1, 'fixture', 'hash');")
     for migration in ("0006_post_purchase_actions.sql", "0007_post_purchase_checkpoint.sql"):
@@ -299,7 +300,7 @@ def initialise(install, db):
     spec.loader.exec_module(module)
 
     with db:
-        db.execute("INSERT INTO outbox VALUES (7)")
+        db.execute("INSERT INTO outbox(id) VALUES (7)")
         for query in module.statements(install.config["store_key"], apply=True):
             db.execute(query["sql"], query["params"]).fetchall()
 
@@ -401,7 +402,8 @@ def test_explicit_off_provider_sender_migration_then_fresh_off_deploy(deployed):
     install = email_migration_install(original, api)
     with pytest.raises(ValueError, match="allow-sender-change"):
         install.post_purchase_reconfigure_provider("cloudflare")
-    assert install.post_purchase_reconfigure_provider("cloudflare", True)["next"] == "fresh OFF build/deploy"
+    assert install.post_purchase_reconfigure_provider("cloudflare", True)["next"] == (
+        "build a different reviewed commit and deploy OFF")
     assert list(db.iterdump()) == before_db
     assert api.events == before_events  # Reads only: no upload, publish, send or D1 write.
     assert "build" not in install.state
@@ -429,6 +431,31 @@ def test_explicit_off_provider_sender_migration_then_fresh_off_deploy(deployed):
     install.post_purchase_disable()
     with pytest.raises(ValueError, match="retained release differs"):
         install.rollback(-2)  # Cannot restore a mismatched provider/sender/digest contract.
+
+
+@pytest.mark.parametrize("execution_state", ["claimed", "accepted", "uncertain"])
+def test_sender_change_rejects_execution_ahead_of_checkpoint(deployed, execution_state):
+    original, api, db = deployed
+    initialise(original, db)
+    with db:
+        db.execute("INSERT INTO orders VALUES ('purchase')")
+        db.execute("INSERT INTO outbox VALUES (8,'purchase','OrderConfirmed')")
+        db.execute("INSERT INTO post_purchase_executions VALUES (?,?,?,?,?,?,NULL,0,0)",
+                   (MERCHANT, "test", "purchase", "workflow", "digest", execution_state))
+    install = email_migration_install(original, api)
+    with pytest.raises(ValueError, match="beyond the post-purchase checkpoint"):
+        install.post_purchase_reconfigure_provider("cloudflare", True)
+    assert "post_purchase_provider_migration" not in install.state
+
+
+def test_shared_reviews_sender_cannot_change_through_delivery_reconfiguration(deployed):
+    original, api, db = deployed
+    initialise(original, db)
+    install = email_migration_install(original, api)
+    install.config["reviews_enabled"] = True
+    with pytest.raises(ValueError, match="Reviews shares the sender"):
+        install.post_purchase_reconfigure_provider("cloudflare", True)
+    assert "post_purchase_provider_migration" not in install.state
 
 
 @pytest.mark.parametrize("boundary", ["vault", "actions", "inventory"])
@@ -611,7 +638,7 @@ def test_disable_resumes_source_first_and_never_touches_the_database(deployed, m
     initialise(install, db)
     install.post_purchase_activate(True)
     with db:
-        db.execute("INSERT INTO outbox VALUES (8)")
+        db.execute("INSERT INTO outbox(id) VALUES (8)")
         db.execute("UPDATE post_purchase_checkpoint SET last_outbox_id=8")
         db.execute("INSERT INTO orders VALUES ('order-fixture')")
         db.execute("INSERT INTO post_purchase_executions VALUES (?,?,?,?,?,'claimed',NULL,0,0)",

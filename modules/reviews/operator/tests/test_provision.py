@@ -17,6 +17,9 @@ class Catalog:
     def request(self, path, method="GET", data=None):
         if path == "workers/subdomain":
             return {"subdomain": "operator-account"}
+        if path.startswith("workers/scripts/") and path.endswith("/subdomain") and method == "POST":
+            assert data == {"enabled": False, "previews_enabled": False}
+            return data
         if method == "POST":
             self.creates += 1
             value = dict(data)

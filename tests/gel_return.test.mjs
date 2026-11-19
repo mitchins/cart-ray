@@ -20,7 +20,7 @@ test('GEL shared renderer shows confirmed receipt lines as text, never current c
       adapter:{preview:false,getCart(){throw Error('Receipt must not read cart');}},
       location:{pathname:'/purchase-return/',search:''},
       document:{dispatchEvent(){},createElement(tag){return {tag,children:[],setAttribute(){},append(child){this.children.push(child);}};}},
-      CustomEvent:class {},icon:()=>'',h:String,url:String,
+      CustomEvent:class {},icon:()=>'',h:String,url:String,catalogueUrl:()=>'/shop/',
       $:selector=>selector==='#content'?content:selector.includes('button-row')?{before:list=>lists.push(list)}:heading,
     });
     await vm.runInContext(`${render}; renderReturn(${JSON.stringify({...result,state})})`,context);

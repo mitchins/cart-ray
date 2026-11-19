@@ -116,6 +116,8 @@ class PostPurchaseOperator:
             sender_changed = self.credentials["test_sender"] != vault["post_purchase_test_sender"]
             if sender_changed and not allow_sender_change:
                 raise ValueError("sender change requires explicit --allow-sender-change")
+            if sender_changed and self.config["reviews_enabled"]:
+                raise ValueError("post-purchase sender changes are unavailable while Reviews shares the sender handoff")
             if key in vault and vault[key] != value:
                 raise ValueError("provider credential already pinned; token rotation is not supported")
             if not sender_changed and provider == self.post_purchase_email_provider:
@@ -125,6 +127,8 @@ class PostPurchaseOperator:
             if any(deployment["versions"][role] != disabled[role] for role in POST_PURCHASE_ROLES):
                 raise ValueError("email reconfiguration requires both recorded OFF versions")
             self.check_current_post_purchase_off()
+            if sender_changed:
+                self.check_sender_change_checkpoint()
             for role in POST_PURCHASE_ROLES:
                 if self.worker_visibility_errors(role):
                     raise ValueError("email reconfiguration requires both Workers and previews to remain private")
@@ -168,6 +172,10 @@ class PostPurchaseOperator:
         if current_action_hash not in (migration["old_action_sha256"], migration["new_action_sha256"]):
             raise ValueError("actions differ from both recorded email migration snapshots")
         self.check_current_post_purchase_off()
+        if old["post_purchase_test_sender"] != new["post_purchase_test_sender"]:
+            if self.config["reviews_enabled"]:
+                raise ValueError("post-purchase sender changes are unavailable while Reviews shares the sender handoff")
+            self.check_sender_change_checkpoint()
         for role in POST_PURCHASE_ROLES:
             if self.worker_visibility_errors(role):
                 raise ValueError("email reconfiguration requires both Workers and previews to remain private")
@@ -186,7 +194,20 @@ class PostPurchaseOperator:
         migration["status"] = "awaiting-off-deploy"
         self.state.pop("build", None)
         self.save()
-        return {"post_purchase": "provider-configured", "provider": provider, "next": "fresh OFF build/deploy"}
+        return {"post_purchase": "provider-configured", "provider": provider,
+                "next": "build a different reviewed commit and deploy OFF"}
+
+    def check_sender_change_checkpoint(self):
+        # A terminal execution still carries the old immutable action digest.
+        # It must not be encountered again after the sender is changed.
+        rows = self.api.query(self.db("commerce"), """SELECT COUNT(*) AS pending FROM post_purchase_executions e
+            WHERE e.merchant_id=? AND e.environment='test' AND NOT EXISTS (
+              SELECT 1 FROM outbox o JOIN post_purchase_checkpoint c ON c.singleton=1
+              WHERE c.merchant_id=e.merchant_id AND c.environment=e.environment
+                AND o.order_id=e.order_id AND o.event_type='OrderConfirmed' AND o.id<=c.last_outbox_id)""",
+                              [self.config["store_key"]])
+        if len(rows) != 1 or rows[0]["pending"]:
+            raise ValueError("sender change blocked: reconcile executions beyond the post-purchase checkpoint")
 
     def require_post_purchase_off(self):
         if self.has_post_purchase and (self.state.get("post_purchase_transition")

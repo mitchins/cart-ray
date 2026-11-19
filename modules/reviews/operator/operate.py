@@ -615,8 +615,7 @@ class Installation(PostPurchaseOperator):
                     {"main_module": "bootstrap.mjs", "bindings": [], "compatibility_date": "2026-08-31"},
                     create=True,
                 )
-            if self.has_post_purchase:
-                self.set_worker_visibility(role, False)
+            self.set_worker_visibility(role, False)
             self.state["resources"][key] = {"name": name, "id": name}
             self.state["pending"].remove(key)
             self.save()
@@ -1101,7 +1100,7 @@ class Installation(PostPurchaseOperator):
             if role in progress["versions"]:
                 self.set_worker_visibility(role, node.get("public", False))
                 continue
-            if self.has_post_purchase:
+            if not node.get("public", False):
                 self.set_worker_visibility(role, False)
             result = self.upload_worker(role, node, build)
             self.api.publish(self.name(role), result["id"])

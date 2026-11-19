@@ -334,6 +334,14 @@ queues and services. The Pages output uses the current public Reviews gateway;
 customer cookies and staff credentials cannot reach public reads. Checkout goes
 directly to the separately bound test source origin.
 
+Changing a test post-purchase email provider is an OFF-only operator action.
+After `post-purchase-reconfigure-provider`, build from a different reviewed
+commit and deploy the new release with delivery OFF: retained builds are keyed
+by commit and cannot be overwritten with different provider inputs. A sender
+change is refused when Reviews shares the sender handoff, or when an execution
+has not yet been passed by the post-purchase checkpoint. Reconcile and advance
+the checkpoint first; never resend an uncertain execution to clear it.
+
 **Verification does not activate the store.** There is no verified runtime
 record before explicit activation, so a source wakeup cannot create the
 activation fence or backfill earlier purchases. The initial sender is disabled and its processing queues are paused until activation;
