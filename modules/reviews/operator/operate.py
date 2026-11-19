@@ -1417,6 +1417,12 @@ class Installation(PostPurchaseOperator):
                 "already_active": True,
                 "activation_watermark": self.state["activation_watermark"],
             }
+        self.check_post_purchase_handoff()
+        if (self.has_post_purchase and self.post_purchase_email_provider == "cloudflare"
+                and not self.state.get("reviews_handoff_attestation")):
+            retained = self.vault().get("post_purchase_smtp2go_api_key")
+            if not retained or not hmac.compare_digest(retained, self.credentials.get("smtp2go_api_key", "")):
+                raise ValueError("attest the original Reviews SMTP handoff before activation")
         if not self.state.get("deployment", {}).get("complete"):
             raise ValueError("finish the interrupted deploy before explicit activation")
         # Reconcile a partially completed queue resume before staged inspection.

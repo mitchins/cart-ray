@@ -110,6 +110,20 @@ class PostPurchaseOperator:
         if pin.get("fingerprints") != actual:
             raise ValueError("Reviews handoff differs from the attested original; restore it before continuing")
 
+    def require_reviews_sender_off(self):
+        deployment = self.state.get("deployment", {})
+        if deployment.get("sending") is not False:
+            raise ValueError("disable Reviews sending before changing provider credentials")
+        actual = self.api.version(self.name("sender"))
+        bindings = {item["name"]: item for item in actual.get("resources", {}).get("bindings", [])}
+        if (actual.get("id") != deployment.get("versions", {}).get("sender")
+                or bindings.get("INITIAL_SEND_MODE", {}).get("text") != "disabled"):
+            raise ValueError("live Reviews sender differs from the recorded OFF version")
+        for role in ("events", "schedule", "due"):
+            queue = self.api.request("queues/" + self.state["resources"]["queue:" + role]["id"])
+            if queue.get("settings", {}).get("delivery_paused") is not True:
+                raise ValueError("pause Reviews processing queues before changing provider credentials")
+
     def attest_reviews_handoff(self, original_path, sender_version, attested):
         """Pin operator-attested original handoff; never read back deployed secret bytes."""
         from operate import read_private
@@ -204,6 +218,7 @@ class PostPurchaseOperator:
                 raise ValueError("provider credential change requires explicit --allow-credential-change")
             if credential_changed and self.config["reviews_enabled"]:
                 self.check_reviews_handoff(required=True)
+                self.require_reviews_sender_off()
             if not sender_changed and not credential_changed and provider == self.post_purchase_email_provider:
                 self.check_post_purchase_handoff()
                 return {"post_purchase": "provider-unchanged", "provider": provider}
@@ -249,6 +264,7 @@ class PostPurchaseOperator:
             raise ValueError("provider credential change requires explicit --allow-credential-change")
         if key in old and old[key] != new[key] and self.config["reviews_enabled"]:
             self.check_reviews_handoff(required=True)
+            self.require_reviews_sender_off()
         if any(self.credentials.get(field) != new["post_purchase_" + field]
                for field in email_handoff_fields(provider)):
             raise ValueError("resume email migration with its unchanged protected handoff")

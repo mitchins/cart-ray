@@ -550,6 +550,36 @@ def test_shared_reviews_smtp_credential_cannot_change_via_post_purchase(deployed
     assert "post_purchase_provider_migration" not in install.state
 
 
+def test_active_reviews_sender_blocks_credential_replacement(deployed, monkeypatch):
+    original, api, db = deployed
+    install = email_migration_install(original, api)
+    install.post_purchase_reconfigure_provider("cloudflare", True)
+    capture_build(install, "cloudflare-old-commit")
+    install.deploy()
+    install.config["reviews_enabled"] = True
+    install.state["deployment"]["sending"] = True
+    install.credentials = {**CF_CREDS, "cloudflare_email_api_token": "replacement-fixture-token-" * 3}
+    monkeypatch.setattr(install, "check_reviews_handoff", lambda **kwargs: None)
+    before_db, before_events = list(db.iterdump()), list(api.events)
+    with pytest.raises(ValueError, match="disable Reviews sending"):
+        install.post_purchase_reconfigure_provider("cloudflare", allow_credential_change=True)
+    assert list(db.iterdump()) == before_db and api.events == before_events
+
+
+def test_unpinned_cloudflare_reviews_activation_rejects_changed_smtp(deployed):
+    original, api, db = deployed
+    install = email_migration_install(original, api)
+    install.post_purchase_reconfigure_provider("cloudflare", True)
+    capture_build(install, "cloudflare-old-commit")
+    install.deploy()
+    install.config["reviews_enabled"] = True
+    install.credentials = {**CF_CREDS, "smtp2go_api_key": "api-different"}
+    before_db, before_events = list(db.iterdump()), list(api.events)
+    with pytest.raises(ValueError, match="attest the original Reviews SMTP handoff"):
+        install.activate(True)
+    assert list(db.iterdump()) == before_db and api.events == before_events
+
+
 def test_cloudflare_credential_replacement_cannot_redeploy_unpinned_reviews_sender(deployed):
     original, api, _ = deployed
     install = email_migration_install(original, api)
@@ -636,6 +666,7 @@ def test_pinned_rotation_resume_rejects_changed_reviews_handoff(deployed, monkey
     monkeypatch.setattr(install, "post_purchase_runtime", lambda: (
         install.state["deployment"], install.state["deployment"]["post_purchase_disabled_versions"], {}))
     monkeypatch.setattr(install, "check_current_post_purchase_off", lambda: None)
+    monkeypatch.setattr(install, "require_reviews_sender_off", lambda: None)
     write = operate.atomic_json
 
     def interrupt(path, value):
