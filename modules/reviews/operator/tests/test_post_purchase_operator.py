@@ -1,5 +1,6 @@
 """EP operator coverage with a provider fake, real fence SQL, and the existing email handler."""
 
+import importlib.util
 import json
 import sqlite3
 import stat
@@ -292,11 +293,14 @@ def deployed(tmp_path, monkeypatch):
 
 
 def initialise(install, db):
-    from scripts.post_purchase_installation import statements
+    spec = importlib.util.spec_from_file_location(
+        "post_purchase_installation", ROOT / "scripts/post_purchase_installation.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
 
     with db:
         db.execute("INSERT INTO outbox VALUES (7)")
-        for query in statements(install.config["store_key"], apply=True):
+        for query in module.statements(install.config["store_key"], apply=True):
             db.execute(query["sql"], query["params"]).fetchall()
 
 
