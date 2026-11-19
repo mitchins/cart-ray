@@ -37,10 +37,12 @@ def validate_post_purchase(value, config, commerce_keys):
                 or len(set(offers)) != len(offers)):
             raise ValueError("post-purchase offers must be an authorised commerce subset")
         links = action["links"]
-        if (not isinstance(links, list) or not 1 <= len(links) <= 20
+        generic_fulfilment = config.get("post_purchase_generic_test") is True
+        if (not isinstance(links, list) or (generic_fulfilment and links) or
+                (not generic_fulfilment and not 1 <= len(links) <= 20)
                 or any(not isinstance(link, str) or not re.fullmatch(r"https://www\.dropbox\.com/t/[A-Za-z0-9]+", link)
                        for link in links)):
-            raise ValueError("only explicit dummy Dropbox Transfer links are supported")
+            raise ValueError("invalid test links; generic fulfilment uses registered resources")
         for key in ("recipient", "sender"):
             if (not isinstance(action[key], str) or not action[key].isascii() or len(action[key]) > 254
                     or not re.fullmatch(r"[^\s@<>]+@[^\s@<>]+\.[A-Za-z]{2,}", action[key])):
@@ -284,6 +286,15 @@ def graph(installation, versions=None, sending=False, post_purchase_modes=None,
             "vars": {"ENVIRONMENT": "test", "DELIVERY_MODE": modes.get("post-purchase", "disabled"),
                      "STRIPE_ACCOUNT_ID": config["stripe_account_id"]},
         }
+        if "fulfilment" in state:
+            nodes["source"]["vars"].update(
+                CARTRAY_FULFILMENT_MODE="test",
+                CARTRAY_FULFILMENT_PUBLIC_ORIGIN=storefront,
+            )
+            nodes["source"].setdefault("ratelimits", {})["FULFILMENT_RATE_LIMITER"] = ("20261123", 120)
+            nodes["post-purchase"]["vars"]["FULFILMENT_PUBLIC_ORIGIN"] = storefront
+            if state["fulfilment"]["bucket"]:
+                nodes["source"]["r2"] = {"FULFILMENT_PRIVATE_BUCKET": state["fulfilment"]["bucket"]}
         provider = email_provider or config.get("post_purchase_email_provider", "smtp2go")
         if provider == "cloudflare":
             nodes["post-purchase"]["vars"].update(
@@ -299,6 +310,8 @@ def graph(installation, versions=None, sending=False, post_purchase_modes=None,
         ]
         bindings.append({"name": "CF_VERSION_METADATA", "type": "version_metadata"})
         bindings += [{"name": name, "type": "d1", "id": db(role)} for name, role in node.get("db", {}).items()]
+        bindings += [{"name": name, "type": "r2_bucket", "bucket_name": bucket}
+                     for name, bucket in node.get("r2", {}).items()]
         bindings += [
             {"name": name, "type": "service", "service": worker(role), "environment": "production"}
             for name, role in node.get("services", {}).items()
@@ -374,6 +387,9 @@ def secret_bindings(installation, role):
         names[role] = {}
     if "post_purchase_config" in installation.config and role in ("source", "post-purchase"):
         names[role]["CARTRAY_POST_PURCHASE_TOKEN" if role == "source" else "HANDLER_TOKEN"] = "post_purchase_token"
+    if role == "source" and "fulfilment" in installation.state:
+        names[role].update(CARTRAY_FULFILMENT_CHECKOUT_PLAN="fulfilment_checkout_plan",
+                           CARTRAY_FULFILMENT_PROVIDER_CONFIG="fulfilment_provider_config")
     result = {name: vault[key] for name, key in names[role].items()}
     if role == "source":
         result.update(
@@ -435,6 +451,8 @@ def wrangler_config(installation, role, node):
             lines += ["[[services]]", f"binding = {q(name)}", f"service = {q(binding['service'])}"]
         elif kind == "queue":
             lines += ["[[queues.producers]]", f"binding = {q(name)}", f"queue = {q(binding['queue_name'])}"]
+        elif kind == "r2_bucket":
+            lines += ["[[r2_buckets]]", f"binding = {q(name)}", f"bucket_name = {q(binding['bucket_name'])}"]
         elif kind == "ratelimit":
             lines += [
                 "[[ratelimits]]",

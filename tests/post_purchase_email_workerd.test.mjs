@@ -13,7 +13,7 @@ test(`private registered email handler runs in Workerd with synthetic ${provider
   const body = {merchant:'merchant-one', environment:'test', workflow_key:'download-one', config_ref:'private/download',
     config_digest:createHash('sha256').update(JSON.stringify(action)).digest('hex'), order_id:'order-one',
     session_id:'cs_test_123', items:[['product-one',1]]};
-  const calls=[];
+  const calls=[], messages=[];
   const outboundService={type:'fetcher',handler:async request => {
     const url=new URL(request.url); calls.push(url.hostname + url.pathname);
     if (url.pathname === '/v1/account') return Response.json({id:'acct_test'});
@@ -25,19 +25,23 @@ test(`private registered email handler runs in Workerd with synthetic ${provider
       assert.equal(url.pathname,`/client/v4/accounts/${'a'.repeat(32)}/email/sending/send`);
       assert.equal(request.headers.get('authorization'),'Bearer '+'x'.repeat(40));
       const message=await request.json();
+      messages.push(message.text);
       assert.equal(message.to,'recipient@example.test');assert.equal(message.from,'sender@example.test');
       return Response.json({success:true,errors:[],result:{message_id:'<test-receipt@example.test>',
         delivered:[],queued:['recipient@example.test'],permanent_bounces:[],suppressed_recipients:[]}});
     }
     assert.equal(url.hostname,'api.smtp2go.com');
-    assert.deepEqual((await request.json()).to,['recipient@example.test']);
+    const message=await request.json();
+    assert.deepEqual(message.to,['recipient@example.test']);
+    messages.push(message.text_body);
     return Response.json({data:{succeeded:1,failed:0,email_id:'test-receipt'}});
   }};
   const script=readFileSync(new URL('../modules/post-purchase/transactional-email/worker.mjs',import.meta.url),'utf8');
   const values={DELIVERY_MODE:'test',ENVIRONMENT:'test',HANDLER_TOKEN:'x'.repeat(40),
     DELIVERY_CONFIG:JSON.stringify({actions:[action]}),APPROVED_TEST_RECIPIENT:'recipient@example.test',
     APPROVED_TEST_SENDER:'sender@example.test',STRIPE_ACCOUNT_ID:'acct_test',
-    STRIPE_API_KEY:'sk_test_synthetic',SMTP2GO_API_KEY:'api-synthetic'};
+    STRIPE_API_KEY:'sk_test_synthetic',SMTP2GO_API_KEY:'api-synthetic',
+    FULFILMENT_PUBLIC_ORIGIN:'https://store.example.test'};
   if (provider==='cloudflare') {
     delete values.SMTP2GO_API_KEY;
     Object.assign(values,{EMAIL_PROVIDER:'cloudflare',CLOUDFLARE_EMAIL_API_TOKEN:'x'.repeat(40),
@@ -53,6 +57,12 @@ test(`private registered email handler runs in Workerd with synthetic ${provider
     assert.deepEqual(await response.json(),{provider_reference:provider==='cloudflare'
       ? '<test-receipt@example.test>' : 'test-receipt'});
     assert.equal(calls.length,3);
+    const token='a'.repeat(43);
+    const withAccess={...body,access_links:[['manual.pdf',`https://store.example.test/fulfilment/access?token=${token}`]]};
+    const accessResponse=await mf.dispatchFetch('https://private.invalid/',{method:'POST',
+      headers:{Authorization:'Bearer '+'x'.repeat(40)},body:JSON.stringify(withAccess)});
+    assert.equal(accessResponse.status,200);
+    assert.match(messages.at(-1),/manual\.pdf: https:\/\/store\.example\.test\/fulfilment\/access\?token=/);
   } finally { await mf.dispose(); }
 });
 }

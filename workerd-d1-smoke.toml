@@ -11,3 +11,7 @@ binding = "DB"
 database_name = "cartray-workerd-smoke"
 database_id = "00000000-0000-0000-0000-000000000002"
 migrations_dir = "migrations"
+
+[[r2_buckets]]
+binding = "FULFILMENT_TEST_BUCKET"
+bucket_name = "cartray-fulfilment-smoke"

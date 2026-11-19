@@ -209,6 +209,8 @@ class PostPurchaseOperator:
                    for field in ("stripe_test_key", "approved_test_email")):
                 raise ValueError("email reconfiguration cannot change the pinned Stripe key or recipient")
             sender_changed = self.credentials["test_sender"] != vault["post_purchase_test_sender"]
+            if sender_changed and "fulfilment" in self.state:
+                raise ValueError("sender changes cannot reinterpret pinned fulfilment workflows")
             if sender_changed and not allow_sender_change:
                 raise ValueError("sender change requires explicit --allow-sender-change")
             if sender_changed and self.config["reviews_enabled"]:
@@ -270,6 +272,8 @@ class PostPurchaseOperator:
             raise ValueError("resume email migration with its unchanged protected handoff")
         if old["post_purchase_test_sender"] != new["post_purchase_test_sender"] and not allow_sender_change:
             raise ValueError("sender change requires explicit --allow-sender-change")
+        if old["post_purchase_test_sender"] != new["post_purchase_test_sender"] and "fulfilment" in self.state:
+            raise ValueError("sender changes cannot reinterpret pinned fulfilment workflows")
         current = read_private(self.vault_path)
         if current not in (old, new):
             raise ValueError("vault differs from both recorded email migration snapshots")
@@ -491,6 +495,8 @@ class PostPurchaseOperator:
                 "activation_watermark": self.state.get("post_purchase_watermark")}
 
     def post_purchase_activate(self, enable_test_delivery=False):
+        if self.config.get("post_purchase_generic_test") and "fulfilment" not in self.state:
+            raise ValueError("register test fulfilment resources before enabling delivery")
         if self.config["reviews_enabled"]:
             self.check_reviews_handoff()
         if self.state.get("post_purchase_provider_migration"):

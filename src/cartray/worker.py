@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import hmac
 import inspect
 import ipaddress
@@ -8,7 +9,7 @@ import json
 import re
 import time
 from dataclasses import dataclass
-from urllib.parse import parse_qsl, urlparse
+from urllib.parse import parse_qsl, quote, urlparse
 
 from kinglet import Kinglet, Response
 
@@ -21,6 +22,15 @@ from cartray.errors import (
     IdempotencyConflict,
     SettlementInconsistency,
     WebhookValidationError,
+)
+from cartray.fulfilment import (
+    ProviderRegistry,
+    Redirect,
+    Stream,
+    authorised_access,
+    external_link,
+    private_object,
+    token_digest,
 )
 from cartray.models import CheckoutRequest
 from cartray.post_purchase import D1Dispatcher, drain_confirmed_d1, parse_action_config
@@ -69,9 +79,16 @@ class CorsPolicy:
 
 
 def create_app(
-    service_factory=None, catalogue_factory=None, settlement_service_factory=None, status_store_factory=None
+    service_factory=None,
+    catalogue_factory=None,
+    settlement_service_factory=None,
+    status_store_factory=None,
+    fulfilment_registry=None,
 ):
     app = Kinglet(auto_wrap_exceptions=False)
+    fulfilment_registry = fulfilment_registry or ProviderRegistry(
+        {"external_link": external_link, "private_object": private_object}
+    )
     service_factory = service_factory or checkout_service_from_environment
     catalogue_factory = catalogue_factory or public_catalogue_from_environment
     settlement_service_factory = settlement_service_factory or settlement_service_from_environment
@@ -129,6 +146,57 @@ def create_app(
             )
         except Exception:
             return Response({"error": "source identity unavailable"}, status=503, headers={"Cache-Control": "no-store"})
+
+    @app.route("/fulfilment/access", methods=["GET", "HEAD"])
+    async def fulfilment_access(request):
+        # Bearer capabilities are never consumed by navigation or link scanners.
+        headers = {"Cache-Control": "no-store", "Referrer-Policy": "no-referrer", "X-Content-Type-Options": "nosniff"}
+        if getattr(request.env, "CARTRAY_FULFILMENT_MODE", "disabled") != "test":
+            return Response({"error": "resource unavailable"}, status=404, headers=headers)
+        try:
+            if _test_environment(request.env) != "test" or len(request.query_string) > 100:
+                raise ValueError("invalid request")
+            pairs = parse_qsl(request.query_string, keep_blank_values=True, max_num_fields=1)
+            if len(pairs) != 1 or pairs[0][0] != "token":
+                raise ValueError("invalid request")
+            token_digest(pairs[0][1])  # Reject malformed capabilities before touching D1.
+            if not await _client_rate_limit(request, "FULFILMENT_RATE_LIMITER", "fulfilment"):
+                return Response({"error": "resource unavailable"}, status=429, headers=headers)
+            raw = _required_env(request.env, "CARTRAY_FULFILMENT_PROVIDER_CONFIG")
+            if len(raw.encode()) > 65536:
+                raise ValueError("invalid provider configuration")
+            settings = json.loads(raw)
+            if not isinstance(settings, dict) or set(settings) != {"merchant", "resources"}:
+                raise ValueError("invalid provider configuration")
+            if not isinstance(settings["merchant"], str) or not isinstance(settings["resources"], dict):
+                raise ValueError("invalid provider configuration")
+            configs = {}
+            for ref, config in settings["resources"].items():
+                if not isinstance(ref, str) or not isinstance(config, dict):
+                    raise ValueError("invalid provider configuration")
+                config = dict(config)
+                encoded = json.dumps(config, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode()
+                digest = hashlib.sha256(encoded).hexdigest()
+                binding = config.pop("bucket_binding", None)
+                if binding is not None:
+                    if not isinstance(binding, str) or not re.fullmatch(r"[A-Z][A-Z0-9_]{0,63}", binding):
+                        raise ValueError("invalid provider configuration")
+                    config["bucket"] = getattr(request.env, binding, None)
+                configs[(settings["merchant"], ref)] = (config, digest)
+            result = await authorised_access(
+                request.env.DB, pairs[0][1], fulfilment_registry, configs, int(time.time())
+            )
+            if isinstance(result, Redirect):
+                return Response(status=302, headers={**headers, "Location": result.url})
+            if isinstance(result, Stream):
+                disposition = "attachment; filename*=UTF-8''" + quote(result.filename, safe="")
+                return Response(
+                    result.body,
+                    headers={**headers, "Content-Type": result.mime_type, "Content-Disposition": disposition},
+                )
+        except Exception:
+            pass
+        return Response({"error": "resource unavailable"}, status=404, headers=headers)
 
     @app.get("/catalogue")
     async def catalogue(request):
@@ -276,7 +344,34 @@ async def checkout_service_from_environment(env) -> CheckoutService:
         cancel_url,
         review_invitations_enabled=_automatic_invitation_enabled(env),
         review_invitation_default_selected=getattr(env, "CARTRAY_REVIEW_INVITATION_DEFAULT", None) == "checked",
+        fulfilment_config=_fulfilment_checkout_config(env),
+        fulfilment_runtime_bindings=env,
+        fulfilment_provider_config=(
+            _required_env(env, "CARTRAY_FULFILMENT_PROVIDER_CONFIG")
+            if getattr(env, "CARTRAY_FULFILMENT_MODE", "disabled") == "test" else None
+        ),
     )
+
+
+def _fulfilment_checkout_config(env):
+    mode = getattr(env, "CARTRAY_FULFILMENT_MODE", "disabled")
+    if mode == "disabled":
+        return None
+    if mode != "test" or _test_environment(env) != "test":
+        raise RuntimeError("fulfilment mode is unavailable")
+    if getattr(env, "CARTRAY_POST_PURCHASE_MODE", "disabled") == "disabled":
+        return None
+    if getattr(env, "CARTRAY_POST_PURCHASE_MODE", "disabled") != "test":
+        raise RuntimeError("post-purchase mode is unavailable")
+    from cartray.fulfilment import checkout_plan
+
+    raw = _required_env(env, "CARTRAY_FULFILMENT_CHECKOUT_PLAN")
+    snapshot, _ = checkout_plan(raw, ())
+    planned = parse_action_config(snapshot[2])
+    deployed = parse_action_config(_required_env(env, "CARTRAY_POST_PURCHASE_CONFIG"))
+    if planned != deployed:
+        raise RuntimeError("fulfilment checkout and delivery workflows differ")
+    return raw
 
 
 def _automatic_invitation_enabled(env) -> bool:
@@ -426,7 +521,12 @@ async def _client_rate_limit(request, binding: str, scope: str) -> bool:
     limiter = getattr(request.env, binding, None)
     if limiter is None:
         raise RuntimeError("missing checkout status limiter")
-    address = ipaddress.ip_address(request.header("cf-connecting-ip") or "")
+    address_text = request.header("cf-connecting-ip")
+    if not address_text:
+        raw_headers = getattr(getattr(request, "_raw", None), "headers", None)
+        if raw_headers is not None and callable(getattr(raw_headers, "get", None)):
+            address_text = raw_headers.get("cf-connecting-ip")
+    address = ipaddress.ip_address(address_text or "")
     if address.version == 6:
         address = address.ipv4_mapped or ipaddress.ip_network(f"{address}/64", strict=False).network_address
     installation = _required_env(request.env, "CARTRAY_SIGNING_KEY_ID")
@@ -550,6 +650,8 @@ async def _drain_post_purchase(env):
     try:
         if getattr(env, "CARTRAY_POST_PURCHASE_MODE", "disabled") != "test" or _test_environment(env) != "test":
             return
+        if getattr(env, "CARTRAY_FULFILMENT_MODE", "disabled") not in ("disabled", "test"):
+            return
         merchant, environment, actions = parse_action_config(_required_env(env, "CARTRAY_POST_PURCHASE_CONFIG"))
         token = _required_env(env, "CARTRAY_POST_PURCHASE_TOKEN")
         service = getattr(env, "POST_PURCHASE_HANDLER", None)
@@ -567,6 +669,7 @@ async def _drain_post_purchase(env):
                     "order_id": purchase.order_id,
                     "session_id": purchase.session_id,
                     "items": purchase.items,
+                    **({"access_links": execution.access_links} if execution.access_links else {}),
                 },
                 separators=(",", ":"),
             )
@@ -581,9 +684,17 @@ async def _drain_post_purchase(env):
                 raise RuntimeError("post-purchase handler outcome uncertain")
             return result.get("provider_reference")
 
-        dispatcher = D1Dispatcher(env.DB, merchant, environment, {"service": service_handler})
+        fulfilment_enabled = getattr(env, "CARTRAY_FULFILMENT_MODE", "disabled") == "test"
+        fulfilment_origin = (
+            _origin(_required_env(env, "CARTRAY_FULFILMENT_PUBLIC_ORIGIN")) if fulfilment_enabled else None
+        )
+        dispatcher = D1Dispatcher(
+            env.DB, merchant, environment, {"service": service_handler},
+            pinned=fulfilment_enabled, fulfilment_origin=fulfilment_origin,
+        )
         await asyncio.wait_for(
-            drain_confirmed_d1(dispatcher, actions, limit=10, max_new_claims=2, deadline=time.monotonic() + 21),
+            drain_confirmed_d1(dispatcher, actions, limit=10, max_new_claims=1 if fulfilment_enabled else 2,
+                               deadline=time.monotonic() + 21),
             timeout=22,
         )
     except Exception as error:

@@ -71,3 +71,12 @@ def test_many_uncertain_rows_do_not_hide_claimed_executions(monkeypatch):
     assert db.execute(checkpoint_query).fetchone() == (4, 0, 5, "blocked")
     claim_query = calls[0][0][0][-1].split(";", 1)[1]
     assert db.execute(claim_query).fetchone()[0] == "blocked"
+
+
+def test_fulfilment_inspection_displays_only_stage_not_capabilities(monkeypatch):
+    scope = ["--account", "a" * 32, "--database", "merchant-test", "--merchant", "merchant"]
+    calls = invoke(monkeypatch, "inspect", *scope, "--fulfilment")
+    sql = calls[0][0][0][-1]
+    assert "fulfilment_notification_intents" in sql
+    assert "fulfilment_stage" in sql
+    assert "token_digest" not in sql

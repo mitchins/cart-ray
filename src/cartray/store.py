@@ -313,6 +313,18 @@ class SqliteOrderStore:
                     for item in order.items
                 ],
             )
+            if order.fulfilment_plan is not None:
+                merchant, environment, actions_json, actions_digest = order.fulfilment_plan
+                self.connection.execute(
+                    "INSERT INTO fulfilment_order_plans VALUES (?,?,?,?,?)",
+                    (order.order_id, merchant, environment, actions_json, actions_digest),
+                )
+                self.connection.executemany(
+                    "INSERT INTO fulfilment_order_bindings VALUES (?,?,?,?,?,?,?,?,?)",
+                    [(merchant, environment, order.order_id, item.workflow_key, item.workflow_digest,
+                      item.product_key, item.resource_id, item.resource_version, item.ordinal)
+                     for item in order.fulfilment_bindings],
+                )
             self.connection.execute(
                 """INSERT INTO checkout_sessions
                    (order_id, state, projection_nonce, lease_expires_at, updated_at)
@@ -373,6 +385,14 @@ class SqliteOrderStore:
         if row is None:
             raise KeyError(order_id)
         return row
+
+    async def fulfilment_resource_rows(self, merchant, environment, references):
+        if not references:
+            return []
+        where = " OR ".join("(resource_id=? AND resource_version=?)" for _ in references)
+        sql = ("SELECT * FROM fulfilment_resources WHERE merchant_id=? AND environment=? AND (" + where + ")")
+        values = (merchant, environment, *(value for pair in references for value in pair))
+        return [dict(row) for row in self.connection.execute(sql, values)]
 
     async def find_order_by_request(self, checkout_request_id: str, request_fingerprint: str) -> CheckoutOrder | None:
         row = self.connection.execute(
@@ -925,6 +945,18 @@ class D1OrderStore:
             )
             for item in order.items
         )
+        if order.fulfilment_plan is not None:
+            merchant, environment, actions_json, actions_digest = order.fulfilment_plan
+            statements.append(self.database.prepare(
+                "INSERT INTO fulfilment_order_plans VALUES (?,?,?,?,?)"
+            ).bind(order.order_id, merchant, environment, actions_json, actions_digest))
+            statements.extend(
+                self.database.prepare("INSERT INTO fulfilment_order_bindings VALUES (?,?,?,?,?,?,?,?,?)").bind(
+                    merchant, environment, order.order_id, item.workflow_key, item.workflow_digest,
+                    item.product_key, item.resource_id, item.resource_version, item.ordinal,
+                )
+                for item in order.fulfilment_bindings
+            )
         statements.extend(
             [
                 self.database.prepare(
@@ -984,6 +1016,14 @@ class D1OrderStore:
         if existing is not None and existing.redirect == redirect:
             return
         raise CheckoutInProgress("checkout redirect was not persisted")
+
+    async def fulfilment_resource_rows(self, merchant, environment, references):
+        if not references:
+            return []
+        where = " OR ".join("(resource_id=? AND resource_version=?)" for _ in references)
+        sql = ("SELECT * FROM fulfilment_resources WHERE merchant_id=? AND environment=? AND (" + where + ")")
+        values = (merchant, environment, *(value for pair in references for value in pair))
+        return _results(await self.database.prepare(sql).bind(*values).all())
 
     async def find_order_by_request(self, checkout_request_id: str, request_fingerprint: str) -> CheckoutOrder | None:
         row = await self._first(

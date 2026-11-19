@@ -17,6 +17,7 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 from cloud import API, CloudError, stripe
+from fulfilment_operator import FulfilmentOperator
 from merchant_inputs import ConnectedShell, commerce_build_hash, javascript_json, tree_hash
 from merchant_inputs import snapshot as snapshot_merchant_inputs
 from merchant_inputs import validate as validate_merchant_inputs
@@ -116,6 +117,7 @@ def validate_config(config):
         "post_purchase_config",
         "post_purchase_config_sha256",
         "post_purchase_email_provider",
+        "post_purchase_generic_test",
     }
     if not isinstance(config, dict) or set(config) - required - optional or required - set(config):
         raise ValueError("installation config has missing or unknown fields")
@@ -220,9 +222,14 @@ def validate_config(config):
         if config.get("post_purchase_email_provider", "smtp2go") not in PROVIDER_KEYS:
             raise ValueError("unsupported post-purchase email provider")
         snapshot = config["post_purchase_config"]
-        if (not isinstance(snapshot, str) or not snapshot.strip()
-                or config.get("store_key") != "effective-policy-uat"
-                or config["stripe_account_id"] != "acct_1Ud2XZBKRMfYblCU"
+        generic = config.get("post_purchase_generic_test", False)
+        if type(generic) is not bool:
+            raise ValueError("post_purchase_generic_test must be a boolean")
+        approved_ep = (config.get("store_key") == "effective-policy-uat"
+                       and config["stripe_account_id"] == "acct_1Ud2XZBKRMfYblCU" and not generic)
+        generic_test = (generic and config.get("store_key") != "effective-policy-uat"
+                        and config["stripe_account_id"] != "acct_1Ud2XZBKRMfYblCU")
+        if (not isinstance(snapshot, str) or not snapshot.strip() or not (approved_ep or generic_test)
                 or config.get("source_mode") != "private"):
             raise ValueError(
                 "post-purchase requires the approved EP Stripe test account and private source"
@@ -231,7 +238,8 @@ def validate_config(config):
                 not isinstance(config["post_purchase_config_sha256"], str)
                 or not re.fullmatch(r"[a-f0-9]{64}", config["post_purchase_config_sha256"])):
             raise ValueError("invalid post-purchase configuration fingerprint")
-    elif "post_purchase_config_sha256" in config or "post_purchase_email_provider" in config:
+    elif any(key in config for key in ("post_purchase_config_sha256", "post_purchase_email_provider",
+                                       "post_purchase_generic_test")):
         raise ValueError("post-purchase fingerprint requires a protected action file")
     return {
         "reviews_enabled": True,
@@ -245,7 +253,7 @@ def validate_config(config):
     }
 
 
-class Installation(PostPurchaseOperator):
+class Installation(PostPurchaseOperator, FulfilmentOperator):
     def __init__(self, directory, credentials=None, api=None, *, credential_provider=None):
         self.directory = Path(directory).resolve()
         self.state_path = self.directory / "inventory.json"
@@ -709,6 +717,10 @@ class Installation(PostPurchaseOperator):
     def private(self, service, path, body=None, token=None, method="POST"):
         bindings = self.directory / "operator-bindings.toml"
         names = {"REVIEWS": "reviews", "PRODUCER": "producer", "CONSUMER": "consumer", "EVIDENCE": "evidence"}
+        if service == "POST_PURCHASE":
+            if not self.has_post_purchase:
+                raise ValueError("post-purchase service is unavailable")
+            names = {"POST_PURCHASE": "post-purchase"}
         lines = [
             f'name = "{self.name("operator-local")}"',
             f'account_id = "{self.config["account_id"]}"',
@@ -1616,6 +1628,8 @@ class Installation(PostPurchaseOperator):
                 errors.append(f"{role}.bindings.{name}: wrong service")
             elif kind == "queue" and value.get("queue_name") != binding["queue_name"]:
                 errors.append(f"{role}.bindings.{name}: wrong queue")
+            elif kind == "r2_bucket" and value.get("bucket_name") != binding["bucket_name"]:
+                errors.append(f"{role}.bindings.{name}: wrong private bucket")
             elif kind == "ratelimit" and (
                 str(value.get("namespace_id", "")) != str(binding["namespace_id"])
                 or value.get("simple") != binding["simple"]
@@ -1627,6 +1641,10 @@ class Installation(PostPurchaseOperator):
                 errors.append(f"{role}.vars.{name}: differs from inventory")
         if self.has_post_purchase and role in POST_PURCHASE_ROLES:
             for name in post_purchase_secret_bindings(role, expected["vars"].get("EMAIL_PROVIDER", "smtp2go")):
+                if observed.get(name, {}).get("type") != "secret_text":
+                    errors.append(f"{role}.bindings.{name}: missing/wrong secret type")
+        if role == "source" and "fulfilment" in self.state:
+            for name in ("CARTRAY_FULFILMENT_CHECKOUT_PLAN", "CARTRAY_FULFILMENT_PROVIDER_CONFIG"):
                 if observed.get(name, {}).get("type") != "secret_text":
                     errors.append(f"{role}.bindings.{name}: missing/wrong secret type")
         return errors
@@ -2025,6 +2043,23 @@ def main():
     handoff_pin.add_argument("--original-handoff", type=Path, required=True)
     handoff_pin.add_argument("--expected-sender-version", required=True)
     handoff_pin.add_argument("--attest-original-handoff", action="store_true")
+    register = commands.add_parser("fulfilment-register", help="register an immutable private test fulfilment package")
+    register.add_argument("--package", type=Path, required=True)
+    register.add_argument("--confirm-test-registration", action="store_true")
+    revocation = commands.add_parser("fulfilment-revoke", help="revoke one test entitlement with audit")
+    revocation.add_argument("--order", required=True)
+    revocation.add_argument("--workflow", required=True)
+    revocation.add_argument("--product", required=True)
+    revocation.add_argument("--ordinal", type=int, required=True)
+    revocation.add_argument("--operator", required=True)
+    revocation.add_argument("--evidence", required=True)
+    revocation.add_argument("--confirm-revoke", action="store_true")
+    recovery = commands.add_parser("fulfilment-recover-prepared", help="recover one proven-unsent test preparation")
+    recovery.add_argument("--order", required=True)
+    recovery.add_argument("--workflow", required=True)
+    recovery.add_argument("--operator", required=True)
+    recovery.add_argument("--evidence", required=True)
+    recovery.add_argument("--confirm-no-send", action="store_true")
     rollback = commands.add_parser("rollback", help="compatible recorded Worker versions only; never rewind D1")
     rollback.add_argument("--release", type=int, default=-2, help="inventory release index (default previous)")
     request = commands.add_parser("request", help="operator-side call to the existing private Reviews service")
@@ -2067,6 +2102,18 @@ def main():
                 elif args.command == "attest-reviews-handoff":
                     result = installation.attest_reviews_handoff(
                         args.original_handoff, args.expected_sender_version, args.attest_original_handoff)
+                elif args.command == "fulfilment-register":
+                    result = installation.register_fulfilment(
+                        read_private(args.package), args.confirm_test_registration)
+                elif args.command == "fulfilment-revoke":
+                    result = installation.revoke_fulfilment(
+                        args.order, args.workflow, args.product, args.ordinal, args.operator,
+                        args.evidence, args.confirm_revoke
+                    )
+                elif args.command == "fulfilment-recover-prepared":
+                    result = installation.recover_prepared_fulfilment(
+                        args.order, args.workflow, args.operator, args.evidence, args.confirm_no_send
+                    )
                 elif args.command == "rollback":
                     result = installation.rollback(args.release)
                 elif args.command == "upgrade":

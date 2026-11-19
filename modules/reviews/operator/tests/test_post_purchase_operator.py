@@ -69,6 +69,20 @@ def test_ep_test_lane_can_enable_reviews_independently(tmp_path):
     assert config["source_mode"] == "private"
 
 
+def test_second_merchant_explicit_test_lane_requires_registered_resources(tmp_path):
+    options = handoff(tmp_path)
+    options.update(store_key="second-merchant", stripe_account_id="acct_secondtest", post_purchase_generic_test=True)
+    second = {**ACTION, "merchant": "second-merchant", "stripe_account": "acct_secondtest", "links": []}
+    atomic_json(Path(options["post_purchase_config"]), {"schema": 1, "actions": [second]})
+    install = Installation.plan(tmp_path / "installation", options)
+    assert install.post_purchase_actions()[0]["links"] == []
+    with pytest.raises(ValueError, match="register test fulfilment"):
+        install.post_purchase_activate(True)
+    changed = {**options, "store_key": MERCHANT, "stripe_account_id": ACCOUNT}
+    with pytest.raises(ValueError, match="approved EP"):
+        validate_config(changed)
+
+
 def test_combined_topology_preserves_independent_delivery_controls(tmp_path):
     options = handoff(tmp_path)
     options["reviews_enabled"] = True
@@ -89,6 +103,29 @@ def test_combined_topology_preserves_independent_delivery_controls(tmp_path):
     nodes, _ = graph(install, sending=False, post_purchase_modes=ON)
     assert nodes["source"]["vars"]["CARTRAY_POST_PURCHASE_MODE"] == "test"
     assert nodes["sender"]["vars"]["INITIAL_SEND_MODE"] == "disabled"
+
+
+def test_fulfilment_topology_is_test_only_and_checks_bucket_binding(tmp_path):
+    options = handoff(tmp_path)
+    install = Installation.plan(tmp_path / "installation", options)
+    install.state["workers_subdomain"] = "example"
+    install.state["resources"]["database:commerce"] = {"id": "db"}
+    install.state["fulfilment"] = {"bucket": "private-test-bucket"}
+    nodes, _ = graph(install, post_purchase_modes=OFF)
+    # Existing entitlement links remain usable while new delivery is paused.
+    assert nodes["source"]["vars"]["CARTRAY_FULFILMENT_MODE"] == "test"
+    assert {"name": "FULFILMENT_PRIVATE_BUCKET", "type": "r2_bucket",
+            "bucket_name": "private-test-bucket"} in nodes["source"]["bindings"]
+    nodes, _ = graph(install, post_purchase_modes={"source": "test"})
+    assert nodes["source"]["vars"]["CARTRAY_FULFILMENT_MODE"] == "test"
+    expected = nodes["source"]
+    actual = {"id": "release", "resources": {"bindings": [
+        {**b, **({"database_id": b["id"]} if b["type"] == "d1" else {})} for b in expected["bindings"]
+    ]}}
+    assert any("wrong private bucket" in message for message in install.worker_binding_errors(
+        "source", expected, {"id": "release", "resources": {"bindings": [
+            {**b, "bucket_name": "wrong"} if b["type"] == "r2_bucket" else b
+            for b in actual["resources"]["bindings"]]}}, "release"))
 
 
 def test_post_purchase_transition_reverifies_before_resuming_reviews(tmp_path, monkeypatch):
@@ -388,6 +425,14 @@ def email_migration_install(install, api, credentials=None):
     handoff = deepcopy(CF_CREDS if credentials is None else credentials)
     handoff.pop("smtp2go_api_key", None)
     return Installation(install.directory, handoff, api, credential_provider="cloudflare")
+
+
+def test_sender_change_cannot_reinterpret_pinned_fulfilment_workflows(deployed):
+    original, api, _db = deployed
+    install = email_migration_install(original, api)
+    install.state["fulfilment"] = {"bucket": None}
+    with pytest.raises(ValueError, match="cannot reinterpret pinned fulfilment"):
+        install.post_purchase_reconfigure_provider("cloudflare", allow_sender_change=True)
 
 
 def test_explicit_off_provider_sender_migration_then_fresh_off_deploy(deployed):

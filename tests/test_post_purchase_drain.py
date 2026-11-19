@@ -170,7 +170,7 @@ def test_many_actions_do_not_require_one_validation_query_each():
     outcomes = asyncio.run(dispatcher.dispatch("after", actions, max_new_claims=2))
     assert list(outcomes.values()).count("accepted") == 2
     assert list(outcomes.values()).count("deferred") == 98
-    assert database.count <= 9
+    assert database.count <= 10  # One additional fixed check prevents legacy delivery of pinned orders.
 
 
 def test_cancelled_handler_is_held_before_checkpoint_replay():
@@ -408,3 +408,80 @@ def test_worker_handler_timeout_is_held_and_never_resent(monkeypatch):
     assert len(calls) == 1
     assert db.execute("SELECT state FROM post_purchase_executions").fetchone()[0] == "uncertain"
     assert db.execute("SELECT last_outbox_id FROM post_purchase_checkpoint").fetchone()[0] == 2
+
+def test_pinned_workflow_is_used_after_deployment_configuration_changes(monkeypatch):
+    import cartray.fulfilment as fulfilment
+
+    async def prepare(_database, merchant, environment, order_id, action, now):
+        from cartray.post_purchase import _action_digest
+
+        db.execute("INSERT OR IGNORE INTO post_purchase_executions "
+                   "(merchant_id,environment,order_id,workflow_key,action_digest,state,"
+                   "created_at,updated_at,fulfilment_nonce) "
+                   "VALUES (?,?,?,?,?,'claimed',?,?,?)", (merchant, environment, order_id, action.workflow_key,
+                   _action_digest(action), now, now, "nonce"))
+        db.commit()
+        return "nonce", (("product", 0, "token", "file.pdf"),)
+
+    async def mark(*_args):
+        return None
+
+    monkeypatch.setattr(fulfilment, "prepare_notification", prepare)
+    monkeypatch.setattr(fulfilment, "mark_notification_sending", mark)
+    import hashlib
+
+    db = setup_database()
+    db.execute("ALTER TABLE post_purchase_executions ADD COLUMN fulfilment_nonce TEXT")
+    db.execute(
+        "CREATE TABLE fulfilment_order_plans (order_id TEXT, merchant_id TEXT, environment TEXT, "
+        "actions_json TEXT, actions_digest TEXT)"
+    )
+    old = {
+        "merchant": "store",
+        "environment": "test",
+        "actions": [
+            {
+                "workflow_key": "workflow",
+                "offer_keys": ["product"],
+                "handler": "service",
+                "config_ref": "private/v1",
+                "config_digest": "a" * 64,
+            }
+        ],
+    }
+    raw = json.dumps(old, sort_keys=True, separators=(",", ":"))
+    db.execute(
+        "INSERT INTO fulfilment_order_plans VALUES (?,?,?,?,?)",
+        ("after", "store", "test", raw, hashlib.sha256(raw.encode()).hexdigest()),
+    )
+    db.commit()
+    seen = []
+    dispatcher = D1Dispatcher(
+        Database(db), "store", "test", {"service": lambda _, e: seen.append(e.config_ref) or "ok"},
+        pinned=True, fulfilment_origin="https://store.example.test"
+    )
+    current = Action("workflow", ("product",), "service", "private/v2", "b" * 64)
+    assert asyncio.run(drain_confirmed_d1(dispatcher, (current,))) == 1
+    assert seen == ["private/v1"]
+    assert db.execute("SELECT last_outbox_id FROM post_purchase_checkpoint").fetchone()[0] == 2
+
+
+
+def test_pinned_mode_excludes_pre_activation_orders_but_holds_missing_post_activation_plan():
+    db = setup_database()
+    db.execute("CREATE TABLE fulfilment_order_plans (order_id TEXT, merchant_id TEXT, environment TEXT, "
+               "actions_json TEXT, actions_digest TEXT)")
+    db.execute("CREATE TABLE fulfilment_order_holds (merchant_id TEXT, environment TEXT, order_id TEXT, "
+               "failure_code TEXT, recorded_at INTEGER, PRIMARY KEY (merchant_id,environment,order_id))")
+    db.execute("INSERT INTO outbox VALUES (0,'before','OrderCreated','{}',NULL)")
+    db.execute("INSERT INTO outbox VALUES (3,'after','OrderCreated','{}',NULL)")
+    db.commit()
+    calls = []
+    dispatcher = D1Dispatcher(Database(db), "store", "test", {"service": lambda *_: calls.append(1)}, pinned=True,
+                              fulfilment_origin="https://store.example.test")
+    action = Action("workflow", ("product",), "service", "private/config", "a" * 64)
+    assert asyncio.run(dispatcher.dispatch("before", (action,))) == {}
+    assert asyncio.run(dispatcher.dispatch("after", (action,))) == {"order": "held"}
+    assert db.execute("SELECT failure_code FROM fulfilment_order_holds").fetchone()[0] == "missing_order_plan"
+    assert calls == []
+    assert db.execute("SELECT last_outbox_id FROM post_purchase_checkpoint").fetchone()[0] == 1

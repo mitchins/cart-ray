@@ -28,6 +28,10 @@ class CheckoutService:
     cancel_url: str = "https://store.invalid/checkout-cancelled/"
     review_invitations_enabled: bool = False
     review_invitation_default_selected: bool = False
+    fulfilment_config: str | None = None
+    fulfilment_provider_config: str | None = None
+    fulfilment_validators: dict | None = None
+    fulfilment_runtime_bindings: object | None = None
 
     async def checkout(self, request: CheckoutRequest) -> CheckoutRedirect:
         # The browser may request an opt-in, but cannot enable the merchant's
@@ -45,6 +49,16 @@ class CheckoutService:
         order = await self.store.find_order_by_request(request.checkout_request_id, fingerprint)
         if order is None:
             order = self._reconstruct_order(request, requested_items, fingerprint)
+            if order.fulfilment_plan is not None:
+                import time
+
+                from .fulfilment import validate_provider_resources
+
+                references = sorted({(item.resource_id, item.resource_version) for item in order.fulfilment_bindings})
+                resources = await self.store.fulfilment_resource_rows(*order.fulfilment_plan[:2], references)
+                validate_provider_resources(order.fulfilment_plan, order.fulfilment_bindings, resources,
+                                            self.fulfilment_provider_config, int(time.time()),
+                                            self.fulfilment_validators, self.fulfilment_runtime_bindings)
         start = await self.store.start_or_load(order, nonce=uuid4().hex)
         if start.redirect is not None:
             return start.redirect
@@ -97,6 +111,11 @@ class CheckoutService:
                 )
             )
         order_items = tuple(items)
+        fulfilment_plan, fulfilment_bindings = None, ()
+        if self.fulfilment_config is not None:
+            from .fulfilment import checkout_plan
+
+            fulfilment_plan, fulfilment_bindings = checkout_plan(self.fulfilment_config, order_items)
         digest_items = tuple(CanonicalItem(item.product_key, item.quantity) for item in order_items)
         return CheckoutOrder(
             order_id="cr_" + uuid4().hex,
@@ -110,6 +129,8 @@ class CheckoutService:
             review_invitation_opt_in=request.review_invitation_opt_in,
             review_invitation_policy_enabled=self.review_invitations_enabled,
             review_invitation_default_selected=self.review_invitation_default_selected,
+            fulfilment_plan=fulfilment_plan,
+            fulfilment_bindings=fulfilment_bindings,
         )
 
 
