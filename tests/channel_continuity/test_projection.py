@@ -265,3 +265,19 @@ def test_empty_feed_is_not_ready_or_exportable():
     with pytest.raises(ValueError, match="empty feed"):
         google_feed(data)
     assert compare(data, copy.deepcopy(data))["ready"] is False
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("title", "   "),
+        ("description", "bad\u2028line"),
+        ("landing_url", "https://./x"),
+        ("image_url", "https://localhost/a"),
+    ],
+)
+def test_invalid_local_feed_data_is_rejected(field, value):
+    data = snapshot()
+    data["items"][0][field] = value
+    with pytest.raises(ValueError):
+        validate(data)

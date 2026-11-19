@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+from datetime import datetime
 from urllib.parse import urlsplit
 
 _ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.:-]{0,149}\Z")
@@ -28,19 +29,29 @@ _FIELDS = (
 
 
 def _text(value, name, limit=1024):
-    if not isinstance(value, str) or not value or len(value) > limit or any(ord(c) < 32 for c in value):
+    if (
+        not isinstance(value, str)
+        or not value.strip()
+        or len(value) > limit
+        or any(ord(c) < 32 or ord(c) == 127 or c in "\u2028\u2029" for c in value)
+    ):
         raise ValueError(f"invalid {name}")
     return value
 
 
 def _url(value, name):
     _text(value, name, 2000)
-    if any(c.isspace() for c in value) or "\\" in value:
+    if any(c.isspace() for c in value) or any(c in value for c in '\\"<>'):
         raise ValueError(f"invalid {name}")
     try:
         parsed = urlsplit(value)
+        host = parsed.hostname or ""
         if (
-            parsed.scheme != "https"
+            not host
+            or any(not part for part in host.split("."))
+            or parsed.netloc.endswith(":")
+            or host.lower() == "localhost"
+            or parsed.scheme != "https"
             or not parsed.hostname
             or parsed.username
             or parsed.password
@@ -88,6 +99,12 @@ def validate(snapshot):
         if not isinstance(snapshot[key], str) or not _ID.fullmatch(snapshot[key]):
             raise ValueError(f"invalid {key}")
     _text(snapshot["captured_at"], "capture time", 64)
+    try:
+        stamp = datetime.fromisoformat(snapshot["captured_at"].replace("Z", "+00:00"))
+        if stamp.tzinfo is None or stamp.utcoffset() is None:
+            raise ValueError("timezone missing")
+    except ValueError as error:
+        raise ValueError("invalid capture time") from error
     if snapshot["coverage"] != "complete":
         raise ValueError("snapshot coverage must be complete")
     if not isinstance(snapshot["items"], list) or len(snapshot["items"]) > 100000:
