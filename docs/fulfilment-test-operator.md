@@ -1,6 +1,9 @@
 # Test-only fulfilment configuration
 
-Fulfilment is optional and remains test-only. It uses the existing confirmed-order
+Fulfilment is optional and remains test-only. The existing operator's deployed
+post-purchase lane remains restricted to its approved EP test account and test
+recipient; a second synthetic merchant is covered locally, not deployable via
+that restricted lane. It uses the existing confirmed-order
 dispatcher and its activation watermark. Registration does not activate sending,
 change the checkpoint, or deliver an email. Register before the first deployment;
 changing a registered package is intentionally rejected in this initial release.
