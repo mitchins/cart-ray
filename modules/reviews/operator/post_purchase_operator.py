@@ -89,7 +89,7 @@ class PostPurchaseOperator:
             raise ValueError("protected email provider migration snapshot changed")
         return json.loads(raw)
 
-    def post_purchase_reconfigure_provider(self, provider, allow_sender_change=False):
+    def post_purchase_reconfigure_provider(self, provider, allow_sender_change=False, allow_credential_change=False):
         """Journal an explicit local provider/sender change; never publish, send or write D1."""
         from operate import atomic_json, digest, read_private
 
@@ -118,9 +118,12 @@ class PostPurchaseOperator:
                 raise ValueError("sender change requires explicit --allow-sender-change")
             if sender_changed and self.config["reviews_enabled"]:
                 raise ValueError("post-purchase sender changes are unavailable while Reviews shares the sender handoff")
-            if key in vault and vault[key] != value:
-                raise ValueError("provider credential already pinned; token rotation is not supported")
-            if not sender_changed and provider == self.post_purchase_email_provider:
+            credential_changed = key in vault and vault[key] != value
+            if credential_changed and not allow_credential_change:
+                raise ValueError("provider credential change requires explicit --allow-credential-change")
+            if credential_changed and provider == "smtp2go" and self.config["reviews_enabled"]:
+                raise ValueError("post-purchase SMTP credential change blocked: Reviews shares the handoff")
+            if not sender_changed and not credential_changed and provider == self.post_purchase_email_provider:
                 self.check_post_purchase_handoff()
                 return {"post_purchase": "provider-unchanged", "provider": provider}
             deployment, disabled, _ = self.post_purchase_runtime()
@@ -159,6 +162,10 @@ class PostPurchaseOperator:
             self.save()
         bundle = self.provider_migration_bundle(migration)
         old, new = bundle["old_vault"], bundle["new_vault"]
+        if key in old and old[key] != new[key] and not allow_credential_change:
+            raise ValueError("provider credential change requires explicit --allow-credential-change")
+        if (key in old and old[key] != new[key] and provider == "smtp2go" and self.config["reviews_enabled"]):
+            raise ValueError("post-purchase SMTP credential changes are unavailable while Reviews shares the handoff")
         if any(self.credentials.get(field) != new["post_purchase_" + field]
                for field in email_handoff_fields(provider)):
             raise ValueError("resume email migration with its unchanged protected handoff")

@@ -335,6 +335,20 @@ customer cookies and staff credentials cannot reach public reads. Checkout goes
 directly to the separately bound test source origin.
 
 Changing a test post-purchase email provider is an OFF-only operator action.
+To replace a credential for an already-pinned provider, place the replacement
+in the protected credentials handoff and explicitly run:
+
+```sh
+uv run --locked python modules/reviews/operator/operate.py \
+  --directory /private/merchant-install --credentials /private/credentials.json \
+  post-purchase-reconfigure-provider --provider cloudflare --allow-credential-change
+```
+
+Confirm the source and handler are OFF before starting; this action journals
+the replacement and changes neither D1 nor an uncertain execution. Resume an
+interrupted action with the same handoff and flag. The private migration
+bundle contains both credential versions and must remain protected. This does
+not verify provider permission or authorize resending any uncertain email.
 After `post-purchase-reconfigure-provider`, build from a different reviewed
 commit and deploy the new release with delivery OFF: retained builds are keyed
 by commit and cannot be overwritten with different provider inputs. A sender

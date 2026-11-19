@@ -1986,6 +1986,7 @@ def main():
         "post-purchase-reconfigure-provider", help="explicit OFF-only local provider/vault migration; never sends")
     pp_provider.add_argument("--provider", required=True, choices=tuple(PROVIDER_KEYS))
     pp_provider.add_argument("--allow-sender-change", action="store_true")
+    pp_provider.add_argument("--allow-credential-change", action="store_true")
     rollback = commands.add_parser("rollback", help="compatible recorded Worker versions only; never rewind D1")
     rollback.add_argument("--release", type=int, default=-2, help="inventory release index (default previous)")
     request = commands.add_parser("request", help="operator-side call to the existing private Reviews service")
@@ -2023,7 +2024,8 @@ def main():
                 elif args.command == "post-purchase-disable":
                     result = installation.post_purchase_disable()
                 elif args.command == "post-purchase-reconfigure-provider":
-                    result = installation.post_purchase_reconfigure_provider(args.provider, args.allow_sender_change)
+                    result = installation.post_purchase_reconfigure_provider(
+                        args.provider, args.allow_sender_change, args.allow_credential_change)
                 elif args.command == "rollback":
                     result = installation.rollback(args.release)
                 elif args.command == "upgrade":

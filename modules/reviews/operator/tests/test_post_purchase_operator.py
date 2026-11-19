@@ -433,6 +433,79 @@ def test_explicit_off_provider_sender_migration_then_fresh_off_deploy(deployed):
         install.rollback(-2)  # Cannot restore a mismatched provider/sender/digest contract.
 
 
+def test_same_provider_credential_replacement_retains_uncertain_claim(deployed):
+    original, api, db = deployed
+    initialise(original, db)
+    install = email_migration_install(original, api)
+    install.post_purchase_reconfigure_provider("cloudflare", True)
+    capture_build(install, "cloudflare-old-commit")
+    install.deploy()
+    with db:
+        db.execute("INSERT INTO orders VALUES ('purchase')")
+        db.execute("INSERT INTO outbox VALUES (8,'purchase','OrderConfirmed')")
+        db.execute("INSERT INTO post_purchase_executions VALUES (?,?,?,?,?,'uncertain',NULL,0,0)",
+                   (MERCHANT, "test", "purchase", "workflow", "digest"))
+    before_db = list(db.iterdump())
+    before_actions = Path(install.config["post_purchase_config"]).read_bytes()
+    before_events = list(api.events)
+    updated = {**CF_CREDS, "cloudflare_email_api_token": "replacement-fixture-token-" * 3}
+    replacement = email_migration_install(original, api, updated)
+    with pytest.raises(ValueError, match="allow-credential-change"):
+        replacement.post_purchase_reconfigure_provider("cloudflare")
+    result = replacement.post_purchase_reconfigure_provider("cloudflare", allow_credential_change=True)
+    assert result["next"] == "build a different reviewed commit and deploy OFF"
+    assert list(db.iterdump()) == before_db
+    assert Path(replacement.config["post_purchase_config"]).read_bytes() == before_actions
+    assert api.events == before_events
+    assert replacement.state["post_purchase_modes"] == OFF
+    assert replacement.vault()["post_purchase_cloudflare_email_api_token"] == updated["cloudflare_email_api_token"]
+    assert updated["cloudflare_email_api_token"] not in replacement.state_path.read_text()
+    capture_build(replacement, "cloudflare-replacement-reviewed-commit")
+    replacement.deploy()
+    assert list(db.iterdump()) == before_db
+    assert replacement.state["post_purchase_modes"] == OFF
+    assert replacement.doctor()["healthy"]
+
+
+def test_credential_replacement_requires_explicit_authorization_on_resume(deployed, monkeypatch):
+    import operate
+
+    original, api, _ = deployed
+    install = email_migration_install(original, api)
+    install.post_purchase_reconfigure_provider("cloudflare", True)
+    capture_build(install, "cloudflare-old-commit")
+    install.deploy()
+    updated = {**CF_CREDS, "cloudflare_email_api_token": "replacement-fixture-token-" * 3}
+    replacement = email_migration_install(original, api, updated)
+    write = operate.atomic_json
+
+    def interrupt(path, value):
+        if path == replacement.vault_path:
+            write(path, value)
+            raise OSError("interrupted after vault write")
+        write(path, value)
+
+    monkeypatch.setattr(operate, "atomic_json", interrupt)
+    with pytest.raises(OSError, match="interrupted"):
+        replacement.post_purchase_reconfigure_provider("cloudflare", allow_credential_change=True)
+    monkeypatch.setattr(operate, "atomic_json", write)
+    resumed = email_migration_install(original, api, updated)
+    with pytest.raises(ValueError, match="allow-credential-change"):
+        resumed.post_purchase_reconfigure_provider("cloudflare")
+    result = resumed.post_purchase_reconfigure_provider("cloudflare", allow_credential_change=True)
+    assert result["provider"] == "cloudflare"
+
+
+def test_shared_reviews_smtp_credential_cannot_change_via_post_purchase(deployed):
+    original, api, _ = deployed
+    changed = {**CREDS, "smtp2go_api_key": "api-replacement-fixture"}
+    install = Installation(original.directory, changed, api, credential_provider="smtp2go")
+    install.config["reviews_enabled"] = True
+    with pytest.raises(ValueError, match="Reviews shares the handoff"):
+        install.post_purchase_reconfigure_provider("smtp2go", allow_credential_change=True)
+    assert "post_purchase_provider_migration" not in install.state
+
+
 @pytest.mark.parametrize("execution_state", ["claimed", "accepted", "uncertain"])
 def test_sender_change_rejects_execution_ahead_of_checkpoint(deployed, execution_state):
     original, api, db = deployed
