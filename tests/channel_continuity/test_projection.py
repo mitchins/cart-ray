@@ -165,6 +165,15 @@ def test_missing_source_values_are_reported_and_never_silently_exported():
     report = compare(source, candidate)
     assert report["ready"] is False
     assert any(row.get("unverified") and row["field"] == "price" for row in report["differences"])
+    waiver = {
+        "source_digest": canonical_digest(source),
+        "candidate_digest": canonical_digest(candidate),
+        "item_id": "external-456",
+        "field": "price",
+        "reviewer": "operator",
+        "reason": "not yet verified",
+    }
+    assert not compare(source, candidate, [waiver])["ready"]
     with pytest.raises(ValueError, match="missing channel data"):
         google_feed(source)
 
@@ -203,3 +212,9 @@ def test_feed_columns_match_header(channel, delimiter):
     rows = list(csv.reader(io.StringIO(feed.decode()), delimiter=delimiter))
     assert len(rows[0]) == len(rows[1])
     assert dict(zip(rows[0], rows[1], strict=True))["color"] == "blue"
+
+
+def test_existing_unicode_and_slash_external_identity_is_preserved():
+    data = snapshot()
+    data["items"][0]["item_id"] = "legacy/été 12"
+    assert "legacy/été 12".encode() in google_feed(data)

@@ -109,7 +109,8 @@ def validate(snapshot):
         if not isinstance(item, dict) or set(item) != item_fields:
             raise ValueError("invalid item fields")
         for key in ("item_id", "merchant_product_id"):
-            if not isinstance(item[key], str) or not _ID.fullmatch(item[key]):
+            _text(item[key], key, 150)
+            if item[key] != item[key].strip() or item[key].startswith(("=", "+", "-", "@")):
                 raise ValueError(f"invalid {key}")
         if snapshot["channel"] == "google" and (
             len(item["item_id"]) > 50 or (item["group_id"] is not None and len(item["group_id"]) > 50)
@@ -149,7 +150,12 @@ def validate(snapshot):
         if item["condition"] not in ("new", "used", "refurbished"):
             raise ValueError("invalid condition")
         if item["group_id"] is not None and (
-            not isinstance(item["group_id"], str) or not _ID.fullmatch(item["group_id"])
+            not isinstance(item["group_id"], str)
+            or not item["group_id"]
+            or len(item["group_id"]) > 150
+            or item["group_id"] != item["group_id"].strip()
+            or any(ord(c) < 32 or ord(c) == 127 for c in item["group_id"])
+            or item["group_id"].startswith(("=", "+", "-", "@"))
         ):
             raise ValueError("invalid variant group")
         if any(value is not None and type(value) is not bool for value in (item["published"], item["eligible"])):
@@ -176,6 +182,10 @@ def compare(source, candidate, exceptions=()):
             or entry["candidate_digest"] != cd
         ):
             raise ValueError("invalid snapshot-bound exception")
+        _text(entry["item_id"], "exception item", 150)
+        _text(entry["field"], "exception field", 150)
+        if (entry["item_id"], entry["field"]) in approved:
+            raise ValueError("duplicate exception")
         _text(entry["reviewer"], "exception reviewer", 150)
         _text(entry["reason"], "exception reason", 500)
         approved.add((entry["item_id"], entry["field"]))
@@ -216,9 +226,12 @@ def compare(source, candidate, exceptions=()):
                             "approved": (key, field) in approved,
                         }
                     )
+    used = {(row["item_id"], row["field"]) for row in differences}
+    if approved - used:
+        raise ValueError("exception does not match a difference")
     return {
         "source_digest": sd,
         "candidate_digest": cd,
         "differences": differences,
-        "ready": all(row["approved"] for row in differences),
+        "ready": all(row["approved"] and not row.get("unverified", False) for row in differences),
     }
