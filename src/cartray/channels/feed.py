@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import csv
+from datetime import datetime
 from io import StringIO
 
 from .projection import validate
@@ -20,7 +21,11 @@ _BASE = (
     "brand",
     "color",
     "size",
+    "material",
+    "pattern",
+    "variant_option",
     "google_product_category",
+    "availability_date",
 )
 
 
@@ -35,6 +40,23 @@ def _write(snapshot, dialect):
         if item["published"] is None or item["eligible"] is None:
             raise ValueError("unknown publication or eligibility")
         if item["published"] and item["eligible"]:
+            if item["group_id"] and not any(
+                item["attributes"].get(k) for k in ("color", "size", "material", "pattern", "variant_option")
+            ):
+                raise ValueError("grouped variant requires a distinguishing attribute")
+            if dialect == "meta" and item["availability"] not in ("in stock", "out of stock"):
+                raise ValueError("Meta availability is not qualified by this adapter")
+            if dialect == "google" and item["availability"] in ("preorder", "backorder"):
+                import re
+
+                if not re.fullmatch(
+                    r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?:Z|[+-]\d{4})", item["attributes"].get("availability_date", "")
+                ):
+                    raise ValueError("Google preorder/backorder requires an availability date")
+                try:
+                    datetime.strptime(item["attributes"]["availability_date"].replace("Z", "+0000"), "%Y-%m-%dT%H:%M%z")
+                except ValueError as error:
+                    raise ValueError("invalid availability date") from error
             if any(item[key] is None for key in ("landing_url", "image_url", "price", "availability")):
                 raise ValueError("eligible item has missing channel data")
             writer.writerow(
@@ -48,7 +70,19 @@ def _write(snapshot, dialect):
                     item["availability"],
                     item["condition"],
                     item["group_id"] or "",
-                    *(item["attributes"].get(key, "") for key in ("brand", "color", "size", "google_product_category")),
+                    *(
+                        item["attributes"].get(key, "")
+                        for key in (
+                            "brand",
+                            "color",
+                            "size",
+                            "material",
+                            "pattern",
+                            "variant_option",
+                            "google_product_category",
+                            "availability_date",
+                        )
+                    ),
                 )
             )
     return output.getvalue().encode("utf-8")

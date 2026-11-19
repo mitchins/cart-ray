@@ -12,6 +12,8 @@ _PRICE = re.compile(r"(?:0|[1-9][0-9]{0,8})\.[0-9]{2} [A-Z]{3}\Z")
 _FIELDS = (
     "item_id",
     "merchant_product_id",
+    "title",
+    "description",
     "landing_url",
     "image_url",
     "price",
@@ -109,6 +111,10 @@ def validate(snapshot):
         for key in ("item_id", "merchant_product_id"):
             if not isinstance(item[key], str) or not _ID.fullmatch(item[key]):
                 raise ValueError(f"invalid {key}")
+        if snapshot["channel"] == "google" and (
+            len(item["item_id"]) > 50 or (item["group_id"] is not None and len(item["group_id"]) > 50)
+        ):
+            raise ValueError("Google item and group IDs must not exceed 50 characters")
         if item["item_id"] in keys:
             raise ValueError("duplicate external item identity")
         keys.add(item["item_id"])
@@ -120,7 +126,16 @@ def validate(snapshot):
             if item[key].lstrip().startswith(("=", "+", "-", "@")):
                 raise ValueError(f"unsafe spreadsheet formula in {key}")
         attributes = item["attributes"]
-        allowed = {"brand", "color", "size", "google_product_category"}
+        allowed = {
+            "brand",
+            "color",
+            "size",
+            "material",
+            "pattern",
+            "variant_option",
+            "google_product_category",
+            "availability_date",
+        }
         if not isinstance(attributes, dict) or set(attributes) - allowed:
             raise ValueError("invalid channel attributes")
         for name, value in attributes.items():

@@ -24,7 +24,9 @@
       "published": true,
       "eligible": true,
       "condition": "new",
-      "attributes": {}
+      "attributes": {
+        "color": "blue"
+      }
     },
     {
       "item_id": "external-123",

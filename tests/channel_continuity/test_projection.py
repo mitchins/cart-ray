@@ -33,7 +33,7 @@ def snapshot(merchant="trees", channel="google"):
                 "published": True,
                 "eligible": True,
                 "condition": "new",
-                "attributes": {},
+                "attributes": {"color": "blue"},
             },
             {
                 "item_id": "external-123",
@@ -132,8 +132,7 @@ def test_cli_refuses_overwrite_and_fails_on_unexplained_change(tmp_path, capsys)
     assert main(["compare", str(source), str(candidate)]) == 1
     assert '"ready": false' in capsys.readouterr().out
     assert main(["export", str(source), str(output)]) == 0
-    with pytest.raises(FileExistsError):
-        main(["export", str(source), str(output)])
+    assert main(["export", str(source), str(output)]) == 2
 
 
 def test_variant_group_and_policy_changes_are_reported():
@@ -168,3 +167,39 @@ def test_missing_source_values_are_reported_and_never_silently_exported():
     assert any(row.get("unverified") and row["field"] == "price" for row in report["differences"])
     with pytest.raises(ValueError, match="missing channel data"):
         google_feed(source)
+
+
+def test_all_exported_content_changes_are_reconciled():
+    a = snapshot()
+    b = copy.deepcopy(a)
+    b["items"][0]["title"] = "New title"
+    b["items"][0]["description"] = "New description"
+    assert {row["field"] for row in compare(a, b)["differences"]} == {"title", "description"}
+
+
+def test_platform_specific_availability_and_google_id_limits():
+    a = snapshot()
+    a["items"][0]["availability"] = "preorder"
+    with pytest.raises(ValueError, match="availability date"):
+        google_feed(a)
+    a["items"][0]["attributes"]["availability_date"] = "2026-12-01T10:00Z"
+    assert b"2026-12-01T10:00Z" in google_feed(a)
+    a["channel"] = "meta"
+    with pytest.raises(ValueError, match="not qualified"):
+        meta_feed(a)
+    a["channel"] = "google"
+    a["items"][0]["item_id"] = "x" * 51
+    with pytest.raises(ValueError, match="50 characters"):
+        validate(a)
+
+
+@pytest.mark.parametrize("channel,delimiter", [("google", "\t"), ("meta", ",")])
+def test_feed_columns_match_header(channel, delimiter):
+    import csv
+    import io
+
+    data = snapshot(channel=channel)
+    feed = (google_feed if channel == "google" else meta_feed)(data)
+    rows = list(csv.reader(io.StringIO(feed.decode()), delimiter=delimiter))
+    assert len(rows[0]) == len(rows[1])
+    assert dict(zip(rows[0], rows[1], strict=True))["color"] == "blue"
