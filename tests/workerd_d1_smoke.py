@@ -26,6 +26,9 @@ from cartray.fulfilment import (
     prepare_notification,
     private_object,
     recover_prepared_notification,
+    valid_external_config,
+    valid_private_config,
+    validate_provider_resources,
 )
 from cartray.models import CheckoutOrder, CheckoutRedirect, OrderItem
 from cartray.post_purchase import Action, D1Dispatcher
@@ -57,7 +60,8 @@ async def fulfilment_smoke(env, suffix):
         "workflow_key": "deliver", "offer_keys": ["FULFILMENT"], "handler": "service",
         "config_ref": "test/v1", "config_digest": "a" * 64,
     }]}
-    plan_doc = {"actions": action_doc, "bindings": [{"workflow_key": "deliver", "product_key": "FULFILMENT",
+    plan_doc = {"actions": action_doc, "no_delivery_offers": [], "bindings": [
+        {"workflow_key": "deliver", "product_key": "FULFILMENT",
         "resources": [{"id": name, "version": "v1"} for name in names]}]}
     item = OrderItem("FULFILMENT", 1, "price_smoke", 1, tuple(name + "@v1" for name in names))
     plan, bindings = checkout_plan(json.dumps(plan_doc), (item,))
@@ -65,6 +69,13 @@ async def fulfilment_smoke(env, suffix):
                           (item,), "sha256:" + "2" * 64, "aud", 1,
                           fulfilment_plan=plan, fulfilment_bindings=bindings)
     store = D1OrderStore(env.DB)
+    refs = sorted({(entry.resource_id, entry.resource_version) for entry in bindings})
+    rows = await store.fulfilment_resource_rows("smoke-store", "test", refs)
+    provider_config = json.dumps({"merchant": "smoke-store", "resources":
+                                  {names[i]: configs[i] for i in range(3)}})
+    validate_provider_resources(plan, bindings, rows, provider_config, int(time.time()),
+        {"external_link": valid_external_config, "private_object": valid_private_config,
+         "third": lambda config, _env: config == {}}, env)
     await store.start_or_load(order, nonce="nonce", now=10)
     session = "cs_fulfil_" + suffix
     await store.attach_redirect(order.order_id, CheckoutRedirect(session, "https://checkout.stripe.test/x"), now=11)

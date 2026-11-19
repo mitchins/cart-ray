@@ -157,3 +157,88 @@ END;
 CREATE TRIGGER fulfilment_recovery_audit_no_delete BEFORE DELETE ON fulfilment_recovery_audit BEGIN
   SELECT RAISE(ABORT, 'fulfilment recovery audit is immutable');
 END;
+-- A preparation proves no send has started. It must use the dedicated
+-- prepared-recovery path, not the generic ambiguous-send disposition.
+CREATE TRIGGER fulfilment_prepared_not_ambiguous
+BEFORE INSERT ON post_purchase_recovery_audit WHEN EXISTS (
+  SELECT 1 FROM fulfilment_notification_intents i
+  WHERE i.merchant_id=NEW.merchant_id AND i.environment=NEW.environment
+    AND i.order_id=NEW.order_id AND i.workflow_key=NEW.workflow_key AND i.state='prepared'
+) BEGIN
+  SELECT RAISE(ABORT, 'prepared fulfilment requires prepared recovery');
+END;
+CREATE TABLE fulfilment_preparation_failures (
+  merchant_id TEXT NOT NULL,
+  environment TEXT NOT NULL,
+  order_id TEXT NOT NULL,
+  workflow_key TEXT NOT NULL,
+  failure_code TEXT NOT NULL,
+  recorded_at INTEGER NOT NULL,
+  PRIMARY KEY (merchant_id, environment, order_id, workflow_key),
+  FOREIGN KEY (merchant_id, environment, order_id, workflow_key)
+    REFERENCES post_purchase_executions(merchant_id, environment, order_id, workflow_key)
+);
+CREATE TRIGGER fulfilment_preparation_failures_no_update BEFORE UPDATE ON fulfilment_preparation_failures BEGIN
+  SELECT RAISE(ABORT, 'fulfilment preparation failure is immutable');
+END;
+CREATE TRIGGER fulfilment_preparation_failures_no_delete BEFORE DELETE ON fulfilment_preparation_failures BEGIN
+  SELECT RAISE(ABORT, 'fulfilment preparation failure is immutable');
+END;
+CREATE TABLE fulfilment_order_holds (
+  merchant_id TEXT NOT NULL,
+  environment TEXT NOT NULL,
+  order_id TEXT NOT NULL REFERENCES orders(order_id),
+  failure_code TEXT NOT NULL,
+  recorded_at INTEGER NOT NULL,
+  PRIMARY KEY (merchant_id, environment, order_id)
+);
+CREATE TRIGGER fulfilment_order_holds_no_update BEFORE UPDATE ON fulfilment_order_holds BEGIN
+  SELECT RAISE(ABORT, 'fulfilment order hold is immutable');
+END;
+CREATE TRIGGER fulfilment_order_holds_no_delete BEFORE DELETE ON fulfilment_order_holds BEGIN
+  SELECT RAISE(ABORT, 'fulfilment order hold is immutable');
+END;
+CREATE TRIGGER fulfilment_entitlements_monotonic BEFORE UPDATE ON fulfilment_entitlements
+WHEN OLD.revoked_at IS NOT NULL OR NEW.revoked_at IS NULL OR OLD.merchant_id != NEW.merchant_id
+  OR OLD.environment != NEW.environment OR OLD.order_id != NEW.order_id OR OLD.workflow_key != NEW.workflow_key
+  OR OLD.product_key != NEW.product_key OR OLD.ordinal != NEW.ordinal OR OLD.issued_at != NEW.issued_at
+  OR OLD.expires_at IS NOT NEW.expires_at BEGIN
+  SELECT RAISE(ABORT, 'fulfilment entitlement can only be revoked once');
+END;
+CREATE TRIGGER fulfilment_entitlements_no_delete BEFORE DELETE ON fulfilment_entitlements BEGIN
+  SELECT RAISE(ABORT, 'fulfilment entitlement is immutable');
+END;
+CREATE TABLE fulfilment_revocation_audit (
+  merchant_id TEXT NOT NULL,
+  environment TEXT NOT NULL CHECK(environment='test'),
+  order_id TEXT NOT NULL,
+  workflow_key TEXT NOT NULL,
+  product_key TEXT NOT NULL,
+  ordinal INTEGER NOT NULL,
+  operator TEXT NOT NULL CHECK(length(operator) BETWEEN 1 AND 128),
+  evidence TEXT NOT NULL CHECK(length(evidence) BETWEEN 1 AND 512),
+  recorded_at INTEGER NOT NULL,
+  PRIMARY KEY (merchant_id,environment,order_id,workflow_key,product_key,ordinal),
+  FOREIGN KEY (merchant_id,environment,order_id,workflow_key,product_key,ordinal)
+    REFERENCES fulfilment_entitlements(merchant_id,environment,order_id,workflow_key,product_key,ordinal)
+);
+CREATE TRIGGER fulfilment_revocation_validate BEFORE INSERT ON fulfilment_revocation_audit BEGIN
+  SELECT CASE WHEN NOT EXISTS (
+    SELECT 1 FROM fulfilment_entitlements e JOIN post_purchase_installation i
+      ON i.singleton=1 AND i.merchant_id=e.merchant_id AND i.environment=e.environment
+    WHERE e.merchant_id=NEW.merchant_id AND e.environment=NEW.environment AND e.order_id=NEW.order_id
+      AND e.workflow_key=NEW.workflow_key AND e.product_key=NEW.product_key AND e.ordinal=NEW.ordinal
+      AND e.revoked_at IS NULL
+  ) THEN RAISE(ABORT, 'fulfilment entitlement missing or already revoked') END;
+END;
+CREATE TRIGGER fulfilment_revocation_apply AFTER INSERT ON fulfilment_revocation_audit BEGIN
+  UPDATE fulfilment_entitlements SET revoked_at=NEW.recorded_at
+  WHERE merchant_id=NEW.merchant_id AND environment=NEW.environment AND order_id=NEW.order_id
+    AND workflow_key=NEW.workflow_key AND product_key=NEW.product_key AND ordinal=NEW.ordinal;
+END;
+CREATE TRIGGER fulfilment_revocation_audit_no_update BEFORE UPDATE ON fulfilment_revocation_audit BEGIN
+  SELECT RAISE(ABORT, 'fulfilment revocation audit is immutable');
+END;
+CREATE TRIGGER fulfilment_revocation_audit_no_delete BEFORE DELETE ON fulfilment_revocation_audit BEGIN
+  SELECT RAISE(ABORT, 'fulfilment revocation audit is immutable');
+END;

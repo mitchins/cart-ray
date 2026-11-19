@@ -94,31 +94,49 @@ class ProviderRegistry:
         return result
 
 
-async def external_link(resource: Resource, config: dict[str, Any]) -> AccessResult:
-    """Return an operator-approved HTTPS target without normalizing its bytes."""
+def valid_external_config(config, _bindings=None):
     url, allowed = config.get("url"), config.get("allowed_hosts")
     if (
-        not isinstance(url, str)
+        set(config) != {"url", "allowed_hosts"}
+        or not isinstance(url, str)
         or len(url) > 2048
         or any(ord(c) <= 32 or ord(c) == 127 for c in url)
         or not isinstance(allowed, list)
         or not allowed
+        or any(not isinstance(host, str) or host != host.lower() for host in allowed)
     ):
-        return Unavailable()
+        return False
     try:
         parsed = urlsplit(url)
-        if (
-            parsed.scheme != "https"
-            or not parsed.hostname
-            or parsed.username
-            or parsed.password
-            or parsed.port not in (None, 443)
-            or parsed.hostname.lower() not in allowed
-        ):
-            return Unavailable()
+        return (
+            parsed.scheme == "https"
+            and bool(parsed.hostname)
+            and not parsed.username
+            and not parsed.password
+            and parsed.port in (None, 443)
+            and parsed.hostname.lower() in allowed
+        )
     except ValueError:
-        return Unavailable()
-    return Redirect(url)
+        return False
+
+
+def valid_private_config(config, bindings=None):
+    if set(config) != {"bucket_binding", "key"}:
+        return False
+    binding, key = config["bucket_binding"], config["key"]
+    return (
+        isinstance(binding, str)
+        and bool(re.fullmatch(r"[A-Z][A-Z0-9_]{0,63}", binding))
+        and isinstance(key, str)
+        and 1 <= len(key) <= 1024
+        and not any(ord(c) < 32 for c in key)
+        and (bindings is None or callable(getattr(getattr(bindings, binding, None), "get", None)))
+    )
+
+
+async def external_link(resource: Resource, config: dict[str, Any]) -> AccessResult:
+    """Return an operator-approved HTTPS target without normalizing its bytes."""
+    return Redirect(config["url"]) if valid_external_config(config) else Unavailable()
 
 
 async def private_object(resource: Resource, config: dict[str, Any]) -> AccessResult:
@@ -207,11 +225,23 @@ def checkout_plan(raw: str, items):
         raise ValueError("invalid fulfilment plan")
     try:
         doc = json.loads(raw)
-        if not isinstance(doc, dict) or set(doc) != {"actions", "bindings"} or not isinstance(doc["bindings"], list):
+        if (
+            not isinstance(doc, dict)
+            or set(doc) != {"actions", "bindings", "no_delivery_offers"}
+            or not isinstance(doc["bindings"], list)
+            or not isinstance(doc["no_delivery_offers"], list)
+        ):
             raise ValueError("invalid fulfilment plan")
         actions_json = json.dumps(doc["actions"], sort_keys=True, separators=(",", ":"), ensure_ascii=True)
         merchant, environment, actions = parse_action_config(actions_json)
         by_key = {action.workflow_key: action for action in actions}
+        no_delivery = doc["no_delivery_offers"]
+        if (
+            any(not isinstance(value, str) or not _KEY.fullmatch(value) for value in no_delivery)
+            or len(no_delivery) != len(set(no_delivery))
+            or set(no_delivery).intersection(offer for action in actions for offer in action.offer_keys)
+        ):
+            raise ValueError("invalid no-delivery offers")
         by_product = {item.product_key: item for item in items}
         bindings = []
         seen = set()
@@ -224,7 +254,7 @@ def checkout_plan(raw: str, items):
             if (
                 product not in action.offer_keys
                 or not isinstance(resources, list)
-                or not 1 <= len(resources) <= 50
+                or not 1 <= len(resources) <= 15
                 or (action.workflow_key, product) in seen
             ):
                 raise ValueError("invalid fulfilment binding")
@@ -255,6 +285,21 @@ def checkout_plan(raw: str, items):
         for action in actions:
             if any((action.workflow_key, offer) not in seen for offer in action.offer_keys if offer in by_product):
                 raise ValueError("purchased offer has no workflow resource binding")
+            if sum(binding.workflow_key == action.workflow_key for binding in bindings) > 15:
+                raise ValueError("too many resources for one fulfilment workflow")
+        if len(bindings) > 15:
+            raise ValueError("too many resources for one checkout")
+        for product, item in by_product.items():
+            if product in no_delivery:
+                continue
+            expected = set(item.fulfilment_resources)
+            assigned = {
+                binding.resource_id + "@" + binding.resource_version
+                for binding in bindings
+                if binding.product_key == product
+            }
+            if expected != assigned:
+                raise ValueError("purchased offer resources are not fully assigned")
         plan = (merchant, environment, actions_json, hashlib.sha256(actions_json.encode()).hexdigest())
         return plan, tuple(bindings)
     except (KeyError, TypeError, json.JSONDecodeError) as error:
@@ -280,12 +325,12 @@ async def prepare_notification(database, merchant, environment, order_id, action
         FROM fulfilment_order_bindings b JOIN fulfilment_resources r
         USING (merchant_id,environment,resource_id,resource_version)
         WHERE b.merchant_id=? AND b.environment=? AND b.order_id=? AND b.workflow_key=?
-        ORDER BY b.product_key,b.ordinal LIMIT 41"""
+        ORDER BY b.product_key,b.ordinal LIMIT 16"""
         )
         .bind(merchant, environment, order_id, action.workflow_key)
         .all()
     )
-    if not rows or len(rows) > 40 or any(row["workflow_digest"] != digest for row in rows):
+    if not rows or len(rows) > 15 or any(row["workflow_digest"] != digest for row in rows):
         raise ValueError("invalid or incomplete pinned fulfilment bindings")
     nonce = secrets.token_hex(16)
     resources = []
@@ -397,12 +442,12 @@ async def recover_prepared_notification(
           AND i.created_at<=? AND e.revoked_at IS NULL AND (e.expires_at IS NULL OR e.expires_at>?)
           AND c.revoked_at IS NULL
         GROUP BY i.claim_nonce,i.created_at,e.product_key,e.ordinal,r.filename ORDER BY e.product_key,e.ordinal
-        LIMIT 41"""
+        LIMIT 16"""
         )
         .bind(*claim, now - 1200, now)
         .all()
     )
-    if not rows or len(rows) > 40 or any(row["active_tokens"] != 1 for row in rows):
+    if not rows or len(rows) > 15 or any(row["active_tokens"] != 1 for row in rows):
         raise ValueError("no stale, safely recoverable preparation")
     old_nonce, nonce = rows[0]["claim_nonce"], secrets.token_hex(16)
     entries = [
@@ -422,14 +467,16 @@ async def recover_prepared_notification(
           SELECT 1 FROM post_purchase_executions WHERE merchant_id=? AND environment=? AND order_id=?
           AND workflow_key=? AND state='claimed' AND fulfilment_nonce=?)"""
         ).bind(nonce, now, *claim, old_nonce, *claim, nonce),
-        database.prepare(
-            """UPDATE fulfilment_capabilities SET revoked_at=? WHERE merchant_id=? AND environment=? AND order_id=?
-        AND workflow_key=? AND revoked_at IS NULL AND EXISTS (SELECT 1 FROM post_purchase_executions
-          WHERE merchant_id=? AND environment=? AND order_id=? AND workflow_key=?
-          AND state='claimed' AND fulfilment_nonce=?)"""
-        ).bind(now, *claim, *claim, nonce),
     ]
     for product, ordinal, _filename, generation, token in entries:
+        statements.append(
+            database.prepare(
+                """UPDATE fulfilment_capabilities SET revoked_at=? WHERE merchant_id=? AND environment=? AND order_id=?
+            AND workflow_key=? AND product_key=? AND ordinal=? AND revoked_at IS NULL AND EXISTS (
+              SELECT 1 FROM post_purchase_executions WHERE merchant_id=? AND environment=? AND order_id=?
+              AND workflow_key=? AND state='claimed' AND fulfilment_nonce=?)"""
+            ).bind(now, *claim, product, ordinal, *claim, nonce)
+        )
         statements.append(
             database.prepare(
                 """INSERT INTO fulfilment_capabilities
@@ -447,11 +494,78 @@ async def recover_prepared_notification(
         ).bind(nonce, *claim, operator, evidence, now)
     )
     result = await database.batch(statements)
-    if (
-        _changes(result[0]) != 1
-        or _changes(result[1]) != 1
-        or _changes(result[2]) != len(entries)
-        or any(_changes(item) != 1 for item in result[3:])
-    ):
+    if _changes(result[0]) != 1 or _changes(result[1]) != 1 or any(_changes(item) != 1 for item in result[2:]):
         raise RuntimeError("fulfilment recovery lost its claim")
     return nonce, tuple((product, ordinal, token, filename) for product, ordinal, filename, _, token in entries)
+
+
+def validate_provider_resources(plan, bindings, rows, raw_config, now, validators=None, runtime_bindings=None):
+    """Ensure pinned resources exist and the private provider config matches before payment."""
+    import hashlib
+    import json
+
+    merchant, environment, _, _ = plan
+    if not isinstance(raw_config, str) or len(raw_config.encode()) > 65536:
+        raise ValueError("provider configuration is unavailable")
+    config = json.loads(raw_config)
+    if (
+        not isinstance(config, dict)
+        or set(config) != {"merchant", "resources"}
+        or config["merchant"] != merchant
+        or not isinstance(config["resources"], dict)
+    ):
+        raise ValueError("provider configuration scope mismatch")
+    validators = validators or {"external_link": valid_external_config, "private_object": valid_private_config}
+    expected = {(binding.resource_id, binding.resource_version) for binding in bindings}
+    actual = {(row["resource_id"], row["resource_version"]) for row in rows}
+    if expected != actual:
+        raise ValueError("pinned resource definitions are missing")
+    for row in rows:
+        entry = config["resources"].get(row["config_ref"])
+        if not isinstance(entry, dict):
+            raise ValueError("pinned resource provider configuration is missing")
+        encoded = json.dumps(entry, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode()
+        if hashlib.sha256(encoded).hexdigest() != row["config_digest"]:
+            raise ValueError("pinned resource provider configuration differs")
+        validator = validators.get(row["provider"])
+        if validator is None or not validator(entry, runtime_bindings):
+            raise ValueError("pinned resource provider configuration is invalid")
+        policy = json.loads(row["policy_json"])
+        if not isinstance(policy, dict) or set(policy) != {"expires_at"}:
+            raise ValueError("unsupported fulfilment access policy")
+        expiry = policy["expires_at"]
+        if expiry is not None and (type(expiry) is not int or expiry <= now):
+            raise ValueError("fulfilment resource is expired")
+
+
+async def hold_preparation_failure(database, merchant, environment, order_id, action, now):
+    """Record a deterministic pre-send failure without blocking later purchases."""
+    import secrets
+
+    from cartray.post_purchase import _action_digest
+    from cartray.store import _changes
+
+    nonce = secrets.token_hex(16)
+    claim = (merchant, environment, order_id, action.workflow_key)
+    result = await database.batch(
+        [
+            database.prepare(
+                """INSERT OR IGNORE INTO post_purchase_executions
+            (merchant_id,environment,order_id,workflow_key,action_digest,state,created_at,updated_at,fulfilment_nonce)
+            SELECT ?,?,?,?,?,'uncertain',?,?,? WHERE EXISTS (
+              SELECT 1 FROM checkout_sessions s JOIN outbox o ON o.order_id=s.order_id
+              WHERE s.order_id=? AND s.settlement_state='confirmed' AND o.event_type='OrderConfirmed')"""
+            ).bind(*claim, _action_digest(action), now, now, nonce, order_id),
+            database.prepare(
+                """INSERT OR IGNORE INTO fulfilment_preparation_failures
+            SELECT ?,?,?,?,'resource_preparation_failed',? WHERE EXISTS (
+              SELECT 1 FROM post_purchase_executions WHERE merchant_id=? AND environment=? AND order_id=?
+              AND workflow_key=? AND state='uncertain' AND fulfilment_nonce=?)"""
+            ).bind(*claim, now, *claim, nonce),
+        ]
+    )
+    if _changes(result[0]) == 0:
+        return False
+    if _changes(result[1]) != 1:
+        raise RuntimeError("fulfilment failure disposition could not be recorded")
+    return True

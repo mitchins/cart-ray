@@ -386,6 +386,14 @@ class SqliteOrderStore:
             raise KeyError(order_id)
         return row
 
+    async def fulfilment_resource_rows(self, merchant, environment, references):
+        if not references:
+            return []
+        where = " OR ".join("(resource_id=? AND resource_version=?)" for _ in references)
+        sql = ("SELECT * FROM fulfilment_resources WHERE merchant_id=? AND environment=? AND (" + where + ")")
+        values = (merchant, environment, *(value for pair in references for value in pair))
+        return [dict(row) for row in self.connection.execute(sql, values)]
+
     async def find_order_by_request(self, checkout_request_id: str, request_fingerprint: str) -> CheckoutOrder | None:
         row = self.connection.execute(
             """SELECT order_id, request_fingerprint
@@ -1008,6 +1016,14 @@ class D1OrderStore:
         if existing is not None and existing.redirect == redirect:
             return
         raise CheckoutInProgress("checkout redirect was not persisted")
+
+    async def fulfilment_resource_rows(self, merchant, environment, references):
+        if not references:
+            return []
+        where = " OR ".join("(resource_id=? AND resource_version=?)" for _ in references)
+        sql = ("SELECT * FROM fulfilment_resources WHERE merchant_id=? AND environment=? AND (" + where + ")")
+        values = (merchant, environment, *(value for pair in references for value in pair))
+        return _results(await self.database.prepare(sql).bind(*values).all())
 
     async def find_order_by_request(self, checkout_request_id: str, request_fingerprint: str) -> CheckoutOrder | None:
         row = await self._first(

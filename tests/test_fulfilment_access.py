@@ -75,7 +75,7 @@ CONFIGS = (
 )
 
 
-def database(two_workflows=False):
+def database(two_workflows=False, prepopulate=True):
     db = sqlite3.connect(":memory:")
     db.row_factory = sqlite3.Row
     root = Path(__file__).resolve().parents[1]
@@ -157,7 +157,7 @@ def database(two_workflows=False):
     db.execute(
         "INSERT INTO outbox (order_id,event_type,payload_json,created_at) VALUES ('order','OrderConfirmed','{}',0)"
     )
-    for n in range(3):
+    for n in range(3) if prepopulate else ():
         db.execute(
             "INSERT INTO fulfilment_entitlements VALUES (?,?,?,?,?,?,?,?,?)",
             ("store", "test", "order", "workflow", "offer", n, 1, None, None),
@@ -256,9 +256,7 @@ def test_registered_third_provider_works_via_the_ordinary_http_route():
 
 
 def test_claim_prepares_multiple_grants_atomically_without_raw_capability_storage():
-    db = database()
-    db.execute("DELETE FROM fulfilment_capabilities")
-    db.execute("DELETE FROM fulfilment_entitlements")
+    db = database(prepopulate=False)
     action = Action("workflow", ("offer",), "service", "private/config", "a" * 64)
     created = asyncio.run(prepare_notification(D1(db), "store", "test", "order", action, 100))
     assert created is not None
@@ -278,9 +276,7 @@ def test_confirmed_purchase_dispatch_grants_and_cross_browser_access_without_dup
 
     from cartray.post_purchase import D1Dispatcher
 
-    db = database()
-    db.execute("DELETE FROM fulfilment_capabilities")
-    db.execute("DELETE FROM fulfilment_entitlements")
+    db = database(prepopulate=False)
     db.execute("UPDATE checkout_sessions SET external_session_id='cs_test_demo' WHERE order_id='order'")
     db.commit()
     sent = []
@@ -321,9 +317,7 @@ def test_confirmed_purchase_dispatch_grants_and_cross_browser_access_without_dup
 def test_ambiguous_delivery_is_held_and_never_retried():
     from cartray.post_purchase import D1Dispatcher
 
-    db = database()
-    db.execute("DELETE FROM fulfilment_capabilities")
-    db.execute("DELETE FROM fulfilment_entitlements")
+    db = database(prepopulate=False)
     db.execute("UPDATE checkout_sessions SET external_session_id='cs_test_demo' WHERE order_id='order'")
     db.commit()
     calls = []
@@ -344,9 +338,7 @@ def test_ambiguous_delivery_is_held_and_never_retried():
 
 
 def test_unconfirmed_purchase_never_claims_or_grants():
-    db = database()
-    db.execute("DELETE FROM fulfilment_capabilities")
-    db.execute("DELETE FROM fulfilment_entitlements")
+    db = database(prepopulate=False)
     db.execute("DELETE FROM outbox WHERE event_type='OrderConfirmed'")
     action = Action("workflow", ("offer",), "service", "private/config", "a" * 64)
     assert asyncio.run(prepare_notification(D1(db), "store", "test", "order", action, 100)) is None
@@ -357,9 +349,7 @@ def test_unconfirmed_purchase_never_claims_or_grants():
 def test_overlapping_workflows_keep_independent_grants_and_delivery_claims():
     from cartray.post_purchase import D1Dispatcher
 
-    db = database(two_workflows=True)
-    db.execute("DELETE FROM fulfilment_capabilities")
-    db.execute("DELETE FROM fulfilment_entitlements")
+    db = database(two_workflows=True, prepopulate=False)
     db.execute("UPDATE checkout_sessions SET external_session_id='cs_test_demo' WHERE order_id='order'")
     db.commit()
     calls = []
@@ -386,9 +376,7 @@ def test_overlapping_workflows_keep_independent_grants_and_delivery_claims():
 def test_stale_prepared_claim_can_be_safely_reissued_but_sending_cannot():
     from cartray.fulfilment import mark_notification_sending, recover_prepared_notification
 
-    db = database()
-    db.execute("DELETE FROM fulfilment_capabilities")
-    db.execute("DELETE FROM fulfilment_entitlements")
+    db = database(prepopulate=False)
     action = Action("workflow", ("offer",), "service", "private/config", "a" * 64)
     first_nonce, first = asyncio.run(prepare_notification(D1(db), "store", "test", "order", action, 100))
     with pytest.raises(ValueError, match="stale"):
@@ -432,3 +420,127 @@ def test_disabled_fulfilment_never_falls_back_to_legacy_delivery():
     with pytest.raises(ValueError, match="pinned delivery mode"):
         asyncio.run(dispatcher.dispatch("order", (action,)))
     assert calls == []
+
+
+def test_operator_recovery_sends_only_after_prepared_claim_is_reissued():
+    from cartray.post_purchase import D1Dispatcher
+
+    db = database(prepopulate=False)
+    db.execute("UPDATE checkout_sessions SET external_session_id='cs_test_demo' WHERE order_id='order'")
+    db.commit()
+    action = Action("workflow", ("offer",), "service", "private/config", "a" * 64)
+    _, old = asyncio.run(prepare_notification(D1(db), "store", "test", "order", action, 100))
+    sent = []
+    dispatcher = D1Dispatcher(
+        D1(db),
+        "store",
+        "test",
+        {"service": lambda p, e: sent.append(e) or "receipt"},
+        pinned=True,
+        fulfilment_origin="https://store.example.test",
+    )
+    assert (
+        asyncio.run(dispatcher.recover_prepared("order", "workflow", "operator", "no provider call", now=1300))
+        == "accepted"
+    )
+    assert len(sent) == 1 and len(sent[0].access_links) == 3
+    assert all(token not in str(sent[0].access_links) for _, _, token, _ in old)
+    assert db.execute("SELECT state FROM post_purchase_executions").fetchone()[0] == "accepted"
+    with pytest.raises(ValueError, match="stale"):
+        asyncio.run(dispatcher.recover_prepared("order", "workflow", "operator", "unknown", now=2600))
+    assert len(sent) == 1
+
+
+def test_pre_send_fence_failure_keeps_prepared_claim_recoverable(monkeypatch):
+    import cartray.fulfilment as fulfilment
+    from cartray.post_purchase import D1Dispatcher
+
+    db = database(prepopulate=False)
+    db.execute("UPDATE checkout_sessions SET external_session_id='cs_test_demo' WHERE order_id='order'")
+    db.commit()
+    calls = []
+
+    async def failed_fence(*_args):
+        raise RuntimeError("temporary D1 failure")
+
+    monkeypatch.setattr(fulfilment, "mark_notification_sending", failed_fence)
+    action = Action("workflow", ("offer",), "service", "private/config", "a" * 64)
+    dispatcher = D1Dispatcher(
+        D1(db),
+        "store",
+        "test",
+        {"service": lambda *_: calls.append(1) or "receipt"},
+        pinned=True,
+        fulfilment_origin="https://store.example.test",
+    )
+    assert asyncio.run(dispatcher.dispatch("order", (action,))) == {"workflow": "pending_claim"}
+    assert calls == []
+    assert db.execute("SELECT state FROM post_purchase_executions").fetchone()[0] == "claimed"
+    assert db.execute("SELECT state FROM fulfilment_notification_intents").fetchone()[0] == "prepared"
+
+
+def test_deterministic_preparation_failure_is_held_without_blocking_other_workflows(monkeypatch):
+    import cartray.fulfilment as fulfilment
+    from cartray.post_purchase import D1Dispatcher
+
+    db = database(two_workflows=True, prepopulate=False)
+    db.execute("UPDATE checkout_sessions SET external_session_id='cs_test_demo' WHERE order_id='order'")
+    db.commit()
+    original = fulfilment.prepare_notification
+
+    async def prepare(database, merchant, environment, order_id, action, now):
+        if action.workflow_key == "workflow":
+            raise ValueError("resource invalid")
+        return await original(database, merchant, environment, order_id, action, now)
+
+    monkeypatch.setattr(fulfilment, "prepare_notification", prepare)
+    calls = []
+    actions = (
+        Action("workflow", ("offer",), "service", "private/config", "a" * 64),
+        Action("second", ("offer",), "service", "private/second", "b" * 64),
+    )
+    dispatcher = D1Dispatcher(
+        D1(db),
+        "store",
+        "test",
+        {"service": lambda _, e: calls.append(e.workflow_key) or "ok"},
+        pinned=True,
+        fulfilment_origin="https://store.example.test",
+    )
+    assert asyncio.run(dispatcher.dispatch("order", actions)) == {"workflow": "uncertain", "second": "accepted"}
+    assert calls == ["second"]
+    assert (
+        db.execute("SELECT failure_code FROM fulfilment_preparation_failures").fetchone()[0]
+        == "resource_preparation_failed"
+    )
+    assert set(asyncio.run(dispatcher.dispatch("order", actions)).values()) == {"already_claimed"}
+
+
+def test_expired_resource_and_wrong_merchant_are_denied_without_affecting_other_access():
+    db = database(prepopulate=False)
+    db.execute(
+        "INSERT INTO fulfilment_entitlements VALUES (?,?,?,?,?,?,?,?,?)",
+        ("store", "test", "order", "workflow", "offer", 0, 1, None, 11),
+    )
+    db.execute(
+        "INSERT INTO fulfilment_capabilities VALUES (?,?,?,?,?,?,?,?,?)",
+        (token_digest("0" * 43), "store", "test", "order", "workflow", "offer", 0, 1, None),
+    )
+    registry = ProviderRegistry({"link": external_link})
+    settings = {("wrong-store", "0"): (CONFIGS[0], digest(CONFIGS[0]))}
+    assert isinstance(asyncio.run(authorised_access(D1(db), "0" * 43, registry, settings, 10)), Unavailable)
+    settings = {("store", "0"): (CONFIGS[0], digest(CONFIGS[0]))}
+    assert asyncio.run(authorised_access(D1(db), "0" * 43, registry, settings, 10)) == Redirect(CONFIGS[0]["url"])
+    assert isinstance(asyncio.run(authorised_access(D1(db), "0" * 43, registry, settings, 12)), Unavailable)
+
+
+def test_provider_outage_does_not_revoke_another_resource():
+    db = database()
+
+    async def unavailable(*_args):
+        raise TimeoutError("synthetic provider outage")
+
+    registry = ProviderRegistry({"link": external_link, "synthetic": unavailable})
+    settings = {("store", "0"): (CONFIGS[0], digest(CONFIGS[0])), ("store", "2"): ({}, digest(CONFIGS[2]))}
+    assert isinstance(asyncio.run(authorised_access(D1(db), "2" * 43, registry, settings, 10)), Unavailable)
+    assert asyncio.run(authorised_access(D1(db), "0" * 43, registry, settings, 10)) == Redirect(CONFIGS[0]["url"])

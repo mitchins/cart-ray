@@ -13,7 +13,7 @@ import re
 import sqlite3
 import time
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 _IDENTIFIER = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$")
 _CONFIG_REF = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,255}$")
@@ -101,7 +101,7 @@ class Execution:
     workflow_key: str
     config_ref: str
     config_digest: str
-    access_links: tuple[tuple[str, str], ...] = ()
+    access_links: tuple[tuple[str, str], ...] = field(default=(), repr=False)
 
 
 @dataclass(frozen=True)
@@ -257,9 +257,33 @@ class D1Dispatcher:
                 "FROM fulfilment_order_plans WHERE order_id=?",
                 order_id,
             )
-            if (not plan or (plan["merchant_id"], plan["environment"]) != (self.merchant, self.environment)
+            if not plan:
+                excluded = await self._first(
+                    """SELECT o.id FROM outbox o JOIN post_purchase_checkpoint c ON c.singleton=1
+                    WHERE o.order_id=? AND o.event_type='OrderCreated' AND o.id<=c.activation_watermark
+                      AND c.merchant_id=? AND c.environment=?""", order_id, self.merchant, self.environment,
+                )
+                if excluded:
+                    return {}  # Pre-activation checkout; never backfill it.
+                result = await self.database.prepare(
+                    """INSERT OR IGNORE INTO fulfilment_order_holds
+                    (merchant_id,environment,order_id,failure_code,recorded_at)
+                    SELECT ?,?,?,'missing_order_plan',? WHERE EXISTS (
+                      SELECT 1 FROM checkout_sessions s JOIN outbox o ON o.order_id=s.order_id
+                      JOIN post_purchase_installation i ON i.singleton=1
+                      WHERE s.order_id=? AND s.settlement_state='confirmed' AND o.event_type='OrderConfirmed'
+                        AND i.merchant_id=? AND i.environment=?)"""
+                ).bind(self.merchant, self.environment, order_id, int(time.time()), order_id,
+                       self.merchant, self.environment).run()
+                if _changes(result) == 1 or await self._first(
+                    "SELECT order_id FROM fulfilment_order_holds WHERE merchant_id=? AND environment=? AND order_id=?",
+                    self.merchant, self.environment, order_id,
+                ):
+                    return {"order": "held"}  # Visible operator hold; later purchases may proceed.
+                raise ValueError("confirmed order is unavailable")
+            if ((plan["merchant_id"], plan["environment"]) != (self.merchant, self.environment)
                     or hashlib.sha256(plan["actions_json"].encode()).hexdigest() != plan["actions_digest"]):
-                raise ValueError("immutable fulfilment plan missing or mismatched")
+                raise ValueError("immutable fulfilment plan mismatched")
             merchant, environment, actions = parse_action_config(plan["actions_json"])
             if (merchant, environment) != (self.merchant, self.environment):
                 raise ValueError("immutable fulfilment plan scope mismatch")
@@ -337,8 +361,18 @@ class D1Dispatcher:
             if self.pinned:
                 from cartray.fulfilment import prepare_notification
 
-                prepared = await prepare_notification(self.database, self.merchant, self.environment, order_id,
-                                                      action, now)
+                try:
+                    prepared = await prepare_notification(self.database, self.merchant, self.environment, order_id,
+                                                          action, now)
+                except ValueError:
+                    from cartray.fulfilment import hold_preparation_failure
+
+                    if await hold_preparation_failure(self.database, self.merchant, self.environment, order_id,
+                                                      action, now):
+                        outcomes[action.workflow_key] = "uncertain"
+                        new_claims += 1
+                        continue
+                    prepared = None
                 claimed = prepared is not None
                 if claimed:
                     nonce, tokens = prepared
@@ -370,12 +404,20 @@ class D1Dispatcher:
                 outcomes[action.workflow_key] = "pending_claim" if existing["state"] == "claimed" else "already_claimed"
                 continue
             new_claims += 1
-            try:
-                if self.pinned:
-                    from cartray.fulfilment import mark_notification_sending
+            if self.pinned:
+                from cartray.fulfilment import mark_notification_sending
 
+                try:
                     await mark_notification_sending(self.database, self.merchant, self.environment, order_id,
                                                     action.workflow_key, nonce)
+                except asyncio.CancelledError:
+                    # The D1 fence may or may not have committed. Leave the
+                    # claim held so the operator can inspect its durable stage.
+                    raise
+                except Exception:
+                    outcomes[action.workflow_key] = "pending_claim"
+                    continue
+            try:
                 reference = self.handlers[action.handler](
                     purchase,
                     Execution(
@@ -413,6 +455,83 @@ class D1Dispatcher:
                     raise
                 outcomes[action.workflow_key] = "uncertain" if changed else "pending_claim"
         return outcomes
+
+    async def recover_prepared(self, order_id, workflow_key, operator, evidence, *, now=None):
+        """Operator-invoked recovery; never retries a possibly sent notification."""
+        from inspect import isawaitable
+
+        from cartray.fulfilment import mark_notification_sending, recover_prepared_notification
+        from cartray.store import _changes, _results
+
+        if not self.pinned or self.environment != "test" or not _IDENTIFIER.fullmatch(order_id):
+            raise ValueError("test-only pinned fulfilment recovery is required")
+        installation = await self._first(
+            "SELECT merchant_id,environment FROM post_purchase_installation WHERE singleton=1"
+        )
+        if not installation or (installation["merchant_id"], installation["environment"]) != (
+            self.merchant, self.environment
+        ):
+            raise ValueError("post-purchase installation binding mismatch")
+        plan = await self._first(
+            "SELECT merchant_id,environment,actions_json,actions_digest FROM fulfilment_order_plans WHERE order_id=?",
+            order_id,
+        )
+        if (not plan or (plan["merchant_id"], plan["environment"]) != (self.merchant, self.environment)
+                or hashlib.sha256(plan["actions_json"].encode()).hexdigest() != plan["actions_digest"]):
+            raise ValueError("immutable fulfilment plan missing or mismatched")
+        merchant, environment, actions = parse_action_config(plan["actions_json"])
+        matches = [action for action in actions if action.workflow_key == workflow_key]
+        if (merchant, environment) != (self.merchant, self.environment) or len(matches) != 1:
+            raise ValueError("pinned workflow missing or mismatched")
+        action = matches[0]
+        if action.handler not in self.handlers:
+            raise ValueError("unregistered post-purchase handler")
+        order = await self._first(
+            """SELECT s.external_session_id FROM checkout_sessions s WHERE s.order_id=?
+            AND s.settlement_state='confirmed' AND EXISTS (SELECT 1 FROM outbox o
+            WHERE o.order_id=s.order_id AND o.event_type='OrderConfirmed')""", order_id,
+        )
+        if not order or not order["external_session_id"]:
+            raise ValueError("purchase is not confirmed")
+        items = _results(await self.database.prepare(
+            "SELECT product_key,quantity FROM order_items WHERE order_id=? ORDER BY product_key"
+        ).bind(order_id).all())
+        purchase = Purchase(order_id, order["external_session_id"],
+                            tuple((row["product_key"], row["quantity"]) for row in items))
+        if not {key for key, _ in purchase.items}.intersection(action.offer_keys):
+            raise ValueError("pinned workflow does not match purchase")
+        now = int(time.time()) if now is None else now
+        nonce, tokens = await recover_prepared_notification(self.database, self.merchant, self.environment,
+                                                            order_id, workflow_key, operator, evidence, now)
+        links = tuple((filename, self.fulfilment_origin + "/fulfilment/access?token=" + token)
+                      for _, _, token, filename in tokens)
+        try:
+            await mark_notification_sending(self.database, self.merchant, self.environment, order_id,
+                                            workflow_key, nonce)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            return "pending_claim"
+        try:
+            result = self.handlers[action.handler](purchase, Execution(merchant, environment, workflow_key,
+                                                   action.config_ref, action.config_digest, links))
+            if isawaitable(result):
+                result = await result
+            if not isinstance(result, str) or not result or len(result) > 256:
+                raise ValueError("handler did not confirm acceptance")
+            updated = await self.database.prepare(
+                "UPDATE post_purchase_executions SET state='accepted',provider_reference=?,updated_at=? "
+                "WHERE merchant_id=? AND environment=? AND order_id=? AND workflow_key=? "
+                "AND state='claimed' AND fulfilment_nonce=?"
+            ).bind(result, int(time.time()), merchant, environment, order_id, workflow_key, nonce).run()
+            if _changes(updated) != 1:
+                raise ValueError("fulfilment recovery receipt was not recorded")
+            return "accepted"
+        except asyncio.CancelledError:
+            await self._hold_after_cancellation(order_id, workflow_key, nonce)
+            raise
+        except Exception:
+            return "uncertain" if await self._mark_uncertain(order_id, workflow_key, nonce) else "pending_claim"
 
     async def _hold_after_cancellation(self, order_id, workflow_key, nonce=None):
         try:

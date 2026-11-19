@@ -293,8 +293,14 @@ def test_fulfilment_plan_is_pinned_with_checkout_and_sealed(checkout_service):
     db = service.store.connection
     migrations = Path(__file__).resolve().parents[1] / "migrations"
     db.executescript((migrations / "0006_post_purchase_actions.sql").read_text())
+    db.executescript((migrations / "0008_post_purchase_recovery.sql").read_text())
     db.executescript((migrations / "0009_fulfilment.sql").read_text())
     db.execute("INSERT INTO post_purchase_installation VALUES (1,'shop','test')")
+    provider = {"url": "https://example.test/dummy", "allowed_hosts": ["example.test"]}
+    provider_digest = __import__("hashlib").sha256(
+        json.dumps(provider, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode()
+    ).hexdigest()
+    service.fulfilment_provider_config = json.dumps({"merchant": "shop", "resources": {"private/manual": provider}})
     db.execute(
         "INSERT INTO fulfilment_resources VALUES (?,?,?,?,?,?,?,?,?,?)",
         (
@@ -304,10 +310,10 @@ def test_fulfilment_plan_is_pinned_with_checkout_and_sealed(checkout_service):
             "v1",
             "external_link",
             "private/manual",
-            "0" * 64,
+            provider_digest,
             "manual.pdf",
             "application/pdf",
-            "{}",
+            json.dumps({"expires_at": None}),
         ),
     )
     products = dict(service.catalogue.products)
@@ -329,6 +335,7 @@ def test_fulfilment_plan_is_pinned_with_checkout_and_sealed(checkout_service):
     service.fulfilment_config = json.dumps(
         {
             "actions": actions,
+            "no_delivery_offers": ["TEST-FREE", "TEST-BUNDLE"],
             "bindings": [
                 {
                     "workflow_key": "manual",
@@ -346,6 +353,10 @@ def test_fulfilment_plan_is_pinned_with_checkout_and_sealed(checkout_service):
         "SELECT product_key,resource_id,resource_version FROM fulfilment_order_bindings WHERE order_id=?", (order_id,)
     ).fetchone()
     assert tuple(binding) == ("TEST-TEMPLATE", "manual", "v1")
+    service.fulfilment_provider_config = json.dumps({"merchant": "shop", "resources": {"private/manual": {}}})
+    with pytest.raises(ValueError, match="provider configuration differs"):
+        checkout(service, valid_request(service.catalogue, request_id="mismatched-config"))
+    assert len(gateway.requests) == 1
     with pytest.raises(sqlite3.IntegrityError, match="immutable"):
         db.execute("UPDATE fulfilment_order_plans SET actions_json='{}' WHERE order_id=?", (order_id,))
     with pytest.raises(sqlite3.IntegrityError, match="sealed"):

@@ -345,6 +345,11 @@ async def checkout_service_from_environment(env) -> CheckoutService:
         review_invitations_enabled=_automatic_invitation_enabled(env),
         review_invitation_default_selected=getattr(env, "CARTRAY_REVIEW_INVITATION_DEFAULT", None) == "checked",
         fulfilment_config=_fulfilment_checkout_config(env),
+        fulfilment_runtime_bindings=env,
+        fulfilment_provider_config=(
+            _required_env(env, "CARTRAY_FULFILMENT_PROVIDER_CONFIG")
+            if getattr(env, "CARTRAY_FULFILMENT_MODE", "disabled") == "test" else None
+        ),
     )
 
 
@@ -685,7 +690,8 @@ async def _drain_post_purchase(env):
             pinned=fulfilment_enabled, fulfilment_origin=fulfilment_origin,
         )
         await asyncio.wait_for(
-            drain_confirmed_d1(dispatcher, actions, limit=10, max_new_claims=2, deadline=time.monotonic() + 21),
+            drain_confirmed_d1(dispatcher, actions, limit=10, max_new_claims=1 if fulfilment_enabled else 2,
+                               deadline=time.monotonic() + 21),
             timeout=22,
         )
     except Exception as error:

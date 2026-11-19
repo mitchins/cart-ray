@@ -17,6 +17,7 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 from cloud import API, CloudError, stripe
+from fulfilment_operator import FulfilmentOperator
 from merchant_inputs import ConnectedShell, commerce_build_hash, javascript_json, tree_hash
 from merchant_inputs import snapshot as snapshot_merchant_inputs
 from merchant_inputs import validate as validate_merchant_inputs
@@ -245,7 +246,7 @@ def validate_config(config):
     }
 
 
-class Installation(PostPurchaseOperator):
+class Installation(PostPurchaseOperator, FulfilmentOperator):
     def __init__(self, directory, credentials=None, api=None, *, credential_provider=None):
         self.directory = Path(directory).resolve()
         self.state_path = self.directory / "inventory.json"
@@ -709,6 +710,10 @@ class Installation(PostPurchaseOperator):
     def private(self, service, path, body=None, token=None, method="POST"):
         bindings = self.directory / "operator-bindings.toml"
         names = {"REVIEWS": "reviews", "PRODUCER": "producer", "CONSUMER": "consumer", "EVIDENCE": "evidence"}
+        if service == "POST_PURCHASE":
+            if not self.has_post_purchase:
+                raise ValueError("post-purchase service is unavailable")
+            names = {"POST_PURCHASE": "post-purchase"}
         lines = [
             f'name = "{self.name("operator-local")}"',
             f'account_id = "{self.config["account_id"]}"',
@@ -2025,6 +2030,20 @@ def main():
     handoff_pin.add_argument("--original-handoff", type=Path, required=True)
     handoff_pin.add_argument("--expected-sender-version", required=True)
     handoff_pin.add_argument("--attest-original-handoff", action="store_true")
+    revocation = commands.add_parser("fulfilment-revoke", help="revoke one test entitlement with audit")
+    revocation.add_argument("--order", required=True)
+    revocation.add_argument("--workflow", required=True)
+    revocation.add_argument("--product", required=True)
+    revocation.add_argument("--ordinal", type=int, required=True)
+    revocation.add_argument("--operator", required=True)
+    revocation.add_argument("--evidence", required=True)
+    revocation.add_argument("--confirm-revoke", action="store_true")
+    recovery = commands.add_parser("fulfilment-recover-prepared", help="recover one proven-unsent test preparation")
+    recovery.add_argument("--order", required=True)
+    recovery.add_argument("--workflow", required=True)
+    recovery.add_argument("--operator", required=True)
+    recovery.add_argument("--evidence", required=True)
+    recovery.add_argument("--confirm-no-send", action="store_true")
     rollback = commands.add_parser("rollback", help="compatible recorded Worker versions only; never rewind D1")
     rollback.add_argument("--release", type=int, default=-2, help="inventory release index (default previous)")
     request = commands.add_parser("request", help="operator-side call to the existing private Reviews service")
@@ -2067,6 +2086,15 @@ def main():
                 elif args.command == "attest-reviews-handoff":
                     result = installation.attest_reviews_handoff(
                         args.original_handoff, args.expected_sender_version, args.attest_original_handoff)
+                elif args.command == "fulfilment-revoke":
+                    result = installation.revoke_fulfilment(
+                        args.order, args.workflow, args.product, args.ordinal, args.operator,
+                        args.evidence, args.confirm_revoke
+                    )
+                elif args.command == "fulfilment-recover-prepared":
+                    result = installation.recover_prepared_fulfilment(
+                        args.order, args.workflow, args.operator, args.evidence, args.confirm_no_send
+                    )
                 elif args.command == "rollback":
                     result = installation.rollback(args.release)
                 elif args.command == "upgrade":

@@ -465,3 +465,23 @@ def test_pinned_workflow_is_used_after_deployment_configuration_changes(monkeypa
     assert seen == ["private/v1"]
     assert db.execute("SELECT last_outbox_id FROM post_purchase_checkpoint").fetchone()[0] == 2
 
+
+
+def test_pinned_mode_excludes_pre_activation_orders_but_holds_missing_post_activation_plan():
+    db = setup_database()
+    db.execute("CREATE TABLE fulfilment_order_plans (order_id TEXT, merchant_id TEXT, environment TEXT, "
+               "actions_json TEXT, actions_digest TEXT)")
+    db.execute("CREATE TABLE fulfilment_order_holds (merchant_id TEXT, environment TEXT, order_id TEXT, "
+               "failure_code TEXT, recorded_at INTEGER, PRIMARY KEY (merchant_id,environment,order_id))")
+    db.execute("INSERT INTO outbox VALUES (0,'before','OrderCreated','{}',NULL)")
+    db.execute("INSERT INTO outbox VALUES (3,'after','OrderCreated','{}',NULL)")
+    db.commit()
+    calls = []
+    dispatcher = D1Dispatcher(Database(db), "store", "test", {"service": lambda *_: calls.append(1)}, pinned=True,
+                              fulfilment_origin="https://store.example.test")
+    action = Action("workflow", ("product",), "service", "private/config", "a" * 64)
+    assert asyncio.run(dispatcher.dispatch("before", (action,))) == {}
+    assert asyncio.run(dispatcher.dispatch("after", (action,))) == {"order": "held"}
+    assert db.execute("SELECT failure_code FROM fulfilment_order_holds").fetchone()[0] == "missing_order_plan"
+    assert calls == []
+    assert db.execute("SELECT last_outbox_id FROM post_purchase_checkpoint").fetchone()[0] == 1
