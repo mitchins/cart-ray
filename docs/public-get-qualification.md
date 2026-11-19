@@ -1,6 +1,6 @@
 # Public GET qualification (development, not an activation approval)
 
-This record concerns the isolated local Workerd run at PR #86 commit `310c875`.
+This record concerns isolated local Workerd runs on the PR #86 development branch.
 No production traffic or Stripe credentials were used. Wrangler 4.127.1 used local D1,
 the `real-test-subset` locked build profile and an explicit local rate-limit binding.
 The disposable test database contained one synthetic pending checkout.
@@ -15,7 +15,7 @@ The disposable test database contained one synthetic pending checkout.
 | `/checkout-status`, synthetic pending ID | 200, `{"state":"pending"}` | Local Workerd/D1, no Origin, `Cache-Control: no-store`. |
 | EP Classic connected product page, idle | Zero `/catalogue` or `/__uat/context` browser requests | Local Chromium synthetic composed PR #83/#85 build; one request to each after Add. |
 | Generic connected GEL product | Catalogue fetch on page load | Compiled snapshot avoids Stripe/D1 but still invokes commerce Worker. |
-| Public Reviews summary and contribution GET | D1-backed; bounded response and cursor | Rate/cache and repeated anonymous access still require qualification. |
+| Public Reviews summary and contribution GET | Local Workerd/D1: 120 × 200, then 429; a second client receives 200 | Separate edge-admission budget, bounded response and cursor. Hosted client-IP propagation and withdrawal/cache behavior still require qualification. |
 | Static files, HEAD, query variants and unknown paths | Not yet fully qualified against deployed routing | Hosted and cross-renderer route matrix remains required. |
 
 The local runtime initially failed to import `kinglet` because pywrangler's sync left its

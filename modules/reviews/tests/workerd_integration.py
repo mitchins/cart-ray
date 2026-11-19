@@ -114,10 +114,16 @@ def main():
             "REVIEWS_PUBLIC_ADMISSION": "edge", "REVIEWS_INSTALLATION_ID": "synthetic-installation"
         })
         try:
-            headers = {"CF-Connecting-IP": "192.0.2.20"}
-            assert all(request("summary", headers)[0] == 200 for _ in range(120))
-            assert request("summary", headers)[0] == 429
-            assert request("summary", {"CF-Connecting-IP": "192.0.2.21"})[0] == 200
+            for attempt in range(3):
+                headers = {"CF-Connecting-IP": f"192.0.2.{20 + attempt}"}
+                minute = int(time.time() // 60)
+                statuses = [request("summary", headers)[0] for _ in range(121)]
+                if int(time.time() // 60) == minute:
+                    assert statuses == [200] * 120 + [429]
+                    break
+            else:
+                raise AssertionError("could not complete a rate-limit probe within one minute")
+            assert request("summary", {"CF-Connecting-IP": "192.0.2.30"})[0] == 200
             print("Public Reviews admission: 120 reads, then 429; separate actor still succeeds")
         finally:
             stop(proc)
