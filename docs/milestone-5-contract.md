@@ -33,7 +33,7 @@ new secret binding, or customer-data table.
 
 ## Minimal status endpoint
 
-`GET /checkout-status?session_id=cs_…` is a browser route protected by the same exact-origin CORS
+`GET /checkout-status?session_id=cs_…` is a browser route governed by the same exact-origin CORS
 policy as `/catalogue` and `/checkout`. It accepts no request body and permits no custom request
 headers. It sends `Cache-Control: no-store`.
 
@@ -71,13 +71,15 @@ or:
 `confirmed` means only that the existing Stripe webhook settlement transition has been recorded.
 `pending` means the Session is known to CartRay but that transition has not yet happened. `expired`
 means the signed Stripe expiry webhook has been recorded. A missing or malformed Session identifier
-receives the same generic `404` response. The endpoint must not
-return order IDs, product keys, quantities, prices, currency, customer details, payment details,
-metadata, Stripe payloads, or error diagnostics.
+receives the same generic `404` response. Confirmed responses may also include an allowlisted
+receipt containing currency, product keys, quantities and unit amounts from the immutable order.
+The endpoint does not return order IDs, customer details, fulfilment locators, capabilities,
+payment details, provider metadata, Stripe payloads or error diagnostics.
 
 This route queries D1 only. It must not call Stripe and must not change checkout, settlement, or
 outbox state. CORS is not authentication; the intentionally tiny response prevents this opaque
-identifier from becoming a customer-order API.
+identifier from becoming a general customer-order API. Pending and unknown requests use one
+indexed D1 lookup; confirmed requests add one bounded receipt query.
 
 ## Storefront behaviour
 

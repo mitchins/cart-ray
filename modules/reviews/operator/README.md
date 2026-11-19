@@ -160,7 +160,11 @@ The existing site's operator must install the retained assets and a narrowly
 routed private service binding to the inventory's source Worker. Strip the API
 prefix when forwarding (`/api/commerce/catalogue` to `/catalogue`, and the explicit
 webhook to `/stripe/webhook`), preserve request bodies/signatures and the browser
-Origin header. This installer does not mutate that site's routes, DNS or bindings.
+Origin header. Forward Cloudflare's `CF-Connecting-IP` on checkout POST and
+checkout-status GET, and preserve `Content-Length` on checkout POST. Forward
+only the required headers; do not forward browser credentials. The Stripe webhook
+remains a separate signed HTTPS route. This installer does not mutate that site's
+routes, DNS or bindings.
 Source `workers.dev` and preview URLs remain disabled across deployment resume in
 private mode. The exported client uses the configured external API base, while
 the source receives the external storefront origin and checkout return URLs.
@@ -173,7 +177,7 @@ topology. Use a fresh reviewed plan and keep rollback of the external site separ
 For the approved `effective-policy-uat` installation only, set
 `post_purchase_config` in the plan to an absolute, operator-owned `0600` JSON
 file outside Git and outside the merchant package. This requires the private
-external source, `reviews_enabled: false` and Stripe test account
+external source and Stripe test account
 `acct_1Ud2XZBKRMfYblCU`. The operator snapshots and fingerprints this file at
 plan time. Keep the snapshot and vault with the private installation backup.
 
@@ -193,8 +197,25 @@ the EP test Stripe key, SMTP2GO key, `approved_test_email` and `test_sender`; th
 mailboxes must match the action. The operator pins those values in the vault
 and binds the existing private transactional-email Worker to the source via a
 shared, independent token. Only the routing fields and action digest go into
-source vars. No Reviews services, queues, identity or activation are installed.
-The initial commerce deployment records both post-purchase modes OFF.
+source vars. Set `reviews_enabled` to `true` with explicit approved test subject
+mappings to install Reviews alongside this delivery lane, or to `false` for
+commerce alone. The initial deployment records both post-purchase modes OFF;
+Reviews and post-purchase delivery each require their own explicit activation.
+Disabling one does not authorize the other. Source-version changes pause and
+reverify active Reviews before resuming its queues; checkpoints and activation
+watermarks are retained.
+
+The external site must route only the permitted public Reviews subject lookup,
+summary and contributions GETs to the private Reviews service binding, passing
+`Accept` and Cloudflare's `CF-Connecting-IP` without cookies or authorization
+headers. Checkout admission uses a per-client budget and a larger installation
+backstop; status and Reviews reads have separate per-client budgets. Cloudflare
+enforces these approximately per location, not as a globally strict quota.
+Public catalogue data is compiled with the release and costs no Stripe or D1
+requests to read. Checkout independently resolves Stripe prices. In the
+four-source synthetic fixture, a new checkout used four Price GETs and two
+Session POSTs, plus one PaymentIntent POST when present; a completed retry
+used four Price GETs and no POSTs. A merchant's count depends on its catalogue.
 
 After deployment and before activation, inspect the independent scope:
 
