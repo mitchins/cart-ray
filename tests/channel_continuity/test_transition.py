@@ -12,6 +12,7 @@ from cartray.channels.transition import transition_check
 def test_transition_requires_item_level_evidence_in_separate_account_and_records_rollback():
     source = snapshot()
     candidate = copy.deepcopy(source)
+    candidate["source"] = "candidate-build"
     record = {
         "previous_source": "legacy",
         "previous_url": "https://shop.example.test/old.tsv",
@@ -19,12 +20,15 @@ def test_transition_requires_item_level_evidence_in_separate_account_and_records
         "replacement_source": "new-feed",
         "replacement_url": "https://shop.example.test/new.tsv",
         "staging_account": "staging-account",
+        "candidate_snapshot_source": "candidate-build",
+        "staging_url": "https://staging.example.test/feed.tsv",
         "evidence_reference": "synthetic-receipt",
         "ingestion": {
             "candidate_digest": canonical_digest(candidate),
             "artifact_digest": hashlib.sha256(google_feed(candidate)).hexdigest(),
             "source_id": "new-feed",
             "account": "staging-account",
+            "url": "https://staging.example.test/feed.tsv",
             "accepted_ids": ["external-456"],
             "rejected_ids": [],
         },

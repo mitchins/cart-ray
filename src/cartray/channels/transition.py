@@ -18,20 +18,37 @@ def transition_check(source, candidate, record, exceptions=()):
         "previous_schedule",
         "replacement_source",
         "replacement_url",
+        "candidate_snapshot_source",
+        "staging_url",
         "staging_account",
         "ingestion",
         "evidence_reference",
     }
     if not isinstance(record, dict) or set(record) != required:
         raise ValueError("invalid transition record")
-    for key in ("previous_source", "replacement_source", "previous_schedule", "staging_account", "evidence_reference"):
+    for key in (
+        "previous_source",
+        "replacement_source",
+        "candidate_snapshot_source",
+        "previous_schedule",
+        "staging_account",
+        "evidence_reference",
+    ):
         _text(record[key], key, 256)
-    for key in ("previous_url", "replacement_url"):
+    for key in ("previous_url", "replacement_url", "staging_url"):
         _url(record[key], key)
     if record["previous_source"] != source["source"]:
         raise ValueError("previous source differs from snapshot provenance")
-    if record["previous_source"] == record["replacement_source"]:
+    if (
+        record["previous_source"].casefold() == record["replacement_source"].strip().casefold()
+        or record["replacement_source"] != record["replacement_source"].strip()
+    ):
         raise ValueError("replacement must be a separately identified source")
+    if (
+        record["candidate_snapshot_source"] != candidate["source"]
+        or candidate["source"].casefold() == source["source"].casefold()
+    ):
+        raise ValueError("candidate snapshot must identify distinct provenance")
     # Reusing item IDs in a separate data source in the same account can
     # overwrite live items; only a separate account is safe for ingestion rehearsal.
     if (
@@ -45,6 +62,7 @@ def transition_check(source, candidate, record, exceptions=()):
         "artifact_digest",
         "source_id",
         "account",
+        "url",
         "accepted_ids",
         "rejected_ids",
     }:
@@ -66,6 +84,7 @@ def transition_check(source, candidate, record, exceptions=()):
         and evidence["artifact_digest"] == hashlib.sha256(artifact).hexdigest()
         and evidence["source_id"] == record["replacement_source"]
         and evidence["account"] == record["staging_account"]
+        and evidence["url"] == record["staging_url"]
         and len(accepted) == len(set(accepted))
         and set(accepted) == eligible
         and not evidence["rejected_ids"]
@@ -78,6 +97,7 @@ def transition_check(source, candidate, record, exceptions=()):
             "source": record["previous_source"],
             "url": record["previous_url"],
             "schedule": record["previous_schedule"],
+            "url_equals_replacement": record["previous_url"] == record["replacement_url"],
             "verify": "Confirm item-level processing after restoring the old source.",
         },
     }
