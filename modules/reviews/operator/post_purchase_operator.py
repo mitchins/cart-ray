@@ -2,6 +2,7 @@
 
 import csv
 import hashlib
+import hmac
 import json
 import re
 import secrets
@@ -89,12 +90,92 @@ class PostPurchaseOperator:
             raise ValueError("protected email provider migration snapshot changed")
         return json.loads(raw)
 
+    def reviews_handoff_fingerprints(self, handoff):
+        migration = self.state.get("post_purchase_provider_migration")
+        vault = self.provider_migration_bundle(migration)["old_vault"] if migration else self.vault()
+        key = vault["post_purchase_token"].encode()
+        fields = ("smtp2go_api_key", "test_sender", "approved_test_email")
+        if not isinstance(handoff, dict) or any(not isinstance(handoff.get(k), str) or not handoff[k] for k in fields):
+            raise ValueError("Reviews handoff is incomplete")
+        return {field: hmac.new(key, (field + "\0" + handoff[field]).encode(), hashlib.sha256).hexdigest()
+                for field in fields}
+
+    def check_reviews_handoff(self, *, required=False):
+        pin = self.state.get("reviews_handoff_attestation")
+        if not pin:
+            if required:
+                raise ValueError("Reviews SMTP handoff is unpinned; explicit original-handoff attestation required")
+            return
+        actual = self.reviews_handoff_fingerprints(self.credentials)
+        if pin.get("fingerprints") != actual:
+            raise ValueError("Reviews handoff differs from the attested original; restore it before continuing")
+
+    def attest_reviews_handoff(self, original_path, sender_version, attested):
+        """Pin operator-attested original handoff; never read back deployed secret bytes."""
+        from operate import read_private
+
+        if (not attested or not self.credentials or not self.has_post_purchase or not self.config["reviews_enabled"]
+                or self.state.get("environment") != "test" or self.config["store_key"] != "effective-policy-uat"):
+            raise ValueError("explicit attestation and the EP combined test installation are required")
+        if (not re.fullmatch(r"[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}", sender_version)
+                or self.state.get("pending") or self.state.get("post_purchase_transition")
+                or self.state.get("post_purchase_provider_migration")):
+            raise ValueError("sender version invalid or an operation is pending")
+        raw = read_private(original_path, raw=True)
+        if len(raw) > 32768:
+            raise ValueError("original handoff is too large")
+        original = json.loads(raw)
+        fingerprints = self.reviews_handoff_fingerprints(original)
+        if fingerprints != self.reviews_handoff_fingerprints(self.credentials):
+            raise ValueError("current Reviews handoff differs from the attested original")
+        deployment, disabled, build = self.post_purchase_runtime()
+        self.require_post_purchase_off()
+        self.check_current_post_purchase_off()
+        if (self.state.get("post_purchase_modes", OFF) != OFF or deployment.get("sending") is not False
+                or deployment.get("versions", {}).get("sender") != sender_version
+                or not self.state.get("releases")
+                or self.state["releases"][0].get("versions", {}).get("sender") != sender_version):
+            raise ValueError("recorded original sender or disabled modes differ")
+        if any(deployment["versions"].get(role) != disabled.get(role) for role in POST_PURCHASE_ROLES):
+            raise ValueError("post-purchase Workers are not on their recorded OFF versions")
+        for role in ("events", "schedule", "due"):
+            queue = self.api.request("queues/" + self.state["resources"]["queue:" + role]["id"])
+            if queue.get("settings", {}).get("delivery_paused") is not True:
+                raise ValueError("Reviews processing queues must be paused")
+        actual = self.api.version(self.name("sender"))
+        nodes, _ = graph(self, deployment["versions"], sending=False, post_purchase_modes=OFF)
+        self.artifact_modules("sender", build)
+        errors = self.worker_binding_errors("sender", nodes["sender"], actual, sender_version)
+        observed = {item["name"]: item for item in actual["resources"]["bindings"]}
+        for name in ("SMTP2GO_API_KEY", "APPROVED_TEST_EMAIL", "TEST_SENDER"):
+            if observed.get(name, {}).get("type") != "secret_text":
+                errors.append("sender.bindings." + name + ": missing secret")
+        visibility = self.api.request(f"workers/scripts/{self.name('sender')}/subdomain")
+        if (errors or visibility.get("enabled") is not nodes["sender"].get("public", False)
+                or visibility.get("previews_enabled") is not False):
+            raise ValueError("original Reviews sender deployment differs from the retained OFF configuration")
+        receipt = {"version": 1, "installation": self.config["namespace"], "account": self.config["account_id"],
+                   "sender_version": sender_version, "first_release": self.state["releases"][0]["commit"],
+                   "fingerprints": fingerprints,
+                   "attestation": "operator asserts original handoff; no deployed secret readback"}
+        existing = self.state.get("reviews_handoff_attestation")
+        if existing:
+            if {k: v for k, v in existing.items() if k != "attested_at"} != receipt:
+                raise ValueError("existing Reviews handoff attestation differs; never overwrite")
+            return {"reviews_handoff": "already-attested", "sender_version": sender_version}
+        self.state["reviews_handoff_attestation"] = {**receipt, "attested_at": int(time.time())}
+        self.save()
+        return {"reviews_handoff": "attested", "sender_version": sender_version,
+                "limitation": "operator attestation; deployed secret bytes not read"}
+
     def post_purchase_reconfigure_provider(self, provider, allow_sender_change=False, allow_credential_change=False):
         """Journal an explicit local provider/sender change; never publish, send or write D1."""
         from operate import atomic_json, digest, read_private
 
         if not self.has_post_purchase or provider not in PROVIDER_KEYS or not self.credentials:
             raise ValueError("email reconfiguration requires a protected post-purchase installation and credentials")
+        if self.config["reviews_enabled"]:
+            self.check_reviews_handoff()
         self.require_post_purchase_off()
         validate_email_credential(self.credentials, provider)
         key = "post_purchase_" + PROVIDER_KEYS[provider]
@@ -122,7 +203,7 @@ class PostPurchaseOperator:
             if credential_changed and not allow_credential_change:
                 raise ValueError("provider credential change requires explicit --allow-credential-change")
             if credential_changed and self.config["reviews_enabled"]:
-                raise ValueError("provider credential change blocked: Reviews shares an unpinned SMTP handoff")
+                self.check_reviews_handoff(required=True)
             if not sender_changed and not credential_changed and provider == self.post_purchase_email_provider:
                 self.check_post_purchase_handoff()
                 return {"post_purchase": "provider-unchanged", "provider": provider}
@@ -165,7 +246,7 @@ class PostPurchaseOperator:
         if key in old and old[key] != new[key] and not allow_credential_change:
             raise ValueError("provider credential change requires explicit --allow-credential-change")
         if key in old and old[key] != new[key] and self.config["reviews_enabled"]:
-            raise ValueError("provider credential change blocked: Reviews shares an unpinned SMTP handoff")
+            self.check_reviews_handoff(required=True)
         if any(self.credentials.get(field) != new["post_purchase_" + field]
                for field in email_handoff_fields(provider)):
             raise ValueError("resume email migration with its unchanged protected handoff")
@@ -392,6 +473,8 @@ class PostPurchaseOperator:
                 "activation_watermark": self.state.get("post_purchase_watermark")}
 
     def post_purchase_activate(self, enable_test_delivery=False):
+        if self.config["reviews_enabled"]:
+            self.check_reviews_handoff()
         if self.state.get("post_purchase_provider_migration"):
             raise ValueError("finish a fresh OFF build/deploy after email provider reconfiguration before activation")
         if not enable_test_delivery:

@@ -768,6 +768,8 @@ class Installation(PostPurchaseOperator):
             raise ValueError("all configured migration ledgers are required")
 
     def upgrade(self):
+        if self.config["reviews_enabled"]:
+            self.check_reviews_handoff()
         current = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip()
         if self.state["phase"] in ("active", "paused") and self.state["deployment"]["commit"] == current:
             return self.doctor()
@@ -1050,6 +1052,8 @@ class Installation(PostPurchaseOperator):
         return self.api.upload(self.name(role), self.artifact_modules(role, build), metadata)
 
     def deploy(self):
+        if self.config["reviews_enabled"]:
+            self.check_reviews_handoff()
         self.require_post_purchase_off()
         self.ensure_pages_subdomain()
         self.check_schema()
@@ -1368,6 +1372,8 @@ class Installation(PostPurchaseOperator):
         }
 
     def activate(self, enable_test_delivery=False):
+        if self.config["reviews_enabled"]:
+            self.check_reviews_handoff()
         if self.state.get("post_purchase_transition"):
             raise ValueError("finish the pending post-purchase transition before activating Reviews")
         if self.has_post_purchase and not self.config["reviews_enabled"]:
@@ -1987,6 +1993,10 @@ def main():
     pp_provider.add_argument("--provider", required=True, choices=tuple(PROVIDER_KEYS))
     pp_provider.add_argument("--allow-sender-change", action="store_true")
     pp_provider.add_argument("--allow-credential-change", action="store_true")
+    handoff_pin = commands.add_parser("attest-reviews-handoff", help="attest original test Reviews handoff")
+    handoff_pin.add_argument("--original-handoff", type=Path, required=True)
+    handoff_pin.add_argument("--expected-sender-version", required=True)
+    handoff_pin.add_argument("--attest-original-handoff", action="store_true")
     rollback = commands.add_parser("rollback", help="compatible recorded Worker versions only; never rewind D1")
     rollback.add_argument("--release", type=int, default=-2, help="inventory release index (default previous)")
     request = commands.add_parser("request", help="operator-side call to the existing private Reviews service")
@@ -2026,6 +2036,9 @@ def main():
                 elif args.command == "post-purchase-reconfigure-provider":
                     result = installation.post_purchase_reconfigure_provider(
                         args.provider, args.allow_sender_change, args.allow_credential_change)
+                elif args.command == "attest-reviews-handoff":
+                    result = installation.attest_reviews_handoff(
+                        args.original_handoff, args.expected_sender_version, args.attest_original_handoff)
                 elif args.command == "rollback":
                     result = installation.rollback(args.release)
                 elif args.command == "upgrade":

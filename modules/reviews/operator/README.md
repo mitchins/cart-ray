@@ -348,9 +348,25 @@ Confirm the source and handler are OFF before starting; this action journals
 the replacement and changes neither D1 nor an uncertain execution. Resume an
 interrupted action with the same handoff and flag. The private migration
 bundle contains both credential versions and must remain protected. This does
-not verify provider permission or authorize resending any uncertain email. It
-currently refuses replacement for installations with Reviews enabled because
-their shared SMTP credential has no independently recorded fingerprint.
+not verify provider permission or authorize resending any uncertain email.
+
+For a combined EP test installation with an unpinned Reviews handoff, the
+operator may attest the retained original protected handoff before replacement:
+
+```sh
+uv run --locked python modules/reviews/operator/operate.py \
+  --directory /private/merchant-install --credentials /private/credentials.json \
+  attest-reviews-handoff --original-handoff /private/original-credentials.json \
+  --expected-sender-version <first-sender-version-uuid> --attest-original-handoff
+```
+
+Only attest when the operator knows that file was used for the first deployment.
+The command checks the retained first and live sender version, disabled modes,
+bindings and paused processing queues, and records keyed fingerprints of the
+Reviews SMTP key, sender and recipient. The receipt is an operator attestation;
+Cloudflare does not reveal the historical secret bytes for comparison. Future
+replacement, deployment and Reviews activation refuse a changed handoff. An
+identical repeat is a no-op; conflicting evidence cannot overwrite the pin.
 After `post-purchase-reconfigure-provider`, build from a different reviewed
 commit and deploy the new release with delivery OFF: retained builds are keyed
 by commit and cannot be overwritten with different provider inputs. A sender
