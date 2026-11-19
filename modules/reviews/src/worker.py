@@ -1,6 +1,7 @@
 """Opt-in, read-only Reviews Worker. No write or scheduled entry points."""
 
 import hmac
+import ipaddress
 import json
 import re
 import time
@@ -10,6 +11,8 @@ from cartray_reviews.automation_initial import unsubscribe
 from cartray_reviews.lookup import resolve_subject
 from cartray_reviews.unified import unified_read
 from native_lifecycle import (
+    Object,
+    await_promise,
     delivery_queue_read,
     discard_body,
     handle_write,
@@ -19,6 +22,7 @@ from native_lifecycle import (
     published_staff_read,
     read_json,
     staff_history_read,
+    to_js,
 )
 from workers import Response, WorkerEntrypoint
 
@@ -26,6 +30,34 @@ from workers import Response, WorkerEntrypoint
 def rows(result):
     """Convert D1 result rows into Python dictionaries."""
     return [row.to_py() if hasattr(row, "to_py") else dict(row) for row in result.results]
+
+
+async def public_read_admitted(request, env, store, environment):
+    """Use a separate edge budget before public reads; local tests can stay offline."""
+    mode = str(getattr(env, "REVIEWS_PUBLIC_ADMISSION", "edge"))
+    if mode == "test_unlimited" and environment == "test":
+        return 200
+    if mode != "edge":
+        return 503
+    try:
+        address = ipaddress.ip_address(str(request.headers.get("CF-Connecting-IP") or ""))
+        if address.version == 6:
+            address = address.ipv4_mapped or ipaddress.ip_network(f"{address}/64", strict=False).network_address
+        limiter = getattr(env, "REVIEWS_PUBLIC_INGRESS", None)
+        if limiter is None:
+            return 503
+        installation = getattr(env, "REVIEWS_INSTALLATION_ID", None)
+        if not isinstance(installation, str) or not installation.strip():
+            return 503
+        key = json.dumps(["reviews-public", installation, store, environment, str(address)], separators=(",", ":"))
+        decision = await await_promise(limiter.limit(to_js({"key": key}, dict_converter=Object.fromEntries)), 1)
+        if decision.success is True:
+            return 200
+        if decision.success is False:
+            return 429
+        return 503
+    except Exception:
+        return 503
 
 
 async def subject_sources(db, store, environment, subject_id):
@@ -174,6 +206,9 @@ class Default(WorkerEntrypoint):
         if not store or environment not in ("test", "live"):
             return Response.json({"error": "invalid configuration"}, status=503)
         if url.path == "/reviews/v1/subject-lookup":
+            admission = await public_read_admitted(request, self.env, store, environment)
+            if admission != 200:
+                return Response.json({"error": "unavailable"}, status=admission, headers={"Cache-Control": "no-store"})
             return await resolve_subject(self.env.REVIEWS_DB, store, environment, url.query, Response)
         match = re.fullmatch(r"/reviews/v1/subjects/([A-Za-z0-9_-]{1,128})/(summary|contributions)", url.path)
         if not match:
@@ -187,6 +222,9 @@ class Default(WorkerEntrypoint):
             return Response.json({"error": "invalid limit"}, status=400)
         if not 1 <= limit <= 50:
             return Response.json({"error": "invalid limit"}, status=400)
+        admission = await public_read_admitted(request, self.env, store, environment)
+        if admission != 200:
+            return Response.json({"error": "unavailable"}, status=admission, headers={"Cache-Control": "no-store"})
         subject_id, endpoint = match.groups()
         db = self.env.REVIEWS_DB
         subject = await subject_sources(db, store, environment, subject_id)
