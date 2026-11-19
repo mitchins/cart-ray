@@ -13,8 +13,17 @@ from .feed import google_feed, meta_feed
 from .projection import compare, validate
 
 
+def _unique_object(pairs):
+    result = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError("duplicate JSON key: " + key)
+        result[key] = value
+    return result
+
+
 def read_json(path):
-    return json.loads(Path(path).read_text(encoding="utf-8"))
+    return json.loads(Path(path).read_text(encoding="utf-8"), object_pairs_hook=_unique_object)
 
 
 def _run(argv=None):
@@ -66,7 +75,7 @@ def _run(argv=None):
 def main(argv=None):
     try:
         return _run(argv)
-    except (ValueError, OSError, TypeError) as error:
+    except (ValueError, OSError, TypeError, RecursionError) as error:
         print(json.dumps({"error": str(error)}), file=sys.stderr)
         return 2
 

@@ -56,17 +56,19 @@ def _write(snapshot, dialect):
                 raise ValueError("grouped variant requires a distinguishing attribute")
             if dialect == "meta" and item["availability"] not in ("in stock", "out of stock"):
                 raise ValueError("Meta availability is not qualified by this adapter")
-            if dialect == "google" and item["availability"] in ("preorder", "backorder"):
+            if dialect == "google":
                 import re
 
-                if not re.fullmatch(
-                    r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?:Z|[+-]\d{4})", item["attributes"].get("availability_date", "")
-                ):
+                date = item["attributes"].get("availability_date")
+                if item["availability"] in ("preorder", "backorder") and not date:
                     raise ValueError("Google preorder/backorder requires an availability date")
-                try:
-                    datetime.strptime(item["attributes"]["availability_date"].replace("Z", "+0000"), "%Y-%m-%dT%H:%M%z")
-                except ValueError as error:
-                    raise ValueError("invalid availability date") from error
+                if date:
+                    if not re.fullmatch(r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}(?:Z|[+-][0-9]{4})", date):
+                        raise ValueError("invalid availability date")
+                    try:
+                        datetime.strptime(date.replace("Z", "+0000"), "%Y-%m-%dT%H:%M%z")
+                    except ValueError as error:
+                        raise ValueError("invalid availability date") from error
             if any(item[key] is None for key in ("landing_url", "image_url", "price", "availability")):
                 raise ValueError("eligible item has missing channel data")
             writer.writerow(

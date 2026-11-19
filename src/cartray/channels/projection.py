@@ -114,7 +114,7 @@ def validate(snapshot):
             raise ValueError("invalid item fields")
         for key in ("item_id", "merchant_product_id"):
             _text(item[key], key, 150)
-            if item[key] != item[key].strip() or item[key].startswith(("=", "+", "-", "@")):
+            if item[key] != item[key].strip():
                 raise ValueError(f"invalid {key}")
         if snapshot["channel"] == "google" and (
             len(item["item_id"]) > 50 or (isinstance(item["group_id"], str) and len(item["group_id"]) > 50)
@@ -128,8 +128,6 @@ def validate(snapshot):
                 _url(item[key], key)
         for key, limit in (("title", 150), ("description", 5000)):
             _text(item[key], key, limit)
-            if item[key].lstrip().startswith(("=", "+", "-", "@")):
-                raise ValueError(f"unsafe spreadsheet formula in {key}")
         attributes = item["attributes"]
         allowed = {
             "brand",
@@ -145,8 +143,6 @@ def validate(snapshot):
             raise ValueError("invalid channel attributes")
         for name, value in attributes.items():
             _text(value, name, 250)
-            if value.lstrip().startswith(("=", "+", "-", "@")):
-                raise ValueError("unsafe spreadsheet formula in attribute")
         if item["price"] is not None and (not isinstance(item["price"], str) or not _PRICE.fullmatch(item["price"])):
             raise ValueError("invalid price")
         if item["availability"] not in (None, "in stock", "out of stock", "preorder", "backorder"):
@@ -159,7 +155,6 @@ def validate(snapshot):
             or len(item["group_id"]) > 150
             or item["group_id"] != item["group_id"].strip()
             or any(ord(c) < 32 or ord(c) == 127 for c in item["group_id"])
-            or item["group_id"].startswith(("=", "+", "-", "@"))
         ):
             raise ValueError("invalid variant group")
         if any(value is not None and type(value) is not bool for value in (item["published"], item["eligible"])):

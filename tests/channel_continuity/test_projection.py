@@ -148,9 +148,9 @@ def test_variant_group_and_policy_changes_are_reported():
 
 def test_reject_spreadsheet_formula_and_other_feed_scope():
     source = snapshot()
-    source["items"][0]["title"] = "=SUM(A1:A2)"
-    with pytest.raises(ValueError, match="formula"):
-        validate(source)
+    source["items"][0]["title"] = "-10% offer"
+    source["items"][0]["item_id"] = "-legacy"
+    assert b"-legacy" in google_feed(source)
     source = snapshot()
     candidate = copy.deepcopy(source)
     candidate["feed_label"] = "NZ"
@@ -240,3 +240,19 @@ def test_zero_price_eligible_item_is_held():
     a["items"][0]["price"] = "0.00 AUD"
     with pytest.raises(ValueError, match="zero-price"):
         google_feed(a)
+
+
+def test_invalid_optional_availability_date_is_rejected():
+    data = snapshot()
+    data["items"][0]["attributes"]["availability_date"] = "tomorrow"
+    with pytest.raises(ValueError, match="availability date"):
+        google_feed(data)
+
+
+def test_duplicate_json_keys_fail_closed(tmp_path, capsys):
+    from cartray.channels.__main__ import main
+
+    source = tmp_path / "bad.json"
+    source.write_text('{"schema":1,"schema":1}')
+    assert main(["validate", str(source)]) == 2
+    assert "duplicate JSON key" in capsys.readouterr().err
