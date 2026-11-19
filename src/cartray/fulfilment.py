@@ -259,3 +259,199 @@ def checkout_plan(raw: str, items):
         return plan, tuple(bindings)
     except (KeyError, TypeError, json.JSONDecodeError) as error:
         raise ValueError("invalid fulfilment plan") from error
+
+
+async def prepare_notification(database, merchant, environment, order_id, action, now):
+    """Atomically claim a workflow and prepare its grants; no network side effects.
+
+    The caller owns raw capabilities only when its nonce created the claim. A
+    crash after preparation leaves a durable held claim, never an automatic send.
+    """
+    import json
+    import secrets
+
+    from cartray.post_purchase import _action_digest
+    from cartray.store import _changes, _results
+
+    digest = _action_digest(action)
+    rows = _results(
+        await database.prepare(
+            """SELECT b.product_key,b.ordinal,b.workflow_digest,r.policy_json,r.filename
+        FROM fulfilment_order_bindings b JOIN fulfilment_resources r
+        USING (merchant_id,environment,resource_id,resource_version)
+        WHERE b.merchant_id=? AND b.environment=? AND b.order_id=? AND b.workflow_key=?
+        ORDER BY b.product_key,b.ordinal LIMIT 41"""
+        )
+        .bind(merchant, environment, order_id, action.workflow_key)
+        .all()
+    )
+    if not rows or len(rows) > 40 or any(row["workflow_digest"] != digest for row in rows):
+        raise ValueError("invalid or incomplete pinned fulfilment bindings")
+    nonce = secrets.token_hex(16)
+    resources = []
+    for row in rows:
+        policy = json.loads(row["policy_json"])
+        if not isinstance(policy, dict) or set(policy) != {"expires_at"}:
+            raise ValueError("unsupported fulfilment access policy")
+        expiry = policy["expires_at"]
+        if expiry is not None and (type(expiry) is not int or expiry <= now):
+            raise ValueError("expired or invalid fulfilment access policy")
+        token = secrets.token_urlsafe(32)
+        resources.append((row["product_key"], row["ordinal"], expiry, token, token_digest(token), row["filename"]))
+    claim = (merchant, environment, order_id, action.workflow_key)
+    statements = [
+        database.prepare(
+            """INSERT OR IGNORE INTO post_purchase_executions
+        (merchant_id,environment,order_id,workflow_key,action_digest,state,created_at,updated_at,fulfilment_nonce)
+        SELECT ?,?,?,?,?,'claimed',?,?,? WHERE EXISTS (
+          SELECT 1 FROM checkout_sessions s JOIN outbox o ON o.order_id=s.order_id
+          WHERE s.order_id=? AND s.settlement_state='confirmed' AND o.event_type='OrderConfirmed')"""
+        ).bind(*claim, digest, now, now, nonce, order_id),
+        database.prepare(
+            """INSERT OR IGNORE INTO fulfilment_notification_intents
+        (merchant_id,environment,order_id,workflow_key,claim_nonce,state,created_at)
+        SELECT ?,?,?,?,?,'prepared',? WHERE EXISTS (
+          SELECT 1 FROM post_purchase_executions WHERE merchant_id=? AND environment=? AND order_id=?
+          AND workflow_key=? AND state='claimed' AND fulfilment_nonce=?)"""
+        ).bind(*claim, nonce, now, *claim, nonce),
+    ]
+    for product, ordinal, expiry, _token, hashed, _filename in resources:
+        statements.append(
+            database.prepare(
+                """INSERT OR IGNORE INTO fulfilment_entitlements
+            (merchant_id,environment,order_id,workflow_key,product_key,ordinal,issued_at,expires_at)
+            SELECT ?,?,?,?,?,?,?,? WHERE EXISTS (
+              SELECT 1 FROM post_purchase_executions WHERE merchant_id=? AND environment=? AND order_id=?
+              AND workflow_key=? AND state='claimed' AND fulfilment_nonce=?)"""
+            ).bind(*claim, product, ordinal, now, expiry, *claim, nonce)
+        )
+        statements.append(
+            database.prepare(
+                """INSERT OR IGNORE INTO fulfilment_capabilities
+            (token_digest,merchant_id,environment,order_id,workflow_key,product_key,ordinal,generation)
+            SELECT ?,?,?,?,?,?,?,1 WHERE EXISTS (
+              SELECT 1 FROM post_purchase_executions WHERE merchant_id=? AND environment=? AND order_id=?
+              AND workflow_key=? AND state='claimed' AND fulfilment_nonce=?)"""
+            ).bind(hashed, *claim, product, ordinal, *claim, nonce)
+        )
+    results = await database.batch(statements)
+    if _changes(results[0]) != 1:
+        return None
+    if any(_changes(row) != 1 for row in results[1:]):
+        raise RuntimeError("fulfilment claim did not prepare every entitlement")
+    return nonce, tuple((product, ordinal, token, filename) for product, ordinal, _, token, _, filename in resources)
+
+
+async def mark_notification_sending(database, merchant, environment, order_id, workflow_key, nonce):
+    """Fence the irreversible call; a crash after this point must remain held."""
+    from cartray.store import _changes
+
+    result = (
+        await database.prepare(
+            """UPDATE fulfilment_notification_intents SET state='sending'
+        WHERE merchant_id=? AND environment=? AND order_id=? AND workflow_key=?
+          AND claim_nonce=? AND state='prepared' AND EXISTS (
+          SELECT 1 FROM post_purchase_executions e WHERE e.merchant_id=? AND e.environment=?
+          AND e.order_id=? AND e.workflow_key=? AND e.fulfilment_nonce=? AND e.state='claimed')"""
+        )
+        .bind(
+            merchant, environment, order_id, workflow_key, nonce, merchant, environment, order_id, workflow_key, nonce
+        )
+        .run()
+    )
+    if _changes(result) != 1:
+        raise ValueError("fulfilment notification claim is unavailable")
+
+
+async def recover_prepared_notification(
+    database, merchant, environment, order_id, workflow_key, operator, evidence, now
+):
+    """Operator-only reissue for a stale preparation proven not to have started sending.
+
+    This has no public route. The returned bearer tokens must be sent by the
+    trusted caller immediately after marking the returned nonce as sending. A
+    sending or uncertain claim can never use this recovery path.
+    """
+    import secrets
+
+    from cartray.store import _changes, _results
+
+    if environment != "test" or any(
+        not isinstance(v, str) or not 1 <= len(v) <= limit or any(ord(c) < 32 for c in v)
+        for v, limit in ((operator, 128), (evidence, 512))
+    ):
+        raise ValueError("test operator and evidence are required")
+    claim = (merchant, environment, order_id, workflow_key)
+    rows = _results(
+        await database.prepare(
+            """SELECT i.claim_nonce,i.created_at,e.product_key,e.ordinal,r.filename,
+                  COUNT(c.token_digest) AS active_tokens,MAX(c.generation) AS last_generation
+        FROM fulfilment_notification_intents i JOIN post_purchase_executions x
+          USING (merchant_id,environment,order_id,workflow_key)
+        JOIN fulfilment_entitlements e USING (merchant_id,environment,order_id,workflow_key)
+        JOIN fulfilment_order_bindings b USING (merchant_id,environment,order_id,workflow_key,product_key,ordinal)
+        JOIN fulfilment_resources r USING (merchant_id,environment,resource_id,resource_version)
+        LEFT JOIN fulfilment_capabilities c USING (merchant_id,environment,order_id,workflow_key,product_key,ordinal)
+        WHERE i.merchant_id=? AND i.environment=? AND i.order_id=? AND i.workflow_key=?
+          AND i.state='prepared' AND x.state='claimed' AND x.fulfilment_nonce=i.claim_nonce
+          AND i.created_at<=? AND e.revoked_at IS NULL AND (e.expires_at IS NULL OR e.expires_at>?)
+          AND c.revoked_at IS NULL
+        GROUP BY i.claim_nonce,i.created_at,e.product_key,e.ordinal,r.filename ORDER BY e.product_key,e.ordinal
+        LIMIT 41"""
+        )
+        .bind(*claim, now - 1200, now)
+        .all()
+    )
+    if not rows or len(rows) > 40 or any(row["active_tokens"] != 1 for row in rows):
+        raise ValueError("no stale, safely recoverable preparation")
+    old_nonce, nonce = rows[0]["claim_nonce"], secrets.token_hex(16)
+    entries = [
+        (row["product_key"], row["ordinal"], row["filename"], row["last_generation"] + 1, secrets.token_urlsafe(32))
+        for row in rows
+    ]
+    statements = [
+        database.prepare(
+            """UPDATE post_purchase_executions SET fulfilment_nonce=?,updated_at=? WHERE merchant_id=? AND environment=?
+        AND order_id=? AND workflow_key=? AND state='claimed' AND fulfilment_nonce=? AND EXISTS (
+          SELECT 1 FROM fulfilment_notification_intents WHERE merchant_id=? AND environment=? AND order_id=?
+          AND workflow_key=? AND state='prepared' AND claim_nonce=? AND created_at<=?)"""
+        ).bind(nonce, now, *claim, old_nonce, *claim, old_nonce, now - 1200),
+        database.prepare(
+            """UPDATE fulfilment_notification_intents SET claim_nonce=?,created_at=? WHERE merchant_id=?
+        AND environment=? AND order_id=? AND workflow_key=? AND state='prepared' AND claim_nonce=? AND EXISTS (
+          SELECT 1 FROM post_purchase_executions WHERE merchant_id=? AND environment=? AND order_id=?
+          AND workflow_key=? AND state='claimed' AND fulfilment_nonce=?)"""
+        ).bind(nonce, now, *claim, old_nonce, *claim, nonce),
+        database.prepare(
+            """UPDATE fulfilment_capabilities SET revoked_at=? WHERE merchant_id=? AND environment=? AND order_id=?
+        AND workflow_key=? AND revoked_at IS NULL AND EXISTS (SELECT 1 FROM post_purchase_executions
+          WHERE merchant_id=? AND environment=? AND order_id=? AND workflow_key=?
+          AND state='claimed' AND fulfilment_nonce=?)"""
+        ).bind(now, *claim, *claim, nonce),
+    ]
+    for product, ordinal, _filename, generation, token in entries:
+        statements.append(
+            database.prepare(
+                """INSERT INTO fulfilment_capabilities
+            (token_digest,merchant_id,environment,order_id,workflow_key,product_key,ordinal,generation)
+            SELECT ?,?,?,?,?,?,?,? WHERE EXISTS (SELECT 1 FROM post_purchase_executions
+              WHERE merchant_id=? AND environment=? AND order_id=? AND workflow_key=?
+              AND state='claimed' AND fulfilment_nonce=?)"""
+            ).bind(token_digest(token), *claim, product, ordinal, generation, *claim, nonce)
+        )
+    statements.append(
+        database.prepare(
+            """INSERT INTO fulfilment_recovery_audit
+        (recovery_id,merchant_id,environment,order_id,workflow_key,operator,evidence,recorded_at)
+        VALUES (?,?,?,?,?,?,?,?)"""
+        ).bind(nonce, *claim, operator, evidence, now)
+    )
+    result = await database.batch(statements)
+    if (
+        _changes(result[0]) != 1
+        or _changes(result[1]) != 1
+        or _changes(result[2]) != len(entries)
+        or any(_changes(item) != 1 for item in result[3:])
+    ):
+        raise RuntimeError("fulfilment recovery lost its claim")
+    return nonce, tuple((product, ordinal, token, filename) for product, ordinal, filename, _, token in entries)

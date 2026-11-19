@@ -160,6 +160,8 @@ def create_app(
             if len(pairs) != 1 or pairs[0][0] != "token":
                 raise ValueError("invalid request")
             token_digest(pairs[0][1])  # Reject malformed capabilities before touching D1.
+            if not await _client_rate_limit(request, "FULFILMENT_RATE_LIMITER", "fulfilment"):
+                return Response({"error": "resource unavailable"}, status=429, headers=headers)
             raw = _required_env(request.env, "CARTRAY_FULFILMENT_PROVIDER_CONFIG")
             if len(raw.encode()) > 65536:
                 raise ValueError("invalid provider configuration")
@@ -350,9 +352,18 @@ def _fulfilment_checkout_config(env):
     mode = getattr(env, "CARTRAY_FULFILMENT_MODE", "disabled")
     if mode == "disabled":
         return None
-    if mode != "test" or _test_environment(env) != "test":
+    if (mode != "test" or _test_environment(env) != "test"
+            or getattr(env, "CARTRAY_POST_PURCHASE_MODE", "disabled") != "test"):
         raise RuntimeError("fulfilment mode is unavailable")
-    return _required_env(env, "CARTRAY_FULFILMENT_CHECKOUT_PLAN")
+    from cartray.fulfilment import checkout_plan
+
+    raw = _required_env(env, "CARTRAY_FULFILMENT_CHECKOUT_PLAN")
+    snapshot, _ = checkout_plan(raw, ())
+    planned = parse_action_config(snapshot[2])
+    deployed = parse_action_config(_required_env(env, "CARTRAY_POST_PURCHASE_CONFIG"))
+    if planned != deployed:
+        raise RuntimeError("fulfilment checkout and delivery workflows differ")
+    return raw
 
 
 def _automatic_invitation_enabled(env) -> bool:
@@ -502,7 +513,12 @@ async def _client_rate_limit(request, binding: str, scope: str) -> bool:
     limiter = getattr(request.env, binding, None)
     if limiter is None:
         raise RuntimeError("missing checkout status limiter")
-    address = ipaddress.ip_address(request.header("cf-connecting-ip") or "")
+    address_text = request.header("cf-connecting-ip")
+    if not address_text:
+        raw_headers = getattr(getattr(request, "_raw", None), "headers", None)
+        if raw_headers is not None and callable(getattr(raw_headers, "get", None)):
+            address_text = raw_headers.get("cf-connecting-ip")
+    address = ipaddress.ip_address(address_text or "")
     if address.version == 6:
         address = address.ipv4_mapped or ipaddress.ip_network(f"{address}/64", strict=False).network_address
     installation = _required_env(request.env, "CARTRAY_SIGNING_KEY_ID")
@@ -626,10 +642,7 @@ async def _drain_post_purchase(env):
     try:
         if getattr(env, "CARTRAY_POST_PURCHASE_MODE", "disabled") != "test" or _test_environment(env) != "test":
             return
-        # Fulfilment delivery is intentionally held until grant creation and the
-        # notification claim are committed together. Never fall back to the
-        # legacy link handler for a checkout carrying a resource plan.
-        if getattr(env, "CARTRAY_FULFILMENT_MODE", "disabled") == "test":
+        if getattr(env, "CARTRAY_FULFILMENT_MODE", "disabled") not in ("disabled", "test"):
             return
         merchant, environment, actions = parse_action_config(_required_env(env, "CARTRAY_POST_PURCHASE_CONFIG"))
         token = _required_env(env, "CARTRAY_POST_PURCHASE_TOKEN")
@@ -648,6 +661,7 @@ async def _drain_post_purchase(env):
                     "order_id": purchase.order_id,
                     "session_id": purchase.session_id,
                     "items": purchase.items,
+                    **({"access_links": execution.access_links} if execution.access_links else {}),
                 },
                 separators=(",", ":"),
             )
@@ -662,9 +676,13 @@ async def _drain_post_purchase(env):
                 raise RuntimeError("post-purchase handler outcome uncertain")
             return result.get("provider_reference")
 
+        fulfilment_enabled = getattr(env, "CARTRAY_FULFILMENT_MODE", "disabled") == "test"
+        fulfilment_origin = (
+            _origin(_required_env(env, "CARTRAY_FULFILMENT_PUBLIC_ORIGIN")) if fulfilment_enabled else None
+        )
         dispatcher = D1Dispatcher(
             env.DB, merchant, environment, {"service": service_handler},
-            pinned=getattr(env, "CARTRAY_FULFILMENT_MODE", "disabled") == "test",
+            pinned=fulfilment_enabled, fulfilment_origin=fulfilment_origin,
         )
         await asyncio.wait_for(
             drain_confirmed_d1(dispatcher, actions, limit=10, max_new_claims=2, deadline=time.monotonic() + 21),

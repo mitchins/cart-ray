@@ -181,3 +181,34 @@ test('provider redirects are not followed and cannot trigger a send', async () =
   assert.equal(response.status, 403);
   assert.equal(calls, 1);
 });
+
+test('pinned access capabilities are rendered with filenames and restricted to the configured origin', async () => {
+  const configured = {...action, fulfilment_origin:'https://store.example.test'};
+  const settings = {...env, DELIVERY_CONFIG:JSON.stringify({actions:[configured]}),
+    FULFILMENT_PUBLIC_ORIGIN:'https://store.example.test'};
+  const token = 'a'.repeat(43);
+  const payload = {...body, config_digest:createHash('sha256').update(JSON.stringify(configured)).digest('hex'),
+    access_links:[['manual.pdf', `https://store.example.test/fulfilment/access?token=${token}`]]};
+  const p = provider();
+  assert.equal((await handle(request(payload), settings, p.fetch)).status,200);
+  assert.match(JSON.parse(p.calls[2].init.body).text_body, /manual\.pdf: https:\/\/store\.example\.test/);
+  for (const link of [`https://attacker.example/fulfilment/access?token=${token}`,
+    `https://store.example.test/fulfilment/access?token=bad`,
+    `https://store.example.test/fulfilment/access?token=${token}&other=1`]) {
+    const attempt = provider();
+    assert.notEqual((await handle(request({...payload,access_links:[['manual.pdf',link]]}),settings,attempt.fetch)).status,200);
+    assert.equal(attempt.calls.length,0);
+  }
+});
+
+test('pinned older workflow revision remains usable after a newer revision is installed', async () => {
+  const revised = {...action, subject:'New version'};
+  const settings = {...env, DELIVERY_CONFIG:JSON.stringify({actions:[action,revised]})};
+  const p = provider();
+  assert.equal((await handle(request(),settings,p.fetch)).status,200);
+  assert.equal(JSON.parse(p.calls[2].init.body).subject,'Test delivery');
+  const duplicated = {...env, DELIVERY_CONFIG:JSON.stringify({actions:[action,action]})};
+  const p2 = provider();
+  assert.equal((await handle(request(),duplicated,p2.fetch)).status,400);
+  assert.equal(p2.calls.length,0);
+});

@@ -170,7 +170,7 @@ def test_many_actions_do_not_require_one_validation_query_each():
     outcomes = asyncio.run(dispatcher.dispatch("after", actions, max_new_claims=2))
     assert list(outcomes.values()).count("accepted") == 2
     assert list(outcomes.values()).count("deferred") == 98
-    assert database.count <= 9
+    assert database.count <= 10  # One additional fixed check prevents legacy delivery of pinned orders.
 
 
 def test_cancelled_handler_is_held_before_checkpoint_replay():
@@ -409,10 +409,29 @@ def test_worker_handler_timeout_is_held_and_never_resent(monkeypatch):
     assert db.execute("SELECT state FROM post_purchase_executions").fetchone()[0] == "uncertain"
     assert db.execute("SELECT last_outbox_id FROM post_purchase_checkpoint").fetchone()[0] == 2
 
-def test_pinned_workflow_is_used_after_deployment_configuration_changes():
+def test_pinned_workflow_is_used_after_deployment_configuration_changes(monkeypatch):
+    import cartray.fulfilment as fulfilment
+
+    async def prepare(_database, merchant, environment, order_id, action, now):
+        from cartray.post_purchase import _action_digest
+
+        db.execute("INSERT OR IGNORE INTO post_purchase_executions "
+                   "(merchant_id,environment,order_id,workflow_key,action_digest,state,"
+                   "created_at,updated_at,fulfilment_nonce) "
+                   "VALUES (?,?,?,?,?,'claimed',?,?,?)", (merchant, environment, order_id, action.workflow_key,
+                   _action_digest(action), now, now, "nonce"))
+        db.commit()
+        return "nonce", (("product", 0, "token", "file.pdf"),)
+
+    async def mark(*_args):
+        return None
+
+    monkeypatch.setattr(fulfilment, "prepare_notification", prepare)
+    monkeypatch.setattr(fulfilment, "mark_notification_sending", mark)
     import hashlib
 
     db = setup_database()
+    db.execute("ALTER TABLE post_purchase_executions ADD COLUMN fulfilment_nonce TEXT")
     db.execute(
         "CREATE TABLE fulfilment_order_plans (order_id TEXT, merchant_id TEXT, environment TEXT, "
         "actions_json TEXT, actions_digest TEXT)"
@@ -438,7 +457,8 @@ def test_pinned_workflow_is_used_after_deployment_configuration_changes():
     db.commit()
     seen = []
     dispatcher = D1Dispatcher(
-        Database(db), "store", "test", {"service": lambda _, e: seen.append(e.config_ref) or "ok"}, pinned=True
+        Database(db), "store", "test", {"service": lambda _, e: seen.append(e.config_ref) or "ok"},
+        pinned=True, fulfilment_origin="https://store.example.test"
     )
     current = Action("workflow", ("product",), "service", "private/v2", "b" * 64)
     assert asyncio.run(drain_confirmed_d1(dispatcher, (current,))) == 1

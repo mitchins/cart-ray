@@ -84,6 +84,31 @@ function allowedLink(value) {
   } catch { return false; }
 }
 
+function approvedAccessLinks(body, config, env) {
+  if (!Object.hasOwn(body, 'access_links')) {
+    return Array.isArray(config.links) && config.links.length > 0 && config.links.length <= 20 &&
+      config.links.every(allowedLink) ? config.links : null;
+  }
+  try {
+    const origin = new URL(config.fulfilment_origin);
+    if (origin.protocol !== 'https:' || origin.username || origin.password || origin.pathname !== '/' ||
+        origin.search || origin.hash || origin.origin !== env.FULFILMENT_PUBLIC_ORIGIN ||
+        !Array.isArray(body.access_links) || body.access_links.length < 1 || body.access_links.length > 40) return null;
+    const lines = [];
+    for (const entry of body.access_links) {
+      if (!Array.isArray(entry) || entry.length !== 2 || typeof entry[0] !== 'string' ||
+          !entry[0] || entry[0].length > 180 || /[\x00-\x1f\x7f/\\]/.test(entry[0]) ||
+          typeof entry[1] !== 'string') return null;
+      const url = new URL(entry[1]);
+      if (url.origin !== origin.origin || url.username || url.password || url.pathname !== '/fulfilment/access' ||
+          url.hash || !/^\?token=[A-Za-z0-9_-]{43}$/.test(url.search) ||
+          entry[1] !== origin.origin + url.pathname + url.search) return null;
+      lines.push(`${entry[0]}: ${entry[1]}`);
+    }
+    return lines;
+  } catch { return null; }
+}
+
 /** The service token and config are operator provisioned, never browser inputs. */
 export async function handle(request, env, fetcher = fetch) {
   if (request.method !== 'POST' || env.DELIVERY_MODE !== 'test' || env.ENVIRONMENT !== 'test' ||
@@ -97,14 +122,19 @@ export async function handle(request, env, fetcher = fetch) {
     const registry = JSON.parse(raw);
     if (!registry || !Array.isArray(registry.actions) || !registry.actions.length || registry.actions.length > 100)
       return fail(503);
-    const matches = registry.actions.filter(action => action && action.workflow_key === body.workflow_key);
+    const candidates = registry.actions.filter(action => action && action.workflow_key === body.workflow_key);
+    const matches = [];
+    for (const candidate of candidates) {
+      const serialized = JSON.stringify(candidate);
+      const hash = Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(serialized))),
+        x => x.toString(16).padStart(2, '0')).join('');
+      if (constantEqual(body.config_digest, hash)) matches.push({config:candidate, hash});
+    }
+    // Old revisions stay addressable by their immutable digest. Duplicate
+    // matches are ambiguous and must not send.
     if (matches.length !== 1) return fail(400);
-    const config = matches[0];
-    // Configuration digests bind the exact JSON serialization of each action,
-    // allowing separate matching workflows to share one private handler.
-    const serialized = JSON.stringify(config);
-    const hash = Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(serialized))),
-      x => x.toString(16).padStart(2, '0')).join('');
+    const {config, hash} = matches[0];
+    const links = approvedAccessLinks(body, config, env);
     if (!config || config.environment !== 'test' || !identifier.test(config.merchant) ||
         !identifier.test(config.workflow_key) || typeof config.config_ref !== 'string' ||
         body.merchant !== config.merchant || body.environment !== 'test' ||
@@ -115,8 +145,7 @@ export async function handle(request, env, fetcher = fetch) {
         !Array.isArray(config.offer_keys) || !config.offer_keys.length ||
         !body.items.some(item => Array.isArray(item) && config.offer_keys.includes(item[0]) &&
           Number.isSafeInteger(item[1]) && item[1] > 0) ||
-        !Array.isArray(config.links) || !config.links.length || config.links.length > 20 ||
-        !config.links.every(allowedLink) || typeof config.recipient !== 'string' ||
+        !links || typeof config.recipient !== 'string' ||
         typeof config.sender !== 'string' || typeof config.subject !== 'string' || config.subject.length > 180 ||
         !/^[^\s@<>]+@[^\s@<>]+\.[A-Za-z]{2,}$/.test(config.recipient) ||
         !/^[^\s@<>]+@[^\s@<>]+\.[A-Za-z]{2,}$/.test(config.sender) || /[\r\n]/.test(config.subject) ||
@@ -144,7 +173,7 @@ export async function handle(request, env, fetcher = fetch) {
 
     // The caller has already durably claimed (merchant, order, workflow).
     // Failure or timeout is uncertain and must never trigger an automatic resend.
-    const reference = await sendEmail(env, config, provider, deadline, fetcher);
+    const reference = await sendEmail(env, {...config, links}, provider, deadline, fetcher);
     if (!reference) return fail(502);
     return Response.json({provider_reference: reference}, {headers: {'Cache-Control': 'no-store'}});
   } catch { return fail(503); }

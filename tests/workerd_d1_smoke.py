@@ -6,24 +6,145 @@ import asyncio
 import base64
 import json
 import time
+from dataclasses import replace
 from types import SimpleNamespace
 
-from js import crypto
+from js import Request, crypto
 from kinglet.storage import bytes_to_arraybuffer
 from pyodide.ffi import to_js
 from workers import Response, WorkerEntrypoint
 
 from cartray.errors import CheckoutInProgress
+from cartray.fulfilment import (
+    ProviderRegistry,
+    Redirect,
+    Stream,
+    authorised_access,
+    checkout_plan,
+    external_link,
+    mark_notification_sending,
+    prepare_notification,
+    private_object,
+    recover_prepared_notification,
+)
 from cartray.models import CheckoutOrder, CheckoutRedirect, OrderItem
 from cartray.post_purchase import Action, D1Dispatcher
 from cartray.store import D1OrderStore, _results
-from cartray.worker import _drain_post_purchase
+from cartray.worker import _drain_post_purchase, create_app
 from cartray.workers_crypto import WorkersEd25519Signer, WorkersEd25519Verifier
 
 TEST_PRIVATE_KEY_PKCS8_B64 = "MC4CAQAwBQYDK2VwBCIEIJZ4orlcGRX4w6SOrvHeEh5ZpFSC0FR4Onu1OKF/Lt87"
 TEST_PUBLIC_KEY_RAW_B64 = "mjCIMxYDlWSJsqHfrQZ+nVkoUEXEiajZ00z2jNxrijg="
 TEST_PUBLIC_KEY_SPKI_B64 = "MCowBQYDK2VwAyEAmjCIMxYDlWSJsqHfrQZ+nVkoUEXEiajZ00z2jNxrijg="
 TEST_PAYLOAD = b"cartray-worker-webcrypto-smoke-v1"
+
+
+async def fulfilment_smoke(env, suffix):
+    import hashlib
+
+    object_key = "object-" + suffix
+    await env.FULFILMENT_TEST_BUCKET.put(object_key, "dummy object")
+    configs = ({"url": "https://example.test/file", "allowed_hosts": ["example.test"]},
+               {"bucket_binding": "FULFILMENT_TEST_BUCKET", "key": object_key}, {})
+    names = ("link-" + suffix, "object-" + suffix, "third-" + suffix)
+    for index, provider in enumerate(("external_link", "private_object", "third")):
+        encoded = json.dumps(configs[index], sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+        await env.DB.prepare("INSERT INTO fulfilment_resources VALUES (?,?,?,?,?,?,?,?,?,?)").bind(
+            "smoke-store", "test", names[index], "v1", provider, names[index],
+            hashlib.sha256(encoded.encode()).hexdigest(), "dummy.txt", "text/plain", '{"expires_at":null}',
+        ).run()
+    action_doc = {"merchant": "smoke-store", "environment": "test", "actions": [{
+        "workflow_key": "deliver", "offer_keys": ["FULFILMENT"], "handler": "service",
+        "config_ref": "test/v1", "config_digest": "a" * 64,
+    }]}
+    plan_doc = {"actions": action_doc, "bindings": [{"workflow_key": "deliver", "product_key": "FULFILMENT",
+        "resources": [{"id": name, "version": "v1"} for name in names]}]}
+    item = OrderItem("FULFILMENT", 1, "price_smoke", 1, tuple(name + "@v1" for name in names))
+    plan, bindings = checkout_plan(json.dumps(plan_doc), (item,))
+    order = CheckoutOrder("cr_fulfil_" + suffix, "fulfil_" + suffix, "fp", "sha256:" + "0" * 64,
+                          (item,), "sha256:" + "2" * 64, "aud", 1,
+                          fulfilment_plan=plan, fulfilment_bindings=bindings)
+    store = D1OrderStore(env.DB)
+    await store.start_or_load(order, nonce="nonce", now=10)
+    session = "cs_fulfil_" + suffix
+    await store.attach_redirect(order.order_id, CheckoutRedirect(session, "https://checkout.stripe.test/x"), now=11)
+    await store.confirm_settlement(order_id=order.order_id, session_id=session, event_id="evt_fulfil_" + suffix,
+                                   payload={"id": "evt_fulfil_" + suffix}, payload_sha256="sha256:test",
+                                   payment_status="paid", amount_total_minor=1, now=12)
+    calls = []
+    async def handler(_purchase, execution):
+        calls.append(execution.access_links)
+        return "receipt"
+    dispatcher = D1Dispatcher(env.DB, "smoke-store", "test", {"service": handler}, pinned=True,
+                              fulfilment_origin="https://store.example.test")
+    action = Action("deliver", ("FULFILMENT",), "service", "test/v1", "a" * 64)
+    outcomes = await asyncio.gather(dispatcher.dispatch(order.order_id, (action,)),
+                                    dispatcher.dispatch(order.order_id, (action,)))
+    replay = await dispatcher.dispatch(order.order_id, (action,))
+    async def third(resource, _config):
+        return Stream("dummy", resource.filename, resource.mime_type)
+    registry = ProviderRegistry({"external_link": external_link, "private_object": private_object, "third": third})
+    settings = {("smoke-store", name): (configs[i], hashlib.sha256(json.dumps(
+        configs[i], sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode()).hexdigest())
+        for i, name in enumerate(names)}
+    settings[("smoke-store", names[1])] = ({"bucket": env.FULFILMENT_TEST_BUCKET, "key": object_key},
+        settings[("smoke-store", names[1])][1])
+    if len(calls) != 1 or len(calls[0]) != 3:
+        return False
+    values = [url.split("?token=", 1)[1] for _, url in calls[0]]
+    resolved = [await authorised_access(env.DB, value, registry, settings, int(time.time())) for value in values]
+    class Limiter:
+        async def limit(self, _key):
+            return {"success": True}
+    endpoint_env = SimpleNamespace(DB=env.DB, CARTRAY_ENVIRONMENT="test", CARTRAY_FULFILMENT_MODE="test",
+        CARTRAY_SIGNING_KEY_ID="smoke-installation", FULFILMENT_RATE_LIMITER=Limiter(),
+        CARTRAY_FULFILMENT_PROVIDER_CONFIG=json.dumps({"merchant": "smoke-store", "resources":
+                                                       {names[i]: configs[i] for i in range(3)}}),
+        FULFILMENT_TEST_BUCKET=env.FULFILMENT_TEST_BUCKET)
+    endpoint = create_app(fulfilment_registry=registry)
+    options = to_js({"headers": {"cf-connecting-ip": "192.0.2.1"}}, dict_converter=__import__("js").Object.fromEntries)
+    object_request = Request.new("https://store.example.test/fulfilment/access?token=" + values[1], options)
+    third_request = Request.new("https://store.example.test/fulfilment/access?token=" + values[2], options)
+    object_response = await endpoint(object_request, endpoint_env)
+    third_response = await endpoint(third_request, endpoint_env)
+    object_body = await object_response.text()
+    third_body = await third_response.text()
+    recovery_doc = json.loads(json.dumps(plan_doc))
+    recovery_doc["actions"]["actions"][0]["workflow_key"] = "recover"
+    recovery_doc["bindings"][0]["workflow_key"] = "recover"
+    recovery_plan, recovery_bindings = checkout_plan(json.dumps(recovery_doc), (item,))
+    recovery_order = replace(order, order_id="cr_recover_" + suffix, checkout_request_id="recover_" + suffix,
+                             fulfilment_plan=recovery_plan, fulfilment_bindings=recovery_bindings)
+    await store.start_or_load(recovery_order, nonce="nonce", now=10)
+    recovery_session = "cs_recover_" + suffix
+    await store.attach_redirect(recovery_order.order_id,
+                                CheckoutRedirect(recovery_session, "https://checkout.stripe.test/x"), now=11)
+    await store.confirm_settlement(order_id=recovery_order.order_id, session_id=recovery_session,
+        event_id="evt_recover_" + suffix, payload={"id": "evt_recover_" + suffix}, payload_sha256="sha256:test",
+        payment_status="paid", amount_total_minor=1, now=12)
+    recovery_action = Action("recover", ("FULFILMENT",), "service", "test/v1", "a" * 64)
+    old_nonce, old_tokens = await prepare_notification(env.DB, "smoke-store", "test", recovery_order.order_id,
+                                                       recovery_action, 100)
+    new_nonce, new_tokens = await recover_prepared_notification(env.DB, "smoke-store", "test", recovery_order.order_id,
+        "recover", "test-operator", "verified no send began", 1300)
+    try:
+        await mark_notification_sending(env.DB, "smoke-store", "test", recovery_order.order_id, "recover", old_nonce)
+        return False
+    except ValueError:
+        pass
+    await mark_notification_sending(env.DB, "smoke-store", "test", recovery_order.order_id, "recover", new_nonce)
+    try:
+        await recover_prepared_notification(env.DB, "smoke-store", "test", recovery_order.order_id,
+                                            "recover", "test-operator", "unknown receipt", 2600)
+        return False
+    except ValueError:
+        pass
+    if {entry[2] for entry in old_tokens} & {entry[2] for entry in new_tokens}:
+        return False
+    return (replay == {"deliver": "already_claimed"} and len(outcomes) == 2
+            and isinstance(resolved[0], Redirect) and isinstance(resolved[1], Stream)
+            and isinstance(resolved[2], Stream) and object_response.status == 200 and object_body == "dummy object"
+            and third_response.status == 200 and third_body == "dummy")
 
 
 class Default(WorkerEntrypoint):
@@ -169,6 +290,7 @@ class Default(WorkerEntrypoint):
         )
         budget_deferred = len(budget_outcomes) == 100 and all(value == "deferred" for value in budget_outcomes.values())
 
+        fulfilment_once = await fulfilment_smoke(self.env, token)
         signer = WorkersEd25519Signer(TEST_PRIVATE_KEY_PKCS8_B64)
         signature = await signer.sign(TEST_PAYLOAD)
         public_key = await crypto.subtle.importKey(
@@ -196,6 +318,7 @@ class Default(WorkerEntrypoint):
             "verifier_accepted": verifier_accepted,
             "workflows_once": workflows_once,
             "budget_deferred": budget_deferred,
+            "fulfilment_once": fulfilment_once,
         }
         expected = {
             "d1_batch_owner": True,
@@ -207,5 +330,6 @@ class Default(WorkerEntrypoint):
             "verifier_accepted": True,
             "workflows_once": True,
             "budget_deferred": True,
+            "fulfilment_once": True,
         }
         return Response.json(result, status=200 if result == expected else 500)
