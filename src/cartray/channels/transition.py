@@ -4,18 +4,20 @@ from __future__ import annotations
 
 import hashlib
 import re
+from datetime import datetime
 
 from .feed import google_feed, meta_feed
 from .projection import _text, _url, compare
 
 
-def transition_check(source, candidate, record, exceptions=()):
+def transition_check(source, candidate, record, previous_artifact, exceptions=()):
     """Bind reported staging evidence and a rollback target to exact snapshots."""
     comparison = compare(source, candidate, exceptions)
     required = {
         "previous_source",
         "previous_url",
         "previous_schedule",
+        "previous_artifact_digest",
         "replacement_source",
         "replacement_url",
         "candidate_snapshot_source",
@@ -37,6 +39,18 @@ def transition_check(source, candidate, record, exceptions=()):
         _text(record[key], key, 256)
     for key in ("previous_url", "replacement_url", "staging_url"):
         _url(record[key], key)
+    if record["staging_url"] in (record["previous_url"], record["replacement_url"]):
+        raise ValueError("staging URL must be distinct from the live and replacement URLs")
+    if (
+        not isinstance(previous_artifact, bytes)
+        or not previous_artifact
+        or hashlib.sha256(previous_artifact).hexdigest() != record["previous_artifact_digest"]
+    ):
+        raise ValueError("retained previous feed artifact is missing or mismatched")
+    old_time = datetime.fromisoformat(source["captured_at"].replace("Z", "+00:00"))
+    candidate_time = datetime.fromisoformat(candidate["captured_at"].replace("Z", "+00:00"))
+    if candidate_time < old_time:
+        raise ValueError("candidate snapshot predates source snapshot")
     if record["previous_source"] != source["source"]:
         raise ValueError("previous source differs from snapshot provenance")
     if (
@@ -97,6 +111,7 @@ def transition_check(source, candidate, record, exceptions=()):
             "source": record["previous_source"],
             "url": record["previous_url"],
             "schedule": record["previous_schedule"],
+            "artifact_sha256": record["previous_artifact_digest"],
             "url_equals_replacement": record["previous_url"] == record["replacement_url"],
             "verify": "Confirm item-level processing after restoring the old source.",
         },

@@ -17,6 +17,7 @@ def test_transition_requires_item_level_evidence_in_separate_account_and_records
         "previous_source": "legacy",
         "previous_url": "https://shop.example.test/old.tsv",
         "previous_schedule": "daily",
+        "previous_artifact_digest": hashlib.sha256(b"prior feed").hexdigest(),
         "replacement_source": "new-feed",
         "replacement_url": "https://shop.example.test/new.tsv",
         "staging_account": "staging-account",
@@ -33,17 +34,50 @@ def test_transition_requires_item_level_evidence_in_separate_account_and_records
             "rejected_ids": [],
         },
     }
-    report = transition_check(source, candidate, record)
+    report = transition_check(source, candidate, record, b"prior feed")
     assert report["ready_for_owner_review"]
     assert report["rollback"]["source"] == "legacy"
     assert report["rollback"]["url"].endswith("/old.tsv")
     assert "not independently verified" in report["evidence_basis"]
     record["ingestion"]["accepted_ids"] = []
-    assert not transition_check(source, candidate, record)["ready_for_owner_review"]
+    assert not transition_check(source, candidate, record, b"prior feed")["ready_for_owner_review"]
     record["staging_account"] = source["account"]
     with pytest.raises(ValueError, match="distinct channel account"):
-        transition_check(source, candidate, record)
+        transition_check(source, candidate, record, b"prior feed")
     for ambiguous in (source["account"].upper(), source["account"] + " "):
         record["staging_account"] = ambiguous
         with pytest.raises(ValueError, match="distinct channel account"):
-            transition_check(source, candidate, record)
+            transition_check(source, candidate, record, b"prior feed")
+
+
+def test_transition_rejects_stale_candidate_and_live_staging():
+    source = snapshot()
+    candidate = copy.deepcopy(source)
+    candidate["source"] = "candidate-build"
+    record = {
+        "previous_source": "legacy",
+        "previous_url": "https://shop.example.test/old.tsv",
+        "previous_schedule": "daily",
+        "previous_artifact_digest": hashlib.sha256(b"old").hexdigest(),
+        "replacement_source": "new-feed",
+        "replacement_url": "https://shop.example.test/old.tsv",
+        "staging_account": "separate",
+        "staging_url": "https://shop.example.test/old.tsv",
+        "candidate_snapshot_source": "candidate-build",
+        "evidence_reference": "test",
+        "ingestion": {
+            "candidate_digest": canonical_digest(candidate),
+            "artifact_digest": hashlib.sha256(google_feed(candidate)).hexdigest(),
+            "source_id": "new-feed",
+            "account": "separate",
+            "url": "https://shop.example.test/old.tsv",
+            "accepted_ids": ["external-456"],
+            "rejected_ids": [],
+        },
+    }
+    with pytest.raises(ValueError, match="staging URL"):
+        transition_check(source, candidate, record, b"old")
+    record["staging_url"] = "https://staging.example.test/feed.tsv"
+    candidate["captured_at"] = "2000-01-01T00:00:00Z"
+    with pytest.raises(ValueError, match="predates"):
+        transition_check(source, candidate, record, b"old")

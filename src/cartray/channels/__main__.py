@@ -43,6 +43,7 @@ def _run(argv=None):
     transition.add_argument("source")
     transition.add_argument("candidate")
     transition.add_argument("record")
+    transition.add_argument("previous_artifact")
     transition.add_argument("--exceptions")
     args = parser.parse_args(argv)
     if args.command == "validate":
