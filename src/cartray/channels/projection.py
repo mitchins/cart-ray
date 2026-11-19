@@ -73,7 +73,11 @@ def validate(snapshot):
         "content_language",
         "feed_label",
     }
-    if not isinstance(snapshot, dict) or set(snapshot) != required or snapshot["schema"] != 1:
+    if (
+        not isinstance(snapshot, dict)
+        or set(snapshot) != required
+        or (type(snapshot["schema"]) is not int or snapshot["schema"] != 1)
+    ):
         raise ValueError("invalid snapshot envelope")
     for key in ("merchant", "account", "catalogue", "source"):
         if not isinstance(snapshot[key], str) or not _ID.fullmatch(snapshot[key]):
@@ -113,7 +117,7 @@ def validate(snapshot):
             if item[key] != item[key].strip() or item[key].startswith(("=", "+", "-", "@")):
                 raise ValueError(f"invalid {key}")
         if snapshot["channel"] == "google" and (
-            len(item["item_id"]) > 50 or (item["group_id"] is not None and len(item["group_id"]) > 50)
+            len(item["item_id"]) > 50 or (isinstance(item["group_id"], str) and len(item["group_id"]) > 50)
         ):
             raise ValueError("Google item and group IDs must not exceed 50 characters")
         if item["item_id"] in keys:
@@ -215,6 +219,11 @@ def compare(source, candidate, exceptions=()):
                     "published",
                     "eligible",
                 ) and (old[key][field] is None or new[key][field] is None)
+                both_excluded = (old[key]["published"] is False or old[key]["eligible"] is False) and (
+                    new[key]["published"] is False or new[key]["eligible"] is False
+                )
+                if both_excluded and old[key][field] is None and new[key][field] is None:
+                    missing = False
                 if old[key][field] != new[key][field] or missing:
                     differences.append(
                         {
@@ -229,9 +238,19 @@ def compare(source, candidate, exceptions=()):
     used = {(row["item_id"], row["field"]) for row in differences}
     if approved - used:
         raise ValueError("exception does not match a difference")
+    from .feed import google_feed, meta_feed
+
+    try:
+        (google_feed if candidate["channel"] == "google" else meta_feed)(candidate)
+        local_error = None
+    except ValueError as error:
+        local_error = str(error)
     return {
+        "candidate_locally_exportable": local_error is None,
+        "candidate_export_error": local_error,
         "source_digest": sd,
         "candidate_digest": cd,
         "differences": differences,
-        "ready": all(row["approved"] and not row.get("unverified", False) for row in differences),
+        "ready": local_error is None
+        and all(row["approved"] and not row.get("unverified", False) for row in differences),
     }

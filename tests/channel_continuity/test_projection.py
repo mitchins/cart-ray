@@ -194,6 +194,7 @@ def test_platform_specific_availability_and_google_id_limits():
     a["items"][0]["attributes"]["availability_date"] = "2026-12-01T10:00Z"
     assert b"2026-12-01T10:00Z" in google_feed(a)
     a["channel"] = "meta"
+    del a["items"][0]["attributes"]["availability_date"]
     with pytest.raises(ValueError, match="not qualified"):
         meta_feed(a)
     a["channel"] = "google"
@@ -218,3 +219,24 @@ def test_existing_unicode_and_slash_external_identity_is_preserved():
     data = snapshot()
     data["items"][0]["item_id"] = "legacy/été 12"
     assert "legacy/été 12".encode() in google_feed(data)
+
+
+def test_excluded_item_without_price_does_not_block_unchanged_feed():
+    a = snapshot()
+    a["items"][1]["price"] = None
+    assert compare(a, copy.deepcopy(a))["ready"]
+
+
+def test_compare_never_claims_unexportable_candidate_is_ready():
+    a = snapshot()
+    a["items"][0]["attributes"] = {}
+    report = compare(a, copy.deepcopy(a))
+    assert not report["ready"]
+    assert not report["candidate_locally_exportable"]
+
+
+def test_zero_price_eligible_item_is_held():
+    a = snapshot()
+    a["items"][0]["price"] = "0.00 AUD"
+    with pytest.raises(ValueError, match="zero-price"):
+        google_feed(a)

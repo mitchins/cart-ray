@@ -23,7 +23,6 @@ _BASE = (
     "size",
     "material",
     "pattern",
-    "variant_option",
     "google_product_category",
     "availability_date",
 )
@@ -35,13 +34,24 @@ def _write(snapshot, dialect):
         raise ValueError("adapter and channel differ")
     output = StringIO(newline="")
     writer = csv.writer(output, delimiter="\t" if dialect == "google" else ",", lineterminator="\n")
-    writer.writerow(_BASE)
+    names = ("brand", "color", "size", "material", "pattern")
+    if dialect == "google":
+        names += ("google_product_category", "availability_date")
+    writer.writerow(_BASE[:9] + names)
     for item in sorted(snapshot["items"], key=lambda row: row["item_id"]):
         if item["published"] is None or item["eligible"] is None:
             raise ValueError("unknown publication or eligibility")
         if item["published"] and item["eligible"]:
+            if dialect == "meta" and any(
+                item["attributes"].get(k) for k in ("google_product_category", "availability_date")
+            ):
+                raise ValueError("unsupported Meta feed attribute")
+            if item["attributes"].get("variant_option"):
+                raise ValueError("variant_option export is not yet supported")
+            if item["price"] is not None and item["price"].startswith("0.00 "):
+                raise ValueError("zero-price offers are not supported by this feed adapter")
             if item["group_id"] and not any(
-                item["attributes"].get(k) for k in ("color", "size", "material", "pattern", "variant_option")
+                item["attributes"].get(k) for k in ("color", "size", "material", "pattern")
             ):
                 raise ValueError("grouped variant requires a distinguishing attribute")
             if dialect == "meta" and item["availability"] not in ("in stock", "out of stock"):
@@ -70,19 +80,7 @@ def _write(snapshot, dialect):
                     item["availability"],
                     item["condition"],
                     item["group_id"] or "",
-                    *(
-                        item["attributes"].get(key, "")
-                        for key in (
-                            "brand",
-                            "color",
-                            "size",
-                            "material",
-                            "pattern",
-                            "variant_option",
-                            "google_product_category",
-                            "availability_date",
-                        )
-                    ),
+                    *(item["attributes"].get(key, "") for key in names),
                 )
             )
     return output.getvalue().encode("utf-8")

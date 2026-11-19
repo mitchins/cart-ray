@@ -35,9 +35,9 @@ def _run(argv=None):
         try:
             (google_feed if data["channel"] == "google" else meta_feed)(data)
         except ValueError as error:
-            print(json.dumps({"valid": True, "feed_ready": False, "reason": str(error)}))
+            print(json.dumps({"valid": True, "locally_exportable": False, "reason": str(error)}))
             return 1
-        print(json.dumps({"valid": True, "feed_ready": True, "items": len(data["items"])}))
+        print(json.dumps({"valid": True, "locally_exportable": True, "items": len(data["items"])}))
     elif args.command == "export":
         data = validate(read_json(args.snapshot))
         content = (google_feed if data["channel"] == "google" else meta_feed)(data)
