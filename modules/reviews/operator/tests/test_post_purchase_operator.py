@@ -68,6 +68,28 @@ def test_ep_test_lane_can_enable_reviews_independently(tmp_path):
     assert config["source_mode"] == "private"
 
 
+def test_combined_topology_preserves_independent_delivery_controls(tmp_path):
+    options = handoff(tmp_path)
+    options["reviews_enabled"] = True
+    install = Installation.plan(tmp_path / "installation", options)
+    install.state["workers_subdomain"] = "example"
+    install.state["resources"]["database:commerce"] = {"id": "db"}
+    for role in ("events", "schedule", "due", "dlq"):
+        install.state["resources"]["queue:" + role] = {"id": role}
+    nodes, _ = graph(install, sending=False, post_purchase_modes=OFF)
+    assert set(nodes) == set(install.roles)
+    assert nodes["source"]["services"]["REVIEWS_SOURCE_TRIGGER"] == "producer"
+    assert nodes["source"]["services"]["POST_PURCHASE_HANDLER"] == "post-purchase"
+    assert nodes["source"]["vars"]["CARTRAY_POST_PURCHASE_MODE"] == "disabled"
+    assert nodes["sender"]["vars"]["INITIAL_SEND_MODE"] == "disabled"
+    nodes, _ = graph(install, sending=True, post_purchase_modes=OFF)
+    assert nodes["source"]["vars"]["CARTRAY_POST_PURCHASE_MODE"] == "disabled"
+    assert nodes["sender"]["vars"]["INITIAL_SEND_MODE"] == "test"
+    nodes, _ = graph(install, sending=False, post_purchase_modes=ON)
+    assert nodes["source"]["vars"]["CARTRAY_POST_PURCHASE_MODE"] == "test"
+    assert nodes["sender"]["vars"]["INITIAL_SEND_MODE"] == "disabled"
+
+
 def test_post_purchase_transition_reverifies_before_resuming_reviews(tmp_path, monkeypatch):
     from types import SimpleNamespace
 

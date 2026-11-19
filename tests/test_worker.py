@@ -22,6 +22,18 @@ from cartray.worker import app, create_app
 STOREFRONT_ORIGIN = "https://cartray-store-test.pages.dev"
 
 
+class FramedTestClient(TestClient):
+    """Model the Content-Length supplied by HTTP for a completed JSON upload."""
+
+    def request(self, method, path, json_data=None, data=None, headers=None, **kwargs):
+        headers = dict(headers or {})
+        if json_data is not None:
+            headers.setdefault("content-length", str(len(json.dumps(json_data).encode())))
+        elif data is not None:
+            headers.setdefault("content-length", str(len(str(data).encode())))
+        return super().request(method, path, json_data=json_data, data=data, headers=headers, **kwargs)
+
+
 def test_invitation_mode_is_explicit_and_squirrel_test_config_selects_automatic():
     config = tomllib.loads(
         (Path(__file__).parents[1] / "examples/acorn-store/cartray-test-vars.example.toml").read_text()
@@ -133,7 +145,7 @@ def test_checkout_route_accepts_only_valid_json_and_returns_a_redirect(fixture_c
     async def factory(_env):
         return service
 
-    client = TestClient(create_app(factory), env=STORE_ENV)
+    client = FramedTestClient(create_app(factory), env=STORE_ENV)
     payload = {
         "checkout_request_id": "worker-request-1",
         "manifest_version": fixture_catalogue.version,
@@ -190,7 +202,7 @@ def test_checkout_route_maps_domain_validation_to_bad_request(fixture_catalogue)
     async def factory(_env):
         return FailingCheckoutService(CheckoutValidationError("catalogue refresh required"))
 
-    client = TestClient(create_app(factory), env=STORE_ENV)
+    client = FramedTestClient(create_app(factory), env=STORE_ENV)
     status, headers, body = client.request(
         "POST",
         "/checkout",
@@ -215,7 +227,7 @@ def test_checkout_rate_limit_rejects_before_invoking_the_checkout_service(fixtur
     async def factory(_env):
         return service
 
-    client = TestClient(create_app(factory), env={**STORE_ENV, "CHECKOUT_RATE_LIMITER": limiter,
+    client = FramedTestClient(create_app(factory), env={**STORE_ENV, "CHECKOUT_RATE_LIMITER": limiter,
                                                    "CHECKOUT_STORE_RATE_LIMITER": backstop})
     status, headers, body = client.request(
         "POST",
@@ -259,11 +271,62 @@ def test_checkout_budgets_are_scoped_to_actor_and_installation():
     assert len(set(limiter.keys)) == 3
 
 
+def test_checkout_one_actor_cannot_consume_another_actors_budget(fixture_catalogue):
+    class PerKeyQuota:
+        def __init__(self):
+            self.counts = {}
+
+        async def limit(self, options):
+            key = options["key"]
+            self.counts[key] = self.counts.get(key, 0) + 1
+            return {"success": self.counts[key] <= 20}
+
+    quota, backstop = PerKeyQuota(), FixtureRateLimiter(True)
+    service = RecordingCheckoutService()
+
+    async def factory(_env):
+        return service
+
+    client = FramedTestClient(create_app(factory), env={**STORE_ENV, "CHECKOUT_RATE_LIMITER": quota,
+                                                       "CHECKOUT_STORE_RATE_LIMITER": backstop})
+    payload = {"checkout_request_id": "quota-fixture", "manifest_version": fixture_catalogue.version,
+               "items": [{"product_key": "TEST-TEMPLATE", "quantity": 1}]}
+    def call(ip):
+        return client.request("POST", "/checkout", json_data=payload,
+                              headers={"origin": STOREFRONT_ORIGIN, "cf-connecting-ip": ip})[0]
+    assert [call("192.0.2.1") for _ in range(21)] == [201] * 20 + [429]
+    assert call("192.0.2.2") == 201
+    assert backstop.calls == 21
+
+
+def test_checkout_rejects_unframed_or_unreadable_body_before_service(fixture_catalogue):
+    service = RecordingCheckoutService()
+
+    async def factory(_env):
+        return service
+
+    client = TestClient(create_app(factory), env=STORE_ENV)
+    payload = {"checkout_request_id": "request-unframed", "manifest_version": fixture_catalogue.version,
+               "items": [{"product_key": "TEST-TEMPLATE", "quantity": 1}]}
+    status, _, _ = client.request("POST", "/checkout", json_data=payload,
+                                  headers={"origin": STOREFRONT_ORIGIN, "cf-connecting-ip": "192.0.2.1"})
+    assert status == 400
+    assert service.redirects == 0
+
+    async def failing_read():
+        raise OSError("private transport error")
+
+    request = SimpleNamespace(header=lambda name, default=None: {"content-type": "application/json",
+                              "content-length": "10"}.get(name, default), bytes=failing_read)
+    with pytest.raises(CheckoutValidationError, match="could not be read"):
+        asyncio.run(worker_module._checkout_payload(request))
+
+
 def test_checkout_route_fails_closed_for_unavailable_configuration(fixture_catalogue):
     async def factory(_env):
         return FailingCheckoutService(ProjectionSealError("missing signing key"))
 
-    client = TestClient(create_app(factory), env=STORE_ENV)
+    client = FramedTestClient(create_app(factory), env=STORE_ENV)
     status, headers, body = client.request(
         "POST",
         "/checkout",

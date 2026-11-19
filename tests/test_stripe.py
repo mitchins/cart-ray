@@ -286,6 +286,51 @@ def test_stripe_price_resolver_requires_one_active_one_off_price():
     assert transport.requests[0][1] == "/v1/prices?active=true&lookup_keys%5B%5D=cr_test_template&limit=2"
 
 
+def test_checkout_stripe_call_budget_and_idempotent_retry(fixture_catalogue):
+    from dataclasses import replace
+    from pathlib import Path
+
+    from cartray.catalogue import FixturePriceResolver
+    from cartray.catalogue_bundle import build_runtime_catalogue
+    from cartray.checkout import CheckoutService
+    from cartray.compiled_catalogue import COMPILED_CATALOGUE
+    from cartray.models import CheckoutRequest
+    from cartray.store import SqliteOrderStore
+
+    prices = FixturePriceResolver.from_json(Path(__file__).parents[1] / "fixtures/price-resolutions.json").prices
+    def price_responses():
+        result = []
+        for source in COMPILED_CATALOGUE.catalogue_sources:
+            price = prices[source.stripe_lookup_key]
+            value = stripe_price(lookup_key=source.stripe_lookup_key)
+            value.update(id=price.stripe_price_id, unit_amount=price.amount_minor, currency=price.currency)
+            result.append((200, {"data": [value]}))
+        return result
+
+    transport = RecordingTransport(price_responses() + [
+        (200, {"id": "cs_test_budget", "url": "https://checkout.stripe.test/c/pay/cs_test_budget",
+               "payment_intent": "pi_budget"}),
+        (200, {"id": "cs_test_budget"}), (200, {"id": "pi_budget"}),
+    ] + price_responses())
+    client = StripeApiClient("rk_test_fixture", transport)
+    locked = replace(COMPILED_CATALOGUE, expected_catalogue_version=fixture_catalogue.version)
+    store = SqliteOrderStore.in_memory()
+    gateway = StripeCheckoutGateway(client, CheckoutMetadataSealer("test", "test-key-1", FixtureSigner()))
+    request = CheckoutRequest("budget-request", fixture_catalogue.version, (CanonicalItem("TEST-TEMPLATE", 1),))
+
+    async def execute():
+        catalogue = await build_runtime_catalogue(locked, StripePriceResolver(client))
+        return await CheckoutService(catalogue, store, gateway).checkout(request)
+
+    first = asyncio.run(execute())
+    first_calls = list(transport.requests)
+    assert asyncio.run(execute()) == first
+    count = len(COMPILED_CATALOGUE.catalogue_sources)
+    assert count == 4
+    assert [call[0] for call in first_calls] == ["GET"] * count + ["POST"] * 3
+    assert [call[0] for call in transport.requests[len(first_calls):]] == ["GET"] * count
+
+
 def test_stripe_api_version_pin_cannot_be_overridden_by_a_request_caller():
     assert STRIPE_API_VERSION == "2025-09-30.clover"
 

@@ -336,10 +336,13 @@ async def _checkout_payload(request) -> CheckoutRequest:
     if content_type.split(";", 1)[0].strip().lower() != "application/json":
         raise CheckoutValidationError("content type must be application/json")
     declared_size = request.header("content-length")
-    if declared_size is not None and (not declared_size.isdigit() or int(declared_size) > MAX_CHECKOUT_BODY_BYTES):
+    if declared_size is None or not declared_size.isdigit() or int(declared_size) > MAX_CHECKOUT_BODY_BYTES:
         raise CheckoutValidationError("checkout request body is too large")
-    body = await request.bytes()
-    if len(body) > MAX_CHECKOUT_BODY_BYTES:
+    try:
+        body = await request.bytes()
+    except Exception as error:
+        raise CheckoutValidationError("checkout request body could not be read") from error
+    if len(body) > MAX_CHECKOUT_BODY_BYTES or len(body) != int(declared_size):
         raise CheckoutValidationError("checkout request body is too large")
     try:
         payload = json.loads(body)
