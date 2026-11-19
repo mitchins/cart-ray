@@ -413,6 +413,14 @@ def email_migration_install(install, api, credentials=None):
     return Installation(install.directory, handoff, api, credential_provider="cloudflare")
 
 
+def test_sender_change_cannot_reinterpret_pinned_fulfilment_workflows(deployed):
+    original, api, _db = deployed
+    install = email_migration_install(original, api)
+    install.state["fulfilment"] = {"bucket": None}
+    with pytest.raises(ValueError, match="cannot reinterpret pinned fulfilment"):
+        install.post_purchase_reconfigure_provider("cloudflare", allow_sender_change=True)
+
+
 def test_explicit_off_provider_sender_migration_then_fresh_off_deploy(deployed):
     original, api, db = deployed
     original.post_purchase_fence()
