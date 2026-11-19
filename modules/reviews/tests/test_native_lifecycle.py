@@ -219,6 +219,7 @@ def test_worker_enforces_modes_and_scope(lifecycle):
         REVIEWS_MODE="disabled",
         REVIEWS_STORE_KEY="store",
         REVIEWS_ENVIRONMENT="test",
+        REVIEWS_PUBLIC_ADMISSION="test_unlimited",
         REVIEWS_TEST_ADMIN_TOKEN="s" * 40,
     )
 

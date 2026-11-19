@@ -46,6 +46,7 @@ def test_runtime_catalogue_and_public_manifest_are_built_only_from_the_compiled_
     presented = asyncio.run(build_runtime_presented_catalogue(COMPILED_CATALOGUE, resolver))
 
     assert presented.catalogue == catalogue
+    assert COMPILED_CATALOGUE.public_manifest() == presented.public_manifest()
     assert presented.presentation_version == COMPILED_CATALOGUE.expected_presentation_version
     assert COMPILED_CATALOGUE.bundle_version not in json.dumps(presented.public_manifest())
     assert "fulfilment_resources" not in json.dumps(presented.public_manifest())

@@ -26,8 +26,8 @@ test('ordinary storefront assets remain available',async()=>assert.equal(await (
 test('public summaries and paginated contributions are bounded and stripped of credentials',async()=>{
  let calls=0; const e=env(); e.ACORN_REVIEWS_READ_MODE='test'; e.REVIEWS_PUBLIC={fetch:async r=>{
   calls++;assert.equal(r.method,'GET');assert.equal(r.headers.get('cookie'),null);assert.equal(r.headers.get('authorization'),null);
-  assert.equal(r.headers.get('accept'),'application/json'); return new Response(new URL(r.url).search,{status:200});}};
- const headers={Cookie:'private=1',Authorization:'Bearer private'};
+  assert.equal(r.headers.get('accept'),'application/json');assert.equal(r.headers.get('cf-connecting-ip'),'192.0.2.8'); return new Response(new URL(r.url).search,{status:200});}};
+ const headers={Cookie:'private=1',Authorization:'Bearer private','CF-Connecting-IP':'192.0.2.8'};
  assert.equal((await gateway.fetch(new Request(origin+'/reviews/v1/subjects/acorn-growing-kit/summary',{headers}),e)).status,200);
  const result=await gateway.fetch(new Request(origin+'/reviews/v1/subjects/acorn-growing-kit/contributions?limit=10&after=cursor&snapshot=revision',{headers}),e);
  assert.equal(result.status,200);assert.equal(await result.text(),'?limit=10&after=cursor&snapshot=revision');assert.equal(calls,2);

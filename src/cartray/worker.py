@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import asyncio
 import hmac
+import inspect
+import ipaddress
 import json
 import re
 import time
@@ -10,7 +12,7 @@ from urllib.parse import parse_qsl, urlparse
 
 from kinglet import Kinglet, Response
 
-from cartray.catalogue_bundle import build_runtime_catalogue, build_runtime_presented_catalogue
+from cartray.catalogue_bundle import build_runtime_catalogue
 from cartray.checkout import CheckoutService
 from cartray.compiled_catalogue import COMPILED_CATALOGUE
 from cartray.errors import (
@@ -41,6 +43,7 @@ from cartray.workers_transport import WorkersFetchTransport
 MAX_CHECKOUT_BODY_BYTES = 16_384
 _BROWSER_ROUTES = {"/catalogue": "GET", "/checkout": "POST", "/checkout-status": "GET"}
 _CHECKOUT_SESSION_ID_RE = re.compile(r"^cs_[A-Za-z0-9_]+$")
+_STATUS_UNAVAILABLE = "checkout status unavailable"
 
 
 class CorsRejected(Exception):
@@ -76,9 +79,7 @@ def create_app(
 
     @app.get("/health")
     async def health(request):
-        result = await request.env.DB.prepare("SELECT 1 AS healthy").run()
-        if not _d1_success(result):
-            return Response({"error": "database unavailable"}, status=503)
+        # Public liveness is deliberately independent of D1 readiness.
         return {"service": "cartray", "mode": "test-only", "status": "ok"}
 
     @app.get("/internal/reviews-runtime-identity")
@@ -138,10 +139,14 @@ def create_app(
         except RuntimeError:
             return Response({"error": "catalogue unavailable"}, status=503)
         try:
-            resolved_catalogue = await catalogue_factory(request.env)
+            resolved_catalogue = catalogue_factory(request.env)
+            if inspect.isawaitable(resolved_catalogue):
+                resolved_catalogue = await resolved_catalogue
         except Exception:
             return Response({"error": "catalogue unavailable"}, status=503, headers=cors.response_headers())
-        return Response(resolved_catalogue.public_manifest(), headers=cors.response_headers())
+        return Response(
+            resolved_catalogue.public_manifest(), headers={**cors.response_headers(), "Cache-Control": "no-store"}
+        )
 
     @app.post("/checkout")
     async def checkout(request):
@@ -184,16 +189,22 @@ def create_app(
         except CorsRejected:
             return Response({"error": "origin not allowed"}, status=403)
         except RuntimeError:
-            return Response({"error": "checkout status unavailable"}, status=503)
+            return Response({"error": _STATUS_UNAVAILABLE}, status=503)
         session_id = _checkout_status_session_id(request)
         if session_id is None:
             return Response({"error": "checkout not found"}, status=404, headers=_status_headers(cors))
+        try:
+            allowed = await _checkout_status_rate_limit(request)
+        except Exception:
+            return Response({"error": _STATUS_UNAVAILABLE}, status=503, headers=_status_headers(cors))
+        if not allowed:
+            return Response({"error": _STATUS_UNAVAILABLE}, status=429, headers=_status_headers(cors))
         try:
             store = await status_store_factory(request.env)
             state = await store.checkout_status(session_id)
             receipt = await store.checkout_receipt(session_id) if state == "confirmed" else None
         except Exception:
-            return Response({"error": "checkout status unavailable"}, status=503, headers=_status_headers(cors))
+            return Response({"error": _STATUS_UNAVAILABLE}, status=503, headers=_status_headers(cors))
         if state not in {"pending", "confirmed", "expired"}:
             return Response({"error": "checkout not found"}, status=404, headers=_status_headers(cors))
         return Response({"state": state, **({"receipt": receipt} if receipt else {})}, headers=_status_headers(cors))
@@ -247,6 +258,7 @@ def _stripe_client(env):
 
 async def checkout_service_from_environment(env) -> CheckoutService:
     environment = _test_environment(env)
+    _require_locked_catalogue()
     success_url = _https_url(_required_env(env, "CARTRAY_SUCCESS_URL"), "CARTRAY_SUCCESS_URL")
     cancel_url = _https_url(_required_env(env, "CARTRAY_CANCEL_URL"), "CARTRAY_CANCEL_URL")
     client = _stripe_client(env)
@@ -277,10 +289,15 @@ async def catalogue_from_environment(env):
     return await build_runtime_catalogue(COMPILED_CATALOGUE, StripePriceResolver(client))
 
 
-async def public_catalogue_from_environment(env):
+def public_catalogue_from_environment(env):
     _test_environment(env)
-    client = _stripe_client(env)
-    return await build_runtime_presented_catalogue(COMPILED_CATALOGUE, StripePriceResolver(client))
+    _require_locked_catalogue()
+    return COMPILED_CATALOGUE
+
+
+def _require_locked_catalogue() -> None:
+    if not COMPILED_CATALOGUE.expected_catalogue_version:
+        raise RuntimeError("connected commerce requires a reviewed Stripe preflight catalogue lock")
 
 
 async def settlement_service_from_environment(env) -> StripeSettlementService:
@@ -383,10 +400,29 @@ async def _checkout_rate_limit(env) -> bool:
 
 
 def _checkout_status_session_id(request) -> str | None:
-    values = [value for key, value in parse_qsl(request.query_string, keep_blank_values=True) if key == "session_id"]
+    if len(request.query_string) > 256:
+        return None
+    try:
+        pairs = parse_qsl(request.query_string, keep_blank_values=True, max_num_fields=2)
+    except ValueError:
+        return None
+    values = [value for key, value in pairs if key == "session_id"]
     if len(values) != 1 or not _CHECKOUT_SESSION_ID_RE.fullmatch(values[0]):
         return None
     return values[0]
+
+
+async def _checkout_status_rate_limit(request) -> bool:
+    limiter = getattr(request.env, "CHECKOUT_STATUS_RATE_LIMITER", None)
+    if limiter is None:
+        raise RuntimeError("missing checkout status limiter")
+    address = ipaddress.ip_address(request.header("cf-connecting-ip") or "")
+    if address.version == 6:
+        address = address.ipv4_mapped or ipaddress.ip_network(f"{address}/64", strict=False).network_address
+    installation = _required_env(request.env, "CARTRAY_SIGNING_KEY_ID")
+    result = await limiter.limit({"key": "checkout-status:" + installation + ":" + str(address)})
+    success = result.get("success") if isinstance(result, dict) else getattr(result, "success", None)
+    return success is True
 
 
 def _status_headers(cors: CorsPolicy) -> dict[str, str]:
@@ -509,6 +545,7 @@ async def _drain_post_purchase(env):
         service = getattr(env, "POST_PURCHASE_HANDLER", None)
         if len(token) < 32 or not callable(getattr(service, "fetch", None)):
             return
+
         async def service_handler(purchase, execution):
             body = json.dumps(
                 {

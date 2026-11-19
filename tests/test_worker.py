@@ -3,7 +3,7 @@ import hmac
 import json
 import time
 import tomllib
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from hashlib import sha256
 from pathlib import Path
 from types import SimpleNamespace
@@ -81,7 +81,12 @@ class RecordingStatusStore:
         return self.receipt
 
 
-STORE_ENV = {"CARTRAY_STOREFRONT_ORIGIN": STOREFRONT_ORIGIN, "CHECKOUT_RATE_LIMITER": FixtureRateLimiter(True)}
+STORE_ENV = {
+    "CARTRAY_STOREFRONT_ORIGIN": STOREFRONT_ORIGIN,
+    "CHECKOUT_RATE_LIMITER": FixtureRateLimiter(True),
+    "CHECKOUT_STATUS_RATE_LIMITER": FixtureRateLimiter(True),
+    "CARTRAY_SIGNING_KEY_ID": "fixture-installation",
+}
 
 
 @dataclass
@@ -295,7 +300,9 @@ def test_checkout_status_is_a_minimal_d1_only_browser_read():
 
     client = TestClient(create_app(status_store_factory=status_factory), env=STORE_ENV)
     status, headers, body = client.request(
-        "GET", "/checkout-status?session_id=cs_test_pending", headers={"origin": STOREFRONT_ORIGIN}
+        "GET",
+        "/checkout-status?session_id=cs_test_pending",
+        headers={"origin": STOREFRONT_ORIGIN, "cf-connecting-ip": "192.0.2.1"},
     )
     assert status == 200
     assert json.loads(body) == {"state": "pending"}
@@ -303,21 +310,27 @@ def test_checkout_status_is_a_minimal_d1_only_browser_read():
     assert headers["Cache-Control"] == "no-store"
 
     status, _headers, body = client.request(
-        "GET", "/checkout-status?session_id=cs_test_confirmed", headers={"origin": STOREFRONT_ORIGIN}
+        "GET",
+        "/checkout-status?session_id=cs_test_confirmed",
+        headers={"origin": STOREFRONT_ORIGIN, "cf-connecting-ip": "192.0.2.1"},
     )
     assert status == 200
     assert json.loads(body) == {"state": "confirmed"}
     assert store.calls == 2
 
     status, _headers, body = client.request(
-        "GET", "/checkout-status?session_id=cs_test_expired", headers={"origin": STOREFRONT_ORIGIN}
+        "GET",
+        "/checkout-status?session_id=cs_test_expired",
+        headers={"origin": STOREFRONT_ORIGIN, "cf-connecting-ip": "192.0.2.1"},
     )
     assert status == 200
     assert json.loads(body) == {"state": "expired"}
     assert store.calls == 3
 
     status, headers, body = client.request(
-        "GET", "/checkout-status?session_id=not-a-session", headers={"origin": STOREFRONT_ORIGIN}
+        "GET",
+        "/checkout-status?session_id=not-a-session",
+        headers={"origin": STOREFRONT_ORIGIN, "cf-connecting-ip": "192.0.2.1"},
     )
     assert status == 404
     assert json.loads(body) == {"error": "checkout not found"}
@@ -325,7 +338,9 @@ def test_checkout_status_is_a_minimal_d1_only_browser_read():
     assert store.calls == 3
 
     status, _headers, body = client.request(
-        "GET", "/checkout-status?session_id=cs_test_unknown", headers={"origin": STOREFRONT_ORIGIN}
+        "GET",
+        "/checkout-status?session_id=cs_test_unknown",
+        headers={"origin": STOREFRONT_ORIGIN, "cf-connecting-ip": "192.0.2.1"},
     )
     assert status == 404
     assert json.loads(body) == {"error": "checkout not found"}
@@ -346,13 +361,108 @@ def test_checkout_status_only_includes_receipt_for_confirmed_sessions():
 
     client = TestClient(create_app(status_store_factory=status_factory), env=STORE_ENV)
     for state in ("pending", "confirmed", "expired", "unknown"):
-        status, headers, body = client.request("GET", f"/checkout-status?session_id=cs_test_{state}")
+        status, headers, body = client.request("GET", f"/checkout-status?session_id=cs_test_{state}", headers={"cf-connecting-ip": "192.0.2.1"})
         assert headers["Cache-Control"] == "no-store"
         assert status == (404 if state == "unknown" else 200)
         expected = {"error": "checkout not found"} if state == "unknown" else {"state": state}
         if state == "confirmed":
             expected["receipt"] = receipt
         assert json.loads(body) == expected
+
+
+def test_status_budget_stops_originless_requests_before_database():
+    store = RecordingStatusStore({"cs_test_pending": "pending"})
+    limiter = FixtureRateLimiter(False)
+
+    async def status_factory(_env):
+        return store
+
+    env = {**STORE_ENV, "CHECKOUT_STATUS_RATE_LIMITER": limiter}
+    client = TestClient(create_app(status_store_factory=status_factory), env=env)
+    for _ in range(10):
+        status, headers, _ = client.request(
+            "GET", "/checkout-status?session_id=cs_test_pending", headers={"cf-connecting-ip": "192.0.2.1"}
+        )
+        assert status == 429
+        assert headers["Cache-Control"] == "no-store"
+    assert store.calls == 0
+    assert limiter.calls == 10
+
+
+def test_status_rejects_bad_queries_and_missing_edge_admission_before_database():
+    store = RecordingStatusStore({"cs_test_pending": "pending"})
+
+    async def status_factory(_env):
+        return store
+
+    client = TestClient(create_app(status_store_factory=status_factory), env=STORE_ENV)
+    for query in ("?session_id=cs_test_" + "x" * 300, "?a=1&b=2&session_id=cs_test_pending"):
+        status, headers, _ = client.request(
+            "GET", "/checkout-status" + query, headers={"cf-connecting-ip": "192.0.2.1"}
+        )
+        assert status == 404
+        assert headers["Cache-Control"] == "no-store"
+    status, headers, _ = client.request("GET", "/checkout-status?session_id=cs_test_pending")
+    assert status == 503
+    assert headers["Cache-Control"] == "no-store"
+    assert store.calls == 0
+
+    env = {**STORE_ENV, "CHECKOUT_STATUS_RATE_LIMITER": None}
+    client = TestClient(create_app(status_store_factory=status_factory), env=env)
+    status, _, _ = client.request(
+        "GET", "/checkout-status?session_id=cs_test_pending", headers={"cf-connecting-ip": "192.0.2.1"}
+    )
+    assert status == 503
+    assert store.calls == 0
+
+
+def test_status_normalizes_ipv4_mapped_and_ipv6_client_budgets():
+    class RecordingLimiter:
+        def __init__(self):
+            self.keys = []
+
+        async def limit(self, options):
+            self.keys.append(options["key"])
+            return {"success": True}
+
+    limiter = RecordingLimiter()
+    for address in ("192.0.2.1", "::ffff:192.0.2.1", "2001:db8::1", "2001:db8::2", "192.0.2.2", "2001:db8:1::1"):
+        request = SimpleNamespace(
+            env=SimpleNamespace(CHECKOUT_STATUS_RATE_LIMITER=limiter, CARTRAY_SIGNING_KEY_ID="store-one"),
+            header=lambda _: address,
+        )
+        assert asyncio.run(worker_module._checkout_status_rate_limit(request))
+    assert limiter.keys[0] == limiter.keys[1]
+    assert limiter.keys[2] == limiter.keys[3]
+    assert len({limiter.keys[0], limiter.keys[2], limiter.keys[4], limiter.keys[5]}) == 4
+    other = SimpleNamespace(
+        env=SimpleNamespace(CHECKOUT_STATUS_RATE_LIMITER=limiter, CARTRAY_SIGNING_KEY_ID="store-two"),
+        header=lambda _: "192.0.2.1",
+    )
+    assert asyncio.run(worker_module._checkout_status_rate_limit(other))
+    assert limiter.keys[-1] != limiter.keys[0]
+
+
+def test_public_catalogue_snapshot_needs_neither_stripe_nor_d1(monkeypatch):
+    def forbidden(_env):
+        raise AssertionError("public read attempted to contact Stripe")
+
+    monkeypatch.setattr(worker_module, "_stripe_client", forbidden)
+    locked = replace(COMPILED_CATALOGUE, expected_catalogue_version=COMPILED_CATALOGUE.public_manifest()["version"])
+    monkeypatch.setattr(worker_module, "COMPILED_CATALOGUE", locked)
+    client = TestClient(app, env={"CARTRAY_ENVIRONMENT": "test", "CARTRAY_STOREFRONT_ORIGIN": STOREFRONT_ORIGIN})
+    for headers in ({}, {"origin": STOREFRONT_ORIGIN}):
+        status, response_headers, body = client.request("GET", "/catalogue", headers=headers)
+        assert status == 200
+        assert response_headers["Cache-Control"] == "no-store"
+        assert json.loads(body) == COMPILED_CATALOGUE.public_manifest()
+
+
+def test_unlocked_fixture_cannot_be_used_as_connected_commerce():
+    with pytest.raises(RuntimeError, match="preflight"):
+        worker_module._require_locked_catalogue()
+
+
 
 
 def test_checkout_status_rejects_foreign_origins_and_has_route_specific_preflight():
@@ -649,6 +759,30 @@ def test_post_purchase_webhook_wakeup_is_opt_in_and_checkout_independent(monkeyp
     entry.env = SimpleNamespace(CARTRAY_POST_PURCHASE_MODE="test", CARTRAY_ENVIRONMENT="production")
     assert asyncio.run(entry.fetch(request)) is response
     assert captured == []
+
+
+def test_gets_never_wake_review_or_post_purchase_work(monkeypatch):
+    scheduled = []
+
+    async def fake_app(request, env):
+        return SimpleNamespace(status=200)
+
+    class Context:
+        def waitUntil(self, work):
+            scheduled.append(work)
+
+    monkeypatch.setattr(worker_module, "app", fake_app)
+    entry = worker_module.Default()
+    entry.ctx = Context()
+    entry.env = SimpleNamespace(
+        CARTRAY_POST_PURCHASE_MODE="test", CARTRAY_REVIEWS_PRODUCER="test", CARTRAY_ENVIRONMENT="test"
+    )
+    for path in ("/catalogue", "/checkout-status?session_id=cs_test_x", "/health", "/stripe/webhook"):
+        result = asyncio.run(entry.fetch(SimpleNamespace(method="GET", url="https://store.test" + path)))
+        assert result.status == 200
+    for work in scheduled:
+        work.close()
+    assert scheduled == []
 
 
 def test_missing_post_purchase_service_is_rejected_before_claims(monkeypatch):

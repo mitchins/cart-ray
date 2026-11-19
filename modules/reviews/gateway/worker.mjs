@@ -19,7 +19,10 @@ export default {async fetch(request, env) {
       return unavailable(503);
     try {
       // Public reads must never forward browser cookies, capabilities or staff credentials.
-      return await env.REVIEWS_PUBLIC.fetch(new Request(request.url, {method:'GET', headers:{Accept:'application/json'}}));
+      const headers = new Headers({Accept:'application/json'});
+      const clientAddress = request.headers.get('CF-Connecting-IP');
+      if (clientAddress !== null) headers.set('CF-Connecting-IP', clientAddress);
+      return await env.REVIEWS_PUBLIC.fetch(new Request(request.url, {method:'GET', headers}));
     } catch { return unavailable(503); }
   }
   if (url.search || !(actions.has(url.pathname) || management.test(url.pathname))) return unavailable(404);

@@ -8,6 +8,12 @@ workers_dev = false
 REVIEWS_MODE = "disabled"
 REVIEWS_STORE_KEY = "example-store"
 REVIEWS_ENVIRONMENT = "test"
+REVIEWS_PUBLIC_ADMISSION = "test_unlimited"
+
+[[ratelimits]]
+name = "REVIEWS_PUBLIC_INGRESS"
+namespace_id = "20261121"
+simple = { limit = 120, period = 60 }
 
 [[d1_databases]]
 binding = "REVIEWS_DB"
