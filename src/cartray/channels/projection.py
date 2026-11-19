@@ -1,0 +1,209 @@
+"""Validate and compare explicit channel snapshots without activating a feed."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import re
+from urllib.parse import urlsplit
+
+_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.:-]{0,149}\Z")
+_PRICE = re.compile(r"(?:0|[1-9][0-9]{0,8})\.[0-9]{2} [A-Z]{3}\Z")
+_FIELDS = (
+    "item_id",
+    "merchant_product_id",
+    "landing_url",
+    "image_url",
+    "price",
+    "availability",
+    "group_id",
+    "published",
+    "eligible",
+    "canonical_url",
+    "condition",
+    "attributes",
+)
+
+
+def _text(value, name, limit=1024):
+    if not isinstance(value, str) or not value or len(value) > limit or any(ord(c) < 32 for c in value):
+        raise ValueError(f"invalid {name}")
+    return value
+
+
+def _url(value, name):
+    _text(value, name, 2000)
+    if any(c.isspace() for c in value) or "\\" in value:
+        raise ValueError(f"invalid {name}")
+    try:
+        parsed = urlsplit(value)
+        if (
+            parsed.scheme != "https"
+            or not parsed.hostname
+            or parsed.username
+            or parsed.password
+            or parsed.port not in (None, 443)
+        ):
+            raise ValueError(f"invalid {name}")
+    except ValueError as error:
+        raise ValueError(f"invalid {name}") from error
+    return value
+
+
+def canonical_digest(snapshot):
+    return hashlib.sha256(
+        json.dumps(snapshot, sort_keys=True, ensure_ascii=False, separators=(",", ":")).encode()
+    ).hexdigest()
+
+
+def validate(snapshot):
+    """Fail closed on incomplete identity and eligibility; never infer purchase authority."""
+    required = {
+        "schema",
+        "merchant",
+        "channel",
+        "account",
+        "catalogue",
+        "source",
+        "captured_at",
+        "coverage",
+        "items",
+        "content_language",
+        "feed_label",
+    }
+    if not isinstance(snapshot, dict) or set(snapshot) != required or snapshot["schema"] != 1:
+        raise ValueError("invalid snapshot envelope")
+    for key in ("merchant", "account", "catalogue", "source"):
+        if not isinstance(snapshot[key], str) or not _ID.fullmatch(snapshot[key]):
+            raise ValueError(f"invalid {key}")
+    if snapshot["channel"] not in ("google", "meta"):
+        raise ValueError("unsupported channel")
+    for key in ("content_language", "feed_label"):
+        if not isinstance(snapshot[key], str) or not _ID.fullmatch(snapshot[key]):
+            raise ValueError(f"invalid {key}")
+    _text(snapshot["captured_at"], "capture time", 64)
+    if snapshot["coverage"] != "complete":
+        raise ValueError("snapshot coverage must be complete")
+    if not isinstance(snapshot["items"], list) or len(snapshot["items"]) > 100000:
+        raise ValueError("invalid items")
+    keys = set()
+    item_fields = {
+        "item_id",
+        "merchant_product_id",
+        "landing_url",
+        "canonical_url",
+        "image_url",
+        "title",
+        "description",
+        "price",
+        "availability",
+        "group_id",
+        "published",
+        "eligible",
+        "condition",
+        "attributes",
+    }
+    for item in snapshot["items"]:
+        if not isinstance(item, dict) or set(item) != item_fields:
+            raise ValueError("invalid item fields")
+        for key in ("item_id", "merchant_product_id"):
+            if not isinstance(item[key], str) or not _ID.fullmatch(item[key]):
+                raise ValueError(f"invalid {key}")
+        if item["item_id"] in keys:
+            raise ValueError("duplicate external item identity")
+        keys.add(item["item_id"])
+        for key in ("landing_url", "canonical_url", "image_url"):
+            if item[key] is not None:
+                _url(item[key], key)
+        for key, limit in (("title", 150), ("description", 5000)):
+            _text(item[key], key, limit)
+            if item[key].lstrip().startswith(("=", "+", "-", "@")):
+                raise ValueError(f"unsafe spreadsheet formula in {key}")
+        attributes = item["attributes"]
+        allowed = {"brand", "color", "size", "google_product_category"}
+        if not isinstance(attributes, dict) or set(attributes) - allowed:
+            raise ValueError("invalid channel attributes")
+        for name, value in attributes.items():
+            _text(value, name, 250)
+            if value.lstrip().startswith(("=", "+", "-", "@")):
+                raise ValueError("unsafe spreadsheet formula in attribute")
+        if item["price"] is not None and (not isinstance(item["price"], str) or not _PRICE.fullmatch(item["price"])):
+            raise ValueError("invalid price")
+        if item["availability"] not in (None, "in stock", "out of stock", "preorder", "backorder"):
+            raise ValueError("invalid availability")
+        if item["condition"] not in ("new", "used", "refurbished"):
+            raise ValueError("invalid condition")
+        if item["group_id"] is not None and (
+            not isinstance(item["group_id"], str) or not _ID.fullmatch(item["group_id"])
+        ):
+            raise ValueError("invalid variant group")
+        if any(value is not None and type(value) is not bool for value in (item["published"], item["eligible"])):
+            raise ValueError("publication and channel eligibility must be explicit")
+    return snapshot
+
+
+def compare(source, candidate, exceptions=()):
+    """Return all differences; waivers must bind both snapshot digests and a reviewer."""
+    validate(source)
+    validate(candidate)
+    if any(
+        source[k] != candidate[k]
+        for k in ("merchant", "channel", "account", "catalogue", "content_language", "feed_label")
+    ):
+        raise ValueError("snapshot scope mismatch")
+    sd, cd = canonical_digest(source), canonical_digest(candidate)
+    approved = set()
+    for entry in exceptions:
+        if (
+            not isinstance(entry, dict)
+            or set(entry) != {"source_digest", "candidate_digest", "item_id", "field", "reviewer", "reason"}
+            or entry["source_digest"] != sd
+            or entry["candidate_digest"] != cd
+        ):
+            raise ValueError("invalid snapshot-bound exception")
+        _text(entry["reviewer"], "exception reviewer", 150)
+        _text(entry["reason"], "exception reason", 500)
+        approved.add((entry["item_id"], entry["field"]))
+    old = {v["item_id"]: v for v in source["items"]}
+    new = {v["item_id"]: v for v in candidate["items"]}
+    differences = []
+    for key in sorted(old.keys() | new.keys()):
+        if key not in old or key not in new:
+            field = "added" if key not in old else "removed"
+            differences.append(
+                {
+                    "item_id": key,
+                    "field": field,
+                    "old": old.get(key),
+                    "new": new.get(key),
+                    "approved": (key, field) in approved,
+                }
+            )
+        else:
+            for field in _FIELDS:
+                missing = field in (
+                    "landing_url",
+                    "canonical_url",
+                    "image_url",
+                    "price",
+                    "availability",
+                    "published",
+                    "eligible",
+                ) and (old[key][field] is None or new[key][field] is None)
+                if old[key][field] != new[key][field] or missing:
+                    differences.append(
+                        {
+                            "item_id": key,
+                            "field": field,
+                            "unverified": missing,
+                            "old": old[key][field],
+                            "new": new[key][field],
+                            "approved": (key, field) in approved,
+                        }
+                    )
+    return {
+        "source_digest": sd,
+        "candidate_digest": cd,
+        "differences": differences,
+        "ready": all(row["approved"] for row in differences),
+    }
