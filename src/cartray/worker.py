@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import hmac
 import inspect
 import ipaddress
@@ -8,7 +9,7 @@ import json
 import re
 import time
 from dataclasses import dataclass
-from urllib.parse import parse_qsl, urlparse
+from urllib.parse import parse_qsl, quote, urlparse
 
 from kinglet import Kinglet, Response
 
@@ -21,6 +22,15 @@ from cartray.errors import (
     IdempotencyConflict,
     SettlementInconsistency,
     WebhookValidationError,
+)
+from cartray.fulfilment import (
+    ProviderRegistry,
+    Redirect,
+    Stream,
+    authorised_access,
+    external_link,
+    private_object,
+    token_digest,
 )
 from cartray.models import CheckoutRequest
 from cartray.post_purchase import D1Dispatcher, drain_confirmed_d1, parse_action_config
@@ -69,9 +79,16 @@ class CorsPolicy:
 
 
 def create_app(
-    service_factory=None, catalogue_factory=None, settlement_service_factory=None, status_store_factory=None
+    service_factory=None,
+    catalogue_factory=None,
+    settlement_service_factory=None,
+    status_store_factory=None,
+    fulfilment_registry=None,
 ):
     app = Kinglet(auto_wrap_exceptions=False)
+    fulfilment_registry = fulfilment_registry or ProviderRegistry(
+        {"external_link": external_link, "private_object": private_object}
+    )
     service_factory = service_factory or checkout_service_from_environment
     catalogue_factory = catalogue_factory or public_catalogue_from_environment
     settlement_service_factory = settlement_service_factory or settlement_service_from_environment
@@ -129,6 +146,55 @@ def create_app(
             )
         except Exception:
             return Response({"error": "source identity unavailable"}, status=503, headers={"Cache-Control": "no-store"})
+
+    @app.route("/fulfilment/access", methods=["GET", "HEAD"])
+    async def fulfilment_access(request):
+        # Bearer capabilities are never consumed by navigation or link scanners.
+        headers = {"Cache-Control": "no-store", "Referrer-Policy": "no-referrer", "X-Content-Type-Options": "nosniff"}
+        if getattr(request.env, "CARTRAY_FULFILMENT_MODE", "disabled") != "test":
+            return Response({"error": "resource unavailable"}, status=404, headers=headers)
+        try:
+            if _test_environment(request.env) != "test" or len(request.query_string) > 100:
+                raise ValueError("invalid request")
+            pairs = parse_qsl(request.query_string, keep_blank_values=True, max_num_fields=1)
+            if len(pairs) != 1 or pairs[0][0] != "token":
+                raise ValueError("invalid request")
+            token_digest(pairs[0][1])  # Reject malformed capabilities before touching D1.
+            raw = _required_env(request.env, "CARTRAY_FULFILMENT_PROVIDER_CONFIG")
+            if len(raw.encode()) > 65536:
+                raise ValueError("invalid provider configuration")
+            settings = json.loads(raw)
+            if not isinstance(settings, dict) or set(settings) != {"merchant", "resources"}:
+                raise ValueError("invalid provider configuration")
+            if not isinstance(settings["merchant"], str) or not isinstance(settings["resources"], dict):
+                raise ValueError("invalid provider configuration")
+            configs = {}
+            for ref, config in settings["resources"].items():
+                if not isinstance(ref, str) or not isinstance(config, dict):
+                    raise ValueError("invalid provider configuration")
+                config = dict(config)
+                encoded = json.dumps(config, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode()
+                digest = hashlib.sha256(encoded).hexdigest()
+                binding = config.pop("bucket_binding", None)
+                if binding is not None:
+                    if not isinstance(binding, str) or not re.fullmatch(r"[A-Z][A-Z0-9_]{0,63}", binding):
+                        raise ValueError("invalid provider configuration")
+                    config["bucket"] = getattr(request.env, binding, None)
+                configs[(settings["merchant"], ref)] = (config, digest)
+            result = await authorised_access(
+                request.env.DB, pairs[0][1], fulfilment_registry, configs, int(time.time())
+            )
+            if isinstance(result, Redirect):
+                return Response(status=302, headers={**headers, "Location": result.url})
+            if isinstance(result, Stream):
+                disposition = "attachment; filename*=UTF-8''" + quote(result.filename, safe="")
+                return Response(
+                    result.body,
+                    headers={**headers, "Content-Type": result.mime_type, "Content-Disposition": disposition},
+                )
+        except Exception:
+            pass
+        return Response({"error": "resource unavailable"}, status=404, headers=headers)
 
     @app.get("/catalogue")
     async def catalogue(request):
