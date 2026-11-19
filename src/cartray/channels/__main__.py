@@ -11,6 +11,7 @@ from pathlib import Path
 
 from .feed import google_feed, meta_feed
 from .projection import compare, validate
+from .transition import transition_check
 
 
 def _unique_object(pairs):
@@ -38,6 +39,11 @@ def _run(argv=None):
     diff.add_argument("source")
     diff.add_argument("candidate")
     diff.add_argument("--exceptions")
+    transition = sub.add_parser("transition-check")
+    transition.add_argument("source")
+    transition.add_argument("candidate")
+    transition.add_argument("record")
+    transition.add_argument("--exceptions")
     args = parser.parse_args(argv)
     if args.command == "validate":
         data = validate(read_json(args.snapshot))
@@ -64,11 +70,17 @@ def _run(argv=None):
                 os.unlink(name)
         print(json.dumps({"path": str(output), "bytes": len(content)}))
     else:
-        result = compare(
-            read_json(args.source), read_json(args.candidate), read_json(args.exceptions) if args.exceptions else ()
-        )
+        exceptions = read_json(args.exceptions) if args.exceptions else ()
+        if args.command == "transition-check":
+            result = transition_check(
+                read_json(args.source), read_json(args.candidate), read_json(args.record), exceptions
+            )
+            ready = result["ready_for_owner_review"]
+        else:
+            result = compare(read_json(args.source), read_json(args.candidate), exceptions)
+            ready = result["ready"]
         print(json.dumps(result, sort_keys=True))
-        return 0 if result["ready"] else 1
+        return 0 if ready else 1
     return 0
 
 
