@@ -99,6 +99,16 @@ class OrderItem:
 
 
 @dataclass(frozen=True)
+class FulfilmentBinding:
+    workflow_key: str
+    workflow_digest: str
+    product_key: str
+    resource_id: str
+    resource_version: str
+    ordinal: int
+
+
+@dataclass(frozen=True)
 class CheckoutOrder:
     order_id: str
     checkout_request_id: str
@@ -111,6 +121,8 @@ class CheckoutOrder:
     review_invitation_opt_in: bool = False
     review_invitation_policy_enabled: bool = False
     review_invitation_default_selected: bool = False
+    fulfilment_plan: tuple[str, str, str, str] | None = None
+    fulfilment_bindings: tuple[FulfilmentBinding, ...] = ()
 
 
 @dataclass(frozen=True)

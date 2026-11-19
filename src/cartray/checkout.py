@@ -28,6 +28,7 @@ class CheckoutService:
     cancel_url: str = "https://store.invalid/checkout-cancelled/"
     review_invitations_enabled: bool = False
     review_invitation_default_selected: bool = False
+    fulfilment_config: str | None = None
 
     async def checkout(self, request: CheckoutRequest) -> CheckoutRedirect:
         # The browser may request an opt-in, but cannot enable the merchant's
@@ -97,6 +98,11 @@ class CheckoutService:
                 )
             )
         order_items = tuple(items)
+        fulfilment_plan, fulfilment_bindings = None, ()
+        if self.fulfilment_config is not None:
+            from .fulfilment import checkout_plan
+
+            fulfilment_plan, fulfilment_bindings = checkout_plan(self.fulfilment_config, order_items)
         digest_items = tuple(CanonicalItem(item.product_key, item.quantity) for item in order_items)
         return CheckoutOrder(
             order_id="cr_" + uuid4().hex,
@@ -110,6 +116,8 @@ class CheckoutService:
             review_invitation_opt_in=request.review_invitation_opt_in,
             review_invitation_policy_enabled=self.review_invitations_enabled,
             review_invitation_default_selected=self.review_invitation_default_selected,
+            fulfilment_plan=fulfilment_plan,
+            fulfilment_bindings=fulfilment_bindings,
         )
 
 

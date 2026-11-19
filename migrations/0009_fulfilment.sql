@@ -72,3 +72,36 @@ CREATE TABLE fulfilment_capabilities (
   FOREIGN KEY (merchant_id, environment, order_id, workflow_key, product_key, ordinal)
     REFERENCES fulfilment_entitlements(merchant_id, environment, order_id, workflow_key, product_key, ordinal)
 );
+
+-- One trusted workflow snapshot is sealed with the order, before a checkout
+-- session exists. Later configuration changes cannot reinterpret it.
+CREATE TABLE fulfilment_order_plans (
+  order_id TEXT PRIMARY KEY REFERENCES orders(order_id),
+  merchant_id TEXT NOT NULL,
+  environment TEXT NOT NULL,
+  actions_json TEXT NOT NULL,
+  actions_digest TEXT NOT NULL CHECK(length(actions_digest) = 64)
+);
+CREATE TRIGGER fulfilment_order_plans_before_checkout
+BEFORE INSERT ON fulfilment_order_plans WHEN EXISTS
+  (SELECT 1 FROM checkout_sessions WHERE order_id = NEW.order_id) BEGIN
+  SELECT RAISE(ABORT, 'fulfilment order plan is sealed');
+END;
+CREATE TRIGGER fulfilment_order_plans_no_update BEFORE UPDATE ON fulfilment_order_plans BEGIN
+  SELECT RAISE(ABORT, 'fulfilment order plans are immutable');
+END;
+CREATE TRIGGER fulfilment_order_plans_no_delete BEFORE DELETE ON fulfilment_order_plans BEGIN
+  SELECT RAISE(ABORT, 'fulfilment order plans are immutable');
+END;
+CREATE TRIGGER fulfilment_order_plans_installation_match
+BEFORE INSERT ON fulfilment_order_plans WHEN NOT EXISTS
+  (SELECT 1 FROM post_purchase_installation WHERE singleton=1
+   AND merchant_id=NEW.merchant_id AND environment=NEW.environment) BEGIN
+  SELECT RAISE(ABORT, 'fulfilment installation mismatch');
+END;
+CREATE TRIGGER fulfilment_order_bindings_installation_match
+BEFORE INSERT ON fulfilment_order_bindings WHEN NOT EXISTS
+  (SELECT 1 FROM fulfilment_order_plans WHERE order_id=NEW.order_id
+   AND merchant_id=NEW.merchant_id AND environment=NEW.environment) BEGIN
+  SELECT RAISE(ABORT, 'fulfilment order plan missing');
+END;

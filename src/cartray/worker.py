@@ -342,7 +342,17 @@ async def checkout_service_from_environment(env) -> CheckoutService:
         cancel_url,
         review_invitations_enabled=_automatic_invitation_enabled(env),
         review_invitation_default_selected=getattr(env, "CARTRAY_REVIEW_INVITATION_DEFAULT", None) == "checked",
+        fulfilment_config=_fulfilment_checkout_config(env),
     )
+
+
+def _fulfilment_checkout_config(env):
+    mode = getattr(env, "CARTRAY_FULFILMENT_MODE", "disabled")
+    if mode == "disabled":
+        return None
+    if mode != "test" or _test_environment(env) != "test":
+        raise RuntimeError("fulfilment mode is unavailable")
+    return _required_env(env, "CARTRAY_FULFILMENT_CHECKOUT_PLAN")
 
 
 def _automatic_invitation_enabled(env) -> bool:
@@ -616,6 +626,11 @@ async def _drain_post_purchase(env):
     try:
         if getattr(env, "CARTRAY_POST_PURCHASE_MODE", "disabled") != "test" or _test_environment(env) != "test":
             return
+        # Fulfilment delivery is intentionally held until grant creation and the
+        # notification claim are committed together. Never fall back to the
+        # legacy link handler for a checkout carrying a resource plan.
+        if getattr(env, "CARTRAY_FULFILMENT_MODE", "disabled") == "test":
+            return
         merchant, environment, actions = parse_action_config(_required_env(env, "CARTRAY_POST_PURCHASE_CONFIG"))
         token = _required_env(env, "CARTRAY_POST_PURCHASE_TOKEN")
         service = getattr(env, "POST_PURCHASE_HANDLER", None)
@@ -647,7 +662,10 @@ async def _drain_post_purchase(env):
                 raise RuntimeError("post-purchase handler outcome uncertain")
             return result.get("provider_reference")
 
-        dispatcher = D1Dispatcher(env.DB, merchant, environment, {"service": service_handler})
+        dispatcher = D1Dispatcher(
+            env.DB, merchant, environment, {"service": service_handler},
+            pinned=getattr(env, "CARTRAY_FULFILMENT_MODE", "disabled") == "test",
+        )
         await asyncio.wait_for(
             drain_confirmed_d1(dispatcher, actions, limit=10, max_new_claims=2, deadline=time.monotonic() + 21),
             timeout=22,

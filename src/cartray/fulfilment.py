@@ -193,3 +193,69 @@ async def authorised_access(database, token, registry: ProviderRegistry, configs
     except (ValueError, KeyError, TypeError):
         return Unavailable()
     return await registry.resolve(resource, config)
+
+
+def checkout_plan(raw: str, items):
+    """Pin trusted workflow revisions and purchased offer/resource associations."""
+    import hashlib
+    import json
+
+    from cartray.models import FulfilmentBinding
+    from cartray.post_purchase import _action_digest, parse_action_config
+
+    if not isinstance(raw, str) or len(raw.encode()) > 65536:
+        raise ValueError("invalid fulfilment plan")
+    try:
+        doc = json.loads(raw)
+        if not isinstance(doc, dict) or set(doc) != {"actions", "bindings"} or not isinstance(doc["bindings"], list):
+            raise ValueError("invalid fulfilment plan")
+        actions_json = json.dumps(doc["actions"], sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+        merchant, environment, actions = parse_action_config(actions_json)
+        by_key = {action.workflow_key: action for action in actions}
+        by_product = {item.product_key: item for item in items}
+        bindings = []
+        seen = set()
+        for entry in doc["bindings"]:
+            if not isinstance(entry, dict) or set(entry) != {"workflow_key", "product_key", "resources"}:
+                raise ValueError("invalid fulfilment binding")
+            action = by_key[entry["workflow_key"]]
+            product = entry["product_key"]
+            resources = entry["resources"]
+            if (
+                product not in action.offer_keys
+                or not isinstance(resources, list)
+                or not 1 <= len(resources) <= 50
+                or (action.workflow_key, product) in seen
+            ):
+                raise ValueError("invalid fulfilment binding")
+            seen.add((action.workflow_key, product))
+            resource_seen = set()
+            for ordinal, resource in enumerate(resources):
+                if not isinstance(resource, dict) or set(resource) != {"id", "version"}:
+                    raise ValueError("invalid resource reference")
+                if not all(isinstance(resource[k], str) and _KEY.fullmatch(resource[k]) for k in ("id", "version")):
+                    raise ValueError("invalid resource reference")
+                identity = (resource["id"], resource["version"])
+                if identity in resource_seen:
+                    raise ValueError("duplicate fulfilment resource")
+                resource_seen.add(identity)
+                if product in by_product:
+                    if resource["id"] + "@" + resource["version"] not in by_product[product].fulfilment_resources:
+                        raise ValueError("resource is not pinned to purchased offer")
+                    bindings.append(
+                        FulfilmentBinding(
+                            action.workflow_key,
+                            _action_digest(action),
+                            product,
+                            resource["id"],
+                            resource["version"],
+                            ordinal,
+                        )
+                    )
+        for action in actions:
+            if any((action.workflow_key, offer) not in seen for offer in action.offer_keys if offer in by_product):
+                raise ValueError("purchased offer has no workflow resource binding")
+        plan = (merchant, environment, actions_json, hashlib.sha256(actions_json.encode()).hexdigest())
+        return plan, tuple(bindings)
+    except (KeyError, TypeError, json.JSONDecodeError) as error:
+        raise ValueError("invalid fulfilment plan") from error

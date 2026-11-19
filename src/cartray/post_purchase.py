@@ -220,10 +220,11 @@ class SqliteDispatcher:
 class D1Dispatcher:
     """D1-backed action dispatcher; handlers must be trusted server-side callables."""
 
-    def __init__(self, database, merchant: str, environment: str, handlers: Mapping[str, Callable]):
+    def __init__(self, database, merchant: str, environment: str, handlers: Mapping[str, Callable], *, pinned=False):
         if not _IDENTIFIER.fullmatch(merchant) or not _IDENTIFIER.fullmatch(environment):
             raise ValueError("invalid merchant identity")
         self.database, self.merchant, self.environment, self.handlers = database, merchant, environment, dict(handlers)
+        self.pinned = pinned
 
     async def _first(self, sql, *values):
         from cartray.store import _results
@@ -240,6 +241,18 @@ class D1Dispatcher:
 
         from cartray.store import _changes, _results
 
+        if self.pinned:
+            plan = await self._first(
+                "SELECT merchant_id,environment,actions_json,actions_digest "
+                "FROM fulfilment_order_plans WHERE order_id=?",
+                order_id,
+            )
+            if (not plan or (plan["merchant_id"], plan["environment"]) != (self.merchant, self.environment)
+                    or hashlib.sha256(plan["actions_json"].encode()).hexdigest() != plan["actions_digest"]):
+                raise ValueError("immutable fulfilment plan missing or mismatched")
+            merchant, environment, actions = parse_action_config(plan["actions_json"])
+            if (merchant, environment) != (self.merchant, self.environment):
+                raise ValueError("immutable fulfilment plan scope mismatch")
         if (not _IDENTIFIER.fullmatch(order_id) or len(actions) > 100
                 or (max_new_claims is not None and not 0 <= max_new_claims <= 100)):
             raise ValueError("invalid dispatch request")

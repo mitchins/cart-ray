@@ -67,6 +67,8 @@ def database():
         "INSERT INTO orders VALUES (?,?,?,?,?,?,?,?)", ("order", "request", "hash", "version", "digest", "AUD", 100, 0)
     )
     db.execute("INSERT INTO order_items VALUES (?,?,?,?,?,?)", ("order", "offer", 1, "price", 100, "[]"))
+    db.execute("INSERT INTO post_purchase_installation VALUES (1,?,?)", ("store", "test"))
+    db.execute("INSERT INTO fulfilment_order_plans VALUES (?,?,?,?,?)", ("order", "store", "test", "{}", "0" * 64))
     for n, provider in enumerate(("link", "object", "synthetic")):
         db.execute(
             "INSERT INTO fulfilment_resources VALUES (?,?,?,?,?,?,?,?,?,?)",

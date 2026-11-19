@@ -313,6 +313,18 @@ class SqliteOrderStore:
                     for item in order.items
                 ],
             )
+            if order.fulfilment_plan is not None:
+                merchant, environment, actions_json, actions_digest = order.fulfilment_plan
+                self.connection.execute(
+                    "INSERT INTO fulfilment_order_plans VALUES (?,?,?,?,?)",
+                    (order.order_id, merchant, environment, actions_json, actions_digest),
+                )
+                self.connection.executemany(
+                    "INSERT INTO fulfilment_order_bindings VALUES (?,?,?,?,?,?,?,?,?)",
+                    [(merchant, environment, order.order_id, item.workflow_key, item.workflow_digest,
+                      item.product_key, item.resource_id, item.resource_version, item.ordinal)
+                     for item in order.fulfilment_bindings],
+                )
             self.connection.execute(
                 """INSERT INTO checkout_sessions
                    (order_id, state, projection_nonce, lease_expires_at, updated_at)
@@ -925,6 +937,18 @@ class D1OrderStore:
             )
             for item in order.items
         )
+        if order.fulfilment_plan is not None:
+            merchant, environment, actions_json, actions_digest = order.fulfilment_plan
+            statements.append(self.database.prepare(
+                "INSERT INTO fulfilment_order_plans VALUES (?,?,?,?,?)"
+            ).bind(order.order_id, merchant, environment, actions_json, actions_digest))
+            statements.extend(
+                self.database.prepare("INSERT INTO fulfilment_order_bindings VALUES (?,?,?,?,?,?,?,?,?)").bind(
+                    merchant, environment, order.order_id, item.workflow_key, item.workflow_digest,
+                    item.product_key, item.resource_id, item.resource_version, item.ordinal,
+                )
+                for item in order.fulfilment_bindings
+            )
         statements.extend(
             [
                 self.database.prepare(
