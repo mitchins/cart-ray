@@ -99,10 +99,12 @@ def graph(installation, versions=None, sending=False):
                 "REVIEWS_AUTOMATION_SENDING": "test",
                 "REVIEWS_INVITATION_LIFETIME": "never",
                 "REVIEWS_PUBLIC_STORE_NAME": config["merchant_name"],
+                "REVIEWS_PUBLIC_ADMISSION": "edge",
+                "REVIEWS_INSTALLATION_ID": config["namespace"],
                 "REVIEWS_STAFF_MODE": "test_admin",
             },
             "db": {"REVIEWS_DB": "reviews", "CARTRAY_DB": "commerce"},
-            "ratelimits": {"REVIEWS_INGRESS": ("20261111", 1000)},
+            "ratelimits": {"REVIEWS_INGRESS": ("20261111", 1000), "REVIEWS_PUBLIC_INGRESS": ("20261121", 120)},
         },
         "producer": {
             "main": "modules/reviews/automation-intake-producer/worker.mjs",

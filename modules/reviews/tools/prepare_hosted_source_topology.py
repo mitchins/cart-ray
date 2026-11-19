@@ -148,12 +148,18 @@ binding = "CF_VERSION_METADATA"
 REVIEWS_MODE = "verified_acquisition_only"
 REVIEWS_AUTOMATION_INTAKE = "test"
 REVIEWS_ENVIRONMENT = "test"
+REVIEWS_PUBLIC_ADMISSION = "edge"
+REVIEWS_INSTALLATION_ID = {q(c["installation"])}
 REVIEWS_STORE_KEY = {q(c["store"])}
 REVIEWS_SUBJECT_MAPS = {q(mapping_text)}
 [[ratelimits]]
 name = "REVIEWS_INGRESS"
 namespace_id = "20261108"
 simple = {{ limit = 1000, period = 60 }}
+[[ratelimits]]
+name = "REVIEWS_PUBLIC_INGRESS"
+namespace_id = "20261121"
+simple = {{ limit = 120, period = 60 }}
 [[d1_databases]]
 binding = "REVIEWS_DB"
 database_name = {q(c["reviews_db_name"])}

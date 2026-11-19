@@ -22,10 +22,10 @@ with socket.socket() as listener:
 URL = f"http://127.0.0.1:{PORT}/reviews/v1/subjects/example-policy/"
 
 
-def request(path):
+def request(path, headers=None):
     """Fetch one local endpoint, preserving status for negative checks."""
     try:
-        with urllib.request.urlopen(URL + path, timeout=3) as response:
+        with urllib.request.urlopen(urllib.request.Request(URL + path, headers=headers or {}), timeout=3) as response:
             return response.status, response.read().decode()
     except urllib.error.HTTPError as exc:
         return exc.code, exc.read().decode()
@@ -110,6 +110,17 @@ def main():
         ]
         for _ in range(2):
             subprocess.run(importer, env=env, cwd=ROOT, check=True)
+        proc = start("wrangler.test.toml", directory, "read_only", extra_vars={
+            "REVIEWS_PUBLIC_ADMISSION": "edge", "REVIEWS_INSTALLATION_ID": "synthetic-installation"
+        })
+        try:
+            headers = {"CF-Connecting-IP": "192.0.2.20"}
+            assert all(request("summary", headers)[0] == 200 for _ in range(120))
+            assert request("summary", headers)[0] == 429
+            assert request("summary", {"CF-Connecting-IP": "192.0.2.21"})[0] == 200
+            print("Public Reviews admission: 120 reads, then 429; separate actor still succeeds")
+        finally:
+            stop(proc)
         conflicting = json.loads(FIXTURE.read_bytes())
         conflicting["contributions"][0]["body"] = "changed without a new identity"
         conflict_path = Path(directory) / "conflict.json"

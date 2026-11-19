@@ -8,6 +8,7 @@ workers_dev = false
 REVIEWS_MODE = "disabled"
 REVIEWS_STORE_KEY = "example-store"
 REVIEWS_ENVIRONMENT = "test"
+REVIEWS_PUBLIC_ADMISSION = "test_unlimited"
 
 [[ratelimits]]
 name = "REVIEWS_INGRESS"

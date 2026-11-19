@@ -13,6 +13,64 @@ from test_native_lifecycle import MODULE, Database, TestResponse
 lifecycle = nl.lifecycle
 
 
+def test_public_read_budget_rejects_before_database(lifecycle, monkeypatch):
+    workers = types.ModuleType("workers")
+    workers.Response = TestResponse
+    workers.WorkerEntrypoint = object
+    spec = importlib.util.spec_from_file_location("tested_reviews_budget", MODULE / "src/worker.py")
+    module = importlib.util.module_from_spec(spec)
+    with patch.dict(sys.modules, {"workers": workers, "native_lifecycle": lifecycle}):
+        spec.loader.exec_module(module)
+
+    keys = []
+
+    class Limiter:
+        allowed = False
+
+        async def limit(self, options):
+            keys.append(options["key"])
+            return types.SimpleNamespace(success=self.allowed)
+
+    async def wait(value, _timeout):
+        return await value
+
+    monkeypatch.setattr(module, "to_js", lambda value, **_: value)
+    monkeypatch.setattr(module, "Object", types.SimpleNamespace(fromEntries=None))
+    monkeypatch.setattr(module, "await_promise", wait)
+    worker = module.Default()
+    worker.env = types.SimpleNamespace(REVIEWS_MODE="read_only", REVIEWS_STORE_KEY="s", REVIEWS_ENVIRONMENT="test",
+                                       REVIEWS_PUBLIC_INGRESS=Limiter(),
+                                       REVIEWS_INSTALLATION_ID="installation-one", REVIEWS_DB=None)
+    request = types.SimpleNamespace(method="GET", url="https://example.invalid/reviews/v1/subjects/p/summary",
+                                    headers={"CF-Connecting-IP": "192.0.2.8"})
+    for path in ("/reviews/v1/subjects/p/summary", "/reviews/v1/subjects/p/contributions",
+                 "/reviews/v1/subject-lookup?alias=%2Fp%2F"):
+        request.url = "https://example.invalid" + path
+        assert asyncio.run(worker.fetch(request)).status == 429
+    assert len(keys) == 3
+    request.headers = {}
+    assert asyncio.run(worker.fetch(request)).status == 503
+    assert len(keys) == 3
+    request.headers = {"CF-Connecting-IP": "192.0.2.8"}
+    for invalid in (None, "", "   ", 42):
+        worker.env.REVIEWS_INSTALLATION_ID = invalid
+        assert asyncio.run(worker.fetch(request)).status == 503
+    assert len(keys) == 3
+    worker.env.REVIEWS_INSTALLATION_ID = "installation-one"
+    worker.env.REVIEWS_PUBLIC_INGRESS.allowed = "true"
+    assert asyncio.run(worker.fetch(request)).status == 503
+    worker.env.REVIEWS_PUBLIC_INGRESS.allowed = True
+    worker.env.REVIEWS_DB = Database()
+    request.url = "https://example.invalid/reviews/v1/subjects/p/summary"
+    assert asyncio.run(worker.fetch(request)).status == 404
+    worker.env.REVIEWS_INSTALLATION_ID = "installation-two"
+    assert asyncio.run(worker.fetch(request)).status == 404
+    assert keys[-1] != keys[-2]
+    worker.env.REVIEWS_ENVIRONMENT = "live"
+    worker.env.REVIEWS_PUBLIC_ADMISSION = "test_unlimited"
+    assert asyncio.run(worker.fetch(request)).status == 503
+
+
 def test_single_source_selection_invalidates_on_other_source_activation(lifecycle):
     workers = types.ModuleType("workers")
     workers.Response = TestResponse
@@ -40,7 +98,8 @@ def test_single_source_selection_invalidates_on_other_source_activation(lifecycl
     request = types.SimpleNamespace(method="GET", url="https://example.invalid/reviews/v1/subjects/p/summary")
     worker = module.Default()
     worker.env = types.SimpleNamespace(
-        REVIEWS_MODE="read_only", REVIEWS_STORE_KEY="s", REVIEWS_ENVIRONMENT="test", REVIEWS_DB=db
+        REVIEWS_MODE="read_only", REVIEWS_STORE_KEY="s", REVIEWS_ENVIRONMENT="test", REVIEWS_DB=db,
+        REVIEWS_PUBLIC_ADMISSION="test_unlimited"
     )
     original_sources = module.subject_sources
     db.db.execute("DELETE FROM native_publication_versions")
