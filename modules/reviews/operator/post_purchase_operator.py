@@ -495,6 +495,8 @@ class PostPurchaseOperator:
                 "activation_watermark": self.state.get("post_purchase_watermark")}
 
     def post_purchase_activate(self, enable_test_delivery=False):
+        if self.config.get("post_purchase_generic_test") and "fulfilment" not in self.state:
+            raise ValueError("register test fulfilment resources before enabling delivery")
         if self.config["reviews_enabled"]:
             self.check_reviews_handoff()
         if self.state.get("post_purchase_provider_migration"):

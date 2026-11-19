@@ -69,6 +69,20 @@ def test_ep_test_lane_can_enable_reviews_independently(tmp_path):
     assert config["source_mode"] == "private"
 
 
+def test_second_merchant_explicit_test_lane_requires_registered_resources(tmp_path):
+    options = handoff(tmp_path)
+    options.update(store_key="second-merchant", stripe_account_id="acct_secondtest", post_purchase_generic_test=True)
+    second = {**ACTION, "merchant": "second-merchant", "stripe_account": "acct_secondtest", "links": []}
+    atomic_json(Path(options["post_purchase_config"]), {"schema": 1, "actions": [second]})
+    install = Installation.plan(tmp_path / "installation", options)
+    assert install.post_purchase_actions()[0]["links"] == []
+    with pytest.raises(ValueError, match="register test fulfilment"):
+        install.post_purchase_activate(True)
+    changed = {**options, "store_key": MERCHANT, "stripe_account_id": ACCOUNT}
+    with pytest.raises(ValueError, match="approved EP"):
+        validate_config(changed)
+
+
 def test_combined_topology_preserves_independent_delivery_controls(tmp_path):
     options = handoff(tmp_path)
     options["reviews_enabled"] = True

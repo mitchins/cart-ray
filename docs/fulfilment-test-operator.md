@@ -1,9 +1,10 @@
 # Test-only fulfilment configuration
 
-Fulfilment is optional and remains test-only. The existing operator's deployed
-post-purchase lane remains restricted to its approved EP test account and test
-recipient; a second synthetic merchant is covered locally, not deployable via
-that restricted lane. It uses the existing confirmed-order
+Fulfilment is optional and remains test-only. The existing EP delivery lane keeps
+its approved account and recipient restrictions. A separate merchant can explicitly
+select `post_purchase_generic_test: true` in its installation configuration; that
+lane requires its own test account, one approved test recipient, private source,
+registered resources, and an explicit delivery activation. It uses the existing confirmed-order
 dispatcher and its activation watermark. Registration does not activate sending,
 change the checkpoint, or deliver an email. Register before the first deployment;
 changing a registered package is intentionally rejected in this initial release.
@@ -21,7 +22,9 @@ pin the same `id@version` resource references. An `external_link` config contain
 an approved HTTPS `url` and `allowed_hosts`; a `private_object` config contains
 `bucket_binding: "FULFILMENT_PRIVATE_BUCKET"` and the private object `key`.
 Provider locators are kept in the protected installation vault, never in D1 or
-the public catalogue. Existing test action and recipient restrictions still apply.
+the public catalogue. Generic test actions use an empty `links` list; the email
+handler receives purchase-scoped links from the registered resources. Existing EP
+test action and recipient restrictions still apply.
 
 Run `python modules/reviews/operator/operate.py --directory <installation> --credentials
 <credentials.json> fulfilment-register --package <private-package.json>

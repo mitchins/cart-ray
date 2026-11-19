@@ -37,10 +37,12 @@ def validate_post_purchase(value, config, commerce_keys):
                 or len(set(offers)) != len(offers)):
             raise ValueError("post-purchase offers must be an authorised commerce subset")
         links = action["links"]
-        if (not isinstance(links, list) or not 1 <= len(links) <= 20
+        generic_fulfilment = config.get("post_purchase_generic_test") is True
+        if (not isinstance(links, list) or (generic_fulfilment and links) or
+                (not generic_fulfilment and not 1 <= len(links) <= 20)
                 or any(not isinstance(link, str) or not re.fullmatch(r"https://www\.dropbox\.com/t/[A-Za-z0-9]+", link)
                        for link in links)):
-            raise ValueError("only explicit dummy Dropbox Transfer links are supported")
+            raise ValueError("invalid test links; generic fulfilment uses registered resources")
         for key in ("recipient", "sender"):
             if (not isinstance(action[key], str) or not action[key].isascii() or len(action[key]) > 254
                     or not re.fullmatch(r"[^\s@<>]+@[^\s@<>]+\.[A-Za-z]{2,}", action[key])):

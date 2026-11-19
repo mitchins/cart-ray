@@ -117,6 +117,7 @@ def validate_config(config):
         "post_purchase_config",
         "post_purchase_config_sha256",
         "post_purchase_email_provider",
+        "post_purchase_generic_test",
     }
     if not isinstance(config, dict) or set(config) - required - optional or required - set(config):
         raise ValueError("installation config has missing or unknown fields")
@@ -221,9 +222,14 @@ def validate_config(config):
         if config.get("post_purchase_email_provider", "smtp2go") not in PROVIDER_KEYS:
             raise ValueError("unsupported post-purchase email provider")
         snapshot = config["post_purchase_config"]
-        if (not isinstance(snapshot, str) or not snapshot.strip()
-                or config.get("store_key") != "effective-policy-uat"
-                or config["stripe_account_id"] != "acct_1Ud2XZBKRMfYblCU"
+        generic = config.get("post_purchase_generic_test", False)
+        if type(generic) is not bool:
+            raise ValueError("post_purchase_generic_test must be a boolean")
+        approved_ep = (config.get("store_key") == "effective-policy-uat"
+                       and config["stripe_account_id"] == "acct_1Ud2XZBKRMfYblCU" and not generic)
+        generic_test = (generic and config.get("store_key") != "effective-policy-uat"
+                        and config["stripe_account_id"] != "acct_1Ud2XZBKRMfYblCU")
+        if (not isinstance(snapshot, str) or not snapshot.strip() or not (approved_ep or generic_test)
                 or config.get("source_mode") != "private"):
             raise ValueError(
                 "post-purchase requires the approved EP Stripe test account and private source"
@@ -232,7 +238,8 @@ def validate_config(config):
                 not isinstance(config["post_purchase_config_sha256"], str)
                 or not re.fullmatch(r"[a-f0-9]{64}", config["post_purchase_config_sha256"])):
             raise ValueError("invalid post-purchase configuration fingerprint")
-    elif "post_purchase_config_sha256" in config or "post_purchase_email_provider" in config:
+    elif any(key in config for key in ("post_purchase_config_sha256", "post_purchase_email_provider",
+                                       "post_purchase_generic_test")):
         raise ValueError("post-purchase fingerprint requires a protected action file")
     return {
         "reviews_enabled": True,
