@@ -50,7 +50,7 @@ Refreshing prices or presentation requires rebuilding and deploying a new catalo
 responses are `no-store`. Checkout independently resolves authoritative Stripe prices and
 checks the catalogue version, so an old display snapshot cannot authorize a stale amount.
 
-The only successful `/checkout-status` response is:
+Every successful `/checkout-status` response includes one of these state values:
 
 ```json
 {"state":"pending"}
