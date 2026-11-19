@@ -38,6 +38,7 @@ def _write(snapshot, dialect):
     if dialect == "google":
         names += ("google_product_category", "availability_date")
     writer.writerow(_BASE[:9] + names)
+    emitted = 0
     for item in sorted(snapshot["items"], key=lambda row: row["item_id"]):
         if item["published"] is None or item["eligible"] is None:
             raise ValueError("unknown publication or eligibility")
@@ -71,6 +72,7 @@ def _write(snapshot, dialect):
                         raise ValueError("invalid availability date") from error
             if any(item[key] is None for key in ("landing_url", "image_url", "price", "availability")):
                 raise ValueError("eligible item has missing channel data")
+            emitted += 1
             writer.writerow(
                 (
                     item["item_id"],
@@ -85,6 +87,8 @@ def _write(snapshot, dialect):
                     *(item["attributes"].get(key, "") for key in names),
                 )
             )
+    if not emitted:
+        raise ValueError("refusing to stage an empty feed")
     return output.getvalue().encode("utf-8")
 
 

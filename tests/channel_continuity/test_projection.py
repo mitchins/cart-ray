@@ -256,3 +256,12 @@ def test_duplicate_json_keys_fail_closed(tmp_path, capsys):
     source.write_text('{"schema":1,"schema":1}')
     assert main(["validate", str(source)]) == 2
     assert "duplicate JSON key" in capsys.readouterr().err
+
+
+def test_empty_feed_is_not_ready_or_exportable():
+    data = snapshot()
+    for item in data["items"]:
+        item["eligible"] = False
+    with pytest.raises(ValueError, match="empty feed"):
+        google_feed(data)
+    assert compare(data, copy.deepcopy(data))["ready"] is False
