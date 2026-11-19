@@ -15,7 +15,8 @@ The disposable test database contained one synthetic pending checkout.
 | `/checkout-status`, synthetic pending ID | 200, `{"state":"pending"}` | Local Workerd/D1, no Origin, `Cache-Control: no-store`. |
 | EP Classic connected product page, idle | Zero `/catalogue` or `/__uat/context` browser requests | Local Chromium synthetic composed PR #83/#85 build; one request to each after Add. |
 | Generic connected GEL product | Catalogue fetch on page load | Compiled snapshot avoids Stripe/D1 but still invokes commerce Worker. |
-| Public Reviews summary and contribution GET | Local Workerd/D1: 120 × 200, then 429; a second client receives 200 | Separate edge-admission budget, bounded response and cursor. Hosted client-IP propagation and withdrawal/cache behavior still require qualification. |
+| Public Reviews summary GET | Local Workerd/D1: 120 × 200, then 429; a second client receives 200 | Separate edge-admission budget. Hosted client-IP propagation and withdrawal/cache behavior still require qualification. |
+| Public Reviews contributions and subject lookup | Python tests reject denied requests before D1 | Response and cursor bounds are preserved; hosted behavior still requires qualification. |
 | Static files, HEAD, query variants and unknown paths | Not yet fully qualified against deployed routing | Hosted and cross-renderer route matrix remains required. |
 
 The local runtime initially failed to import `kinglet` because pywrangler's sync left its
