@@ -300,6 +300,81 @@ def initialise(install, db):
             db.execute(query["sql"], query["params"]).fetchall()
 
 
+def test_combined_delivery_transition_keeps_reviews_active_and_fence(deployed, monkeypatch):
+    install, api, db = deployed
+    initialise(install, db)
+    install.config["reviews_enabled"] = True
+    install.state.update(phase="active", activation_authorized=True, activation_watermark=17,
+                         automation_paused=False, queue_recovery_required=False)
+    for role in ("events", "schedule", "due", "dlq"):
+        install.state["resources"]["queue:" + role] = {"id": role, "name": install.name(role)}
+    build_path = install.directory / "releases" / install.state["build"] / "build.json"
+    build = json.loads(build_path.read_text())
+    build["merchant_config_sha256"] = install.merchant_config_hash()
+    for role in install.roles:
+        if role not in build["artifacts"]:
+            filename = "worker.py" if role == "reviews" else role + ".mjs"
+            path = (build_path.parent / role / "bundle" / filename if role == "reviews"
+                    else build_path.parent / filename)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text("# synthetic")
+            build["artifacts"][role] = {filename: digest(path.read_bytes())}
+    atomic_json(build_path, build)
+    nodes, _ = graph(install, sending=True, post_purchase_modes=OFF)
+    versions = {}
+    for role in install.roles:
+        name = install.name(role)
+        api.visibility[name] = OFF_VISIBILITY
+        metadata = {"bindings": nodes[role]["bindings"] + secret_bindings(install, role)}
+        versions[role] = api.upload(name, [("fixture", b"fixture", "text/plain")], metadata)["id"]
+        api.active[name] = versions[role]
+    install.state["deployment"] = {"complete": True, "commit": install.state["build"], "versions": versions,
+                                   "sending": True, "post_purchase_disabled_versions": {
+                                       role: versions[role] for role in ("source", "post-purchase")}}
+    install.state["post_purchase_modes"] = dict(OFF)
+    install.state["releases"] = []
+    events = []
+    monkeypatch.setattr(install, "assert_resources", lambda: None)
+    monkeypatch.setattr(install, "check_schema", lambda: None)
+    monkeypatch.setattr(install, "verify_merchant_inputs", lambda: None)
+    monkeypatch.setattr(install, "provider_ready", lambda: None)
+    monkeypatch.setattr(install, "doctor", lambda: {"healthy": True})
+    monkeypatch.setattr(install, "configure_queues",
+                        lambda pause_processing=False: events.append(("queue", pause_processing)))
+    monkeypatch.setattr(install, "recover_paused_hints", lambda: events.append(("recover",)))
+    monkeypatch.setattr(install, "verifier", lambda mode: events.append(("verify", mode)) or {"revision": 9})
+    sender = versions["sender"]
+    old_evidence = versions["evidence"]
+    assert install.post_purchase_activate(True)["modes"] == ON
+    assert install.state["activation_watermark"] == 17
+    assert install.state["deployment"]["versions"]["sender"] == sender
+    assert install.state["deployment"]["versions"]["evidence"] != old_evidence
+    assert events.index(("verify", "record")) < events.index(("queue", False))
+    assert install.post_purchase_disable()["modes"] == OFF
+    assert install.state["activation_watermark"] == 17
+    assert install.state["deployment"]["versions"]["sender"] == sender
+    assert install.state["releases"][-1]["post_purchase_modes"] == OFF
+    before = list(api.events), list(events), list(install.state["releases"])
+    assert install.post_purchase_disable()["post_purchase"] == "already-disabled"
+    assert (api.events, events, install.state["releases"]) == before
+
+
+def test_recorded_legacy_source_can_upgrade_but_new_source_requires_rate_bindings(deployed):
+    install, api, _ = deployed
+    name = install.name("source")
+    actual = api.version(name)
+    bindings = actual["resources"]["bindings"]
+    bindings[:] = [item for item in bindings if item["name"] not in {
+        "CHECKOUT_STATUS_RATE_LIMITER", "CHECKOUT_STORE_RATE_LIMITER"
+    }]
+    install.check_current_post_purchase_off()
+    with pytest.raises(ValueError, match="CHECKOUT_.*_RATE_LIMITER"):
+        install.check_post_purchase_version("source", "disabled", actual, actual["id"])
+    bindings.append({"name": "CHECKOUT_STATUS_RATE_LIMITER", "type": "plain_text", "text": "wrong"})
+    with pytest.raises(ValueError, match="CHECKOUT_STATUS_RATE_LIMITER"):
+        install.check_current_post_purchase_off()
+
+
 CF_CREDS = {**CREDS, "cloudflare_email_api_token": "v1.0-account-email-fixture-" * 3,
             "test_sender": "enquiry@effectivepolicy.com.au"}
 
