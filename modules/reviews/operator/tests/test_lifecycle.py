@@ -383,6 +383,29 @@ def test_paused_intent_survives_upgrade_and_worker_rollback_without_implicit_del
     assert install.activate(True)["phase"] == "active"
 
 
+def test_explicit_activation_requirement_keeps_off_rollback_paused(tmp_path):
+    import json
+
+    install, provider, _, _, _ = lifecycle(tmp_path)
+    build_at(install, "a" * 40)
+    install.deploy()
+    install.activate(True)
+    install.state["reviews_explicit_activation_required"] = True
+    build_at(install, "b" * 40)
+    install.deploy()
+    build = json.loads((install.directory / "releases" / ("b" * 40) / "build.json").read_text())
+    install.state["releases"].append({**build, "versions": dict(install.state["deployment"]["versions"]),
+                                      "sending": False, "record_revision": 0})
+    watermark = install.state["activation_watermark"]
+    result = install.rollback(-1)
+    assert result["phase"] == "paused"
+    assert install.state["deployment"]["sending"] is False
+    assert install.state["activation_watermark"] == watermark
+    for role in ("events", "schedule", "due"):
+        identifier = install.state["resources"]["queue:" + role]["id"]
+        assert provider.queue_settings[identifier]["delivery_paused"] is True
+
+
 def test_assigned_pages_origin_is_hydrated_before_rendering_existing_inventory(tmp_path):
     install, provider, _, _, _ = lifecycle(tmp_path)
     original = provider.request

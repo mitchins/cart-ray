@@ -768,12 +768,17 @@ class Installation(PostPurchaseOperator):
             raise ValueError("all configured migration ledgers are required")
 
     def upgrade(self):
+        if self.state.get("post_purchase_provider_migration"):
+            raise ValueError("finish credential reconfiguration and OFF deployment before upgrade")
+        if self.config["reviews_enabled"]:
+            self.check_reviews_handoff()
         current = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip()
         if self.state["phase"] in ("active", "paused") and self.state["deployment"]["commit"] == current:
             return self.doctor()
         self.require_post_purchase_off()
         was_active = self.state["activation_authorized"]
-        stay_paused = self.state.get("automation_paused", False)
+        stay_paused = (self.state.get("automation_paused", False)
+                       or self.state.get("reviews_explicit_activation_required", False))
         self.migrate()
         self.build()
         self.deploy()
@@ -888,6 +893,8 @@ class Installation(PostPurchaseOperator):
         return digest(encoded.encode())
 
     def build(self):
+        if self.state.get("post_purchase_provider_migration", {}).get("status") == "staging":
+            raise ValueError("resume credential reconfiguration before building")
         self.vault()
         self.check_schema()
         self.verify_merchant_inputs()
@@ -1050,6 +1057,10 @@ class Installation(PostPurchaseOperator):
         return self.api.upload(self.name(role), self.artifact_modules(role, build), metadata)
 
     def deploy(self):
+        if self.state.get("post_purchase_provider_migration", {}).get("status") == "staging":
+            raise ValueError("resume credential reconfiguration before deployment")
+        if self.config["reviews_enabled"]:
+            self.check_reviews_handoff()
         self.require_post_purchase_off()
         self.ensure_pages_subdomain()
         self.check_schema()
@@ -1150,6 +1161,8 @@ class Installation(PostPurchaseOperator):
         migration = self.state.pop("post_purchase_provider_migration", None)
         if migration:
             self.state.setdefault("post_purchase_provider_migrations", []).append({**migration, "status": "complete"})
+            if self.config["reviews_enabled"]:
+                self.state["reviews_explicit_activation_required"] = True
         self.state["phase"] = "deployed"
         self.save()
         return {"commit": build["commit"], "versions": progress["versions"], "activated": False}
@@ -1368,6 +1381,14 @@ class Installation(PostPurchaseOperator):
         }
 
     def activate(self, enable_test_delivery=False):
+        if self.config["reviews_enabled"]:
+            self.check_reviews_handoff()
+            if self.state.get("post_purchase_provider_migration"):
+                raise ValueError("finish credential reconfiguration and OFF deployment before Reviews activation")
+            if not self.state.get("deployment", {}).get("complete"):
+                raise ValueError("finish the interrupted deploy before Reviews activation")
+            if self.state.get("build") != self.state["deployment"].get("commit"):
+                raise ValueError("deploy the selected build before Reviews activation")
         if self.state.get("post_purchase_transition"):
             raise ValueError("finish the pending post-purchase transition before activating Reviews")
         if self.has_post_purchase and not self.config["reviews_enabled"]:
@@ -1396,6 +1417,12 @@ class Installation(PostPurchaseOperator):
                 "already_active": True,
                 "activation_watermark": self.state["activation_watermark"],
             }
+        self.check_post_purchase_handoff()
+        if (self.has_post_purchase and self.post_purchase_email_provider == "cloudflare"
+                and not self.state.get("reviews_handoff_attestation")):
+            retained = self.vault().get("post_purchase_smtp2go_api_key")
+            if not retained or not hmac.compare_digest(retained, self.credentials.get("smtp2go_api_key", "")):
+                raise ValueError("attest the original Reviews SMTP handoff before activation")
         if not self.state.get("deployment", {}).get("complete"):
             raise ValueError("finish the interrupted deploy before explicit activation")
         # Reconcile a partially completed queue resume before staged inspection.
@@ -1443,6 +1470,7 @@ class Installation(PostPurchaseOperator):
         self.configure_queues()
         self.state["automation_paused"] = False
         self.state["queue_recovery_required"] = False
+        self.state.pop("reviews_explicit_activation_required", None)
         self.state["phase"] = "active"
         self.save()
         release = {
@@ -1737,6 +1765,10 @@ class Installation(PostPurchaseOperator):
         return result
 
     def rollback(self, index):
+        if self.state.get("post_purchase_provider_migration"):
+            raise ValueError("finish credential reconfiguration and OFF deployment before rollback")
+        if self.config["reviews_enabled"]:
+            self.check_reviews_handoff()
         self.require_post_purchase_off()
         self.check_schema()
         self.pin_suppression()
@@ -1750,9 +1782,9 @@ class Installation(PostPurchaseOperator):
             raise ValueError("rollback schema/key contract is incompatible; databases are never rewound")
         versions = release["versions"]
         release_sending = release.get("sending", bool(release.get("record_revision", 0)))
-        if self.config["reviews_enabled"] and bool(release_sending) != bool(
-            self.state.get("activation_authorized")
-        ):
+        reviews_authorized = (self.state.get("activation_authorized")
+                              and not self.state.get("reviews_explicit_activation_required"))
+        if self.config["reviews_enabled"] and bool(release_sending) != bool(reviews_authorized):
             raise ValueError("rollback release is incompatible with the current Reviews activation state")
         if self.has_post_purchase:
             self.vault()
@@ -1800,7 +1832,9 @@ class Installation(PostPurchaseOperator):
         self.save()
         reviews_ready = self.config["reviews_enabled"] and self.state.get("activation_authorized", False)
         record = self.verifier("record") if reviews_ready or not self.config["reviews_enabled"] else {"revision": 0}
-        paused = self.state.get("automation_paused", False) or (self.config["reviews_enabled"] and not reviews_ready)
+        paused = (self.state.get("automation_paused", False)
+                  or self.state.get("reviews_explicit_activation_required", False)
+                  or (self.config["reviews_enabled"] and not reviews_ready))
         if not paused:
             self.recover_paused_hints()
         self.configure_queues(pause_processing=paused)
@@ -1986,6 +2020,11 @@ def main():
         "post-purchase-reconfigure-provider", help="explicit OFF-only local provider/vault migration; never sends")
     pp_provider.add_argument("--provider", required=True, choices=tuple(PROVIDER_KEYS))
     pp_provider.add_argument("--allow-sender-change", action="store_true")
+    pp_provider.add_argument("--allow-credential-change", action="store_true")
+    handoff_pin = commands.add_parser("attest-reviews-handoff", help="attest original test Reviews handoff")
+    handoff_pin.add_argument("--original-handoff", type=Path, required=True)
+    handoff_pin.add_argument("--expected-sender-version", required=True)
+    handoff_pin.add_argument("--attest-original-handoff", action="store_true")
     rollback = commands.add_parser("rollback", help="compatible recorded Worker versions only; never rewind D1")
     rollback.add_argument("--release", type=int, default=-2, help="inventory release index (default previous)")
     request = commands.add_parser("request", help="operator-side call to the existing private Reviews service")
@@ -2023,7 +2062,11 @@ def main():
                 elif args.command == "post-purchase-disable":
                     result = installation.post_purchase_disable()
                 elif args.command == "post-purchase-reconfigure-provider":
-                    result = installation.post_purchase_reconfigure_provider(args.provider, args.allow_sender_change)
+                    result = installation.post_purchase_reconfigure_provider(
+                        args.provider, args.allow_sender_change, args.allow_credential_change)
+                elif args.command == "attest-reviews-handoff":
+                    result = installation.attest_reviews_handoff(
+                        args.original_handoff, args.expected_sender_version, args.attest_original_handoff)
                 elif args.command == "rollback":
                     result = installation.rollback(args.release)
                 elif args.command == "upgrade":
