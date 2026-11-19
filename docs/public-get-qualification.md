@@ -24,3 +24,27 @@ vendored wheel absent. The existing locked-vendor repair was used before startin
 Worker; no dependency versions were changed. This result is not evidence about hosted client-IP
 propagation or Cloudflare's deployed rate-limit distribution. Do not enable the public UAT API
 until the outstanding routing, Reviews and hosted checks are complete.
+
+## Integrated checkout and receipt (local Workerd)
+
+The integrated Worker built from `056a37b` was run locally with the locked
+`real-test-subset` profile and a disposable migrated D1; no Stripe credentials
+were supplied. `/catalogue` returned 200. A syntactically invalid status ID
+returned 404. An unframed checkout upload returned 400; a framed request reached
+the configured-service boundary and returned 503 because Stripe credentials
+were deliberately absent. One client's 21 checkout requests returned 20 × 503
+then 429, while another client still reached the service boundary (503). This
+is local rate-limit evidence, not evidence of a successful hosted checkout.
+
+A synthetic confirmed two-unit order returned the following allowlisted result;
+private Stripe-price and fulfilment canaries in D1 were absent:
+
+```json
+{"state":"confirmed","receipt":{"currency":"aud","items":[{"product_key":"TEST-PRODUCT","quantity":2,"unit_amount_minor":50}]}}
+```
+
+A separate instrumented test of the real catalogue builder and Stripe gateway
+measured four Price GETs plus two Session POSTs for a four-source new checkout,
+plus one PaymentIntent POST when supplied; an attached retry made four Price
+GETs and no POSTs. The test did not call the network. Rate-limiter counters
+are approximate and location-scoped, not a globally strict quota.
