@@ -121,8 +121,8 @@ class PostPurchaseOperator:
             credential_changed = key in vault and vault[key] != value
             if credential_changed and not allow_credential_change:
                 raise ValueError("provider credential change requires explicit --allow-credential-change")
-            if credential_changed and provider == "smtp2go" and self.config["reviews_enabled"]:
-                raise ValueError("post-purchase SMTP credential change blocked: Reviews shares the handoff")
+            if credential_changed and self.config["reviews_enabled"]:
+                raise ValueError("provider credential change blocked: Reviews shares an unpinned SMTP handoff")
             if not sender_changed and not credential_changed and provider == self.post_purchase_email_provider:
                 self.check_post_purchase_handoff()
                 return {"post_purchase": "provider-unchanged", "provider": provider}
@@ -164,8 +164,8 @@ class PostPurchaseOperator:
         old, new = bundle["old_vault"], bundle["new_vault"]
         if key in old and old[key] != new[key] and not allow_credential_change:
             raise ValueError("provider credential change requires explicit --allow-credential-change")
-        if (key in old and old[key] != new[key] and provider == "smtp2go" and self.config["reviews_enabled"]):
-            raise ValueError("post-purchase SMTP credential changes are unavailable while Reviews shares the handoff")
+        if key in old and old[key] != new[key] and self.config["reviews_enabled"]:
+            raise ValueError("provider credential change blocked: Reviews shares an unpinned SMTP handoff")
         if any(self.credentials.get(field) != new["post_purchase_" + field]
                for field in email_handoff_fields(provider)):
             raise ValueError("resume email migration with its unchanged protected handoff")

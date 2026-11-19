@@ -501,9 +501,23 @@ def test_shared_reviews_smtp_credential_cannot_change_via_post_purchase(deployed
     changed = {**CREDS, "smtp2go_api_key": "api-replacement-fixture"}
     install = Installation(original.directory, changed, api, credential_provider="smtp2go")
     install.config["reviews_enabled"] = True
-    with pytest.raises(ValueError, match="Reviews shares the handoff"):
+    with pytest.raises(ValueError, match="Reviews shares an unpinned SMTP handoff"):
         install.post_purchase_reconfigure_provider("smtp2go", allow_credential_change=True)
     assert "post_purchase_provider_migration" not in install.state
+
+
+def test_cloudflare_credential_replacement_cannot_redeploy_unpinned_reviews_sender(deployed):
+    original, api, _ = deployed
+    install = email_migration_install(original, api)
+    install.post_purchase_reconfigure_provider("cloudflare", True)
+    capture_build(install, "cloudflare-old-commit")
+    install.deploy()
+    updated = {**CF_CREDS, "cloudflare_email_api_token": "replacement-fixture-token-" * 3}
+    replacement = email_migration_install(original, api, updated)
+    replacement.config["reviews_enabled"] = True
+    with pytest.raises(ValueError, match="Reviews shares an unpinned SMTP handoff"):
+        replacement.post_purchase_reconfigure_provider("cloudflare", allow_credential_change=True)
+    assert "post_purchase_provider_migration" not in replacement.state
 
 
 @pytest.mark.parametrize("execution_state", ["claimed", "accepted", "uncertain"])

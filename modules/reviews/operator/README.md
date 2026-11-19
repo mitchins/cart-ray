@@ -348,7 +348,9 @@ Confirm the source and handler are OFF before starting; this action journals
 the replacement and changes neither D1 nor an uncertain execution. Resume an
 interrupted action with the same handoff and flag. The private migration
 bundle contains both credential versions and must remain protected. This does
-not verify provider permission or authorize resending any uncertain email.
+not verify provider permission or authorize resending any uncertain email. It
+currently refuses replacement for installations with Reviews enabled because
+their shared SMTP credential has no independently recorded fingerprint.
 After `post-purchase-reconfigure-provider`, build from a different reviewed
 commit and deploy the new release with delivery OFF: retained builds are keyed
 by commit and cannot be overwritten with different provider inputs. A sender
