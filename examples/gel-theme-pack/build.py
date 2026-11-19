@@ -9,7 +9,11 @@ import argparse
 import hashlib
 import json
 import shutil
+import sys
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
+from cartray.merchant_contract import merchant_path, page_seo, register_path  # noqa: E402
 
 if __package__:
     from .src import templates as t
@@ -27,8 +31,70 @@ def load_inputs(gel_path, catalogue_path, assets_root=ROOT):
     gel = json.loads(Path(gel_path).read_text(encoding="utf8"))
     report = validate(gel, Path(assets_root))
     catalogue = json.loads(Path(catalogue_path).read_text(encoding="utf8"))
-    if set(catalogue) != {"version", "review_invitation_default_checked", "products"}:
+    required_catalogue = {"version", "review_invitation_default_checked", "products"}
+    if not required_catalogue <= set(catalogue) or set(catalogue) - required_catalogue - {"seo_qualified", "category_links", "pages_seo", "owned_pages", "catalogue_path"}:
         raise ValueError("invalid catalogue fields")
+    if type(catalogue.get("seo_qualified", False)) is not bool:
+        raise ValueError("invalid SEO qualification flag")
+    pages_seo = catalogue.get("pages_seo", {})
+    owned_pages = catalogue.get("owned_pages", {"home": "/", "shop": "/shop/", "help": "/help/"})
+    if not isinstance(owned_pages, dict) or owned_pages.keys() - {"home", "shop", "help"}:
+        raise ValueError("invalid owned-page scope")
+    for name, path in owned_pages.items():
+        if name == "home" and path != "/":
+            raise ValueError("home route must be the root")
+        if path == "/":
+            if name != "home":
+                raise ValueError("invalid owned-page route")
+        else:
+            merchant_path(path)
+            if (path == "/shop/" and name != "shop") or (path == "/help/" and name != "help"):
+                raise ValueError("reserved owned-page route")
+            if path not in ("/shop/", "/help/"):
+                merchant_path(path, product=True)
+    if len({path.casefold() for path in owned_pages.values()}) != len(owned_pages):
+        raise ValueError("duplicate owned-page route")
+    if "owned_pages" in catalogue and "shop" not in owned_pages and "catalogue_path" not in catalogue:
+        raise ValueError("host-owned catalogue requires an explicit catalogue path")
+    catalogue_path = catalogue.get("catalogue_path", owned_pages.get("shop", "/shop/"))
+    merchant_path(catalogue_path)
+    if catalogue_path != "/shop/":
+        merchant_path(catalogue_path, product=True)
+    if "shop" in owned_pages and owned_pages["shop"] != catalogue_path:
+        raise ValueError("catalogue path differs from owned shop route")
+    if any(name != "shop" and path.casefold() == catalogue_path.casefold() for name, path in owned_pages.items()):
+        raise ValueError("catalogue path conflicts with an owned page")
+    if not isinstance(pages_seo, dict) or pages_seo.keys() - {"home", "shop", "help"}:
+        raise ValueError("invalid page SEO mapping")
+    if pages_seo.keys() - owned_pages.keys():
+        raise ValueError("SEO supplied for a page owned by the host")
+    if catalogue.get("seo_qualified") and set(pages_seo) != set(owned_pages):
+        raise ValueError("SEO-qualified pages require metadata")
+    from urllib.parse import urlsplit
+    for page, seo in pages_seo.items():
+        if page_seo(seo) is not None:
+            raise ValueError("product structured data requires a product page")
+        if seo["robots"] == "index,follow" and not catalogue.get("seo_qualified"):
+            raise ValueError("indexable SEO requires an SEO-qualified catalogue")
+        if urlsplit(seo["canonical_url"]).path != owned_pages[page]:
+            raise ValueError("canonical URL must match the page route")
+    links = catalogue.get("category_links", [])
+    if not isinstance(links, list) or len(links) > 100:
+        raise ValueError("invalid category navigation")
+    prefixes = {}
+    for path in owned_pages.values():
+        if path != "/":
+            register_path(path, prefixes)
+    register_path(catalogue_path, prefixes)
+    for link in links:
+        if not isinstance(link, dict) or set(link) != {"path", "label"} or not isinstance(link["label"], str) or not link["label"].strip():
+            raise ValueError("invalid category navigation")
+        merchant_path(link["path"], product=True)
+        register_path(link["path"], prefixes)
+        if link["path"].casefold() in {path.casefold() for path in owned_pages.values()} or link["path"].casefold() == catalogue_path.casefold():
+            raise ValueError("category route conflicts with an owned page")
+    if len({link["path"].casefold() for link in links}) != len(links):
+        raise ValueError("duplicate category navigation path")
     if not isinstance(catalogue["version"], str) or not catalogue["version"]:
         raise ValueError("catalogue version required")
     if type(catalogue["review_invitation_default_checked"]) is not bool:
@@ -39,6 +105,7 @@ def load_inputs(gel_path, catalogue_path, assets_root=ROOT):
 
     keys = set()
     slugs = set()
+    routes = set()
     for p in catalogue["products"]:
         required = {
             "product_key",
@@ -57,7 +124,7 @@ def load_inputs(gel_path, catalogue_path, assets_root=ROOT):
             "features",
             "specs",
         }
-        if not isinstance(p, dict) or not required <= set(p) or set(p) - required - {"images"}:
+        if not isinstance(p, dict) or not required <= set(p) or set(p) - required - {"images", "path", "seo"}:
             raise ValueError("invalid product fields")
         if not re.fullmatch(r"[A-Z0-9-]{1,64}", p["product_key"]) or p["product_key"] in keys:
             raise ValueError("invalid product key")
@@ -65,6 +132,19 @@ def load_inputs(gel_path, catalogue_path, assets_root=ROOT):
             raise ValueError("invalid product slug")
         keys.add(p["product_key"])
         slugs.add(p["slug"])
+        route = merchant_path(p.get("path", f'/products/{p["slug"]}/'), product=True)
+        register_path(route, prefixes)
+        if route.casefold() in routes or route.casefold() in {link["path"].casefold() for link in links} or route.casefold() in {path.casefold() for path in owned_pages.values()} or route.casefold() == catalogue_path.casefold():
+            raise ValueError("duplicate or conflicting product route")
+        routes.add(route.casefold())
+        if catalogue.get("seo_qualified") and "seo" not in p:
+            raise ValueError("SEO-qualified products require metadata")
+        if "seo" in p:
+            page_seo(p["seo"])
+            if p["seo"]["robots"] == "index,follow" and not catalogue.get("seo_qualified"):
+                raise ValueError("indexable SEO requires an SEO-qualified catalogue")
+            if urlsplit(p["seo"]["canonical_url"]).path != route:
+                raise ValueError("canonical URL must match the product route")
         if type(p["amount_minor"]) is not int or not 0 <= p["amount_minor"] <= 100_000_000:
             raise ValueError("invalid preview amount")
         if type(p["max_quantity"]) is not int or not 1 <= p["max_quantity"] <= 100:
@@ -174,21 +254,30 @@ def build_site(output, gel_path, catalogue_path, theme="minimal", base="/", asse
         "adapter": base + "theme/" + adapter,
         "gel": gel,
         "catalogue": catalogue,
+        "cataloguePath": catalogue.get("catalogue_path", catalogue.get("owned_pages", {}).get("shop", "/shop/")),
+        "helpPath": catalogue.get("owned_pages", {"help": "/help/"}).get("help"),
     }
     write(
         output / "site-config.js",
         "window.CARTRAY_THEME = " + json.dumps(config, ensure_ascii=True, sort_keys=True) + ";\n",
     )
     products = catalogue["products"]
+    owned = catalogue.get("owned_pages", {"home": "/", "shop": "/shop/", "help": "/help/"})
+    catalogue_path = config["cataloguePath"]
     pages = {
         "index.html": (
             "home",
             "Home",
-            t.hero(gel, theme, base) + t.collection(gel, products, theme, base) + t.story(gel, base),
+            t.hero(gel, theme, base) + t.collection(gel, products, theme, base) + t.story(gel, base, help_path=owned.get("help")),
         ),
         "shop/index.html": ("shop", "The collection", t.collection(gel, products, theme, base, True)),
         "help/index.html": ("help", "Help & care", t.help_page(gel, base, preview)),
     }
+    for name, old in (("home", "index.html"), ("shop", "shop/index.html"), ("help", "help/index.html")):
+        value = pages.pop(old)
+        if name in owned:
+            target = (owned[name].lstrip("/") + "index.html") if owned[name] != "/" else "index.html"
+            pages[target] = value
     flow = {
         "cart/index.html": "cart",
         "purchase-return/index.html": "purchase-return",
@@ -205,21 +294,33 @@ def build_site(output, gel_path, catalogue_path, theme="minimal", base="/", asse
         )
     for path, page in flow.items():
         pages[path] = (page, page.replace("-", " ").title(), t.simple_page(page, gel, base))
+    nav_links = None
+    if catalogue.get("category_links") or "owned_pages" in catalogue:
+        nav_links = [(base + catalogue_path.lstrip("/"), "Shop all"), *((link["path"], link["label"]) for link in catalogue.get("category_links", []))]
+    def finish(html):
+        replacement = base + catalogue_path.lstrip("/")
+        return html.replace(f'href="{base}shop/"', f'href="{replacement}"').replace(
+            f'action="{base}shop/"', f'action="{replacement}"')
     for path, (page, title, content) in pages.items():
-        write(output / path, t.page_shell(gel, theme, base, page, title, content, preview))
+        write(output / path, finish(t.page_shell(gel, theme, base, page, title, content, preview, nav_links=nav_links,
+                                          minimal_footer="owned_pages" in catalogue,
+                                          seo=catalogue.get("pages_seo", {}).get(page))))
     for p in products:
         write(
-            output / "products" / p["slug"] / "index.html",
-            t.page_shell(
+            output / p.get("path", f'/products/{p["slug"]}/').lstrip("/") / "index.html",
+            finish(t.page_shell(
                 gel,
                 theme,
                 base,
                 "product",
                 p["title"],
-                t.product_page(gel, p, base, preview),
+                t.product_page(gel, p, base, preview, help_path=owned.get("help")),
                 preview,
                 p["product_key"],
-            ),
+                nav_links=nav_links,
+                minimal_footer="owned_pages" in catalogue,
+                seo=p.get("seo"),
+            )),
         )
     write(
         output / "gel.resolved.json",

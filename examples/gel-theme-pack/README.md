@@ -4,7 +4,7 @@ A working visual implementation for Codex: **Minimal**, **Studio** and **Classic
 
 ## Start with the preview
 
-From the repository root (Python 3.10+, no build-time dependencies):
+From the repository root (Python 3.12+, no build-time dependencies):
 
 ```sh
 cd examples/gel-theme-pack
@@ -110,3 +110,49 @@ and the connected HTTP browser harness. That harness runs all three Squirrel
 themes and an explicit Northline synthetic contract fixture in Chromium, Firefox
 and WebKit. API fixture responses are labelled separately from hosted evidence;
 see `evidence/INTEGRATION.md` for completed runs, screenshots and limitations.
+
+### Merchant URLs and document metadata
+
+A connected catalogue product may set `path` to its approved local route, for
+example `/product/policy-template/`. Omitting it preserves the original
+`/products/<slug>/` behavior. Paths are presentation only: the existing product
+key, checkout catalogue and Reviews subject mapping remain the authority. Product
+paths must be distinct even ignoring case, slash-terminated local paths with
+ASCII letters, digits, hyphens or underscores in each segment. Encoded segments,
+traversal, query strings and reserved application route prefixes are rejected.
+A shared directory must have consistent casing across all routes. An operator's
+`productPaths` and `subject_details` must agree with the approved route.
+The connected theme builder requires a source build with matching `productPaths`.
+The Acorn example builder produces Acorn's routes, not another merchant's paths.
+Listings that cannot be purchased can still use explicit paths in the UAT builder.
+
+Optional `category_links` is an ordered list of `{ "path":
+"/category/policies/templates/", "label": "Templates" }` links. CartRay renders
+navigation only; the merchant's site generator owns category pages and ordering.
+
+Products may include an `seo` object; `pages_seo` maps `home`, `shop`, and `help`
+to the same object. It contains `title`, `description`, an absolute HTTPS
+`canonical_url`, and `robots` (`index,follow` or `noindex,nofollow`). Canonical
+paths must match their page routes. Optional `structured_data` is restricted to
+product `@type`, `name`, `description`, and `sku`; review and offer claims are
+not inferred. Setting `seo_qualified: true` requires metadata for every product
+and each of the three owned pages; `index,follow` requires that flag. Preview builds always emit `noindex,nofollow`
+regardless of the supplied directive. The EP UAT builder retains its independent
+noindex policy. An external site generator that owns the document head can consume
+the same metadata via `cartray.merchant_contract.page_seo` without rendering a
+second head.
+
+A merchant can make the document boundary explicit with `owned_pages`, for
+example `{"shop":"/policies-and-templates/"}`, and `catalogue_path` set to the
+same path. CartRay then emits only the listed home/shop/help content pages;
+product pages remain explicit. In an SEO-qualified build `pages_seo` must cover
+exactly the owned content pages and each product needs its own `seo`. Omitting
+`owned_pages` preserves the original Acorn/Northline home, shop and help pages.
+A host may own the catalogue page too: omit `shop` from `owned_pages` and supply
+its verified `catalogue_path`. Utility and checkout pages remain separate.
+
+`description` may be absent or null, which emits no meta-description tag; an
+explicit empty string is preserved. Descriptions up to 16,384 characters are
+accepted without truncation. `seo_head` is available to a host that owns the
+HTML head. It validates the same limited schema and can force `noindex`; the
+host owns any independently sourced structured-data graph outside that contract.

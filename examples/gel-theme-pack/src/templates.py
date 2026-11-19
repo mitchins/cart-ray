@@ -4,6 +4,8 @@
 
 from html import escape as esc
 
+from cartray.merchant_contract import merchant_path, page_seo, seo_head
+
 
 def icon(name, size=22):
     paths = {
@@ -28,7 +30,7 @@ def money(p):
 
 
 def card(p, base):
-    url = base + "products/" + p["slug"] + "/"
+    url = esc(base + p.get("path", "/products/" + p["slug"] + "/").lstrip("/"), quote=True)
     return f'''<article class="product-card" data-key="{esc(p["product_key"])}" data-category="{esc(p["category"])}">
       <a class="product-art" href="{url}" tabindex="-1" aria-hidden="true"><img src="{base + p["image"]}" alt="" width="800" height="720" loading="lazy"></a>
       <div class="product-copy"><p class="eyebrow">{esc(p["eyebrow"])}</p><h3><a href="{url}">{esc(p["title"])}</a></h3><p class="description">{esc(p["short_description"])}</p>
@@ -39,19 +41,29 @@ def search(base, label="Search products", value=""):
     return f'''<form class="search-form" action="{base}shop/" role="search"><label class="sr-only" for="site-search">{label}</label><input id="site-search" name="q" type="search" placeholder="Search the collection" value="{esc(value)}" maxlength="100"><button aria-label="Search" type="submit">{icon("search")}</button></form>'''
 
 
-def header(gel, theme, base, preview, *, nav_links=None, header_search=True, cart_count=True):
+def header(gel, theme, base, preview, *, nav_links=None, header_search=True, cart_count=True, cart_link=True, brand_path=None):
     i = gel["identity"]
-    logo = f'''<a class="brand" href="{base}" aria-label="{esc(i["name"])} — home"><img src="{base + gel["assets"]["logo"]}" width="38" height="38" alt=""><span>{esc(i["short_name"])}<small>{esc(i["wordmark_descriptor"])}</small></span></a>'''
+    brand = merchant_path(brand_path) if brand_path is not None else base
+    brand_destination = "catalogue" if brand_path is not None else "home"
+    logo = f'''<a class="brand" href="{esc(brand, quote=True)}" aria-label="{esc(i["name"])} — {brand_destination}"><img src="{base + gel["assets"]["logo"]}" width="38" height="38" alt=""><span>{esc(i["short_name"])}<small>{esc(i["wordmark_descriptor"])}</small></span></a>'''
+    supplied_nav = nav_links is not None
     if nav_links is None:
         nav_links = ((f"{base}shop/", "Shop all"), (f"{base}#our-story", "Our story"), (f"{base}help/", "Help & care"))
     if any(not isinstance(url, str) or not url.startswith("/") or url.startswith("//") or "\\" in url
            or any(ord(ch) < 33 for ch in url) or not isinstance(label, str) or not label.strip()
            for url, label in nav_links):
         raise ValueError("navigation links must be local paths with labels")
+    if supplied_nav:
+        try:
+            for url, _label in nav_links:
+                if url != "/":
+                    merchant_path(url)
+        except ValueError as error:
+            raise ValueError("navigation links must use safe local paths") from error
     links = "".join(f'<a href="{esc(url, quote=True)}">{esc(label)}</a>' for url, label in nav_links)
     nav = f'<nav class="desktop-nav" aria-label="Main navigation">{links}</nav>'
     count = '<span data-cart-count class="cart-count">0</span>' if cart_count else ""
-    cart = f'''<a class="header-cart" href="{base}cart/" aria-label="Your cart"><span class="cart-label">Cart</span>{icon("bag")}{count}</a>'''
+    cart = f'''<a class="header-cart" href="{base}cart/" aria-label="Your cart"><span class="cart-label">Cart</span>{icon("bag")}{count}</a>''' if cart_link else ""
     mobile = f'''<details class="mobile-nav"><summary aria-label="Open navigation">{icon("menu")}</summary><nav aria-label="Mobile navigation">{links}</nav></details>'''
     if theme == "classic":
         head = f'<div class="masthead wrap">{logo}{search(base) if header_search else ""}{cart}{mobile}</div><div class="navigation-bar"><div class="wrap">{nav}<span class="navigation-note">{esc(i["tagline"])}</span></div></div>'
@@ -99,22 +111,34 @@ def collection(gel, products, theme, base, shop=False):
     return f"""<section class="collection wrap">{top}{search(base) if shop and theme != "classic" else ""}<div class="catalogue-layout">{controls}<div><p id="results-status" class="results-status" role="status" aria-live="polite">{len(products)} products</p><div id="products" class="product-grid">{"".join(card(p, base) for p in products)}</div><div id="no-results" class="empty-state" hidden><h2>No little things found.</h2><p>Try another search or show the whole collection.</p><button type="button" id="reset-filter">Clear filters</button></div></div></div></section>"""
 
 
-def story(gel, base):
-    return f'''<section id="our-story" class="story wrap"><div><p class="eyebrow">A SMALL STORE, BY DESIGN</p><h2>Fewer things.<br>More thought.</h2></div><div><p>{esc(gel["identity"]["description"])}</p><p>Browse at your pace. Choose what suits you. No account to create, no noisy extras.</p><a class="text-link" href="{base}help/">A little help along the way {icon("arrow", 18)}</a></div></section>'''
+def story(gel, base, *, help_path="/help/"):
+    link = f'<a class="text-link" href="{esc(base + help_path.lstrip("/"), quote=True)}">A little help along the way {icon("arrow", 18)}</a>' if help_path else ""
+    return f'''<section id="our-story" class="story wrap"><div><p class="eyebrow">A SMALL STORE, BY DESIGN</p><h2>Fewer things.<br>More thought.</h2></div><div><p>{esc(gel["identity"]["description"])}</p><p>Browse at your pace. Choose what suits you. No account to create, no noisy extras.</p>{link}</div></section>'''
 
 
-def product_page(gel, p, base, preview):
+def product_page(gel, p, base, preview, *, help_path="/help/"):
     specs = "".join(f"<div><dt>{esc(k)}</dt><dd>{esc(v)}</dd></div>" for k, v in p["specs"].items())
     public_reviews = (
         f"""<section class="public-reviews wrap" id="reviews" {"hidden" if not preview else ""} aria-labelledby="reviews-heading"><div class="section-heading"><div><p class="eyebrow">FROM PEOPLE WHO CHOSE IT</p><h2 id="reviews-heading">Customer reviews</h2></div><span class="tag">{"Preview data" if preview else "Customer experiences"}</span></div><p id="reviews-status" role="status" aria-live="polite">{"Illustrative review only — not a real customer rating." if preview else ""}</p><div id="review-list">{('<article class="quote-card"><span class="stars" aria-label="5 out of 5 stars">★★★★★</span><h3>A lovely little beginning</h3><p>“A simple project to slow down with. The instructions made getting started feel easy.”</p><p class="muted">Alex · Sample reviewer</p></article>') if preview else ""}</div><button id="reviews-more" type="button" hidden>Load more reviews</button></section>"""
         if p.get("review_subject")
         else ""
     )
-    return f'''<div class="wrap breadcrumb"><a href="{base}shop/">The collection</a><span aria-hidden="true">/</span><span>{esc(p["title"])}</span></div><section class="product-detail wrap"><figure class="detail-art" data-product-gallery aria-label="{esc(p["title"])} images"><div class="gallery-stage"><img data-gallery-image src="{esc(p["image"] if p["image"].startswith(("/", "https://", "http://")) else base + p["image"])}" alt="{esc(p["image_alt"])}" width="800" height="720" fetchpriority="high"><p data-gallery-fallback hidden>Image unavailable</p></div><div data-gallery-controls hidden></div><figcaption class="sr-only" data-gallery-status role="status" aria-live="polite" aria-atomic="true"></figcaption></figure><div class="detail-copy"><p class="eyebrow">{esc(p["eyebrow"])}</p><h1>{esc(p["title"])}</h1><p class="detail-price">{money(p)} <small>{esc(p["currency"]) if p["amount_minor"] else "digital guide"}</small></p><p class="lead">{esc(p["short_description"])}</p><p>{esc(p["details"])}</p><ul class="feature-list">{"".join("<li>" + icon("check", 18) + esc(x) + "</li>" for x in p["features"])}</ul><button type="button" class="button wide" data-add="{esc(p["product_key"])}">Add to cart {icon("bag")}</button><p class="muted small">{"Sample product, price and illustration." if preview else "Final price and availability are confirmed at checkout."}</p><details class="product-info"><summary>The details</summary><dl>{specs}</dl></details><details class="product-info"><summary>A little help</summary><p>Questions before you choose? <a href="{base}help/">Get in touch with the store.</a></p></details></div></section>{public_reviews}'''
+    help_info = f'<details class="product-info"><summary>A little help</summary><p>Questions before you choose? <a href="{esc(base + help_path.lstrip("/"), quote=True)}">Get in touch with the store.</a></p></details>' if help_path else ""
+    return f'''<div class="wrap breadcrumb"><a href="{base}shop/">The collection</a><span aria-hidden="true">/</span><span>{esc(p["title"])}</span></div><section class="product-detail wrap"><figure class="detail-art" data-product-gallery aria-label="{esc(p["title"])} images"><div class="gallery-stage"><img data-gallery-image src="{esc(p["image"] if p["image"].startswith(("/", "https://", "http://")) else base + p["image"])}" alt="{esc(p["image_alt"])}" width="800" height="720" fetchpriority="high"><p data-gallery-fallback hidden>Image unavailable</p></div><div data-gallery-controls hidden></div><figcaption class="sr-only" data-gallery-status role="status" aria-live="polite" aria-atomic="true"></figcaption></figure><div class="detail-copy"><p class="eyebrow">{esc(p["eyebrow"])}</p><h1>{esc(p["title"])}</h1><p class="detail-price">{money(p)} <small>{esc(p["currency"]) if p["amount_minor"] else "digital guide"}</small></p><p class="lead">{esc(p["short_description"])}</p><p>{esc(p["details"])}</p><ul class="feature-list">{"".join("<li>" + icon("check", 18) + esc(x) + "</li>" for x in p["features"])}</ul><button type="button" class="button wide" data-add="{esc(p["product_key"])}">Add to cart {icon("bag")}</button><p class="muted small">{"Sample product, price and illustration." if preview else "Final price and availability are confirmed at checkout."}</p><details class="product-info"><summary>The details</summary><dl>{specs}</dl></details>{help_info}</div></section>{public_reviews}'''
 
 
-def page_shell(gel, theme, base, page, title, content, preview=True, product_key="", *, nav_links=None, minimal_footer=False):
+def page_shell(gel, theme, base, page, title, content, preview=True, product_key="", *, nav_links=None, minimal_footer=False, seo=None):
     name = gel["identity"]["name"]
+    structured = page_seo(seo) if seo is not None else None
+    if structured and page != "product":
+        raise ValueError("product structured data requires a product page")
+    title_text = seo["title"] if seo else f"{title} · {name}"
+    sensitive = preview or page in ("review", "manage", "purchase-return", "cart", "unsubscribe")
+    if seo:
+        head = seo_head(seo, force_noindex=sensitive)
+    else:
+        head = ('<meta name="robots" content="noindex,nofollow">' if sensitive else "")
+        head += f'<title>{esc(title_text)}</title><meta name="description" content="{esc(gel["identity"]["description"], quote=True)}">'
     footer = f'''<footer class="site-footer"><div class="wrap footer-grid"><div><img class="footer-mark" src="{base + gel["assets"]["logo_inverse"]}" width="44" height="44" alt=""><p class="footer-name">{esc(gel["identity"]["short_name"])}</p><p>{esc(gel["identity"]["tagline"])}</p></div><nav aria-label="Footer"><a href="{base}shop/">The collection</a><a href="{base}help/">Contact & care</a><a href="{base}help/#privacy">Privacy</a></nav><div><p class="eyebrow">HERE TO HELP</p><a href="mailto:{esc(gel["identity"]["contact_email"])}">{esc(gel["identity"]["contact_email"])}</a><p class="small">{"Fictional store · illustrative products" if preview else "Thank you for shopping with us."}</p></div></div><div class="wrap footer-bottom"><span>{esc(name)}</span><span>{esc(gel["identity"]["currency"])} · {esc(gel["identity"]["locale"])}</span></div></footer>'''
     if minimal_footer:
         footer = f'<footer class="site-footer"><div class="wrap"><p>{esc(name)}</p></div></footer>'
@@ -123,7 +147,7 @@ def page_shell(gel, theme, base, page, title, content, preview=True, product_key
         if preview
         else ""
     )
-    return f'''<!doctype html><html lang="{esc(gel["identity"]["locale"])}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="referrer" content="no-referrer">{('<meta name="robots" content="noindex,nofollow">') if preview or page in ("review", "manage", "purchase-return", "cart", "unsubscribe") else ""}<title>{esc(title)} · {esc(name)}</title><meta name="description" content="{esc(gel["identity"]["description"])}"><link rel="icon" href="{base + gel["assets"]["favicon"]}" type="image/svg+xml"><link rel="stylesheet" href="{base}theme/tokens.css"><link rel="stylesheet" href="{base}theme/base.css"><link rel="stylesheet" href="{base}theme/theme.css"><script src="{base}site-config.js" defer></script><script type="module" src="{base}theme/app.mjs"></script></head><body class="theme-{theme} page-{page}" data-page="{page}" data-product-key="{esc(product_key)}" data-page-title="{esc(title)} · {esc(name)}">{header(gel, theme, base, preview, nav_links=nav_links)}<main id="main" tabindex="-1">{content}</main><div id="toast" class="toast" role="status" aria-live="polite" aria-atomic="true"></div>{preview_tools}{footer}<noscript><p class="noscript">You can browse the collection without JavaScript. Cart, checkout and review forms require JavaScript.</p></noscript><dialog id="confirm-dialog" aria-labelledby="dialog-title"><h2 id="dialog-title">Withdraw this review?</h2><p>Your review will no longer be displayed. This does not change your order.</p><div class="button-row"><button type="button" data-dialog-cancel autofocus>Keep my review</button><button type="button" class="danger" data-dialog-confirm>Withdraw review</button></div></dialog></body></html>'''
+    return f'''<!doctype html><html lang="{esc(gel["identity"]["locale"])}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="referrer" content="no-referrer">{head}<link rel="icon" href="{base + gel["assets"]["favicon"]}" type="image/svg+xml"><link rel="stylesheet" href="{base}theme/tokens.css"><link rel="stylesheet" href="{base}theme/base.css"><link rel="stylesheet" href="{base}theme/theme.css"><script src="{base}site-config.js" defer></script><script type="module" src="{base}theme/app.mjs"></script></head><body class="theme-{theme} page-{page}" data-page="{page}" data-product-key="{esc(product_key)}" data-page-title="{esc(title_text, quote=True)}">{header(gel, theme, base, preview, nav_links=nav_links)}<main id="main" tabindex="-1">{content}</main><div id="toast" class="toast" role="status" aria-live="polite" aria-atomic="true"></div>{preview_tools}{footer}<noscript><p class="noscript">You can browse the collection without JavaScript. Cart, checkout and review forms require JavaScript.</p></noscript><dialog id="confirm-dialog" aria-labelledby="dialog-title"><h2 id="dialog-title">Withdraw this review?</h2><p>Your review will no longer be displayed. This does not change your order.</p><div class="button-row"><button type="button" data-dialog-cancel autofocus>Keep my review</button><button type="button" class="danger" data-dialog-confirm>Withdraw review</button></div></dialog></body></html>'''
 
 
 def simple_page(page, gel, base):

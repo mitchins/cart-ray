@@ -8,6 +8,7 @@ from html.parser import HTMLParser
 from pathlib import Path
 
 from cartray.fingerprints import fingerprint_entries
+from cartray.merchant_contract import merchant_path, register_path
 
 
 class ConnectedShell(HTMLParser):
@@ -113,7 +114,7 @@ def validate(root, repo):
     if (config.get("previewCatalogue") is not None or config.get("checkoutEnabled") is not True
             or not isinstance(config.get("productPaths"), dict) or set(config["productPaths"]) != set(keys)
             or not all(isinstance(value, str) for value in config["productPaths"].values())
-            or len(set(config["productPaths"].values())) != len(keys)
+            or len({value.casefold() for value in config["productPaths"].values()}) != len(keys)
             or theme.get("schemaVersion") != 1 or theme.get("base") != "/"
             or theme.get("preview") is not False or theme.get("adapter") != "/theme/cartray-adapter.mjs"
             or theme.get("gel", {}).get("identity", {}).get("name") != config.get("storeName")):
@@ -131,7 +132,8 @@ def validate(root, repo):
         if (not image.startswith("/") or image.startswith("//") or ".." in relative.parts
                 or relative.suffix.lower() not in (".png", ".jpg", ".jpeg", ".webp", ".svg")
                 or not (site / relative).is_file()
-                or config["productPaths"][product["product_key"]] != f'/products/{product["slug"]}/'):
+                or config["productPaths"][product["product_key"]]
+                != product.get("path", f'/products/{product["slug"]}/')):
             raise ValueError("merchant storefront presentation image or product route is invalid")
     browse = theme.get("browseOffers")
     if (not isinstance(browse, list) or any(not isinstance(row, dict) or set(row) != {"sourceId", "productKey"}
@@ -162,9 +164,10 @@ def validate(root, repo):
         if (site / relative).read_bytes() != (repo / source).read_bytes():
             raise ValueError(f"merchant storefront has unrecognised connected code: {relative}")
     sources = {row["productKey"]: str(row["sourceId"]) for row in browse}
+    prefixes = {}
     for key, path in config["productPaths"].items():
-        if not isinstance(path, str) or not re.fullmatch(r"/products/[a-z0-9]+(?:-[a-z0-9]+)*/", path):
-            raise ValueError("invalid merchant product route")
+        merchant_path(path, product=True)
+        register_path(path, prefixes)
         if not (site / path.lstrip("/") / "index.html").is_file():
             raise ValueError("merchant product route is missing")
         page = ConnectedShell()
