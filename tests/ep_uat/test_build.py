@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import copy
+import hashlib
 import importlib.util
 import json
 from pathlib import Path
@@ -75,6 +77,62 @@ def test_source_markup_rejects_active_or_undeclared_content():
     parser = module.SourceMarkupCheck(set())
     parser.feed('<p>Less than &lt; five</p>')
     parser.close()
+
+
+def test_build_requires_matching_link_policy_and_rejects_forged_anchor(tmp_path):
+    source = tmp_path / "source"
+    data = make_source(source)
+    data["products"][0]["description_html"] = (
+        '<p>Before <a href="/training-and-induction/#quote">Get one here</a> after.</p>')
+    (source / "catalogue.json").write_text(json.dumps(data))
+    with pytest.raises(ValueError, match="unapproved source markup link"):
+        module.build(source, tmp_path / "without-policy", "minimal")
+    policy = ROOT / "examples/ep-uat/approved-link-policy.json"
+    module.build(source, tmp_path / "approved", "minimal", link_policy=policy)
+    page = (tmp_path / "approved/products/woo-1/index.html").read_text()
+    assert '<p>Before <a href="/training-and-induction/#quote">Get one here</a> after.</p>' in page
+    for index, href in enumerate(("javascript:alert(1)", "//evil.test/", "/../private/",
+                                  "/training-and-induction/#other")):
+        data["products"][0]["description_html"] = f'<a href="{href}">Bad</a>'
+        (source / "catalogue.json").write_text(json.dumps(data))
+        with pytest.raises(ValueError, match="unapproved source markup link"):
+            module.build(source, tmp_path / f"bad-{index}", "minimal", link_policy=policy)
+    data["products"][0]["description_html"] = '<a href="/training-and-induction/#quote" onclick="bad()">Bad</a>'
+    (source / "catalogue.json").write_text(json.dumps(data))
+    with pytest.raises(ValueError, match="unapproved source markup link"):
+        module.build(source, tmp_path / "event-handler", "minimal", link_policy=policy)
+
+
+def test_approved_link_does_not_change_pdf_or_two_offer_checkout(tmp_path):
+    source = tmp_path / "source"
+    data = make_source(source)
+    first = data["products"][0]
+    first["source_delivery_kind"] = "uat_dummy_transfer"
+    second = copy.deepcopy(first)
+    second.update(source_id=3, key="ep:woo:offer:3", title="Second", navigation_path="/products/woo-3/")
+    free = copy.deepcopy(first)
+    free.update(source_id=4, key="ep:woo:offer:4", title="Free", navigation_path="/products/woo-4/",
+                action="free_download", free_download="media/free.pdf", source_delivery_kind="free_native_download")
+    pdf = b"%PDF-1.4\nsynthetic\n%%EOF"
+    (source / "media/free.pdf").write_bytes(pdf)
+    data["public_media"].append({"path": "media/free.pdf", "sha256": hashlib.sha256(pdf).hexdigest()})
+    data["products"].extend([second, free])
+    fixture_path = tmp_path / "checkout.json"
+    fixture_path.write_text(json.dumps({"livemode": False, "source_archive_sha256": data["source_archive_sha256"],
+        "offers": [{"source_id": item["source_id"], "source_key": item["key"], "currency": "aud",
+                    "amount_minor": 1200, "cartray_product_key": f'EP-UAT-{item["source_id"]}'}
+                   for item in (first, second)]}))
+    catalogue = source / "catalogue.json"
+    catalogue.write_text(json.dumps(data))
+    module.build(source, tmp_path / "original", "minimal", test_fixture=fixture_path)
+    first["description_html"] = '<p>Quote: <a href="/training-and-induction/#quote">Get one here</a></p>'
+    catalogue.write_text(json.dumps(data))
+    policy = ROOT / "examples/ep-uat/approved-link-policy.json"
+    module.build(source, tmp_path / "mapped", "minimal", test_fixture=fixture_path, link_policy=policy)
+    assert (tmp_path / "original/site-config.js").read_bytes() == (tmp_path / "mapped/site-config.js").read_bytes()
+    assert (tmp_path / "mapped/media/free.pdf").read_bytes() == pdf
+    assert (tmp_path / "original/products/woo-4/index.html").read_bytes() == (
+        tmp_path / "mapped/products/woo-4/index.html").read_bytes()
 
 
 def test_reviews_are_explicitly_scoped_to_a_product(tmp_path):

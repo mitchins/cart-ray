@@ -18,6 +18,62 @@ def test_plain_flushes_trailing_source_text():
     assert module.plain("<p>Supplied by AT&T") == "Supplied by AT&T"
 
 
+def test_only_explicit_source_link_is_preserved_without_changing_surrounding_copy():
+    source = "https://effectivepolicy.com.au/get-a-quote/"
+    policy = {"version": 1, "links": {source: "/training-and-induction/#quote"}}
+    blobs = fixture()
+    items = json.loads(blobs["offers.json"])
+    items[0]["contentHtml"] = (f'<p>Want a quote? <a class="old" href="{source}" onclick="bad()">'
+                                '<strong>Get one here</strong></a> today. '
+                                '<a href="https://unknown.example/">Other</a></p>')
+    blobs["offers.json"] = encoded(items)
+    product = module.prepare(blobs, "hash", link_policy=policy)["products"][0]
+    assert ('<p>Want a quote? <a href="/training-and-induction/#quote"><strong>Get one here</strong></a> today.'
+            in product["description_html"])
+    assert 'Other</span><span class="muted"> [source link disabled in UAT]</span>' in product["description_html"]
+    assert "onclick" not in product["description_html"] and "bad()" not in product["description_html"]
+    default = module.prepare(blobs, "hash")["products"][0]["description_html"]
+    assert '<a href=' not in default and default.count("source link disabled") == 2
+
+
+@pytest.mark.parametrize("target", ["javascript:alert(1)", "//evil.test/", "/../secret/",
+                                    "/%2e%2e/secret/", "/ok/#x\n", "https://checkout.stripe.com/c/pay/",
+                                    "https://example.test/checkout/", "https://example.test/?add-to-cart=1",
+                                    "mailto:a@example.test?subject=hello", "https://127.0.0.1/admin/",
+                                    "https://internal.local/private/"])
+def test_link_policy_rejects_unsafe_destinations(target):
+    with pytest.raises(ValueError, match="destination"):
+        module.prepare(fixture(), "hash", link_policy={"version": 1, "links": {"https://example.test/a/": target}})
+
+
+@pytest.mark.parametrize("source", ["javascript:alert(1)", "//evil.test/", "https://evil.test/../x/", "https://evil.test/%2e%2e/x/"])
+def test_link_policy_rejects_unsafe_source_urls(source):
+    with pytest.raises(ValueError, match="source link"):
+        module.prepare(fixture(), "hash", link_policy={"version": 1, "links": {source: "/safe/"}})
+
+
+def test_link_policy_file_rejects_duplicate_mappings(tmp_path):
+    path = tmp_path / "policy.json"
+    path.write_text('{"version":1,"links":{"https://example.test/a/":"/one/",'
+                    '"https://example.test/a/":"/two/"}}')
+    with pytest.raises(ValueError, match="duplicate"):
+        module.read_link_policy(path)
+
+
+@pytest.mark.parametrize(("href", "target"), [
+    ("mailto:enquiry@example.test", "mailto:enquiry@example.test"),
+    ("https://youtube.com/watch?v=ABC", "https://youtube.com/watch?v=ABC"),
+    ("http://example.test/service/", "https://example.test/service/"),
+    ("https://example.test/catalog/info/id:649", "https://example.test/catalog/info/id:649"),
+    ("https://example.test/initial-consult", "/initial-consult"),
+    ("https://example.test/media/file.png", "/media/file.png"),
+    ("/service/", "/service/"),
+])
+def test_explicit_safe_external_and_email_mappings_can_be_reviewed(href, target):
+    mapping = {"version": 1, "links": {href: target}}
+    assert module.validate_link_policy(mapping) == {href: target}
+
+
 def encoded(value):
     return json.dumps(value).encode()
 

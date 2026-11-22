@@ -8,6 +8,16 @@ The source archive is intentionally not in this repository. Prepare a snapshot w
 uv run --locked python examples/ep-uat/build.py /path/to/prepared /path/to/new-output --theme minimal
 ```
 
+Source-description links are disabled by default. To include reviewed links, pass
+the same `--link-policy examples/ep-uat/approved-link-policy.json` to **both**
+`prepare.py` and `build.py`. The policy currently approves only the captured
+quote link and its verified same-origin destination. Other links stay disabled.
+Adding a mapping requires review of its source and destination, including whether
+the destination is non-transactional; syntax checks cannot determine what a
+remote page does. Policies can express explicit safe HTTPS, same-origin paths or
+`mailto:` links, but do not themselves send email or perform transactions. The
+build rejects markup containing a destination absent from its supplied policy.
+
 Select `minimal`, `studio` or `classic`. The default EP UAT GEL is `gel.json`; supply a merchant-specific validated manifest with `--gel`. Its identity and currency must match the catalogue, and only the approved source logo may be used. Colours are provisional UAT choices. The builder validates source image fingerprints and copies only declared approved media. The local routes are UAT routes, not source canonical URLs. Browse-only products remain visible without payment or entitlement mappings. Variations are selectable under their source parent; they are not checkout-authorised.
 
 ## Controlled sandbox lane

@@ -12,10 +12,14 @@ import html
 import io
 import json
 import re
+import sys
 import tarfile
 from collections import Counter
 from html.parser import HTMLParser
 from pathlib import Path, PurePosixPath
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from link_policy import read_link_policy, validate_link_policy  # noqa: E402
 
 APPROVED_SHA256 = "fd004ca15d26a0562fada8fcbd4fc0ab8f7a86a3b87abd89ed63668016307285"
 
@@ -86,11 +90,13 @@ class SafeSourceHTML(HTMLParser):
     }
     blocked = {"script", "style", "iframe", "object", "embed", "form"}
 
-    def __init__(self, media_by_ref):
+    def __init__(self, media_by_ref, approved_links=None):
         super().__init__(convert_charrefs=True)
         self.media_by_ref = media_by_ref
         self.output = []
         self.suppressed = 0
+        self.approved_links = approved_links or {}
+        self.anchors = []
 
     def handle_starttag(self, tag, attrs):
         if tag in self.blocked:
@@ -99,7 +105,10 @@ class SafeSourceHTML(HTMLParser):
         if self.suppressed:
             return
         if tag == "a":
-            self.output.append("<span>")
+            hrefs = [value for key, value in attrs if key == "href"]
+            target = self.approved_links.get(hrefs[0]) if len(hrefs) == 1 else None
+            self.anchors.append(bool(target))
+            self.output.append('<a href="' + html.escape(target, quote=True) + '">' if target else "<span>")
         elif tag == "img":
             attrs = dict(attrs)
             match = re.search(r"(?:^|\s)wp-image-(\d+)(?:\s|$)", attrs.get("class") or "")
@@ -121,7 +130,9 @@ class SafeSourceHTML(HTMLParser):
         if tag in self.blocked and self.suppressed:
             self.suppressed -= 1
         elif not self.suppressed and tag == "a":
-            self.output.append('</span><span class="muted"> [source link disabled in UAT]</span>')
+            if self.anchors:
+                self.output.append("</a>" if self.anchors.pop() else
+                                   '</span><span class="muted"> [source link disabled in UAT]</span>')
         elif not self.suppressed and tag in self.allowed and tag != "br":
             self.output.append("</" + tag + ">")
 
@@ -152,8 +163,9 @@ def read_archive(raw):
     return blobs, manifest
 
 
-def prepare(blobs, archive_hash):
+def prepare(blobs, archive_hash, *, link_policy=None):
     """Map published records to listings and independent, disabled purchase actions."""
+    approved_links = validate_link_policy(link_policy)
     offers = json.loads(blobs["offers.json"])
     identities = json.loads(blobs["legacy-keys.json"])
     commerce_config = json.loads(blobs["catalogue-config.json"])["sourceCommerceOptions"]
@@ -253,7 +265,7 @@ def prepare(blobs, archive_hash):
         if free_file:
             action = "free_download"
         cta = p.get("externalCatalogueCta") or {}
-        safe_html = SafeSourceHTML(media_by_ref)
+        safe_html = SafeSourceHTML(media_by_ref, approved_links)
         safe_html.feed(p["contentHtml"] or "")
         safe_html.close()
         result.append(
@@ -319,6 +331,7 @@ def main():
     parser.add_argument("archive", type=Path)
     parser.add_argument("output", type=Path)
     parser.add_argument("--expected-sha256", default=APPROVED_SHA256)
+    parser.add_argument("--link-policy", type=Path, help="explicit approved source-link policy")
     args = parser.parse_args()
     raw = args.archive.read_bytes()
     digest = hashlib.sha256(raw).hexdigest()
@@ -327,7 +340,8 @@ def main():
     if digest == "824cf47fa8c57af588a767d655db38f351de2f5d191518dbaa28af1ba82b5f3f":
         raise ValueError("superseded handoff archive is not permitted")
     blobs, _ = read_archive(raw)
-    document = prepare(blobs, digest)
+    links = read_link_policy(args.link_policy)
+    document = prepare(blobs, digest, link_policy={"version": 1, "links": links} if args.link_policy else None)
     if args.output.exists():
         raise ValueError("output already exists")
     args.output.mkdir(parents=True)
