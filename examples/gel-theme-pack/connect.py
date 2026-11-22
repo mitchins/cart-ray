@@ -37,7 +37,7 @@ EXPORTS = (
 )
 
 
-def connect(source_site, cartray_root, output, gel, catalogue, theme, assets_root=ROOT):
+def connect(source_site, cartray_root, output, gel, catalogue, theme, assets_root=ROOT, *, base_css_suffix=""):
     source_site, cartray_root, output = map(Path, (source_site, cartray_root, output))
     if output.exists():
         raise ValueError("output already exists; choose a new directory")
@@ -79,6 +79,9 @@ def connect(source_site, cartray_root, output, gel, catalogue, theme, assets_roo
     if not (source_site / "reviews.mjs").is_file():
         raise ValueError("existing public Reviews reader is required")
     build_site(output, gel, catalogue, theme, assets_root=assets_root, preview=False)
+    if base_css_suffix:
+        with (output / "theme/base.css").open("a", encoding="utf-8") as stylesheet:
+            stylesheet.write("\n" + base_css_suffix)
     # Retain route gateway, configuration and unrelated static content from the known build.
     for file in source_site.rglob("*"):
         if file.is_symlink():

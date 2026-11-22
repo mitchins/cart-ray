@@ -164,6 +164,10 @@ def build(
             sys.modules[spec.name] = module
             spec.loader.exec_module(module)
         connect = importlib.import_module("cartray_gel.connect").connect
+        # This sample image contains its own wordmark; keep its crop local to
+        # Acorn rather than leaking a merchant-specific rule into shared CSS.
+        acorn_hero = json.loads(gel.read_text())["assets"].get("hero") == "assets/products/acorn-hero.webp"
+        crop_css = (HERE / "gel-acorn.css").read_text(encoding="utf-8") if acorn_hero else ""
         with tempfile.TemporaryDirectory(prefix="cartray-source-") as temporary:
             source = Path(temporary) / "store"
             build(
@@ -182,12 +186,8 @@ def build(
                 theme_content or pack / "content/squirrel.json",
                 theme,
                 assets_root=gel_assets or gel.resolve().parent.parent,
+                base_css_suffix=crop_css,
             )
-        # This sample image contains its own wordmark; keep its crop local to
-        # Acorn rather than leaking a merchant-specific rule into shared CSS.
-        if json.loads(gel.read_text())["assets"].get("hero") == "assets/products/acorn-hero.webp":
-            with (output / "theme/base.css").open("a", encoding="utf-8") as stylesheet:
-                stylesheet.write("\n" + (HERE / "gel-acorn.css").read_text(encoding="utf-8"))
         return
     if theme_content is not None or gel_assets is not None or theme != "minimal":
         raise ValueError("theme options require --gel")
