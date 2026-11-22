@@ -25,8 +25,10 @@ from urllib.parse import urlsplit
 
 ROOT = Path(__file__).resolve().parents[2]
 PACK = ROOT / "examples/gel-theme-pack"
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 sys.path.insert(0, str(ROOT / "src"))
 sys.path.insert(0, str(PACK))
+from link_policy import policy_digest, read_link_policy  # noqa: E402
 from src.gel import tokens, validate  # noqa: E402
 from src.templates import header as theme_header  # noqa: E402
 
@@ -60,11 +62,14 @@ class SourceMarkupCheck(HTMLParser):
         "td",
         "blockquote",
         "img",
+        "a",
     }
 
-    def __init__(self, declared):
+    def __init__(self, declared, approved_targets=()):
         super().__init__(convert_charrefs=False)
         self.declared = declared
+        self.approved_targets = set(approved_targets)
+        self.anchor_open = False
 
     def handle_starttag(self, tag, attrs):
         if tag not in self.allowed:
@@ -72,7 +77,11 @@ class SourceMarkupCheck(HTMLParser):
         values = dict(attrs)
         if len(values) != len(attrs):
             raise ValueError("duplicate markup attribute")
-        if tag == "img":
+        if tag == "a":
+            if self.anchor_open or set(values) != {"href"} or values["href"] not in self.approved_targets:
+                raise ValueError("unapproved source markup link")
+            self.anchor_open = True
+        elif tag == "img":
             if (
                 set(values) != {"src", "alt", "loading"}
                 or values["loading"] != "lazy"
@@ -85,6 +94,12 @@ class SourceMarkupCheck(HTMLParser):
         elif values:
             raise ValueError("source markup attributes are not allowed")
 
+    def handle_endtag(self, tag):
+        if tag == "a":
+            if not self.anchor_open:
+                raise ValueError("unmatched source markup link")
+            self.anchor_open = False
+
     def handle_decl(self, decl):
         raise ValueError("source markup declarations are not allowed")
 
@@ -96,6 +111,8 @@ class SourceMarkupCheck(HTMLParser):
         if "<" in self.rawdata:
             raise ValueError("incomplete source markup is not allowed")
         super().close()
+        if self.anchor_open:
+            raise ValueError("incomplete source markup link")
 
     def handle_data(self, data):
         if "<" in data:
@@ -236,13 +253,18 @@ def detail(p, test_ids=(), review_subject=None, currency="AUD", *, offline_parit
 
 
 def build(source, output, theme, test_fixture=None, review_fixture=None, gel_file=None, *, offline_seo=None,
-          catalogue_path=None):
+          catalogue_path=None, link_policy=None):
     source, output = Path(source), Path(output)
     if output.exists():
         raise ValueError("output already exists")
     if offline_seo is not None and (test_fixture is not None or review_fixture is not None):
         raise ValueError("offline parity cannot use test checkout or review fixtures")
     data = json.loads((source / "catalogue.json").read_text())
+    approved_links = read_link_policy(link_policy)
+    expected_policy = data.get("link_policy_sha256")
+    if ((link_policy is None and expected_policy is not None)
+            or (link_policy is not None and expected_policy != policy_digest(approved_links))):
+        raise ValueError("prepared catalogue link policy differs from the supplied policy")
     review_subjects = {}
     if review_fixture:
         review_config = json.loads(Path(review_fixture).read_text())
@@ -325,7 +347,7 @@ def build(source, output, theme, test_fixture=None, review_fixture=None, gel_fil
         ]:
             if media_path is not None and media_path not in declared:
                 raise ValueError("product media is not declared")
-        validator = SourceMarkupCheck(declared)
+        validator = SourceMarkupCheck(declared, approved_links.values())
         validator.feed(product["description_html"])
         validator.close()
     seo_pages = None
@@ -453,6 +475,7 @@ def build(source, output, theme, test_fixture=None, review_fixture=None, gel_fil
         json.dumps(
             {"source_archive_sha256": data["source_archive_sha256"], "theme": theme,
              "gel_sha256": gel_validation["manifest_sha256"], "counts": data["reconciliation"],
+             **({"link_policy_sha256": expected_policy} if expected_policy is not None else {}),
              "output_mode": "offline-parity-noindex" if seo_pages is not None else "uat-noindex"},
             indent=2,
         )
@@ -471,6 +494,7 @@ if __name__ == "__main__":
     parser.add_argument("--gel", type=Path, help="merchant-specific GEL manifest (defaults to EP UAT)")
     parser.add_argument("--offline-seo", type=Path, help="explicit offline-only SEO metadata contract")
     parser.add_argument("--catalogue-path", help="explicit local catalogue route (default /shop/)")
+    parser.add_argument("--link-policy", type=Path, help="explicit approved source-link policy used in preparation")
     args = parser.parse_args()
     build(args.source, args.output, args.theme, args.test_fixture, args.review_fixture, args.gel,
-          offline_seo=args.offline_seo, catalogue_path=args.catalogue_path)
+          offline_seo=args.offline_seo, catalogue_path=args.catalogue_path, link_policy=args.link_policy)

@@ -22,6 +22,15 @@ class GelTests(unittest.TestCase):
     def setUp(self):
         self.gel = json.loads((ROOT / "gel/squirrel.json").read_text())
 
+    def test_shared_styles_do_not_include_reference_merchant_assets(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            output = Path(tmp) / "northline"
+            build_site(output, ROOT / "gel/northline.json", ROOT / "content/northline.json", theme="classic")
+            css = (output / "theme/base.css").read_text()
+            self.assertNotIn("acorn-hero", css)
+            self.assertNotIn("Squirrel", css)
+            self.assertNotIn("Acorn", css)
+
     def test_merchant_paths_and_seo_are_rendered_safely(self):
         with tempfile.TemporaryDirectory() as tmp:
             tmp = Path(tmp)
@@ -349,6 +358,8 @@ class GelTests(unittest.TestCase):
             for name in ("reviews.js", "manage.js"):
                 (repo / "modules/reviews/ui" / name).write_text("// native fixture " + name + "\n")
             connect(site, repo, output, ROOT / "gel/squirrel.json", ROOT / "content/squirrel.json", "classic")
+            self.assertIn((ROOT.parent / "acorn-store/gel-acorn.css").read_text(),
+                          (output / "theme/base.css").read_text())
             self.assertEqual(
                 hashlib.sha256((output / "assets/products/acorn-kit-primary.webp").read_bytes()).hexdigest(),
                 expected_hash,
