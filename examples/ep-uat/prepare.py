@@ -19,7 +19,7 @@ from html.parser import HTMLParser
 from pathlib import Path, PurePosixPath
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from link_policy import read_link_policy, validate_link_policy  # noqa: E402
+from link_policy import policy_digest, read_link_policy, validate_link_policy  # noqa: E402
 
 APPROVED_SHA256 = "fd004ca15d26a0562fada8fcbd4fc0ab8f7a86a3b87abd89ed63668016307285"
 
@@ -105,6 +105,8 @@ class SafeSourceHTML(HTMLParser):
         if self.suppressed:
             return
         if tag == "a":
+            if self.anchors:
+                self.close_anchor()
             hrefs = [value for key, value in attrs if key == "href"]
             target = self.approved_links.get(hrefs[0]) if len(hrefs) == 1 else None
             self.anchors.append(bool(target))
@@ -131,14 +133,22 @@ class SafeSourceHTML(HTMLParser):
             self.suppressed -= 1
         elif not self.suppressed and tag == "a":
             if self.anchors:
-                self.output.append("</a>" if self.anchors.pop() else
-                                   '</span><span class="muted"> [source link disabled in UAT]</span>')
+                self.close_anchor()
         elif not self.suppressed and tag in self.allowed and tag != "br":
             self.output.append("</" + tag + ">")
 
     def handle_data(self, data):
         if not self.suppressed:
             self.output.append(html.escape(data))
+
+    def close_anchor(self):
+        self.output.append("</a>" if self.anchors.pop() else
+                           '</span><span class="muted"> [source link disabled in UAT]</span>')
+
+    def close(self):
+        super().close()
+        while self.anchors:
+            self.close_anchor()
 
 
 def read_archive(raw):
@@ -313,6 +323,7 @@ def prepare(blobs, archive_hash, *, link_policy=None):
         "source_prices_include_tax": commerce_config["woocommerce_prices_include_tax"],
         "public_media": [{"path": path, "sha256": sha} for path, sha in sorted(public_media.items())],
         "source_archive_sha256": archive_hash,
+        **({"link_policy_sha256": policy_digest(approved_links)} if link_policy is not None else {}),
         "authority": "source-price-is-display-only; no-checkout-or-review-authority",
         "products": result,
         "reconciliation": {

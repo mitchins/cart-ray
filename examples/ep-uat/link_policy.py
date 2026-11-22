@@ -1,5 +1,6 @@
 """Validate explicit source-link replacements for the offline UAT build."""
 
+import hashlib
 import ipaddress
 import json
 import re
@@ -14,7 +15,9 @@ def _public_url(value, *, allow_http=False):
         return False
     parsed = urlsplit(value)
     labels = (parsed.hostname or "").split(".")
-    if len(labels) < 2 or labels[-1].lower() in {"local", "internal", "localhost"}:
+    if (len(labels) < 2 or labels[-1].lower() in {"local", "internal", "localhost", "lan", "corp"}
+            or re.fullmatch(r"(?:[0-9]+|0x[0-9a-f]+)", labels[-1], re.I)
+            or parsed.hostname.lower().endswith(".home.arpa")):
         return False
     try:
         if not ipaddress.ip_address(parsed.hostname).is_global:
@@ -78,3 +81,8 @@ def read_link_policy(path):
         return result
 
     return validate_link_policy(json.loads(Path(path).read_text(encoding="utf-8"), object_pairs_hook=unique_keys))
+
+
+def policy_digest(links):
+    canonical = json.dumps({"version": 1, "links": links}, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+    return hashlib.sha256(canonical.encode()).hexdigest()

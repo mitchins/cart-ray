@@ -82,13 +82,21 @@ def test_source_markup_rejects_active_or_undeclared_content():
 def test_build_requires_matching_link_policy_and_rejects_forged_anchor(tmp_path):
     source = tmp_path / "source"
     data = make_source(source)
+    policy = ROOT / "examples/ep-uat/approved-link-policy.json"
+    data["link_policy_sha256"] = module.policy_digest(module.read_link_policy(policy))
     data["products"][0]["description_html"] = (
         '<p>Before <a href="/training-and-induction/#quote">Get one here</a> after.</p>')
     (source / "catalogue.json").write_text(json.dumps(data))
-    with pytest.raises(ValueError, match="unapproved source markup link"):
+    with pytest.raises(ValueError, match="link policy differs"):
         module.build(source, tmp_path / "without-policy", "minimal")
-    policy = ROOT / "examples/ep-uat/approved-link-policy.json"
+    wrong = tmp_path / "wrong-policy.json"
+    wrong.write_text(json.dumps({"version": 1,
+                                 "links": {"https://example.test/other/": "/training-and-induction/#quote"}}))
+    with pytest.raises(ValueError, match="link policy differs"):
+        module.build(source, tmp_path / "wrong-policy", "minimal", link_policy=wrong)
     module.build(source, tmp_path / "approved", "minimal", link_policy=policy)
+    provenance = json.loads((tmp_path / "approved/provenance.json").read_text())
+    assert provenance["link_policy_sha256"] == data["link_policy_sha256"]
     page = (tmp_path / "approved/products/woo-1/index.html").read_text()
     assert '<p>Before <a href="/training-and-induction/#quote">Get one here</a> after.</p>' in page
     for index, href in enumerate(("javascript:alert(1)", "//evil.test/", "/../private/",
@@ -126,8 +134,9 @@ def test_approved_link_does_not_change_pdf_or_two_offer_checkout(tmp_path):
     catalogue.write_text(json.dumps(data))
     module.build(source, tmp_path / "original", "minimal", test_fixture=fixture_path)
     first["description_html"] = '<p>Quote: <a href="/training-and-induction/#quote">Get one here</a></p>'
-    catalogue.write_text(json.dumps(data))
     policy = ROOT / "examples/ep-uat/approved-link-policy.json"
+    data["link_policy_sha256"] = module.policy_digest(module.read_link_policy(policy))
+    catalogue.write_text(json.dumps(data))
     module.build(source, tmp_path / "mapped", "minimal", test_fixture=fixture_path, link_policy=policy)
     assert (tmp_path / "original/site-config.js").read_bytes() == (tmp_path / "mapped/site-config.js").read_bytes()
     assert (tmp_path / "mapped/media/free.pdf").read_bytes() == pdf

@@ -28,7 +28,7 @@ PACK = ROOT / "examples/gel-theme-pack"
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 sys.path.insert(0, str(ROOT / "src"))
 sys.path.insert(0, str(PACK))
-from link_policy import read_link_policy  # noqa: E402
+from link_policy import policy_digest, read_link_policy  # noqa: E402
 from src.gel import tokens, validate  # noqa: E402
 from src.templates import header as theme_header  # noqa: E402
 
@@ -261,6 +261,10 @@ def build(source, output, theme, test_fixture=None, review_fixture=None, gel_fil
         raise ValueError("offline parity cannot use test checkout or review fixtures")
     data = json.loads((source / "catalogue.json").read_text())
     approved_links = read_link_policy(link_policy)
+    expected_policy = data.get("link_policy_sha256")
+    if ((link_policy is None and expected_policy is not None)
+            or (link_policy is not None and expected_policy != policy_digest(approved_links))):
+        raise ValueError("prepared catalogue link policy differs from the supplied policy")
     review_subjects = {}
     if review_fixture:
         review_config = json.loads(Path(review_fixture).read_text())
@@ -471,6 +475,7 @@ def build(source, output, theme, test_fixture=None, review_fixture=None, gel_fil
         json.dumps(
             {"source_archive_sha256": data["source_archive_sha256"], "theme": theme,
              "gel_sha256": gel_validation["manifest_sha256"], "counts": data["reconciliation"],
+             **({"link_policy_sha256": expected_policy} if expected_policy is not None else {}),
              "output_mode": "offline-parity-noindex" if seo_pages is not None else "uat-noindex"},
             indent=2,
         )

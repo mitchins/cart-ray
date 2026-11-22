@@ -358,6 +358,8 @@ class GelTests(unittest.TestCase):
             for name in ("reviews.js", "manage.js"):
                 (repo / "modules/reviews/ui" / name).write_text("// native fixture " + name + "\n")
             connect(site, repo, output, ROOT / "gel/squirrel.json", ROOT / "content/squirrel.json", "classic")
+            self.assertIn((ROOT.parent / "acorn-store/gel-acorn.css").read_text(),
+                          (output / "theme/base.css").read_text())
             self.assertEqual(
                 hashlib.sha256((output / "assets/products/acorn-kit-primary.webp").read_bytes()).hexdigest(),
                 expected_hash,

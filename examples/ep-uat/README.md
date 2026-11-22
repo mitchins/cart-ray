@@ -17,6 +17,8 @@ the destination is non-transactional; syntax checks cannot determine what a
 remote page does. Policies can express explicit safe HTTPS, same-origin paths or
 `mailto:` links, but do not themselves send email or perform transactions. The
 build rejects markup containing a destination absent from its supplied policy.
+The prepared catalogue records a digest of the validated mapping; the build
+requires the same mapping and records that digest in its provenance receipt.
 
 Select `minimal`, `studio` or `classic`. The default EP UAT GEL is `gel.json`; supply a merchant-specific validated manifest with `--gel`. Its identity and currency must match the catalogue, and only the approved source logo may be used. Colours are provisional UAT choices. The builder validates source image fingerprints and copies only declared approved media. The local routes are UAT routes, not source canonical URLs. Browse-only products remain visible without payment or entitlement mappings. Variations are selectable under their source parent; they are not checkout-authorised.
 

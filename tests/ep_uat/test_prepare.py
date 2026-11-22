@@ -46,11 +46,25 @@ def test_untrusted_source_anchors_stay_disabled_even_with_policy(href):
     assert "onmouseover" not in output and "bad()" not in output
 
 
+@pytest.mark.parametrize("markup", [
+    '<a href="https://example.test/approved/">One<a href="https://example.test/approved/">Two</a>',
+    '<p>One <a href="https://example.test/approved/">Two',
+])
+def test_malformed_source_anchors_are_closed_during_preparation(markup):
+    parser = module.SafeSourceHTML({}, {"https://example.test/approved/": "/approved/"})
+    parser.feed(markup)
+    parser.close()
+    output = "".join(parser.output)
+    assert output.count('<a href="/approved/">') == output.count("</a>")
+    assert '<a href="/approved/">Two</a>' in output
+
+
 @pytest.mark.parametrize("target", ["javascript:alert(1)", "//evil.test/", "/../secret/",
                                     "/%2e%2e/secret/", "/ok/#x\n", "https://checkout.stripe.com/c/pay/",
                                     "https://example.test/checkout/", "https://example.test/?add-to-cart=1",
                                     "mailto:a@example.test?subject=hello", "https://127.0.0.1/admin/",
-                                    "https://internal.local/private/"])
+                                    "https://internal.local/private/", "https://127.1/a/",
+                                    "https://0x7f.0.0.1/a/", "https://0177.0.0.1/", "https://10.1/"])
 def test_link_policy_rejects_unsafe_destinations(target):
     with pytest.raises(ValueError, match="destination"):
         module.prepare(fixture(), "hash", link_policy={"version": 1, "links": {"https://example.test/a/": target}})
