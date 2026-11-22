@@ -22,6 +22,15 @@ class GelTests(unittest.TestCase):
     def setUp(self):
         self.gel = json.loads((ROOT / "gel/squirrel.json").read_text())
 
+    def test_shared_styles_do_not_include_reference_merchant_assets(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            output = Path(tmp) / "northline"
+            build_site(output, ROOT / "gel/northline.json", ROOT / "content/northline.json", theme="classic")
+            css = (output / "theme/base.css").read_text()
+            self.assertNotIn("acorn-hero", css)
+            self.assertNotIn("Squirrel", css)
+            self.assertNotIn("Acorn", css)
+
     def test_merchant_paths_and_seo_are_rendered_safely(self):
         with tempfile.TemporaryDirectory() as tmp:
             tmp = Path(tmp)

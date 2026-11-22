@@ -1,0 +1,2 @@
+/* The sample hero contains a baked-in wordmark; keep the scene below it. */
+.hero-art img[src$="/acorn-hero.webp"]{width:100%;height:clamp(180px,18vw,260px);max-height:none;object-fit:cover;object-position:center bottom}

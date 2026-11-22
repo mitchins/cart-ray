@@ -174,6 +174,9 @@ def test_connected_themes_share_brand_and_preserve_native_contracts(tmp_path):
     for theme in ("minimal", "studio", "classic"):
         output = tmp_path / theme
         module.build(output, config, gel=pack / "gel/squirrel.json", theme=theme)
+        shared_css = (output / "theme/base.css").read_text()
+        assert "acorn-hero" not in (pack / "src/base.css").read_text()
+        assert (HERE / "gel-acorn.css").read_text() in shared_css
         receipt = json.loads((output / "gel.resolved.json").read_text())
         hashes.add(receipt["validation"]["manifest_sha256"])
         assert (output / "theme/core-storefront.js").read_bytes() == (module.ROOT / "storefront/app.js").read_bytes()
