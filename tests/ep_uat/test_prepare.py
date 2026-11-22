@@ -36,6 +36,16 @@ def test_only_explicit_source_link_is_preserved_without_changing_surrounding_cop
     assert '<a href=' not in default and default.count("source link disabled") == 2
 
 
+@pytest.mark.parametrize("href", ["javascript:alert(1)", "//evil.test/", "/../private/", "data:text/html,bad"])
+def test_untrusted_source_anchors_stay_disabled_even_with_policy(href):
+    parser = module.SafeSourceHTML({}, {"https://example.test/approved/": "/approved/"})
+    parser.feed(f'<p>Before <a href="{href}" onmouseover="bad()">Text</a> after.</p>')
+    parser.close()
+    output = "".join(parser.output)
+    assert "<a " not in output and "source link disabled" in output
+    assert "onmouseover" not in output and "bad()" not in output
+
+
 @pytest.mark.parametrize("target", ["javascript:alert(1)", "//evil.test/", "/../secret/",
                                     "/%2e%2e/secret/", "/ok/#x\n", "https://checkout.stripe.com/c/pay/",
                                     "https://example.test/checkout/", "https://example.test/?add-to-cart=1",
