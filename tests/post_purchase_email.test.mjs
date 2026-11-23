@@ -175,3 +175,14 @@ test('invalid optional review data never blocks the payment receipt', async () =
   assert.match(JSON.parse(p.calls.at(-1).init.body).text_body,/Your purchased|View your purchased/);
   assert.equal((await handle(request({...body,type:'review_followup',reviews:{}}),env,p.fetch)).status,400);
 });
+
+test('account lookup failures are retryable while confirmed recipient rejection is specific',async()=>{
+  for(const status of [401,429,500,503]) {
+    const response=await handle(request({...body,type:'recipient_evidence'}),env,async()=>new Response('',{status}));
+    assert.equal(response.status,502);
+  }
+  let p=provider({account:'acct_wrong'});
+  assert.equal((await handle(request({...body,type:'recipient_evidence'}),env,p.fetch)).status,403);
+  p=provider({email:'unapproved@example.test'});
+  assert.equal((await handle(request({...body,type:'recipient_evidence'}),env,p.fetch)).status,422);
+});

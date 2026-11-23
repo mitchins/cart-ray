@@ -448,7 +448,7 @@ def test_rejected_recovery_is_retired_before_later_requests(purchase, fixture_ca
     async def reject_old_request(request):
         body = json.loads(request.body)
         if body['type'] == 'recipient_evidence' and body['order_id'] == first_order:
-            return SimpleNamespace(status=403)
+            return SimpleNamespace(status=422)
         return await original(request)
 
     env.POST_PURCHASE_HANDLER.fetch = reject_old_request
@@ -489,7 +489,7 @@ def test_recovery_reserves_send_budget_and_reuses_prepared_generation(purchase, 
     assert len(sent) == 2
 
 
-def test_recovery_cancellation_after_claim_is_recorded_uncertain(purchase,monkeypatch):
+def test_recovery_cancellation_during_claim_is_held_without_resending(purchase,monkeypatch):
     import time
 
     from cartray_reviews import invitations
@@ -510,6 +510,93 @@ def test_recovery_cancellation_after_claim_is_recorded_uncertain(purchase,monkey
     with pytest.raises(asyncio.CancelledError):
         run(worker._drain_review_recovery(env,env.POST_PURCHASE_HANDLER,env.CARTRAY_POST_PURCHASE_TOKEN,
                                          deadline=time.monotonic()+21))
-    assert db.conn.execute('SELECT state FROM invitation_generations').fetchone()[0] == 'uncertain'
+    assert db.conn.execute('SELECT state FROM invitation_generations').fetchone()[0] == 'dispatching'
     run(worker._drain_post_purchase(env))
     assert len(sent) == 1
+
+
+@pytest.mark.parametrize('status',[400,403,429,502,503])
+def test_recovery_auth_or_upstream_failure_stays_pending(purchase,status):
+    db, env, sent, order = purchase
+    env.CARTRAY_REVIEW_SETTINGS = json.dumps({'timing':'receipt'})
+    run(worker._drain_post_purchase(env))
+    db.conn.execute("INSERT INTO review_recovery_requests VALUES ('merchant','test',?,?,100,'pending')",(order,'d'*64))
+    db.conn.commit()
+
+    async def temporarily_unavailable(request):
+        return SimpleNamespace(status=status)
+
+    env.POST_PURCHASE_HANDLER.fetch = temporarily_unavailable
+    run(worker._drain_post_purchase(env))
+    assert db.conn.execute('SELECT state FROM review_recovery_requests').fetchone()[0] == 'pending'
+    assert db.conn.execute('SELECT count(*) FROM invitation_generations').fetchone()[0] == 0
+    assert len(sent) == 1
+
+
+def test_concurrent_recovery_loser_cannot_overwrite_winning_send(purchase,monkeypatch):
+    import time
+
+    from cartray_reviews import invitations
+
+    db, env, sent, order = purchase
+    env.CARTRAY_REVIEW_SETTINGS = json.dumps({'timing':'receipt'})
+    env.CARTRAY_REVIEW_INVITATION_KEY = 'i'*32
+    run(worker._drain_post_purchase(env))
+    db.conn.execute("INSERT INTO review_recovery_requests VALUES ('merchant','test',?,?,100,'pending')",(order,'9'*64))
+    db.conn.commit()
+
+    async def scenario():
+        both_prepared, sending, release, loser = (asyncio.Event() for _ in range(4))
+        # D1 serializes transactions. The SQLite test adapter shares a single
+        # connection, so serialize its batches rather than nesting transactions.
+        batch_lock, original_batch = asyncio.Lock(), db.batch
+
+        async def serial_batch(statements):
+            async with batch_lock:
+                return await original_batch(statements)
+
+        monkeypatch.setattr(db,'batch',serial_batch)
+        prepared = 0
+        prepare, claim = invitations.prepare_replacement,invitations.claim_delivery
+        mail = env.POST_PURCHASE_HANDLER.fetch
+
+        async def concurrent_prepare(*args,**kwargs):
+            nonlocal prepared
+            result = await prepare(*args,**kwargs)
+            prepared += 1
+            if prepared == 2:
+                both_prepared.set()
+            await both_prepared.wait()
+            return result
+
+        async def observed_claim(*args,**kwargs):
+            try:
+                return await claim(*args,**kwargs)
+            except ValueError:
+                loser.set()
+                raise
+
+        async def held_send(request):
+            if json.loads(request.body)['type']=='review_followup':
+                sending.set()
+                await release.wait()
+            return await mail(request)
+
+        monkeypatch.setattr(invitations,'prepare_replacement',concurrent_prepare)
+        monkeypatch.setattr(invitations,'claim_delivery',observed_claim)
+        env.POST_PURCHASE_HANDLER.fetch = held_send
+        tasks = [asyncio.create_task(worker._drain_review_recovery(
+            env,env.POST_PURCHASE_HANDLER,env.CARTRAY_POST_PURCHASE_TOKEN,deadline=time.monotonic()+21))
+            for _ in range(2)]
+        try:
+            await asyncio.wait_for(sending.wait(),2)
+            await asyncio.wait_for(loser.wait(),2)
+            assert db.conn.execute('SELECT state FROM invitation_generations').fetchone()[0] == 'dispatching'
+        finally:
+            release.set()
+            await asyncio.gather(*tasks)
+
+    run(scenario())
+    assert db.conn.execute('SELECT state FROM invitation_generations').fetchone()[0] == 'accepted'
+    assert db.conn.execute('SELECT count(*) FROM invitation_generations').fetchone()[0] == 1
+    assert len(sent) == 2

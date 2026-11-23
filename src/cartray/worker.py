@@ -899,7 +899,7 @@ async def _mail_call(service, token, envelope, *, fetch_timeout=8):
         ),
         fetch_timeout,
     )
-    if 400 <= response.status < 500:
+    if response.status == 422:
         raise MailRequestRejected("mail request rejected")
     if response.status != 200:
         raise ValueError("mail service unavailable")
@@ -1186,7 +1186,6 @@ async def _drain_review_recovery(env, service, token, *, deadline):
         # claiming. A prepared generation can safely resume without sending.
         if time.monotonic() + 12 >= deadline:
             return
-        outcome, reference = "uncertain", None
         try:
             await claim_delivery(
                 env.DB,
@@ -1197,6 +1196,12 @@ async def _drain_review_recovery(env, service, token, *, deadline):
                 delivery=draft["delivery_identity"],
                 now=now,
             )
+        except ValueError:
+            continue  # Another claimant or a failed guard owns the disposition.
+        # A cancelled/unacknowledged claim stays dispatching for inspection. Do
+        # not overwrite another worker's outcome without a confirmed own claim.
+        outcome, reference = "uncertain", None
+        try:
             origin = _origin(env.CARTRAY_STOREFRONT_ORIGIN)
             result = await _mail_call(
                 service,

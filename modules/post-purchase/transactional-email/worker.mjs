@@ -129,7 +129,8 @@ export async function handle(request, env, fetcher = fetch) {
     const account = await fetcher('https://api.stripe.com/v1/account', {
       headers: {Authorization: `Bearer ${env.STRIPE_API_KEY}`}, redirect: 'manual', signal: deadline,
     });
-    if (!account.ok || (await account.json()).id !== env.STRIPE_ACCOUNT_ID) return fail(403);
+    if (!account.ok) return fail(502);
+    if ((await account.json()).id !== env.STRIPE_ACCOUNT_ID) return fail(403);
     const stripe = await fetcher(`https://api.stripe.com/v1/checkout/sessions/${body.session_id}`, {
       headers: {Authorization: `Bearer ${env.STRIPE_API_KEY}`}, redirect: 'manual', signal: deadline,
     });
@@ -141,7 +142,7 @@ export async function handle(request, env, fetcher = fetch) {
         session.metadata?.cr_order_id !== body.order_id ||
         typeof session.customer_details?.email !== 'string' || !email.test(session.customer_details.email) ||
         (mode === 'test' &&
-         session.customer_details.email.toLowerCase() !== env.APPROVED_TEST_RECIPIENT.toLowerCase())) return fail(403);
+         session.customer_details.email.toLowerCase() !== env.APPROVED_TEST_RECIPIENT.toLowerCase())) return fail(422);
     const recipient = mode === 'test' ? env.APPROVED_TEST_RECIPIENT : session.customer_details.email;
 
     if (body.type === 'recipient_evidence') return Response.json({email:recipient}, {headers:{'Cache-Control':'no-store'}});
