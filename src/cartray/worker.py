@@ -121,54 +121,6 @@ def create_app(
         # Public liveness is deliberately independent of D1 readiness.
         return {"service": "cartray", "mode": "test-only", "status": "ok"}
 
-    @app.get("/internal/reviews-runtime-identity")
-    async def reviews_runtime_identity(request):
-        """Identify the running source version without a control-plane or Stripe call."""
-        try:
-            env = request.env
-            if _test_environment(env) != "test" or getattr(env, "CARTRAY_REVIEWS_SOURCE", None) != "test":
-                raise RuntimeError("disabled")
-            token = _required_env(env, "CARTRAY_REVIEWS_IDENTITY_TOKEN")
-            if len(token) < 32 or not hmac.compare_digest(request.header("authorization") or "", f"Bearer {token}"):
-                raise RuntimeError("unauthorized")
-            version = getattr(getattr(env, "CF_VERSION_METADATA", None), "id", None)
-            catalogue = COMPILED_CATALOGUE.expected_catalogue_version
-            if not isinstance(version, str) or not version or not isinstance(catalogue, str) or not catalogue:
-                raise RuntimeError("unbound version")
-            return Response(
-                {"version_id": version, "catalogue_version": catalogue}, headers={"Cache-Control": "no-store"}
-            )
-        except Exception:
-            return Response({"error": "source identity unavailable"}, status=503, headers={"Cache-Control": "no-store"})
-
-    @app.get("/internal/reviews-source-identity")
-    async def reviews_source_identity(request):
-        # Disabled unless explicitly provisioned. This endpoint never returns
-        # credentials or purchaser data and is not part of checkout.
-        try:
-            env = request.env
-            if _test_environment(env) != "test" or getattr(env, "CARTRAY_REVIEWS_SOURCE", None) != "test":
-                raise RuntimeError("disabled")
-            token = _required_env(env, "CARTRAY_REVIEWS_IDENTITY_TOKEN")
-            provided = request.header("authorization") or ""
-            if len(token) < 32 or not hmac.compare_digest(provided, f"Bearer {token}"):
-                raise RuntimeError("unauthorized")
-            version = getattr(getattr(env, "CF_VERSION_METADATA", None), "id", None)
-            catalogue = COMPILED_CATALOGUE.expected_catalogue_version
-            if not isinstance(version, str) or not version or not isinstance(catalogue, str) or not catalogue:
-                raise RuntimeError("unbound version")
-            client = StripeApiClient(_required_env(env, "STRIPE_API_KEY"), WorkersFetchTransport())
-            account = await client.get("/v1/account", {})
-            account_id = account.get("id")
-            if not isinstance(account_id, str) or not re.fullmatch(r"acct_[A-Za-z0-9]+", account_id):
-                raise RuntimeError("unavailable")
-            return Response(
-                {"version_id": version, "stripe_account": account_id, "catalogue_version": catalogue},
-                headers={"Cache-Control": "no-store"},
-            )
-        except Exception:
-            return Response({"error": "source identity unavailable"}, status=503, headers={"Cache-Control": "no-store"})
-
     @app.post("/internal/order-access")
     async def issue_access(request):
         headers = {"Cache-Control": "no-store"}

@@ -94,7 +94,6 @@ def graph(
         preferences = config.get("review_requests", {})
         ReviewSettings.parse(json.dumps(preferences))
         nodes["source"]["vars"].update(
-            CARTRAY_REVIEWS_SOURCE="test",
             CARTRAY_REVIEW_INVITATION_MODE="disabled" if preferences.get("timing") == "off" else "automatic",
             CARTRAY_REVIEW_INVITATION_DEFAULT=(
                 "checked" if config.get("review_invitation_default_checked", True) else "unchecked"
