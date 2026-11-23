@@ -1,7 +1,6 @@
 /** Test-only registered handler for a confirmed CartRay purchase action. */
 const fail = status => Response.json({error: 'delivery unavailable'}, {status, headers: {'Cache-Control': 'no-store'}});
 const identifier = /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$/;
-const sessionId = /^cs_test_[A-Za-z0-9_]{1,200}$/;
 
 function sendingProvider(env) {
   const provider = env.EMAIL_PROVIDER ?? 'smtp2go';
@@ -101,15 +100,20 @@ function formatTotal(session) {
 
 /** The source Worker has already claimed one order receipt; this handler never retries. */
 export async function handle(request, env, fetcher = fetch) {
-  if (request.method !== 'POST' || env.DELIVERY_MODE !== 'test' || env.ENVIRONMENT !== 'test' ||
+  if (request.method !== 'POST' || !['test','live'].includes(env.DELIVERY_MODE) ||
+      env.ENVIRONMENT !== env.DELIVERY_MODE ||
       typeof env.HANDLER_TOKEN !== 'string' || env.HANDLER_TOKEN.length < 32 ||
       !constantEqual(request.headers.get('authorization'), `Bearer ${env.HANDLER_TOKEN}`)) return fail(403);
   try {
     const provider = sendingProvider(env);
     const body = await readBounded(request);
-    if (!body || body.type !== 'order_confirmation' || body.environment !== 'test' ||
+    const sender = env.ENVIRONMENT === 'test' ? env.APPROVED_TEST_SENDER : env.MERCHANT_SENDER;
+    const email = /^[^\s@<>]+@[^\s@<>]+\.[A-Za-z]{2,}$/;
+    const mode = env.ENVIRONMENT;
+    if (!body || body.type !== 'order_confirmation' || body.environment !== mode ||
         !identifier.test(body.merchant || '') || body.merchant !== env.MERCHANT_ID ||
-        !identifier.test(body.order_id || '') || !sessionId.test(body.session_id || '') ||
+        !identifier.test(body.order_id || '') ||
+        !(mode === 'test' ? /^cs_test_[A-Za-z0-9_]{1,200}$/ : /^cs_live_[A-Za-z0-9_]{1,200}$/).test(body.session_id || '') ||
         typeof env.MERCHANT_NAME !== 'string' || !env.MERCHANT_NAME.trim() || [...env.MERCHANT_NAME].length > 100 ||
         /[\x00-\x1f\x7f]/.test(env.MERCHANT_NAME) || !Array.isArray(body.items) ||
         !body.items.length || body.items.length > 100 || body.items.some(item =>
@@ -117,9 +121,8 @@ export async function handle(request, env, fetcher = fetch) {
           item.quantity < 1 || typeof item.title !== 'string' || !item.title.trim() ||
           item.title.length > 200 || /[\x00-\x1f\x7f]/.test(item.title)) ||
         !/^acct_[A-Za-z0-9]+$/.test(env.STRIPE_ACCOUNT_ID || '') ||
-        (!env.STRIPE_API_KEY?.startsWith('sk_test_') && !env.STRIPE_API_KEY?.startsWith('rk_test_')) ||
-        !/^[^\s@<>]+@[^\s@<>]+\.[A-Za-z]{2,}$/.test(env.APPROVED_TEST_RECIPIENT || '') ||
-        !/^[^\s@<>]+@[^\s@<>]+\.[A-Za-z]{2,}$/.test(env.APPROVED_TEST_SENDER || '') ||
+        (!env.STRIPE_API_KEY?.startsWith(`sk_${mode}_`) && !env.STRIPE_API_KEY?.startsWith(`rk_${mode}_`)) ||
+        !email.test(sender || '') || (mode === 'test' && !email.test(env.APPROVED_TEST_RECIPIENT || '')) ||
         !orderLink(body.access_url, env.STOREFRONT_ORIGIN) || !provider) return fail(400);
 
     const deadline = AbortSignal.timeout(7000);
@@ -132,12 +135,14 @@ export async function handle(request, env, fetcher = fetch) {
     });
     if (!stripe.ok) return fail(502);
     const session = await stripe.json();
-    if (session.id !== body.session_id || session.livemode !== false || session.mode !== 'payment' ||
+    if (session.id !== body.session_id || session.livemode !== (mode === 'live') || session.mode !== 'payment' ||
         session.status !== 'complete' || !Number.isSafeInteger(session.amount_total) || session.amount_total < 0 ||
         !(session.payment_status === 'paid' || (session.amount_total === 0 && session.payment_status === 'no_payment_required')) ||
         session.metadata?.cr_order_id !== body.order_id ||
-        typeof session.customer_details?.email !== 'string' ||
-        session.customer_details.email.toLowerCase() !== env.APPROVED_TEST_RECIPIENT.toLowerCase()) return fail(403);
+        typeof session.customer_details?.email !== 'string' || !email.test(session.customer_details.email) ||
+        (mode === 'test' &&
+         session.customer_details.email.toLowerCase() !== env.APPROVED_TEST_RECIPIENT.toLowerCase())) return fail(403);
+    const recipient = mode === 'test' ? env.APPROVED_TEST_RECIPIENT : session.customer_details.email;
 
     const lines = body.items.map(item => `${item.title} × ${item.quantity}`);
     const total = formatTotal(session);
@@ -145,7 +150,7 @@ export async function handle(request, env, fetcher = fetch) {
       : 'Your purchased resources will be available when ready. Please contact the merchant if needed.';
     const text = `Thank you for your order from ${env.MERCHANT_NAME}.\n\nOrder: ${body.order_id}\n\n` +
       lines.join('\n') + total + `\n\n${access}`;
-    const reference = await sendEmail(env, {sender:env.APPROVED_TEST_SENDER, recipient:env.APPROVED_TEST_RECIPIENT,
+    const reference = await sendEmail(env, {sender, recipient,
       subject:`Your order from ${env.MERCHANT_NAME}`}, provider, deadline, fetcher, text);
     if (!reference) return fail(502);
     return Response.json({provider_reference: reference}, {headers: {'Cache-Control': 'no-store'}});

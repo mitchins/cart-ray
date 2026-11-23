@@ -18,7 +18,7 @@ function provider(options={}) {
   return {calls, fetch:async (url, init={}) => {
     calls.push({url,init});
     if (url.endsWith('/v1/account')) return Response.json({id:options.account || 'acct_test'});
-    if (url.includes('/v1/checkout/sessions/')) return Response.json({id:'cs_test_123',livemode:false,
+    if (url.includes('/v1/checkout/sessions/')) return Response.json({id:options.session || 'cs_test_123',livemode:!!options.live,
       mode:'payment',status:'complete',payment_status:options.payment || 'paid',amount_total:options.amount ?? 12500,currency:options.currency || 'aud',
       metadata:{cr_order_id:options.order || 'order-one'},customer_details:{email:options.email || 'recipient@example.test'}});
     if (options.failSend) throw new Error('provider timeout');
@@ -44,6 +44,35 @@ test('unavailable order access does not prevent the receipt', async () => {
   assert.equal(result.status,200);
   assert.match(JSON.parse(p.calls.at(-1).init.body).text_body,/available when ready/);
   assert.equal(p.calls.filter(c=>c.url.includes('/email/send')).length,1);
+});
+
+test('merchant sender and authoritative Stripe recipient work outside the sandbox restriction', async () => {
+  const p=provider({email:'buyer@example.test',live:true,session:'cs_live_123'});
+  const settings={...env,ENVIRONMENT:'live',DELIVERY_MODE:'live',STRIPE_API_KEY:'sk_live_synthetic',
+    MERCHANT_SENDER:'orders@example.test',APPROVED_TEST_SENDER:undefined,APPROVED_TEST_RECIPIENT:undefined};
+  assert.equal((await handle(request({...body,environment:'live',session_id:'cs_live_123'}),settings,p.fetch)).status,200);
+  const message=JSON.parse(p.calls.at(-1).init.body);
+  assert.equal(message.sender,'orders@example.test');
+  assert.deepEqual(message.to,['buyer@example.test']);
+});
+
+test('sandbox sending requires the approved test recipient', async () => {
+  const p=provider();
+  assert.notEqual((await handle(request(),{...env,APPROVED_TEST_RECIPIENT:undefined},p.fetch)).status,200);
+  assert.equal(p.calls.length,0);
+});
+
+test('sender selection is environment-scoped and test delivery uses the approved address', async () => {
+  let p=provider({email:'recipient@example.test'});
+  const settings={...env,APPROVED_TEST_RECIPIENT:'Recipient@example.test',MERCHANT_SENDER:'other@example.test'};
+  assert.equal((await handle(request(),settings,p.fetch)).status,200);
+  const message=JSON.parse(p.calls.at(-1).init.body);
+  assert.equal(message.sender,env.APPROVED_TEST_SENDER);
+  assert.deepEqual(message.to,['Recipient@example.test']);
+  p=provider({live:true,session:'cs_live_123'});
+  const live={...env,ENVIRONMENT:'live',DELIVERY_MODE:'live',STRIPE_API_KEY:'sk_live_synthetic'};
+  assert.notEqual((await handle(request({...body,environment:'live',session_id:'cs_live_123'}),live,p.fetch)).status,200);
+  assert.equal(p.calls.length,0);
 });
 
 test('forged scope, unconfirmed purchase or untrusted recipient cannot send', async () => {
