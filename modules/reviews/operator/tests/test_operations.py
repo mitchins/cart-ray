@@ -69,7 +69,8 @@ def test_sender_off_pauses_and_verifies_disabled_version_without_changing_fence(
     installation.credentials = None
     with pytest.raises(ValueError, match="credentials"):
         operations.Installation.sender_off(installation)
-    assert not calls
+    assert calls == [("pause",)]
+    calls.clear()
     installation.credentials = {"token": "test"}
     result = operations.Installation.sender_off(installation)
     assert calls[0] == ("pause",) and calls[-1] == ("publish", "off-version")
@@ -122,8 +123,11 @@ def test_reviews_provider_change_requires_verified_off_and_preserves_fence(monke
     assert state["activation_watermark"] == 7 and "build" not in state
     installation.credentials["smtp2go_api_key"] = "api-test"
     installation.db = lambda role: "db"
-    installation.api.query = lambda *args: [{"n": 1}]
-    with pytest.raises(ValueError, match="resolve uncertain or in-flight"):
+    def failed_cloudflare_query(_database, sql, _params):
+        assert "'failed'" in sql
+        return [{"n": 1}]
+    installation.api.query = failed_cloudflare_query
+    with pytest.raises(ValueError, match="resolve failed, uncertain or in-flight"):
         operations.Installation.reviews_provider(installation, "smtp2go")
     assert config["reviews_email_provider"] == "cloudflare"
 

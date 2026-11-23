@@ -1591,11 +1591,11 @@ class Installation(PostPurchaseOperator):
         """Pause Reviews queues, then publish and verify a hard-disabled sender version."""
         if not self.config["reviews_enabled"] or not self.state.get("deployment", {}).get("complete"):
             raise ValueError("a completed Reviews deployment is required")
+        self.pause()
         if not self.credentials:
-            raise ValueError("protected sender credentials are required before disabling the sender")
+            raise ValueError("queues paused; protected sender credentials are required to disable the sender")
         self.check_reviews_handoff()
         sender_secrets = secret_bindings(self, "sender")
-        self.pause()
         deployment = self.state["deployment"]
         build = json.loads((self.directory / "releases" / deployment["commit"] / "build.json").read_text())
         nodes, _ = graph(self, deployment["versions"], sending=False)
@@ -1636,9 +1636,9 @@ class Installation(PostPurchaseOperator):
         if self.config.get("reviews_email_provider", "smtp2go") == "cloudflare":
             unresolved = self.api.query(self.db("reviews"),
                 "SELECT count(*) AS n FROM invitation_generations WHERE store_key=? AND environment='test' "
-                "AND state IN ('dispatching','uncertain')", [self.config.get("store_key", "acorn-store")])
+                "AND state IN ('dispatching','uncertain','failed')", [self.config.get("store_key", "acorn-store")])
             if len(unresolved) != 1 or unresolved[0]["n"]:
-                raise ValueError("resolve uncertain or in-flight deliveries before changing from Cloudflare")
+                raise ValueError("resolve failed, uncertain or in-flight deliveries before changing from Cloudflare")
         self.config["reviews_email_provider"] = provider
         self.state["config"]["reviews_email_provider"] = provider
         self.state.pop("build", None)
