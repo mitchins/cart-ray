@@ -234,6 +234,7 @@ def test_merchant_reviews_require_correct_subject_pages_and_native_clients(tmp_p
     installation.credentials = {"cloudflare_api_token": "test-token"}
     installation.state["resources"]["database:commerce"] = {"id": "test-db"}
     if shared_mail:
+        installation.config['source_api_path'] = '/api'
         installation.config['post_purchase_config'] = 'fixture-config'
         monkeypatch.setattr(installation, 'post_purchase_actions', lambda: {'schema':2})
     else:
@@ -262,6 +263,7 @@ def test_merchant_reviews_require_correct_subject_pages_and_native_clients(tmp_p
     if shared_mail:
         deployments = [call[1][2]['deployment_configs']['production'] for call in calls if call[0]=='request']
         assert deployments[-1]['env_vars']['ORDER_ACCESS_GATEWAY']['value']=='test'
+        assert deployments[-1]['env_vars']['CARTRAY_SOURCE_API_PATH']['value']=='/api'
         assert deployments[-1]['services']['CARTRAY_SOURCE']['service']==installation.name('source')
     output_page = output / "products/one/index.html"
     original_output = output_page.read_text()

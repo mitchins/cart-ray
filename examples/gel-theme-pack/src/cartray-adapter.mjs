@@ -74,7 +74,7 @@ export async function createAdapter(config) {
         const result=await createCheckoutAndStorePending({configuration:source,catalogueVersion:catalogue.version,cart,revision,
           requestId:attempt.requestId,storage,
           reviewInvitationOptIn:this.permissionEnabled?attempt.permission:undefined,
-          reviewInvitationWordingVersion:attempt.wordingVersion || 'review-invitation-v1'});
+          reviewInvitationWordingVersion:attempt.wordingVersion || source.reviewInvitationWordingVersion || 'review-invitation-v1'});
         try {storage?.removeItem(attemptKey);} catch { /* return may still be checked */ }
         attempt=null;this.attemptPending=false;
         return result.url;

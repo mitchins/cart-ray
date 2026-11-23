@@ -1368,6 +1368,9 @@ class Installation(PostPurchaseOperator):
             deployment = {"env_vars": {}, "services": {}}
         if "fulfilment" in self.config or (self.consolidated and self.config['reviews_enabled']):
             deployment["env_vars"]["ORDER_ACCESS_GATEWAY"] = {"type": "plain_text", "value": "test"}
+            deployment["env_vars"]["CARTRAY_SOURCE_API_PATH"] = {
+                "type": "plain_text", "value": self.config.get("source_api_path", "")
+            }
             deployment["env_vars"]["REVIEWS_STOREFRONT_ORIGIN"] = {"type": "plain_text", "value": origin}
             deployment["services"]["CARTRAY_SOURCE"] = {"service": self.name("source"), "environment": "production"}
         self.api.request(
