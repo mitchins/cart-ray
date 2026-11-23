@@ -505,6 +505,8 @@ class PostPurchaseOperator:
             raise ValueError("finish a fresh OFF build/deploy after email provider reconfiguration before activation")
         if not enable_test_delivery:
             raise ValueError("post-purchase activation requires explicit --enable-test-delivery")
+        if not isinstance(self.post_purchase_actions(), dict):
+            raise ValueError("legacy workflow delivery needs an explicit schema-2 order-confirmation handover")
         deployment, disabled, build = self.post_purchase_runtime()
         transition = self.state.get("post_purchase_transition")
         if transition and transition["operation"] != "activate":
