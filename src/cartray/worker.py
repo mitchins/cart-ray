@@ -1185,7 +1185,7 @@ async def _drain_review_recovery(env, service, token, *, deadline):
                 token,
                 {
                     **envelope,
-                    "type": "review_followup",
+                    "type": "review_followup", "delivery_identity":draft['delivery_identity'],
                     "reviews": {
                         "url": origin + "/review/#invitation=" + draft["token"],
                         "subjects": selected,

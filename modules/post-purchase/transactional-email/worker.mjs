@@ -153,6 +153,12 @@ export async function handle(request, env, fetcher = fetch) {
     let text = `Thank you for your order from ${env.MERCHANT_NAME}.\n\nOrder: ${body.order_id}\n\n` +
       lines.join('\n') + total + `\n\n${access}`;
     let reviews = body.reviews;
+    const identity = body.delivery_identity ?? [...new Uint8Array(await crypto.subtle.digest('SHA-256',
+      new TextEncoder().encode(JSON.stringify([body.merchant,mode,body.order_id,body.type]))))]
+      .map(x=>x.toString(16).padStart(2,'0')).join('');
+    if (!/^[a-f0-9]{64}$/.test(identity)) return fail(400);
+    const identityHeaders = [{name:'X-CartRay-Message-Identity',value:identity},
+      ...(body.delivery_identity ? [{name:'X-Reviews-Delivery-Identity',value:identity}] : [])];
     let unsubscribeHeaders;
     try {
     if (reviews !== undefined && reviews !== null) {
@@ -179,7 +185,7 @@ export async function handle(request, env, fetcher = fetch) {
       if (body.type === 'review_followup') return fail(400);
       unsubscribeHeaders = undefined; // Optional Reviews cannot block the transactional receipt.
     }
-    const reference = await sendEmail(env, {sender, recipient, headers:unsubscribeHeaders,
+    const reference = await sendEmail(env, {sender, recipient, headers:[...identityHeaders,...(unsubscribeHeaders || [])],
       subject:body.type === 'review_followup' ? `Review your purchase from ${env.MERCHANT_NAME}` : `Your order from ${env.MERCHANT_NAME}`}, provider, deadline, fetcher, text);
     if (!reference) return fail(502);
     return Response.json({provider_reference: reference}, {headers: {'Cache-Control': 'no-store'}});
