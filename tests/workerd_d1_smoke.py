@@ -28,7 +28,7 @@ TEST_PUBLIC_KEY_SPKI_B64 = "MCowBQYDK2VwAyEAmjCIMxYDlWSJsqHfrQZ+nVkoUEXEiajZ00z2
 TEST_PAYLOAD = b"cartray-worker-webcrypto-smoke-v1"
 
 
-async def order_reviews_journey(db):
+async def order_reviews_journey(db, *, enrichment_timeout=False):
     """Real D1/native submission, synthetic mail: the link works BEFORE acceptance."""
     import hashlib
     import hmac
@@ -47,7 +47,7 @@ async def order_reviews_journey(db):
                          fulfilment_resources=('smoke-external',))),
         items_digest='sha256:'+'2'*64,currency='aud',subtotal_minor=3,
         review_invitation_opt_in=True,review_invitation_policy_enabled=True,
-        review_invitation_default_selected=True,review_invitation_request_limit=2)
+        review_invitation_default_selected=True)
     store = D1OrderStore(db)
     await store.start_or_load(order, nonce='reviews', now=now)
     await store.attach_redirect(order.order_id, CheckoutRedirect('cs_test_'+suffix,'https://stripe.test'), now=now)
@@ -67,14 +67,18 @@ async def order_reviews_journey(db):
         await (db.prepare("INSERT OR IGNORE INTO review_subject_display_names VALUES ('smoke-store','test',?,?)")
             .bind(subject,subject).run())
     messages = []
+    evidence_calls = [0]
     class Mail:
         async def fetch(self, request):
             envelope = json.loads(await request.text())
             if envelope['type'] == 'recipient_evidence':
+                evidence_calls[0] += 1
+                if enrichment_timeout and evidence_calls[0] == 1:
+                    await asyncio.sleep(10)
                 return JsResponse.json(
                     to_js({'email':'buyer-'+suffix+'@example.test'},dict_converter=Object.fromEntries))
             messages.append(envelope)
-            if envelope['type'] == 'order_confirmation':
+            if envelope['type'] == 'order_confirmation' and envelope.get('reviews'):
                 bearer = envelope['reviews']['url'].split('invitation=')[1].split('&')[0]
                 await redeem_purchase(db, store='smoke-store',environment='test',subject='review-a',token=bearer,
                     request_key='review_'+suffix,author='Buyer',title='',body='Helpful',rating=5,
@@ -86,7 +90,40 @@ async def order_reviews_journey(db):
         CARTRAY_RECIPIENT_HASH_KEY=key,CARTRAY_INSTALLATION_ID='smoke-install',
         CARTRAY_REVIEW_SETTINGS=json.dumps({'timing':'both','delay_days':0,'priorities':['REVIEW-A']}),
         CARTRAY_REVIEW_SUBJECT_MAPS=json.dumps({'smoke-review-version':{'REVIEW-A':'review-a','REVIEW-B':'review-b'}}))
+    env.CARTRAY_ORDER_ACCESS_MODE = 'test'
+    env.CARTRAY_ORDER_ACCESS_KEY = 'a'*32
+    env.CARTRAY_RESOURCE_CONFIG = '{}'
+    env.CARTRAY_SIGNING_KEY_ID = 'smoke-install'
+
+    async def allow(_):
+        return {'success':True}
+
+    env.CHECKOUT_STATUS_RATE_LIMITER = SimpleNamespace(limit=allow)
     await _drain_post_purchase(env)
+    if enrichment_timeout:
+        if len(messages)!=1 or messages[0].get('reviews') or not messages[0].get('access_url'):
+            return False
+        token = messages[0]['access_url'].split('#token=')[1]
+        env.CARTRAY_POST_PURCHASE_MODE = 'disabled'
+        body = json.dumps({'token':token})
+        raw = Request.new('https://shop.example/order-access',to_js({'method':'POST',
+            'headers':{'cf-connecting-ip':'192.0.2.1','content-type':'application/json',
+                       'content-length':str(len(body.encode()))},'body':body},dict_converter=Object.fromEntries))
+        response = await create_app()(raw,env)
+        if response.status != 200:
+            return False
+        data = await response.json()
+        if hasattr(data,'to_py'):
+            data = data.to_py()
+        if len(data['items'])!=2 or data.get('reviews',{}).get('subjects')!=['review-a']:
+            return False
+        bearer = data['reviews']['url'].split('invitation=')[1].split('&')[0]
+        submitted = await redeem_purchase(db,store='smoke-store',environment='test',subject='review-a',token=bearer,
+            request_key='late_'+suffix,author='Buyer',title='',body='Accessible after timeout',rating=5,
+            reviewer_key_secret=b'r'*32,now=int(time.time()),random_token=lambda:secrets.token_hex(32))
+        await _drain_post_purchase(env)
+        message = await order_reviews.first(db,'SELECT * FROM order_review_messages WHERE order_id=?',order.order_id)
+        return submitted['status']=='pending' and len(messages)==1 and message['due_at'] is None
     await _drain_post_purchase(env)
     if len(messages)!=2 or [m['type'] for m in messages]!=['order_confirmation','review_followup']:
         return False
@@ -267,8 +304,10 @@ class Default(WorkerEntrypoint):
         verifier_accepted = await verifier.verify(TEST_PAYLOAD, signature)
         session_rows = _results(session)
         reviews_ok = await order_reviews_journey(self.env.DB)
+        review_timeout_ok = await order_reviews_journey(self.env.DB,enrichment_timeout=True)
         result = {
             "order_reviews": reviews_ok,
+            "order_review_timeout": review_timeout_ok,
             "d1_batch_owner": first.owner,
             "first_confirmation": confirmed is False,
             "lease_rejected": lease_rejected,
@@ -284,6 +323,7 @@ class Default(WorkerEntrypoint):
         }
         expected = {
             "order_reviews": True,
+            "order_review_timeout": True,
             "d1_batch_owner": True,
             "first_confirmation": True,
             "lease_rejected": True,

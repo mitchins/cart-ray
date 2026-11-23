@@ -192,10 +192,16 @@ async def prepare(
         != hashlib.sha256(existing_message["invitation_token"].encode()).hexdigest()
     ):
         return None
-    grant = await first(db, "SELECT COALESCE(request_limit,CASE WHEN wording_version='review-invitation-v2' "
-                        "THEN 2 ELSE 1 END) AS request_limit FROM review_invitation_checkout_grants "
+    grant = await first(db, "SELECT wording_version,request_limit FROM review_invitation_checkout_grants "
                         "WHERE order_id=?", order)
-    if settings.timing == 'both' and grant['request_limit'] != 2:
+    historical_limit = grant['request_limit']
+    if grant['wording_version'] == 'review-invitation-v1':
+        historical_limit = 1
+    elif grant['wording_version'] == 'review-invitation-v2':
+        historical_limit = historical_limit or 2
+    if settings.timing == 'both' and grant['wording_version'] in (
+        'review-invitation-v1', 'review-invitation-v2'
+    ) and historical_limit == 1:
         settings = replace(settings, timing='receipt')
     settings = replace(settings, priorities=tuple(dict.fromkeys(mapping.get(key, key) for key in settings.priorities)))
     # Insert once; concurrent attempts recover the winning unpredictable token.

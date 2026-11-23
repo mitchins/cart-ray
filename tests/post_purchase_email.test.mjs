@@ -186,3 +186,18 @@ test('account lookup failures are retryable while confirmed recipient rejection 
   p=provider({email:'unapproved@example.test'});
   assert.equal((await handle(request({...body,type:'recipient_evidence'}),env,p.fetch)).status,422);
 });
+
+
+test('paused provider verifies a purchase recipient without admitting delivery',async()=>{
+  const paused={...env,DELIVERY_MODE:'disabled'};
+  const p=provider();
+  const evidence=await handle(request({...body,type:'recipient_evidence'}),paused,p.fetch);
+  assert.equal(evidence.status,200);
+  assert.deepEqual(await evidence.json(),{email:env.APPROVED_TEST_RECIPIENT});
+  assert.equal(p.calls.length,2);
+  for(const type of ['order_confirmation','review_followup'])
+    assert.equal((await handle(request({...body,type}),paused,p.fetch)).status,403);
+  assert.equal(p.calls.length,2);
+  assert.equal((await handle(request({...body,type:'recipient_evidence'},'wrong'),paused,p.fetch)).status,403);
+  assert.equal(p.calls.length,2);
+});

@@ -68,7 +68,9 @@ def purchase(fixture_catalogue, monkeypatch, request):
     order = gateway.requests[0].order_id
     from cartray.store import review_invitation_disclosure
 
-    version, wording = review_invitation_disclosure(1 if getattr(request, "param", None) == "v1" else 2)
+    version, wording = review_invitation_disclosure(version=(
+        'review-invitation-v1' if getattr(request,'param',None)=='v1' else
+        'review-invitation-v2' if getattr(request,'param',None)=='restricted-v2' else 'review-invitation-v3'))
     db.conn.execute("INSERT INTO review_invitation_checkout_choices VALUES (?,1,1,?,?,90)", (order, version, wording))
     db.conn.execute(
         "INSERT INTO review_invitation_checkout_grants "
@@ -305,33 +307,20 @@ def test_customer_recovery_uses_the_receipt_provider_and_preserves_progress(purc
     )
 
 
-def test_two_request_disclosure_is_server_scoped_and_old_clients_keep_one(fixture_catalogue):
+@pytest.mark.parametrize('supplied,expected',[
+    ('review-invitation-v1',1),('review-invitation-v2',2),('review-invitation-v3',None)])
+def test_general_permission_has_no_count_and_legacy_clients_keep_their_promise(fixture_catalogue,supplied,expected):
     from cartray.store import SqliteOrderStore, review_invitation_disclosure
 
-    for configured, supplied, expected in [
-        (2, "review-invitation-v2", 2),
-        (2, "review-invitation-v1", 1),
-        (1, "review-invitation-v2", 1),
-    ]:
-        store = SqliteOrderStore.in_memory()
-        checkout = CheckoutService(
-            fixture_catalogue,
-            store,
-            FakePaymentGateway(),
-            review_invitations_enabled=True,
-            review_invitation_default_selected=True,
-            review_invitation_request_limit=configured,
-        )
-        request = CheckoutRequest(
-            "disclosure", fixture_catalogue.version, (CanonicalItem("TEST-BUNDLE", 1),), True, supplied
-        )
-        run(checkout.checkout(request))
-        row = store.connection.execute(
-            "SELECT wording_version,wording,request_limit FROM review_invitation_checkout_grants"
-        ).fetchone()
-        assert tuple(row[:2]) == review_invitation_disclosure(2 if supplied == "review-invitation-v2" else 1)
-        assert row[2] == expected
-        store.connection.close()
+    store = SqliteOrderStore.in_memory()
+    checkout = CheckoutService(fixture_catalogue,store,FakePaymentGateway(),review_invitations_enabled=True)
+    request = CheckoutRequest('disclosure',fixture_catalogue.version,(CanonicalItem('TEST-BUNDLE',1),),True,supplied)
+    run(checkout.checkout(request))
+    row = store.connection.execute(
+        'SELECT wording_version,wording,request_limit FROM review_invitation_checkout_grants').fetchone()
+    assert tuple(row[:2]) == review_invitation_disclosure(version=supplied)
+    assert row[2] == expected
+    store.connection.close()
 
 
 @pytest.mark.parametrize("purchase", ["v1"], indirect=True)
@@ -638,11 +627,10 @@ def test_checkout_retry_survives_reduced_invitation_policy(fixture_catalogue):
 
     store = SqliteOrderStore.in_memory()
     checkout = CheckoutService(fixture_catalogue,store,FakePaymentGateway(),review_invitations_enabled=True,
-                               review_invitation_default_selected=True,review_invitation_request_limit=2)
+                               review_invitation_default_selected=True)
     request = CheckoutRequest('wording-retry',fixture_catalogue.version,(CanonicalItem('TEST-BUNDLE',1),),True,
                               'review-invitation-v2')
     first = run(checkout.checkout(request))
-    checkout.review_invitation_request_limit = 1
     assert run(checkout.checkout(request)) == first
     assert store.connection.execute('SELECT request_limit FROM review_invitation_checkout_grants').fetchone()[0] == 2
     store.connection.close()
@@ -775,3 +763,93 @@ def test_unusable_prepared_recovery_is_deferred_without_sending(purchase,monkeyp
     assert len(sent) == 1
     assert db.conn.execute('SELECT state FROM review_recovery_requests').fetchone()[0] == 'pending'
     assert db.conn.execute('SELECT retry_after FROM review_recovery_deferrals').fetchone()[0] > 0
+
+
+@pytest.mark.parametrize('persisted',[False,True])
+def test_four_second_enrichment_timeout_retains_order_access_without_another_email(purchase,monkeypatch,persisted):
+    from kinglet import TestClient
+
+    db,env,sent,_ = purchase
+    env.CARTRAY_REVIEW_SETTINGS = json.dumps({'timing':'both','delay_days':7})
+    env.CARTRAY_SIGNING_KEY_ID = 'installation'
+    env.CARTRAY_ORDER_ACCESS_MODE = 'test'
+    env.CARTRAY_ORDER_ACCESS_KEY = 'a'*32
+    env.CARTRAY_RESOURCE_CONFIG = '{}'
+
+    async def allow(_):
+        return {'success':True}
+
+    env.CHECKOUT_STATUS_RATE_LIMITER = SimpleNamespace(limit=allow)
+    original = worker._receipt_reviews
+
+    async def stalled_enrichment(env,envelope):
+        if persisted:
+            await worker._prepare_order_reviews(env,envelope)
+        await asyncio.sleep(10)  # The actual four-second receipt timeout must cancel this.
+        raise AssertionError('the enrichment did not time out')
+
+    monkeypatch.setattr(worker,'_receipt_reviews',stalled_enrichment)
+    run(worker._drain_post_purchase(env))
+    assert len(sent) == 1
+    assert sent[0]['type'] == 'order_confirmation'
+    assert 'reviews' not in sent[0]
+    assert db.conn.execute('SELECT state FROM post_purchase_executions').fetchone()[0] == 'accepted'
+    assert db.conn.execute('SELECT count(*) FROM order_review_messages').fetchone()[0] == int(persisted)
+    token = sent[0]['access_url'].split('#token=')[1]
+    client = TestClient(worker.create_app(),env=vars(env))
+    body = {'token':token}
+    headers = {'content-type':'application/json','content-length':str(len(json.dumps(body).encode())),
+               'cf-connecting-ip':'192.0.2.1'}
+    assert client.request('GET','/order-access')[0] == 200
+    for _ in range(2):
+        status,_,payload = client.request('POST','/order-access',json_data=body,headers=headers)
+        data = json.loads(payload)
+        assert status == 200
+        assert len(data['items']) == 2
+        assert data['reviews']['subjects'] == ['first']
+    assert db.conn.execute('SELECT count(*) FROM acquisition_invitations').fetchone()[0] == 1
+    row = db.conn.execute('SELECT due_at FROM order_review_messages').fetchone()
+    assert (row[0] is not None) == persisted  # Access repair never arms new mail.
+    monkeypatch.setattr(worker,'_receipt_reviews',original)
+    run(worker._drain_post_purchase(env))
+    assert len(sent) == 1
+
+
+def test_order_resources_survive_review_outage_then_permission_checked_access_repair(purchase):
+    from kinglet import TestClient
+
+    db,env,sent,order = purchase
+    env.CARTRAY_SIGNING_KEY_ID = 'installation'
+    env.CARTRAY_ORDER_ACCESS_MODE = 'test'
+    env.CARTRAY_RESOURCE_CONFIG = '{}'
+    token = run(worker.issue_order_access(db,'a'*32,'merchant','test',order))
+
+    async def allow(_):
+        return {'success':True}
+
+    env.CHECKOUT_STATUS_RATE_LIMITER = SimpleNamespace(limit=allow)
+    original = env.POST_PURCHASE_HANDLER
+
+    class Unavailable:
+        async def fetch(self,_):
+            return SimpleNamespace(status=503)
+
+    env.POST_PURCHASE_HANDLER = Unavailable()
+    env.CARTRAY_POST_PURCHASE_MODE = 'disabled'
+    client = TestClient(worker.create_app(),env=vars(env))
+    body = {'token':token}
+    headers = {'content-type':'application/json','content-length':str(len(json.dumps(body).encode())),
+               'cf-connecting-ip':'192.0.2.1'}
+    status,_,payload = client.request('POST','/order-access',json_data=body,headers=headers)
+    assert status == 200 and len(json.loads(payload)['items']) == 2
+    assert 'reviews' not in json.loads(payload)
+    assert sent == []
+    env.POST_PURCHASE_HANDLER = original
+    client = TestClient(worker.create_app(),env=vars(env))
+    status,_,payload = client.request('POST','/order-access',json_data=body,headers=headers)
+    assert status == 200 and json.loads(payload)['reviews']['subjects']
+    message = run(order_reviews.first(db,'SELECT * FROM order_review_messages'))
+    run(order_reviews.unsubscribe(db,'merchant','test',message['unsubscribe_token'],1000))
+    status,_,payload = client.request('POST','/order-access',json_data=body,headers=headers)
+    assert status == 200 and 'reviews' not in json.loads(payload)
+    assert sent == []

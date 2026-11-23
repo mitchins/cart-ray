@@ -298,23 +298,9 @@ def create_app(
                 )
             reviews = None
             try:
-                import hashlib
-
-                scope = await order_reviews.first(
-                    request.env.DB,
-                    "SELECT order_id FROM order_access WHERE token_digest=? AND merchant=? "
-                    "AND environment='test' AND revoked_at IS NULL",
-                    hashlib.sha256(args["token"].encode()).hexdigest(),
-                    merchant,
+                reviews = await asyncio.wait_for(
+                    _order_access_review_links(request.env, merchant, args['token'], items), timeout=4
                 )
-                message = await order_reviews.first(
-                    request.env.DB,
-                    "SELECT * FROM order_review_messages WHERE merchant_id=? AND environment='test' AND order_id=?",
-                    merchant,
-                    scope["order_id"],
-                )
-                if message:
-                    reviews = await _review_message_links(request.env, message)
             except Exception:
                 pass
             return Response({"items": output, **({"reviews": reviews} if reviews else {})}, headers=headers)
@@ -467,7 +453,6 @@ async def checkout_service_from_environment(env) -> CheckoutService:
         cancel_url,
         review_invitations_enabled=_automatic_invitation_enabled(env),
         review_invitation_default_selected=getattr(env, "CARTRAY_REVIEW_INVITATION_DEFAULT", None) == "checked",
-        review_invitation_request_limit=2 if getattr(env, 'CARTRAY_REVIEW_INVITATION_LIMIT', '1') == '2' else 1,
     )
 
 
@@ -857,16 +842,43 @@ async def _mail_call(service, token, envelope, *, fetch_timeout=8):
     return value.to_py() if hasattr(value, "to_py") else value
 
 
+async def _order_access_review_links(env, merchant, token, items):
+    import hashlib
+
+    scope = await order_reviews.first(
+        env.DB, "SELECT a.order_id,s.external_session_id FROM order_access a "
+        "JOIN checkout_sessions s USING(order_id) WHERE a.token_digest=? AND a.merchant=? "
+        "AND a.environment='test' AND a.revoked_at IS NULL AND s.settlement_state='confirmed'",
+        hashlib.sha256(token.encode()).hexdigest(), merchant,
+    )
+    if not scope:
+        return None
+    message = await order_reviews.first(env.DB,
+        "SELECT * FROM order_review_messages WHERE merchant_id=? AND environment='test' AND order_id=?",
+        merchant, scope['order_id'])
+    if not message:
+        envelope = {'merchant':merchant, 'environment':'test', 'order_id':scope['order_id'],
+                    'session_id':scope['external_session_id'], 'access_url':None,
+                    'items':[{'product_key':item['product_key'],'quantity':item['quantity'],
+                              'title':item['product_key']} for item in items]}
+        message = await _prepare_order_reviews(env, envelope, access_only=True)
+    return await _review_message_links(env, message) if message else None
+
+
 async def _receipt_reviews(env, envelope):
     message = await _prepare_order_reviews(env, envelope)
     return await _review_message_links(env, message, receipt=True) if message else None
 
 
-async def _prepare_order_reviews(env, envelope):
+async def _prepare_order_reviews(env, envelope, *, access_only=False):
     settings = order_reviews.ReviewSettings.parse(getattr(env, "CARTRAY_REVIEW_SETTINGS", "{}"))
     mapping = json.loads(getattr(env, "CARTRAY_REVIEW_SUBJECT_MAPS", "{}"))
     if settings.timing == "off" or not mapping:
         return None
+    if access_only:
+        # Restore access only: do not arm another email or change the receipt.
+        from dataclasses import replace
+        settings = replace(settings, timing='receipt')
     evidence = await _mail_call(
         env.POST_PURCHASE_HANDLER, env.CARTRAY_POST_PURCHASE_TOKEN, {**envelope, "type": "recipient_evidence"}
     )

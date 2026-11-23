@@ -193,8 +193,9 @@ def test_cached_build_and_deploy_reject_changed_merchant_configuration(tmp_path)
         p.deploy()
 
 
+@pytest.mark.parametrize("timing", ["receipt", "followup", "both"])
 @pytest.mark.parametrize("shared_mail", [False, True])
-def test_merchant_reviews_require_correct_subject_pages_and_native_clients(tmp_path, monkeypatch, shared_mail):
+def test_merchant_reviews_require_correct_subject_pages_and_native_clients(tmp_path, monkeypatch, shared_mail, timing):
     source = merchant(tmp_path / "source")
     site = source / "storefront"
     page = site / "products/one/index.html"
@@ -219,7 +220,7 @@ def test_merchant_reviews_require_correct_subject_pages_and_native_clients(tmp_p
             '<script type="module" src="/theme/review-presenter.mjs"></script>'
         )
     installation = plan_merchant(tmp_path, source, reviews=True, mapped=True,
-                                 review_invitation_default_checked=False)
+                                 review_invitation_default_checked=False, review_requests={"timing":timing})
     installation.verify_merchant_inputs()
     calls = []
 
@@ -249,6 +250,9 @@ def test_merchant_reviews_require_correct_subject_pages_and_native_clients(tmp_p
     installation.deploy_storefront({"commit": "test-release"})
     output = installation.directory / "releases/test-release/storefront"
     deployed = (output / "storefront-config.js").read_text()
+    assert '"reviewInvitationWordingVersion": "review-invitation-v3"' in deployed
+    assert "I'm happy to receive invitations to review products I purchase." in deployed
+    assert "CARTRAY_REVIEW_INVITATION_LIMIT" not in nodes["source"]["vars"]
     assert '"storeName": "Merchant"' in deployed
     assert '"MERCHANT-ONE": "product-one"' in deployed
     assert '"reviewInvitationDefaultChecked": false' in deployed

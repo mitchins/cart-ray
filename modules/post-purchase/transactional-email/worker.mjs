@@ -100,13 +100,14 @@ function formatTotal(session) {
 
 /** The source Worker has already claimed one order receipt; this handler never retries. */
 export async function handle(request, env, fetcher = fetch) {
-  if (request.method !== 'POST' || !['test','live'].includes(env.DELIVERY_MODE) ||
-      env.ENVIRONMENT !== env.DELIVERY_MODE ||
+  if (request.method !== 'POST' || !['test','live'].includes(env.ENVIRONMENT) ||
+      ![env.ENVIRONMENT, 'disabled'].includes(env.DELIVERY_MODE) ||
       typeof env.HANDLER_TOKEN !== 'string' || env.HANDLER_TOKEN.length < 32 ||
       !constantEqual(request.headers.get('authorization'), `Bearer ${env.HANDLER_TOKEN}`)) return fail(403);
   try {
     const provider = sendingProvider(env);
     const body = await readBounded(request);
+    if (env.DELIVERY_MODE === 'disabled' && body?.type !== 'recipient_evidence') return fail(403);
     const sender = env.ENVIRONMENT === 'test' ? env.APPROVED_TEST_SENDER : env.MERCHANT_SENDER;
     const email = /^[^\s@<>]+@[^\s@<>]+\.[A-Za-z]{2,}$/;
     const mode = env.ENVIRONMENT;

@@ -95,6 +95,30 @@ def main():
                     engine + " reviews invitation disabled by merchant config",
                     page.locator("#review-invitation-opt-in").count() == 0,
                 )
+                wording = "I'm happy to receive invitations to review products I purchase."
+
+                def enable_review_permission(route):
+                    response = route.fetch()
+                    extra = {"checkoutEnabled": True, "reviewInvitationsEnabled": True,
+                             "reviewInvitationDefaultChecked": True,
+                             "reviewInvitationWordingVersion": "review-invitation-v3",
+                             "reviewInvitationWording": wording}
+                    route.fulfill(response=response, body=response.text() +
+                                  "\nObject.assign(window.CARTRAY_STOREFRONT," + json.dumps(extra) + ");")
+
+                page.route("**/storefront-config.js", enable_review_permission)
+                page.reload()
+                choice = page.get_by_role("checkbox", name=wording)
+                choice.wait_for()
+                check(engine + " general review disclosure defaults checked", choice.is_checked())
+                choice.focus()
+                choice.press("Space")
+                check(engine + " keyboard review opt-out leaves checkout available",
+                      not choice.is_checked() and page.locator("#checkout").is_enabled())
+                choice.press("Space")
+                check(engine + " keyboard review permission can be restored", choice.is_checked())
+                page.screenshot(path=str(shots / f"connected-{prefix}{engine}-permission-mobile.png"), full_page=True)
+                page.unroute("**/storefront-config.js", enable_review_permission)
                 requests = []
                 attempts = []
 

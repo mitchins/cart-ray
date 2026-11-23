@@ -1257,8 +1257,7 @@ class Installation(PostPurchaseOperator):
                 start = source.index('window.CARTRAY_STOREFRONT = ') + len('window.CARTRAY_STOREFRONT = ')
                 public, end = json.JSONDecoder().raw_decode(source[start:])
                 from cartray.store import review_invitation_disclosure
-                version, wording = review_invitation_disclosure(
-                    2 if self.config.get('review_requests', {}).get('timing') == 'both' else 1)
+                version, wording = review_invitation_disclosure()
                 public.update(reviewInvitationsEnabled=review_requests_enabled(self.config),
                               reviewInvitationDefaultChecked=self.config['review_invitation_default_checked'],
                               reviewInvitationWordingVersion=version, reviewInvitationWording=wording)

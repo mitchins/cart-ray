@@ -46,13 +46,16 @@ class CatalogProduct:
     fulfilment_resources: tuple[str, ...]
 
 
+REVIEW_INVITATION_WORDING_VERSION = "review-invitation-v3"
+
+
 @dataclass(frozen=True)
 class CheckoutRequest:
     checkout_request_id: str
     manifest_version: str
     items: tuple[CanonicalItem, ...]
     review_invitation_opt_in: bool = False
-    review_invitation_wording_version: str = "review-invitation-v1"
+    review_invitation_wording_version: str = REVIEW_INVITATION_WORDING_VERSION
 
     @classmethod
     def from_payload(cls, payload: dict[str, object]) -> CheckoutRequest:
@@ -74,7 +77,7 @@ class CheckoutRequest:
             request_id = payload["checkout_request_id"]
             manifest_version = payload["manifest_version"]
             wording = payload.get('review_invitation_wording_version', 'review-invitation-v1')
-            if wording not in ('review-invitation-v1', 'review-invitation-v2'):
+            if wording not in ('review-invitation-v1', 'review-invitation-v2', REVIEW_INVITATION_WORDING_VERSION):
                 raise TypeError
             opt_in = payload.get("review_invitation_opt_in", False)
             if not isinstance(opt_in, bool):
@@ -115,8 +118,8 @@ class CheckoutOrder:
     subtotal_minor: int
     review_invitation_opt_in: bool = False
     review_invitation_policy_enabled: bool = False
-    review_invitation_request_limit: int = 1
-    review_invitation_wording_version: str = "review-invitation-v1"
+    review_invitation_request_limit: int | None = None
+    review_invitation_wording_version: str = REVIEW_INVITATION_WORDING_VERSION
     review_invitation_default_selected: bool = False
 
 

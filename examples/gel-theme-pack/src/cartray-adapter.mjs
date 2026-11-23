@@ -66,7 +66,7 @@ export async function createAdapter(config) {
         throw new Error('A previous checkout may have started. Contact the store before starting another.');
       if(!attempt){
         attempt={requestId:`checkout_${crypto.randomUUID().replaceAll('-','')}`,catalogueVersion:catalogue.version,
-          revision,items:snapshot,permission,wordingVersion:source.reviewInvitationWordingVersion || 'review-invitation-v1'};
+          revision,items:snapshot,permission,wordingVersion:source.reviewInvitationWordingVersion || 'review-invitation-v3'};
         try {storage?.setItem(attemptKey,JSON.stringify(attempt));} catch { /* retain in memory */ }
       }
       this.attemptPending=true;this.checkoutLocked=true;

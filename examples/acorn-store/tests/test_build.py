@@ -125,7 +125,7 @@ def test_review_invitation_choice_is_optional_and_enabled_only_for_test_checkout
     assert '"reviewInvitationDefaultChecked": true' in (out / "storefront-config.js").read_text()
     html = (out / "index.html").read_text()
     assert 'id="review-invitation-opt-in" type="checkbox"' in html
-    assert "Email me one request to review my purchase." in html
+    assert "I'm happy to receive invitations to review products I purchase." in html
     assert "review-consent" not in html and "verification code" not in html
     config["review_invitations_default_checked"] = False
     unchecked = tmp_path / "unchecked"
