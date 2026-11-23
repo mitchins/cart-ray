@@ -798,7 +798,7 @@ def test_runtime_reviews_identity_is_authenticated_and_does_not_call_stripe(monk
     )
 
 
-def test_webhook_subscriber_wakeup_does_not_change_checkout_response(monkeypatch):
+def test_retired_subscriber_configuration_does_not_start_background_work(monkeypatch):
     from types import SimpleNamespace
 
     captured = []
@@ -817,8 +817,7 @@ def test_webhook_subscriber_wakeup_does_not_change_checkout_response(monkeypatch
     entry.env = SimpleNamespace(CARTRAY_REVIEWS_PRODUCER="test", CARTRAY_ENVIRONMENT="test")
     entry.ctx = Context()
     result = asyncio.run(entry.fetch(SimpleNamespace(method="POST", url="https://store.test/stripe/webhook")))
-    assert result is response and len(captured) == 1
-    asyncio.run(captured.pop())
+    assert result is response and len(captured) == 0
     entry.ctx = None
     assert asyncio.run(entry.fetch(SimpleNamespace(method="POST", url="https://store.test/stripe/webhook"))) is response
 

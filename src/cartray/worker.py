@@ -739,19 +739,6 @@ except ImportError:
 class Default(WorkerEntrypoint):
     async def fetch(self, request):
         response = await app(request, self.env)
-        # A committed confirmation can wake the independent subscriber, but a
-        # missing or broken subscriber must not change the webhook response.
-        try:
-            if (
-                getattr(self.env, "CARTRAY_REVIEWS_PRODUCER", "disabled") == "test"
-                and getattr(self.env, "CARTRAY_ENVIRONMENT", "") == "test"
-                and request.method == "POST"
-                and urlparse(str(request.url)).path == "/stripe/webhook"
-                and response.status == 200
-            ):
-                self.ctx.waitUntil(_wake_reviews_subscriber(self.env))
-        except Exception:
-            pass
         try:
             if (
                 getattr(self.env, "CARTRAY_POST_PURCHASE_MODE", "disabled") == "test"
@@ -770,11 +757,6 @@ class Default(WorkerEntrypoint):
             if str(getattr(controller, "cron", "")) != "* * * * *":
                 await scheduled_reconciliation_from_environment(self.env)
         finally:
-            try:
-                if getattr(self.env, "CARTRAY_REVIEWS_PRODUCER", "disabled") == "test":
-                    ctx.waitUntil(_wake_reviews_subscriber(self.env))
-            except Exception:
-                pass
             try:
                 if (
                     getattr(self.env, "CARTRAY_POST_PURCHASE_MODE", "disabled") == "test"
@@ -889,7 +871,7 @@ async def _drain_order_notifications(env, *, priority="receipt"):
             await review_stage(_drain_review_followups)
         dispatcher = OrderReceiptDispatcher(env.DB, merchant, "test", {"receipt": receipt_handler})
         await asyncio.wait_for(
-            drain_confirmed_d1(dispatcher, (), limit=10, max_new_claims=2, deadline=deadline),
+            drain_confirmed_d1(dispatcher, limit=10, max_new_claims=2, deadline=deadline),
             timeout=22,
         )
         if reviews and priority != 'followup':
@@ -1278,18 +1260,3 @@ async def _drain_review_recovery(env, service, token, *, deadline):
                     reference if outcome == "accepted" and re.fullmatch(r"[A-Za-z0-9_-]{1,128}", reference) else None
                 ),
             )
-
-
-async def _wake_reviews_subscriber(env):
-    """Best-effort wakeup; durable source cursor and queue own retry semantics."""
-    if getattr(env, "CARTRAY_REVIEWS_PRODUCER", "disabled") != "test":
-        return
-    try:
-        token = _required_env(env, "CARTRAY_REVIEWS_TRIGGER_TOKEN")
-        if _test_environment(env) != "test" or len(token) < 32:
-            return
-        request = _internal_post("https://reviews-producer.internal/", token)
-        await env.REVIEWS_SOURCE_TRIGGER.fetch(request)
-    except Exception:
-        # Never fail an already committed settlement because a subscriber is down.
-        return

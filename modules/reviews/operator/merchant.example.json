@@ -1,0 +1,32 @@
+{
+  "namespace": "merchant-reference-test",
+  "account_id": "00000000000000000000000000000000",
+  "stripe_account_id": "acct_REPLACE",
+  "preflight_lock": "/absolute/private/stripe-test-lock.json",
+  "merchant_inputs": "/absolute/private/merchant-package",
+  "store_key": "merchant-reference",
+  "merchant_name": "Reference Merchant",
+  "merchant_contact": "Contact the reference merchant",
+  "reviews_enabled": true,
+  "subject_map": {
+    "REFERENCE-ONE": "reference-one"
+  },
+  "subject_details": [
+    [
+      "reference-one",
+      "/products/reference-one/",
+      "Reference product"
+    ]
+  ],
+  "post_purchase_config": "/absolute/private/confirmation.json",
+  "post_purchase_email_provider": "smtp2go",
+  "review_requests": {
+    "timing": "receipt",
+    "selection": "priority",
+    "priorities": [
+      "REFERENCE-ONE"
+    ],
+    "delay_days": 7
+  },
+  "theme": "minimal"
+}

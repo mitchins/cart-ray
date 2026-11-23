@@ -237,9 +237,6 @@ def test_merchant_reviews_require_correct_subject_pages_and_native_clients(tmp_p
         installation.config['source_api_path'] = '/api'
         installation.config['post_purchase_config'] = 'fixture-config'
         monkeypatch.setattr(installation, 'post_purchase_actions', lambda: {'schema':2})
-    else:
-        installation.state["resources"]["queue:events"] = {"id": "events"}
-        installation.state["resources"]["queue:dlq"] = {"id": "dlq"}
     installation.state["workers_subdomain"] = "workers-test"
     installation.state["pages_subdomain"] = "shop.example.test"
     installation.state["urls"] = {"source": "https://checkout.example.test", "storefront": "https://shop.example.test"}

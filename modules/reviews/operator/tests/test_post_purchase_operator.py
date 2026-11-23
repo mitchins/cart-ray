@@ -1,10 +1,8 @@
 """EP operator coverage with a provider fake, real fence SQL, and the existing email handler."""
 
-import hashlib
 import importlib.util
 import json
 import sqlite3
-import stat
 import subprocess
 from copy import deepcopy
 from pathlib import Path
@@ -40,7 +38,7 @@ def handoff(tmp_path):
     atomic_json(lock, {"stripe_mode": "test", "catalogue_version": "sha256:" + "b" * 64,
                        "prices": [{"stripe_lookup_key": "ep-171-test", "amount_minor": 100}]})
     actions = tmp_path / "private-workflows.json"
-    atomic_json(actions, {"schema": 1, "actions": [ACTION]})
+    atomic_json(actions, {"schema": 2, "sender": CREDS["test_sender"], "recipient": CREDS["approved_test_email"]})
     return {
         **EXTERNAL, "namespace": "ep-uat-test", "account_id": "a" * 32, "stripe_account_id": ACCOUNT,
         "preflight_lock": str(lock), "reviews_enabled": False, "merchant_name": "Merchant",
@@ -49,17 +47,6 @@ def handoff(tmp_path):
     }
 
 
-@pytest.mark.parametrize("overrides", [
-    {"stripe_account_id": "acct_NotApproved"}, {"store_key": "acorn-store"},
-    {"source_mode": "public", "source_api_path": None},
-])
-def test_plan_rejects_wrong_installation_lane(tmp_path, overrides):
-    options = handoff(tmp_path)
-    options.update(overrides)
-    if options["source_api_path"] is None:
-        del options["source_api_path"]
-    with pytest.raises(ValueError, match="legacy workflow|private source"):
-        Installation.plan(tmp_path / "installation", options)
 
 
 def test_other_merchant_can_plan_test_order_confirmation(tmp_path):
@@ -84,84 +71,8 @@ def test_ep_test_lane_can_enable_reviews_independently(tmp_path):
     assert config["source_mode"] == "private"
 
 
-def test_combined_topology_preserves_independent_delivery_controls(tmp_path):
-    options = handoff(tmp_path)
-    options["reviews_enabled"] = True
-    install = Installation.plan(tmp_path / "installation", options)
-    install.state["workers_subdomain"] = "example"
-    install.state["resources"]["database:commerce"] = {"id": "db"}
-    for role in ("events", "schedule", "due", "dlq"):
-        install.state["resources"]["queue:" + role] = {"id": role}
-    nodes, _ = graph(install, sending=False, post_purchase_modes=OFF)
-    assert set(nodes) == set(install.roles)
-    assert nodes["source"]["services"]["REVIEWS_SOURCE_TRIGGER"] == "producer"
-    assert nodes["source"]["services"]["POST_PURCHASE_HANDLER"] == "post-purchase"
-    assert nodes["source"]["vars"]["CARTRAY_POST_PURCHASE_MODE"] == "disabled"
-    assert nodes["sender"]["vars"]["INITIAL_SEND_MODE"] == "disabled"
-    nodes, _ = graph(install, sending=True, post_purchase_modes=OFF)
-    assert nodes["source"]["vars"]["CARTRAY_POST_PURCHASE_MODE"] == "disabled"
-    assert nodes["sender"]["vars"]["INITIAL_SEND_MODE"] == "test"
-    nodes, _ = graph(install, sending=False, post_purchase_modes=ON)
-    assert nodes["source"]["vars"]["CARTRAY_POST_PURCHASE_MODE"] == "test"
-    assert nodes["sender"]["vars"]["INITIAL_SEND_MODE"] == "disabled"
 
 
-def test_post_purchase_transition_reverifies_before_resuming_reviews(tmp_path, monkeypatch):
-    from types import SimpleNamespace
-
-    from post_purchase_operator import PostPurchaseOperator
-
-    calls = []
-    release = tmp_path / "releases" / "fixture"
-    release.mkdir(parents=True)
-    (release / "build.json").write_text('{"commit":"fixture"}')
-    monkeypatch.setattr("post_purchase_operator.graph", lambda *args, **kwargs: ({"evidence": {}}, {}))
-    live = {"id": "old-evidence"}
-
-    def publish(name, version):
-        calls.append(("publish", name, version))
-        live["id"] = version
-
-    subject = SimpleNamespace(
-        state={"post_purchase_transition": {"reviews_phase": "active"}, "post_purchase_watermark": 42,
-               "phase": "post-purchase-transition"},
-        config={"reviews_enabled": True},
-        directory=tmp_path,
-        name=lambda role: role,
-        upload_worker=lambda *args: {"id": "new-evidence"},
-        api=SimpleNamespace(version=lambda name: dict(live), request=lambda path: {"id": "new-evidence"},
-                            publish=publish),
-        worker_binding_errors=lambda role, node, actual, version: [] if actual["id"] == version else ["drift"],
-        save=lambda: calls.append("save"),
-        verifier=lambda mode: calls.append("verify:" + mode) or {"revision": 1},
-        recover_paused_hints=lambda: calls.append("recover"),
-        configure_queues=lambda pause_processing: calls.append(("queue", pause_processing)),
-    )
-    deployment = {"versions": {"evidence": "old-evidence"}, "commit": "fixture"}
-    result = PostPurchaseOperator.finish_post_purchase_transition(subject, deployment, "active", ON)
-    assert deployment["versions"]["evidence"] == "new-evidence"
-    assert calls.index(("publish", "evidence", "new-evidence")) < calls.index("verify:record")
-    assert calls.index("verify:record") < calls.index(("queue", False))
-    assert calls.index("recover") < calls.index(("queue", False))
-    assert subject.state["phase"] == "active"
-    assert subject.state["post_purchase_watermark"] == 42
-    assert result["modes"] == ON
-
-    calls.clear()
-    live["id"] = "old-evidence"
-    deployment["versions"]["evidence"] = "old-evidence"
-    subject.state["post_purchase_transition"] = {}
-    PostPurchaseOperator.finish_post_purchase_transition(subject, deployment, "active", ON)
-    assert deployment["versions"]["evidence"] == "new-evidence"
-    assert "verify:record" not in calls
-    assert not any(isinstance(call, tuple) and call[0] == "queue" for call in calls)
-
-    calls.clear()
-    live["id"] = "unrecorded"
-    subject.state["post_purchase_transition"] = {"reviews_phase": "active", "evidence_version": "new-evidence"}
-    with pytest.raises(ValueError, match="unrecorded deployed version"):
-        PostPurchaseOperator.finish_post_purchase_transition(subject, deployment, "active", ON)
-    assert not any(isinstance(call, tuple) and call[0] == "queue" for call in calls)
 
 
 @pytest.mark.parametrize("change", [
@@ -177,38 +88,8 @@ def test_actions_cannot_exceed_approved_scope(change):
                                {"EP-UAT-131", "EP-UAT-171"})
 
 
-def test_action_snapshot_protection_and_fingerprint(tmp_path):
-    options = handoff(tmp_path)
-    target, input_path = tmp_path / "installation", Path(options["post_purchase_config"])
-    input_path.chmod(0o644)
-    with pytest.raises(ValueError, match="private regular file"):
-        Installation.plan(target, options)
-    input_path.chmod(0o600)
-    symlink = tmp_path / "linked.json"
-    symlink.symlink_to(input_path)
-    with pytest.raises(OSError):
-        Installation.plan(target, {**options, "post_purchase_config": str(symlink)})
-    install = Installation.plan(target, options)
-    snapshot = Path(install.config["post_purchase_config"])
-    assert stat.S_IMODE(snapshot.stat().st_mode) == 0o600
-    assert install.config["post_purchase_config_sha256"] == digest(snapshot.read_bytes())
-    assert ACTION["recipient"] not in install.state_path.read_text()
-    assert LINK not in install.state_path.read_text()
-    input_path.unlink()
-    assert Installation(target).post_purchase_actions() == [ACTION]
-    snapshot.write_bytes(snapshot.read_bytes() + b"\n")
-    with pytest.raises(ValueError, match="input changed"):
-        install.post_purchase_actions()
 
 
-def test_plan_requires_a_paid_active_offer_in_the_test_lock(tmp_path):
-    options = handoff(tmp_path)
-    path = Path(options["preflight_lock"])
-    lock = json.loads(path.read_text())
-    lock["prices"][0]["amount_minor"] = 0
-    atomic_json(path, lock)
-    with pytest.raises(ValueError, match="authorised commerce subset"):
-        Installation.plan(tmp_path / "installation", options)
 
 
 class Backend:
@@ -318,28 +199,6 @@ def deployed(tmp_path, monkeypatch, request):
     db.close()
 
 
-@pytest.fixture
-def legacy_deployed(deployed):
-    """Retained queue-era inventory; new stores must not create this topology."""
-    from operate import SECRET_NAMES
-    install, api, db = deployed
-    vault = install.vault()
-    for key in SECRET_NAMES:
-        if key not in vault:
-            vault[key] = ('historical-fixture-' + key).ljust(64, 'x')
-            install.state['secret_fingerprints'][key] = hashlib.sha256(vault[key].encode()).hexdigest()
-    atomic_json(install.vault_path, vault)
-    for role in ('events','schedule','due','dlq'):
-        install.state['resources']['queue:'+role] = {'id':role, 'name':install.name(role)}
-    install.save()
-    original_request = api.request
-    def request(path, *args):
-        if path.startswith('queues/'):
-            role = path.split('/')[1]
-            return {'queue_name':install.name(role), 'settings':{'delivery_paused':True}}
-        return original_request(path, *args)
-    api.request = request
-    return install, api, db
 
 
 def initialise(install, db):
@@ -354,63 +213,6 @@ def initialise(install, db):
             db.execute(query["sql"], query["params"]).fetchall()
 
 
-def test_combined_delivery_transition_keeps_reviews_active_and_fence(legacy_deployed, monkeypatch):
-    install, api, db = legacy_deployed
-    initialise(install, db)
-    install.config["reviews_enabled"] = True
-    install.state.update(phase="active", activation_authorized=True, activation_watermark=17,
-                         automation_paused=False, queue_recovery_required=False)
-    for role in ("events", "schedule", "due", "dlq"):
-        install.state["resources"]["queue:" + role] = {"id": role, "name": install.name(role)}
-    build_path = install.directory / "releases" / install.state["build"] / "build.json"
-    build = json.loads(build_path.read_text())
-    build["merchant_config_sha256"] = install.merchant_config_hash()
-    for role in install.roles:
-        if role not in build["artifacts"]:
-            filename = "worker.py" if role == "reviews" else role + ".mjs"
-            path = (build_path.parent / role / "bundle" / filename if role == "reviews"
-                    else build_path.parent / filename)
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text("# synthetic")
-            build["artifacts"][role] = {filename: digest(path.read_bytes())}
-    atomic_json(build_path, build)
-    nodes, _ = graph(install, sending=True, post_purchase_modes=OFF)
-    versions = {}
-    for role in install.roles:
-        name = install.name(role)
-        api.visibility[name] = OFF_VISIBILITY
-        metadata = {"bindings": nodes[role]["bindings"] + secret_bindings(install, role)}
-        versions[role] = api.upload(name, [("fixture", b"fixture", "text/plain")], metadata)["id"]
-        api.active[name] = versions[role]
-    install.state["deployment"] = {"complete": True, "commit": install.state["build"], "versions": versions,
-                                   "sending": True, "post_purchase_disabled_versions": {
-                                       role: versions[role] for role in ("source", "post-purchase")}}
-    install.state["post_purchase_modes"] = dict(OFF)
-    install.state["releases"] = []
-    events = []
-    monkeypatch.setattr(install, "assert_resources", lambda: None)
-    monkeypatch.setattr(install, "check_schema", lambda: None)
-    monkeypatch.setattr(install, "verify_merchant_inputs", lambda: None)
-    monkeypatch.setattr(install, "provider_ready", lambda: None)
-    monkeypatch.setattr(install, "doctor", lambda: {"healthy": True})
-    monkeypatch.setattr(install, "configure_queues",
-                        lambda pause_processing=False: events.append(("queue", pause_processing)))
-    monkeypatch.setattr(install, "recover_paused_hints", lambda: events.append(("recover",)))
-    monkeypatch.setattr(install, "verifier", lambda mode: events.append(("verify", mode)) or {"revision": 9})
-    sender = versions["sender"]
-    old_evidence = versions["evidence"]
-    assert install.post_purchase_activate(True)["modes"] == ON
-    assert install.state["activation_watermark"] == 17
-    assert install.state["deployment"]["versions"]["sender"] == sender
-    assert install.state["deployment"]["versions"]["evidence"] != old_evidence
-    assert events.index(("verify", "record")) < events.index(("queue", False))
-    assert install.post_purchase_disable()["modes"] == OFF
-    assert install.state["activation_watermark"] == 17
-    assert install.state["deployment"]["versions"]["sender"] == sender
-    assert install.state["releases"][-1]["post_purchase_modes"] == OFF
-    before = list(api.events), list(events), list(install.state["releases"])
-    assert install.post_purchase_disable()["post_purchase"] == "already-disabled"
-    assert (api.events, events, install.state["releases"]) == before
 
 
 def test_recorded_legacy_source_can_upgrade_but_new_source_requires_rate_bindings(deployed):
@@ -433,511 +235,46 @@ CF_CREDS = {**CREDS, "cloudflare_email_api_token": "v1.0-account-email-fixture-"
             "test_sender": "enquiry@effectivepolicy.com.au"}
 
 
-def email_migration_install(install, api, credentials=None):
-    handoff = deepcopy(CF_CREDS if credentials is None else credentials)
-    handoff.pop("smtp2go_api_key", None)
-    return Installation(install.directory, handoff, api, credential_provider="cloudflare")
 
 
-def test_explicit_off_provider_sender_migration_then_fresh_off_deploy(deployed):
-    original, api, db = deployed
-    original.post_purchase_fence()
-    initialise(original, db)
-    before_db = list(db.iterdump())
-    before_vault = original.vault()
-    previous_actions = original.post_purchase_actions()
-    previous_hash = original.config["post_purchase_config_sha256"]
-    before_events = list(api.events)
-    install = email_migration_install(original, api)
-    with pytest.raises(ValueError, match="allow-sender-change"):
-        install.post_purchase_reconfigure_provider("cloudflare")
-    assert install.post_purchase_reconfigure_provider("cloudflare", True)["next"] == (
-        "build a different reviewed commit and deploy OFF")
-    assert list(db.iterdump()) == before_db
-    assert api.events == before_events  # Reads only: no upload, publish, send or D1 write.
-    assert "build" not in install.state
-    assert install.state["post_purchase_modes"] == OFF
-    assert install.config["post_purchase_config_sha256"] != previous_hash
-    assert install.post_purchase_actions() == {**previous_actions, "sender": CF_CREDS["test_sender"]}
-    for key, value in before_vault.items():
-        assert install.vault()[key] == (CF_CREDS["test_sender"] if key == "post_purchase_test_sender" else value)
-    assert CF_CREDS["cloudflare_email_api_token"] not in install.state_path.read_text()
-    assert CF_CREDS["test_sender"] not in install.state_path.read_text()
-    secrets = {b["name"]: b["text"] for b in secret_bindings(install, "post-purchase")}
-    assert secrets["CLOUDFLARE_EMAIL_API_TOKEN"] == CF_CREDS["cloudflare_email_api_token"]
-    assert "SMTP2GO_API_KEY" not in secrets
-    assert graph(install)[0]["post-purchase"]["vars"]["EMAIL_PROVIDER"] == "cloudflare"
-    install.check_current_post_purchase_off()  # Retained old provider/action digest is still verifiable.
-    with pytest.raises(ValueError, match="fresh OFF"):
-        install.post_purchase_activate(True)
-    assert install.post_purchase_reconfigure_provider("cloudflare", True)["provider"] == "cloudflare"
-    capture_build(install, "cloudflare-new-clean-commit")
-    install.deploy()
-    assert "post_purchase_provider_migration" not in install.state
-    assert install.state["post_purchase_provider_migrations"][-1]["status"] == "complete"
-    assert install.doctor()["healthy"]
-    assert install.post_purchase_activate(True)["modes"] == ON
-    install.post_purchase_disable()
-    with pytest.raises(ValueError, match="retained release differs"):
-        install.rollback(-2)  # Cannot restore a mismatched provider/sender/digest contract.
 
 
-def test_same_provider_credential_replacement_retains_uncertain_claim(deployed):
-    original, api, db = deployed
-    initialise(original, db)
-    install = email_migration_install(original, api)
-    install.post_purchase_reconfigure_provider("cloudflare", True)
-    capture_build(install, "cloudflare-old-commit")
-    install.deploy()
-    with db:
-        db.execute("INSERT INTO orders VALUES ('purchase')")
-        db.execute("INSERT INTO outbox VALUES (8,'purchase','OrderConfirmed')")
-        db.execute("INSERT INTO post_purchase_executions VALUES (?,?,?,?,?,'uncertain',NULL,0,0)",
-                   (MERCHANT, "test", "purchase", "workflow", "digest"))
-    before_db = list(db.iterdump())
-    before_actions = Path(install.config["post_purchase_config"]).read_bytes()
-    before_events = list(api.events)
-    updated = {**CF_CREDS, "cloudflare_email_api_token": "replacement-fixture-token-" * 3}
-    replacement = email_migration_install(original, api, updated)
-    with pytest.raises(ValueError, match="allow-credential-change"):
-        replacement.post_purchase_reconfigure_provider("cloudflare")
-    result = replacement.post_purchase_reconfigure_provider("cloudflare", allow_credential_change=True)
-    assert result["next"] == "build a different reviewed commit and deploy OFF"
-    assert list(db.iterdump()) == before_db
-    assert Path(replacement.config["post_purchase_config"]).read_bytes() == before_actions
-    assert api.events == before_events
-    assert replacement.state["post_purchase_modes"] == OFF
-    assert replacement.vault()["post_purchase_cloudflare_email_api_token"] == updated["cloudflare_email_api_token"]
-    assert updated["cloudflare_email_api_token"] not in replacement.state_path.read_text()
-    capture_build(replacement, "cloudflare-replacement-reviewed-commit")
-    replacement.deploy()
-    assert list(db.iterdump()) == before_db
-    assert replacement.state["post_purchase_modes"] == OFF
-    assert replacement.doctor()["healthy"]
 
 
-def test_credential_replacement_requires_explicit_authorization_on_resume(deployed, monkeypatch):
-    import operate
-
-    original, api, _ = deployed
-    install = email_migration_install(original, api)
-    install.post_purchase_reconfigure_provider("cloudflare", True)
-    capture_build(install, "cloudflare-old-commit")
-    install.deploy()
-    updated = {**CF_CREDS, "cloudflare_email_api_token": "replacement-fixture-token-" * 3}
-    replacement = email_migration_install(original, api, updated)
-    write = operate.atomic_json
-
-    def interrupt(path, value):
-        if path == replacement.vault_path:
-            write(path, value)
-            raise OSError("interrupted after vault write")
-        write(path, value)
-
-    monkeypatch.setattr(operate, "atomic_json", interrupt)
-    with pytest.raises(OSError, match="interrupted"):
-        replacement.post_purchase_reconfigure_provider("cloudflare", allow_credential_change=True)
-    monkeypatch.setattr(operate, "atomic_json", write)
-    resumed = email_migration_install(original, api, updated)
-    with pytest.raises(ValueError, match="allow-credential-change"):
-        resumed.post_purchase_reconfigure_provider("cloudflare")
-    result = resumed.post_purchase_reconfigure_provider("cloudflare", allow_credential_change=True)
-    assert result["provider"] == "cloudflare"
 
 
-def test_staging_migration_blocks_build_deploy_upgrade_and_reviews_activation(deployed):
-    install, api, db = deployed
-    install.state["post_purchase_provider_migration"] = {"status": "staging"}
-    install.config["reviews_enabled"] = True
-    before_db, before_events = list(db.iterdump()), list(api.events)
-    for action in (install.build, install.deploy, install.upgrade, lambda: install.rollback(0),
-                   lambda: install.activate(True)):
-        with pytest.raises(ValueError, match="credential reconfiguration"):
-            action()
-    assert list(db.iterdump()) == before_db
-    assert api.events == before_events
 
 
-def test_reviews_activation_rejects_undeployed_selected_build(deployed):
-    install, api, db = deployed
-    install.config["reviews_enabled"] = True
-    install.state["build"] = "not-yet-deployed"
-    before_db, before_events = list(db.iterdump()), list(api.events)
-    with pytest.raises(ValueError, match="deploy the selected build"):
-        install.activate(True)
-    assert list(db.iterdump()) == before_db
-    assert api.events == before_events
 
 
-def test_upgrade_does_not_reactivate_reviews_after_credential_replacement(deployed, monkeypatch):
-    install, api, db = deployed
-    install.config["reviews_enabled"] = True
-    install.state.update(activation_authorized=True, automation_paused=False,
-                         reviews_explicit_activation_required=True)
-    monkeypatch.setattr("operate.subprocess.check_output", lambda *a, **k: "new-reviewed-commit\n")
-    monkeypatch.setattr(install, "migrate", lambda: None)
-    monkeypatch.setattr(install, "build", lambda: None)
-    monkeypatch.setattr(install, "deploy", lambda: None)
-    monkeypatch.setattr(install, "verify", lambda: {"phase": "verified"})
-    monkeypatch.setattr(install, "verifier", lambda mode: {"revision": 1})
-    monkeypatch.setattr(install, "activate", lambda *args: pytest.fail("unexpected Reviews activation"))
-    before_db, before_events = list(db.iterdump()), list(api.events)
-    for _ in range(2):
-        assert install.upgrade()["phase"] == "paused"
-        assert install.state["reviews_explicit_activation_required"] is True
-    assert list(db.iterdump()) == before_db
-    assert api.events == before_events
 
 
-def test_shared_reviews_smtp_credential_cannot_change_via_post_purchase(deployed):
-    original, api, _ = deployed
-    changed = {**CREDS, "smtp2go_api_key": "api-replacement-fixture"}
-    install = Installation(original.directory, changed, api, credential_provider="smtp2go")
-    install.config["reviews_enabled"] = True
-    with pytest.raises(ValueError, match="Reviews SMTP handoff is unpinned"):
-        install.post_purchase_reconfigure_provider("smtp2go", allow_credential_change=True)
-    assert "post_purchase_provider_migration" not in install.state
 
 
-def test_active_reviews_sender_blocks_credential_replacement(deployed, monkeypatch):
-    original, api, db = deployed
-    install = email_migration_install(original, api)
-    install.post_purchase_reconfigure_provider("cloudflare", True)
-    capture_build(install, "cloudflare-old-commit")
-    install.deploy()
-    install.config["reviews_enabled"] = True
-    install.state["deployment"]["sending"] = True
-    install.credentials = {**CF_CREDS, "cloudflare_email_api_token": "replacement-fixture-token-" * 3}
-    monkeypatch.setattr(install, "check_reviews_handoff", lambda **kwargs: None)
-    before_db, before_events = list(db.iterdump()), list(api.events)
-    with pytest.raises(ValueError, match="disable Reviews sending"):
-        install.post_purchase_reconfigure_provider("cloudflare", allow_credential_change=True)
-    assert list(db.iterdump()) == before_db and api.events == before_events
 
 
-def test_unpinned_cloudflare_reviews_activation_rejects_changed_smtp(legacy_deployed):
-    original, api, db = legacy_deployed
-    install = email_migration_install(original, api)
-    install.post_purchase_reconfigure_provider("cloudflare", True)
-    capture_build(install, "cloudflare-old-commit")
-    install.deploy()
-    install.config["reviews_enabled"] = True
-    install.credentials = {**CF_CREDS, "smtp2go_api_key": "api-different"}
-    before_db, before_events = list(db.iterdump()), list(api.events)
-    with pytest.raises(ValueError, match="attest the original Reviews SMTP handoff"):
-        install.activate(True)
-    assert list(db.iterdump()) == before_db and api.events == before_events
 
 
-def test_cloudflare_credential_replacement_cannot_redeploy_unpinned_reviews_sender(deployed):
-    original, api, _ = deployed
-    install = email_migration_install(original, api)
-    install.post_purchase_reconfigure_provider("cloudflare", True)
-    capture_build(install, "cloudflare-old-commit")
-    install.deploy()
-    updated = {**CF_CREDS, "cloudflare_email_api_token": "replacement-fixture-token-" * 3}
-    replacement = email_migration_install(original, api, updated)
-    replacement.config["reviews_enabled"] = True
-    with pytest.raises(ValueError, match="Reviews SMTP handoff is unpinned"):
-        replacement.post_purchase_reconfigure_provider("cloudflare", allow_credential_change=True)
-    assert "post_purchase_provider_migration" not in replacement.state
 
 
-def test_attested_reviews_handoff_guards_operations_without_mutating_claims(legacy_deployed, monkeypatch, tmp_path):
-    install, api, db = legacy_deployed
-    initialise(install, db)
-    install.config["reviews_enabled"] = True
-    sender = "0e63c9b2-f464-4daa-bcdc-59d32f85738b"
-    for role in ("events", "schedule", "due", "dlq"):
-        install.state["resources"]["queue:" + role] = {"id": role, "name": role}
-    deployment = install.state["deployment"]
-    deployment["versions"]["sender"] = sender
-    deployment["sending"] = False
-    install.state["post_purchase_modes"] = dict(OFF)
-    install.state["releases"] = [{"commit": "first", "versions": {"sender": sender}}]
-    nodes, _ = graph(install, deployment["versions"], sending=False, post_purchase_modes=OFF)
-    metadata = {"id": sender, "resources": {"bindings": nodes["sender"]["bindings"]
-                + secret_bindings(install, "sender")}}
-    api.active[install.name("sender")] = sender
-    api.versions[sender] = metadata
-    api.visibility[install.name("sender")] = {"enabled": nodes["sender"]["public"], "previews_enabled": False}
-    original_request = api.request
-    monkeypatch.setattr(api, "request", lambda path, *args: (
-        {"settings": {"delivery_paused": True}} if path.startswith("queues/") else original_request(path, *args)))
-    monkeypatch.setattr(install, "post_purchase_runtime", lambda: (
-        deployment, deployment["post_purchase_disabled_versions"], {}))
-    monkeypatch.setattr(install, "check_current_post_purchase_off", lambda: None)
-    monkeypatch.setattr(install, "artifact_modules", lambda *args: [])
-    original = tmp_path / "original.json"
-    atomic_json(original, CREDS)
-    before_db = list(db.iterdump())
-    with pytest.raises(ValueError, match="explicit attestation"):
-        install.attest_reviews_handoff(original, sender, False)
-    assert install.attest_reviews_handoff(original, sender, True)["reviews_handoff"] == "attested"
-    assert install.attest_reviews_handoff(original, sender, True)["reviews_handoff"] == "already-attested"
-    assert list(db.iterdump()) == before_db
-    pin = install.state["reviews_handoff_attestation"]
-    assert CREDS["smtp2go_api_key"] not in json.dumps(pin)
-    install.credentials = {**CREDS, "smtp2go_api_key": "api-different"}
-    events = list(api.events)
-    for operation in (lambda: install.post_purchase_reconfigure_provider("smtp2go", allow_credential_change=True),
-                      install.deploy, install.upgrade, lambda: install.activate(True),
-                      lambda: install.post_purchase_activate(True)):
-        with pytest.raises(ValueError, match="differs from the attested original"):
-            operation()
-    assert api.events == events
-    assert list(db.iterdump()) == before_db
 
 
-def test_pinned_rotation_resume_rejects_changed_reviews_handoff(deployed, monkeypatch):
-    import operate
-
-    original, api, db = deployed
-    initialise(original, db)
-    install = email_migration_install(original, api)
-    install.post_purchase_reconfigure_provider("cloudflare", True)
-    capture_build(install, "cloudflare-old-commit")
-    install.deploy()
-    with db:
-        db.execute("INSERT INTO orders VALUES ('purchase')")
-        db.execute("INSERT INTO outbox VALUES (8,'purchase','OrderConfirmed')")
-        db.execute("INSERT INTO post_purchase_executions VALUES (?,?,?,?,?,'uncertain',NULL,0,0)",
-                   (MERCHANT, "test", "purchase", "workflow", "digest"))
-    before_db = list(db.iterdump())
-    install.config["reviews_enabled"] = True
-    original_handoff = deepcopy(CF_CREDS)
-    install.credentials = original_handoff
-    install.state["reviews_handoff_attestation"] = {
-        "fingerprints": install.reviews_handoff_fingerprints(original_handoff)}
-    install.save()
-    changed = {**original_handoff, "cloudflare_email_api_token": "replacement-fixture-token-" * 3}
-    install.credentials = changed
-    monkeypatch.setattr(install, "post_purchase_runtime", lambda: (
-        install.state["deployment"], install.state["deployment"]["post_purchase_disabled_versions"], {}))
-    monkeypatch.setattr(install, "check_current_post_purchase_off", lambda: None)
-    monkeypatch.setattr(install, "require_reviews_sender_off", lambda: None)
-    write = operate.atomic_json
-
-    def interrupt(path, value):
-        if path == install.vault_path:
-            write(path, value)
-            raise OSError("interrupted after vault write")
-        write(path, value)
-
-    monkeypatch.setattr(operate, "atomic_json", interrupt)
-    with pytest.raises(OSError, match="interrupted"):
-        install.post_purchase_reconfigure_provider("cloudflare", allow_credential_change=True)
-    monkeypatch.setattr(operate, "atomic_json", write)
-    install.credentials = {**changed, "smtp2go_api_key": "api-other-reviews-key"}
-    with pytest.raises(ValueError, match="differs from the attested original"):
-        install.post_purchase_reconfigure_provider("cloudflare", allow_credential_change=True)
-    assert list(db.iterdump()) == before_db
-    install.credentials = changed
-    result = install.post_purchase_reconfigure_provider("cloudflare", allow_credential_change=True)
-    assert result["provider"] == "cloudflare"
-    assert install.state["post_purchase_modes"] == OFF
-    assert list(db.iterdump()) == before_db
 
 
-def test_pinned_combined_rotation_survives_restart_and_off_deploy(legacy_deployed, monkeypatch, tmp_path):
-    original, api, db = legacy_deployed
-    initialise(original, db)
-    install = email_migration_install(original, api)
-    install.post_purchase_reconfigure_provider("cloudflare", True)
-    capture_build(install, "cloudflare-first")
-    install.deploy()
-    with db:
-        db.execute("INSERT INTO orders VALUES ('purchase')")
-        db.execute("INSERT INTO outbox VALUES (8,'purchase','OrderConfirmed')")
-        db.execute("INSERT INTO post_purchase_executions VALUES (?,?,?,?,?,'uncertain',NULL,0,0)",
-                   (MERCHANT, "test", "purchase", "workflow", "digest"))
-    before_db = list(db.iterdump())
-    install.config["reviews_enabled"] = True
-    install.state["config"]["reviews_enabled"] = True
-    install.credentials = deepcopy(CF_CREDS)
-    for role in ("events", "schedule", "due", "dlq"):
-        install.state["resources"]["queue:" + role] = {"id": role, "name": role}
-    for role in ("events", "schedule", "due"):
-        install.state["resources"]["consumer:" + role] = {"id": role, "name": role}
-    for role in install.roles:
-        install.state["resources"]["worker:" + role] = {"id": install.name(role), "name": install.name(role)}
-    build_path = install.directory / "releases" / install.state["build"] / "build.json"
-    build = json.loads(build_path.read_text())
-    build["merchant_config_sha256"] = install.merchant_config_hash()
-    nodes, _ = graph(install, sending=False, post_purchase_modes=OFF)
-    versions = {}
-    for role in install.roles:
-        name = install.name(role)
-        api.visibility[name] = OFF_VISIBILITY
-        versions[role] = api.upload(name, [("fixture", b"fixture", "text/plain")],
-                                    {"bindings": nodes[role]["bindings"] + secret_bindings(install, role)})["id"]
-        api.active[name] = versions[role]
-        build["artifacts"][role] = {"fixture": digest(b"fixture")}
-        (build_path.parent / "fixture").write_bytes(b"fixture")
-    sender_uuid = "0e63c9b2-f464-4daa-bcdc-59d32f85738b"
-    api.versions[sender_uuid] = {**api.versions[versions["sender"]], "id": sender_uuid}
-    api.active[install.name("sender")] = versions["sender"] = sender_uuid
-    api.visibility[install.name("sender")] = {"enabled": True, "previews_enabled": False}
-    atomic_json(build_path, build)
-    install.state["deployment"] = {"complete": True, "commit": install.state["build"], "versions": versions,
-                                   "sending": False, "post_purchase_disabled_versions": {
-                                       role: versions[role] for role in ("source", "post-purchase")}}
-    install.state["post_purchase_modes"] = dict(OFF)
-    install.state["releases"] = [{**build, "versions": dict(versions)}]
-    install.save()
-    original_file = tmp_path / "original.json"
-    atomic_json(original_file, CF_CREDS)
-    monkeypatch.setattr(install, "assert_resources", lambda: None)
-    monkeypatch.setattr(install, "artifact_modules", lambda *args: [("fixture", b"fixture", "text/plain")])
-    request = api.request
-    monkeypatch.setattr(api, "request", lambda path, *args: (
-        {"settings": {"delivery_paused": True}} if path.startswith("queues/") else request(path, *args)))
-    assert install.attest_reviews_handoff(original_file, sender_uuid, True)["reviews_handoff"] == "attested"
-    changed = {**CF_CREDS, "cloudflare_email_api_token": "replacement-fixture-token-" * 3}
-    install.credentials = changed
-    install.post_purchase_reconfigure_provider("cloudflare", allow_credential_change=True)
-    # Start a fresh operator object from the durable journal and handoff.
-    resumed = Installation(install.directory, changed, api, credential_provider="cloudflare")
-    monkeypatch.setattr(resumed, "ensure_pages_subdomain", lambda: None)
-    monkeypatch.setattr(resumed, "check_schema", lambda: None)
-    monkeypatch.setattr(resumed, "verify_merchant_inputs", lambda: None)
-    monkeypatch.setattr(resumed, "pin_suppression", lambda: None)
-    monkeypatch.setattr(resumed, "provider_ready", lambda: None)
-    monkeypatch.setattr(resumed, "configure_queues", lambda **kwargs: None)
-    monkeypatch.setattr(resumed, "render", lambda *args: None)
-    monkeypatch.setattr(resumed, "seed_subjects", lambda: None)
-    monkeypatch.setattr(resumed, "deploy_storefront", lambda *args: None)
-    monkeypatch.setattr(resumed, "artifact_modules", lambda *args: [("fixture", b"fixture", "text/plain")])
-    monkeypatch.setattr(api, "publish", lambda name, version: api.active.__setitem__(name, version))
-    new_build = capture_build(resumed, "replacement-reviewed-commit")
-    new_path = resumed.directory / "releases/replacement-reviewed-commit/build.json"
-    for role in resumed.roles:
-        new_build["artifacts"][role] = {"fixture": digest(b"fixture")}
-    atomic_json(new_path, new_build)
-    # A journal created by an earlier release may not have the new flag yet.
-    resumed.state.pop("reviews_explicit_activation_required", None)
-    resumed.save()
-    resumed.deploy()
-    sender = api.version(resumed.name("sender"))["resources"]["bindings"]
-    handler = api.version(resumed.name("post-purchase"))["resources"]["bindings"]
-    sender_values = {item["name"]: item.get("text") for item in sender}
-    handler_values = {item["name"]: item.get("text") for item in handler}
-    assert sender_values["SMTP2GO_API_KEY"] == CF_CREDS["smtp2go_api_key"]
-    assert sender_values["TEST_SENDER"] == CF_CREDS["test_sender"]
-    assert sender_values["APPROVED_TEST_EMAIL"] == CF_CREDS["approved_test_email"]
-    assert handler_values["CLOUDFLARE_EMAIL_API_TOKEN"] == changed["cloudflare_email_api_token"]
-    assert resumed.state["post_purchase_modes"] == OFF and not resumed.state["deployment"]["sending"]
-    assert resumed.state["reviews_explicit_activation_required"] is True
-    assert list(db.iterdump()) == before_db
 
 
-@pytest.mark.parametrize("execution_state", ["claimed", "accepted", "uncertain"])
-def test_sender_change_rejects_execution_ahead_of_checkpoint(deployed, execution_state):
-    original, api, db = deployed
-    initialise(original, db)
-    with db:
-        db.execute("INSERT INTO orders VALUES ('purchase')")
-        db.execute("INSERT INTO outbox VALUES (8,'purchase','OrderConfirmed')")
-        db.execute("INSERT INTO post_purchase_executions VALUES (?,?,?,?,?,?,NULL,0,0)",
-                   (MERCHANT, "test", "purchase", "workflow", "digest", execution_state))
-    install = email_migration_install(original, api)
-    with pytest.raises(ValueError, match="beyond the post-purchase checkpoint"):
-        install.post_purchase_reconfigure_provider("cloudflare", True)
-    assert "post_purchase_provider_migration" not in install.state
 
 
-def test_shared_reviews_sender_cannot_change_through_delivery_reconfiguration(deployed):
-    original, api, db = deployed
-    initialise(original, db)
-    install = email_migration_install(original, api)
-    install.config["reviews_enabled"] = True
-    with pytest.raises(ValueError, match="Reviews shares the sender"):
-        install.post_purchase_reconfigure_provider("cloudflare", True)
-    assert "post_purchase_provider_migration" not in install.state
 
 
-@pytest.mark.parametrize("boundary", ["vault", "actions", "inventory"])
-def test_email_migration_resumes_after_each_local_write_boundary(deployed, monkeypatch, boundary):
-    import operate
-
-    original, api, db = deployed
-    before_db = list(db.iterdump())
-    install = email_migration_install(original, api)
-    write = operate.atomic_json
-    failed = False
-
-    def interrupted(path, value):
-        nonlocal failed
-        is_target = ((boundary == "vault" and path == install.vault_path)
-                     or (boundary == "actions" and path == Path(install.config["post_purchase_config"]))
-                     or (boundary == "inventory" and path == install.state_path
-                         and value.get("post_purchase_provider_migration", {}).get("status") == "awaiting-off-deploy"))
-        if is_target and not failed:
-            failed = True
-            if boundary != "inventory":
-                write(path, value)
-            raise OSError("simulated local rename interruption")
-        write(path, value)
-
-    monkeypatch.setattr(operate, "atomic_json", interrupted)
-    with pytest.raises(OSError, match="interruption"):
-        install.post_purchase_reconfigure_provider("cloudflare", True)
-    monkeypatch.setattr(operate, "atomic_json", write)
-    resumed = email_migration_install(original, api)
-    assert resumed.state["post_purchase_provider_migration"]["status"] == "staging"
-    assert resumed.post_purchase_reconfigure_provider("cloudflare", True)["provider"] == "cloudflare"
-    assert resumed.vault()["post_purchase_test_sender"] == CF_CREDS["test_sender"]
-    resumed.check_current_post_purchase_off()
-    assert list(db.iterdump()) == before_db
 
 
-@pytest.mark.parametrize("change", [{"approved_test_email": "other@example.test"},
-                                   {"stripe_test_key": "sk_test_different"}])
-def test_email_migration_cannot_change_recipient_or_stripe_identity(deployed, change):
-    original, api, _ = deployed
-    install = email_migration_install(original, api, {**CF_CREDS, **change})
-    with pytest.raises(ValueError, match="cannot change"):
-        install.post_purchase_reconfigure_provider("cloudflare", True)
-    assert "post_purchase_provider_migration" not in install.state
 
 
-def test_email_migration_rejects_active_runtime_and_public_visibility(deployed):
-    original, api, db = deployed
-    original.post_purchase_fence()
-    initialise(original, db)
-    original.post_purchase_activate(True)
-    install = email_migration_install(original, api)
-    with pytest.raises(ValueError, match="post-purchase-disable"):
-        install.post_purchase_reconfigure_provider("cloudflare", True)
-    original.post_purchase_disable()
-    api.visibility[original.name("source")] = {"enabled": True, "previews_enabled": False}
-    install = email_migration_install(original, api)
-    with pytest.raises(ValueError, match="remain private"):
-        install.post_purchase_reconfigure_provider("cloudflare", True)
-    assert "post_purchase_provider_migration" not in install.state
 
 
-def test_email_migration_rejects_modified_snapshot_and_changed_resume_credential(deployed):
-    original, api, _ = deployed
-    install = email_migration_install(original, api)
-    install.post_purchase_reconfigure_provider("cloudflare", True)
-    install.credentials["cloudflare_email_api_token"] = "another-token-value" * 3
-    with pytest.raises(ValueError, match="pinned credential"):
-        install.post_purchase_reconfigure_provider("cloudflare", True)
-    install.credentials = deepcopy(CF_CREDS)
-    bundle = install.directory / "inputs" / install.state["post_purchase_provider_migration"]["bundle"]
-    bundle.write_bytes(bundle.read_bytes() + b"\n")
-    with pytest.raises(ValueError, match="snapshot changed"):
-        install.post_purchase_reconfigure_provider("cloudflare", True)
 
 
-def test_email_migration_cannot_restart_during_replacement_deployment(deployed):
-    original, api, _ = deployed
-    install = email_migration_install(original, api)
-    install.post_purchase_reconfigure_provider("cloudflare", True)
-    install.state["phase"] = "deploying"
-    with pytest.raises(ValueError, match="interrupted OFF deployment"):
-        install.post_purchase_reconfigure_provider("cloudflare", True)
 
 
 def test_disabled_deploy_and_real_handler_digest(deployed):
@@ -1013,13 +350,6 @@ def test_activation_requires_flag_fence_and_unchanged_test_credential(deployed):
     assert "post_purchase_transition" not in install.state
 
 
-def test_legacy_workflow_requires_explicit_order_confirmation_handover(deployed, monkeypatch):
-    install, api, _ = deployed
-    monkeypatch.setattr(install, "post_purchase_actions", lambda: [ACTION])
-    api.events.clear()
-    with pytest.raises(ValueError, match="schema-2"):
-        install.post_purchase_activate(True)
-    assert api.events == []
 
 
 @pytest.mark.parametrize("interrupted_role", ["post-purchase", "source"])
@@ -1197,16 +527,3 @@ def test_pages_merchant_can_use_public_checkout_with_private_mail_handler(tmp_pa
     assert not nodes['post-purchase'].get('public', False)
     assert nodes['source']['services']=={'POST_PURCHASE_HANDLER':'post-purchase'}
     assert not install.queues
-
-
-@pytest.mark.parametrize('deployed', ['public'], indirect=True)
-def test_public_checkout_survives_repeat_pause_and_off_provider_change(deployed):
-    install, api, db = deployed
-    assert api.visibility[install.name('source')]['enabled'] is True
-    assert api.visibility[install.name('post-purchase')]['enabled'] is False
-    assert install.post_purchase_disable()['post_purchase']=='already-disabled'
-    assert install.post_purchase_disable()['post_purchase']=='already-disabled'
-    changed = email_migration_install(install, api)
-    assert changed.post_purchase_reconfigure_provider('cloudflare', True)['provider']=='cloudflare'
-    assert api.visibility[install.name('source')]['enabled'] is True
-    assert api.visibility[install.name('post-purchase')]['enabled'] is False

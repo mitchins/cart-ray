@@ -35,32 +35,7 @@ from cartray.merchant_contract import merchant_path, register_path
 from cartray.order_access import validate_resource_configuration
 
 ROOT = Path(__file__).resolve().parents[3]
-ROLES = ("source", "reviews", "consumer", "producer", "evidence", "scheduler", "sender")
 DATABASES = ("commerce",)
-QUEUES = ("events", "schedule", "due", "dlq")
-SECRET_NAMES = (
-    "source_identity",
-    "trigger",
-    "activation",
-    "event_key",
-    "attestation_key",
-    "attestation_token",
-    "ingress",
-    "consent",
-    "recipient_evidence",
-    "recipient_hash",
-    "recipient_resolve",
-    "automation_evidence",
-    "automation_recipient",
-    "delivery",
-    "invitation",
-    "reviewer",
-    "admin",
-    "settlement",
-    "unsubscribe",
-    "scheduler",
-    "order_access",
-)
 
 
 def digest(data):
@@ -264,6 +239,10 @@ class Installation(PostPurchaseOperator):
         self.vault_path = self.directory / "secrets.json"
         self.state = json.loads(self.state_path.read_text())
         self.config = validate_config(self.state["config"])
+        if (any(k.startswith('queue:') for k in self.state.get('resources', {}))
+                or self.state.get('post_purchase_provider_migration')):
+            raise ValueError('retained legacy delivery installation: use its pinned release; '
+                             'no automatic migration, secret replacement or resend')
         if (
             self.state.get("format") != 2
             or self.state.get("environment") != "test"
@@ -291,7 +270,7 @@ class Installation(PostPurchaseOperator):
             }
             if "fulfilment" in self.config:
                 required.add("fulfilment_resources")
-            mailing = self.config["reviews_enabled"] or self.has_post_purchase
+            mailing = self.has_post_purchase
             provider = credential_provider or self.post_purchase_email_provider
             if self.has_post_purchase:
                 if not self.config["reviews_enabled"] or self.consolidated:
@@ -446,19 +425,13 @@ class Installation(PostPurchaseOperator):
 
     @property
     def secret_names(self):
-        if self.consolidated:
-            return ('invitation', 'reviewer', 'admin', 'settlement', 'delivery', 'unsubscribe',
-                    'recipient_hash', 'order_access')
-        return SECRET_NAMES
+        return ('invitation', 'reviewer', 'admin', 'settlement', 'delivery', 'unsubscribe',
+                'recipient_hash', 'order_access')
 
     @property
     def roles(self):
-        if self.consolidated:
-            return ('source', *(('reviews',) if self.config['reviews_enabled'] else ()),
-                    *(('post-purchase',) if self.has_post_purchase else ()))
-        if self.config["reviews_enabled"]:
-            return (*ROLES, "post-purchase") if self.has_post_purchase else ROLES
-        return ("source", "post-purchase") if self.has_post_purchase else ("source",)
+        return ('source', *(('reviews',) if self.config['reviews_enabled'] else ()),
+                *(('post-purchase',) if self.has_post_purchase else ()))
 
     @staticmethod
     def parse_post_purchase_snapshot(raw, config, merchant_inputs, lock):
@@ -488,7 +461,7 @@ class Installation(PostPurchaseOperator):
 
     @property
     def queues(self):
-        return QUEUES if self.config["reviews_enabled"] and not self.consolidated else ()
+        return ()
 
     def save(self):
         atomic_json(self.state_path, self.state)
@@ -595,32 +568,10 @@ class Installation(PostPurchaseOperator):
         self.provision_workers()
         self.provision_webhook()
         self.provision_pages()
-        self.configure_queues(pause_processing=self.state["phase"] not in ("planned", "provisioned", "active"))
         if self.state["phase"] == "planned":
             self.state["phase"] = "provisioned"
         self.save()
         return self.state["resources"]
-
-    def prepare_queue_transition(self):
-        """Pause consumers and retain recovery state before changing releases."""
-        self.state["queue_recovery_required"] = True
-        self.save()
-        self.configure_queues(pause_processing=True)
-
-    def configure_queues(self, pause_processing=False):
-        # The verifier requires explicit false; the API omits its implicit default.
-        for role in self.queues:
-            resource = self.state["resources"]["queue:" + role]
-            self.api.request(
-                "queues/" + resource["id"],
-                "PATCH",
-                {
-                    "settings": {
-                        "delivery_paused": pause_processing and role != "dlq",
-                        "message_retention_period": 86400,
-                    }
-                },
-            )
 
     def provision_workers(self):
         existing = {item["id"] for item in self.api.listing("workers/scripts")}
@@ -740,7 +691,7 @@ class Installation(PostPurchaseOperator):
 
     def private(self, service, path, body=None, token=None, method="POST"):
         bindings = self.directory / "operator-bindings.toml"
-        names = {"REVIEWS": "reviews", "PRODUCER": "producer", "CONSUMER": "consumer", "EVIDENCE": "evidence"}
+        names = {"REVIEWS": "reviews"}
         lines = [
             f'name = "{self.name("operator-local")}"',
             f'account_id = "{self.config["account_id"]}"',
@@ -804,8 +755,6 @@ class Installation(PostPurchaseOperator):
     def upgrade(self):
         if self.state.get("post_purchase_provider_migration"):
             raise ValueError("finish credential reconfiguration and OFF deployment before upgrade")
-        if self.config["reviews_enabled"]:
-            self.check_reviews_handoff()
         current = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip()
         if self.state["phase"] in ("active", "paused") and self.state["deployment"]["commit"] == current:
             return self.doctor()
@@ -1129,8 +1078,6 @@ class Installation(PostPurchaseOperator):
     def deploy(self):
         if self.state.get("post_purchase_provider_migration", {}).get("status") == "staging":
             raise ValueError("resume credential reconfiguration before deployment")
-        if self.config["reviews_enabled"]:
-            self.check_reviews_handoff()
         self.require_post_purchase_off()
         self.ensure_pages_subdomain()
         self.check_schema()
@@ -1163,16 +1110,13 @@ class Installation(PostPurchaseOperator):
         # Validate every retained artifact before any runtime mutation.
         for role in self.roles:
             self.artifact_modules(role, build)
-        # A disabled/stale sender must never consume and exhaust durable due hints.
-        self.prepare_queue_transition()
-        if "sender" not in progress["versions"]:
-            progress["sending"] = False
+        progress["sending"] = False
         self.state["phase"] = "deploying"
         self.save()
         for role in (
             role
             for role in (
-                "post-purchase", "source", "reviews", "producer", "evidence", "scheduler", "consumer", "sender"
+                "post-purchase", "source", "reviews"
             )
             if role in self.roles
         ):
@@ -1188,33 +1132,6 @@ class Installation(PostPurchaseOperator):
             progress["versions"][role] = result["id"]
             self.save()
             self.set_worker_visibility(role, node.get("public", False))
-        for role in ("consumer", "scheduler", "sender") if self.queues else ():
-            nodes, _ = graph(self, progress["versions"])
-            queue_role = nodes[role]["consumes"]
-            key = "consumer:" + queue_role
-            if key in self.state["resources"]:
-                continue
-            identifier = self.state["resources"]["queue:" + queue_role]["id"]
-            current = self.api.request("queues/" + identifier)
-            consumers = current.get("consumers", [])
-            if consumers and not all(
-                item.get("script_name", item.get("script")) == self.name(role) for item in consumers
-            ):
-                raise ValueError("queue has an unexpected consumer; doctor must be resolved before continuing")
-            if not consumers:
-                self.api.request(
-                    f"queues/{identifier}/consumers",
-                    "POST",
-                    {
-                        "type": "worker",
-                        "script_name": self.name(role),
-                        "settings": {"batch_size": 10, "max_wait_time_ms": 1000, "max_retries": 3},
-                        "dead_letter_queue": self.name("dlq"),
-                    },
-                )
-            self.state["resources"][key] = {"id": identifier, "name": self.name(role)}
-            self.save()
-        self.configure_queues(pause_processing=True)
         self.api.request(f"workers/scripts/{self.name('source')}/schedules", "PUT",
                          [{"cron": "0 * * * *"}] + ([{"cron":"* * * * *"}] if self.consolidated else []))
         self.render(progress["versions"])
@@ -1396,66 +1313,18 @@ class Installation(PostPurchaseOperator):
         )
 
     def verifier(self, mode):
-        if self.consolidated:
-            self.check_schema()
-            nodes, _ = graph(self, self.state['deployment']['versions'])
-            errors = []
-            for role, node in nodes.items():
-                errors.extend(self.worker_binding_errors(role, node, self.api.version(self.name(role)),
-                              self.state['deployment']['versions'].get(role)))
-            if errors:
-                raise ValueError('; '.join(errors))
-            # The immutable commerce installation row and existing checkpoint
-            # remain runtime authority; no second subscriber or watermark.
-            fence = self.post_purchase_fence() if self.has_post_purchase else {'status':'uninitialised'}
-            return {'status':'active' if fence['status']=='retained' else 'uninitialised', 'revision':0}
-        if not self.config["reviews_enabled"]:
-            self.check_schema()
-            return {"status": "active", "revision": 0}
-        self.ensure_pages_subdomain()
-        self.vault()
-        nodes, _ = graph(self, self.state["deployment"]["versions"])
-        env = {
-            **nodes["producer"]["vars"],
-            "CF_VERSION_METADATA": {"id": self.state["deployment"]["versions"]["producer"]},
-            **{item["name"]: item["text"] for item in secret_bindings(self, "producer")},
-            "CF_READ_TOKEN": self.credentials["cloudflare_api_token"],
-            "OPERATOR_EXPECT_EVENT_QUEUE_PAUSED": self.state["phase"] != "active",
-        }
-        config = self.directory / "verifier-bindings.toml"
-        lines = [
-            f'name = "{self.name("operator-local")}"',
-            f'account_id = "{self.config["account_id"]}"',
-            'compatibility_date = "2026-08-31"',
-        ]
-        for name, role in [("SOURCE_API", "source"), ("REVIEWS_API", "reviews")]:
-            lines += ["[[services]]", f'binding = "{name}"', f'service = "{self.name(role)}"', "remote = true"]
-        config.write_text("\n".join(lines) + "\n")
-        rows = self.api.query(
-            self.db("commerce"),
-            "SELECT COALESCE(MAX(revision),0) AS revision "
-            "FROM reviews_verified_deployment WHERE subscriber_id=? AND installation_id=?",
-            [self.config["namespace"], self.config["namespace"]],
-        )
-        value = subprocess.run(
-            ["node", str(Path(__file__).with_name("verify.mjs")), str(config)],
-            cwd=ROOT,
-            input=json.dumps({"mode": mode, "env": env, "expectedRevision": rows[0]["revision"]}),
-            capture_output=True,
-            text=True,
-            check=False,
-            env={
-                **os.environ,
-                "CLOUDFLARE_API_TOKEN": self.credentials["cloudflare_api_token"],
-                "WRANGLER_LOG": "error",
-            },
-        )
-        if value.returncode:
-            log = self.directory / "verification-error.log"
-            log.write_text(value.stdout + value.stderr)
-            log.chmod(0o600)
-            raise CloudError(f"private verification failed; inspect protected {log}, then retry")
-        return json.loads([line for line in value.stdout.splitlines() if line.startswith("{")][-1])
+        self.check_schema()
+        nodes, _ = graph(self, self.state['deployment']['versions'])
+        errors = []
+        for role, node in nodes.items():
+            errors.extend(self.worker_binding_errors(role, node, self.api.version(self.name(role)),
+                          self.state['deployment']['versions'].get(role)))
+        if errors:
+            raise ValueError('; '.join(errors))
+        # The immutable commerce installation row and existing checkpoint
+        # remain runtime authority; no second subscriber or watermark.
+        fence = self.post_purchase_fence() if self.has_post_purchase else {'status':'uninitialised'}
+        return {'status':'active' if fence['status']=='retained' else 'uninitialised', 'revision':0}
 
     def verify(self):
         if self.config["reviews_enabled"]:
@@ -1478,232 +1347,28 @@ class Installation(PostPurchaseOperator):
         }
 
     def activate(self, enable_test_delivery=False):
-        if self.consolidated:
-            if not self.has_post_purchase:
-                raise ValueError('configure the shared order-confirmation email provider before activation')
-            if not enable_test_delivery:
-                raise ValueError('activation requires explicit --enable-test-delivery')
-            if self.state.get('post_purchase_provider_migration'):
-                raise ValueError('finish credential reconfiguration and OFF deployment before activation')
-            if (not self.state.get('deployment', {}).get('complete') or
-                    self.state.get('build') != self.state['deployment'].get('commit')):
-                raise ValueError('deploy the selected build before activation')
-            self.verify()
-            if self.post_purchase_fence()['status'] == 'uninitialised':
-                from scripts.post_purchase_installation import remote_import, validate_backend
-                database, name = validate_backend(self, self.api)
-                remote_import(self.config['account_id'], database, name,
-                              self.credentials['cloudflare_api_token'], self.config['store_key'])
-            return self.post_purchase_activate(enable_test_delivery)
-        if self.config["reviews_enabled"]:
-            self.check_reviews_handoff()
-            if self.state.get("post_purchase_provider_migration"):
-                raise ValueError("finish credential reconfiguration and OFF deployment before Reviews activation")
-            if not self.state.get("deployment", {}).get("complete"):
-                raise ValueError("finish the interrupted deploy before Reviews activation")
-            if self.state.get("build") != self.state["deployment"].get("commit"):
-                raise ValueError("deploy the selected build before Reviews activation")
-        if self.state.get("post_purchase_transition"):
-            raise ValueError("finish the pending post-purchase transition before activating Reviews")
-        if self.has_post_purchase and not self.config["reviews_enabled"]:
-            raise ValueError("use post-purchase-activate for the independent EP test delivery lane")
-        if not self.config["reviews_enabled"]:
-            if not self.state.get("deployment", {}).get("complete"):
-                raise ValueError("finish the interrupted deploy before activation")
-            self.verify()
-            self.state.update(phase="active", activation_authorized=True, automation_paused=False)
-            build = json.loads((self.directory / "releases" / self.state["build"] / "build.json").read_text())
-            release = {**build, "versions": dict(self.state["deployment"]["versions"]), "record_revision": 0}
-            if not self.state["releases"] or self.state["releases"][-1] != release:
-                self.state["releases"].append(release)
-            self.save()
-            return {"phase": "active", "reviews_enabled": False}
+        if not self.has_post_purchase:
+            raise ValueError('configure the shared order-confirmation email provider before activation')
         if not enable_test_delivery:
-            raise ValueError(
-                "activation requires explicit --enable-test-delivery for the documented approved test mailbox"
-            )
-        if self.state["phase"] == "active":
-            health = self.doctor()
-            if not health["healthy"]:
-                raise ValueError("active installation differs; resolve doctor findings before repeating activation")
-            return {
-                "phase": "active",
-                "already_active": True,
-                "activation_watermark": self.state["activation_watermark"],
-            }
-        self.check_post_purchase_handoff()
-        if (self.has_post_purchase and self.post_purchase_email_provider == "cloudflare"
-                and not self.state.get("reviews_handoff_attestation")):
-            retained = self.vault().get("post_purchase_smtp2go_api_key")
-            if not retained or not hmac.compare_digest(retained, self.credentials.get("smtp2go_api_key", "")):
-                raise ValueError("attest the original Reviews SMTP handoff before activation")
-        if not self.state.get("deployment", {}).get("complete"):
-            raise ValueError("finish the interrupted deploy before explicit activation")
-        # Reconcile a partially completed queue resume before staged inspection.
-        self.configure_queues(pause_processing=True)
+            raise ValueError('activation requires explicit --enable-test-delivery')
+        if self.state.get('post_purchase_provider_migration'):
+            raise ValueError('finish credential reconfiguration and OFF deployment before activation')
+        if (not self.state.get('deployment', {}).get('complete') or
+                self.state.get('build') != self.state['deployment'].get('commit')):
+            raise ValueError('deploy the selected build before activation')
         self.verify()
-        vault = self.vault()
-        # This is the sole initial activation authorization. Inspect/verify never
-        # creates a record that would let the runtime implicitly activate itself.
-        result = self.private(
-            "REVIEWS",
-            "/reviews-internal/v1/automation-activate",
-            {
-                "policy_version": "operator-v1",
-                "delay_seconds": self.config["delay_seconds"],
-                "max_lateness": self.config["max_lateness"],
-            },
-            vault["activation"],
-        )
-        self.state["activation_authorized"] = True
-        self.state["activation_watermark"] = result["outbox_watermark"]
-        self.save()
-        record = self.verifier("record")
-        nodes, _ = graph(self, self.state["deployment"]["versions"], sending=True)
-        node = nodes["sender"]
-        build = json.loads((self.directory / "releases" / self.state["build"] / "build.json").read_text())
-        version = self.api.upload(
-            self.name("sender"),
-            self.artifact_modules("sender", build),
-            {
-                "main_module": "sender.mjs",
-                "bindings": node["bindings"] + secret_bindings(self, "sender"),
-                "compatibility_date": "2026-08-31",
-            },
-        )
-        self.api.publish(self.name("sender"), version["id"])
-        self.state["deployment"]["versions"]["sender"] = version["id"]
-        self.state["deployment"]["sending"] = True
-        self.api.request(f"workers/scripts/{self.name('producer')}/schedules", "PUT", [{"cron": "* * * * *"}])
-        self.private("PRODUCER", "/run", token=vault["trigger"])
-        if record.get("activation_status") != "active":
-            # The first relay creates the immutable checkpoint. Reflect its actual
-            # active state without changing its original activation watermark.
-            record = self.verifier("record")
-        self.recover_paused_hints()
-        self.configure_queues()
-        self.state["automation_paused"] = False
-        self.state["queue_recovery_required"] = False
-        self.state.pop("reviews_explicit_activation_required", None)
-        self.state["phase"] = "active"
-        self.save()
-        release = {
-            **build,
-            "versions": dict(self.state["deployment"]["versions"]),
-            "record_revision": record["revision"],
-            "sending": True,
-            **({"post_purchase_modes": dict(self.state.get("post_purchase_modes", OFF))}
-               if self.has_post_purchase else {}),
-        }
-        if not self.state["releases"] or self.state["releases"][-1] != release:
-            self.state["releases"].append(release)
-        self.save()
-        return {
-            "phase": "active",
-            "record_revision": record["revision"],
-            "activation_watermark": result["outbox_watermark"],
-        }
+        if self.post_purchase_fence()['status'] == 'uninitialised':
+            from scripts.post_purchase_installation import remote_import, validate_backend
+            database, name = validate_backend(self, self.api)
+            remote_import(self.config['account_id'], database, name,
+                          self.credentials['cloudflare_api_token'], self.config['store_key'])
+        return self.post_purchase_activate(enable_test_delivery)
 
-    def recover_paused_hints(self):
-        if not self.config["reviews_enabled"]:
-            return
-        """Reconstruct expirable hints from durable post-fence facts before resume."""
-        if not self.state.get("automation_paused") and not self.state.get("queue_recovery_required"):
-            return
-        row = self.api.query(
-            self.db("commerce"),
-            "SELECT activation_watermark,last_outbox_id FROM reviews_subscriber_checkpoint WHERE subscriber_id=?",
-            [self.config["namespace"]],
-        )
-        if not row:
-            return
-        fence, upper = row[0]["activation_watermark"], row[0]["last_outbox_id"]
-        if fence != self.state["activation_watermark"] or upper < fence:
-            raise ValueError("pause recovery checkpoint/fence differs; no queue is resumed")
-        now = int(time.time())
-        recovery = self.state.get("pause_recovery")
-        # Cloudflare hints are expirable. Never resume from an old partial replay:
-        # all reconstructed pages must be fresh within this conservative deadline.
-        if not recovery or not 0 <= now - recovery["started_at"] < 300:
-            recovery = {"started_at": now, "fence": fence, "upper": upper, "last_id": fence, "complete": False}
-            self.state["pause_recovery"] = recovery
-            self.save()
-        if recovery["fence"] != fence:
-            raise ValueError("pause recovery fence changed; no queue is resumed")
-        key = bytes.fromhex(self.vault()["event_key"])
-        for _ in range(20):
-            rows = self.api.query(
-                self.db("commerce"),
-                "SELECT id FROM outbox WHERE id>? AND id<=? AND event_type='OrderConfirmed' ORDER BY id LIMIT 20",
-                [recovery["last_id"], recovery["upper"]],
-            )
-            if not rows:
-                if int(time.time()) - recovery["started_at"] >= 300:
-                    raise ValueError("pause recovery freshness window elapsed; repeat explicit activation")
-                recovery["complete"] = True
-                self.save()
-                return
-            messages = []
-            for row in rows:
-                identity = row["id"]
-                payload = [
-                    "cartray-reviews-order-confirmed-v1",
-                    self.config["namespace"],
-                    self.config["namespace"],
-                    self.config.get("store_key", "acorn-store"),
-                    "test",
-                    identity,
-                ]
-                signature = hmac.new(key, json.dumps(payload, separators=(",", ":")).encode(), "sha256").hexdigest()
-                messages.append(
-                    {
-                        "content_type": "json",
-                        "body": {
-                            "version": 1,
-                            "issuer": self.config["namespace"],
-                            "installation": self.config["namespace"],
-                            "store": self.config.get("store_key", "acorn-store"),
-                            "environment": "test",
-                            "outbox_id": identity,
-                            "signature": signature,
-                        },
-                    }
-                )
-            self.api.request(
-                "queues/" + self.state["resources"]["queue:events"]["id"] + "/messages/batch",
-                "POST",
-                {"messages": messages},
-            )
-            recovery["last_id"] = rows[-1]["id"]
-            self.save()
-        raise ValueError("pause recovery page budget reached; repeat explicit activation within five minutes")
 
     def pause(self):
-        """Stop new automation deliveries without changing checkout or unsubscribe."""
-        if self.consolidated:
-            if not self.has_post_purchase:
-                return {'phase':'paused', 'sending':False}
-            return self.post_purchase_disable()
-        self.assert_resources()
-        self.vault()
-        if not self.state.get("automation_paused"):
-            self.state.pop("pause_recovery", None)
-        self.state["automation_paused"] = True
-        transition = self.state.get("post_purchase_transition")
-        if transition and transition.get("reviews_phase"):
-            transition["reviews_phase"] = "paused"
-        self.state["queue_recovery_required"] = True
-        self.state["phase"] = "pausing"
-        self.save()
-        self.configure_queues(pause_processing=True)
-        self.state["phase"] = "paused"
-        self.save()
-        return {
-            "phase": "paused",
-            "activation_authorized": self.state["activation_authorized"],
-            "activation_watermark": self.state.get("activation_watermark"),
-            "queued_work_retained": True,
-        }
+        if not self.has_post_purchase:
+            return {'phase':'paused', 'sending':False}
+        return self.post_purchase_disable()
 
     def private_source_visibility_errors(self):
         if self.config.get("source_mode", "public") != "private":
@@ -1893,8 +1558,6 @@ class Installation(PostPurchaseOperator):
     def rollback(self, index):
         if self.state.get("post_purchase_provider_migration"):
             raise ValueError("finish credential reconfiguration and OFF deployment before rollback")
-        if self.config["reviews_enabled"]:
-            self.check_reviews_handoff()
         self.require_post_purchase_off()
         self.check_schema()
         self.pin_suppression()
@@ -1924,7 +1587,6 @@ class Installation(PostPurchaseOperator):
                 self.check_post_purchase_version(role, "disabled", actual, versions[role])
             self.check_current_post_purchase_off(
                 versions if self.state["phase"] == "rolling-back" else None)
-        self.prepare_queue_transition()
         self.state["phase"] = "rolling-back"
         self.save()
         publish_roles = versions
@@ -1961,9 +1623,6 @@ class Installation(PostPurchaseOperator):
         paused = (self.state.get("automation_paused", False)
                   or self.state.get("reviews_explicit_activation_required", False)
                   or (self.config["reviews_enabled"] and not reviews_ready))
-        if not paused:
-            self.recover_paused_hints()
-        self.configure_queues(pause_processing=paused)
         self.state["queue_recovery_required"] = paused
         self.state["phase"] = "paused" if paused else "active"
         if (self.has_post_purchase and not self.config["reviews_enabled"]) or (
@@ -2159,20 +1818,6 @@ def main():
         "activate", help="explicitly authorize the fixed no-backfill fence and test delivery"
     )
     activation.add_argument("--enable-test-delivery", action="store_true")
-    pp_activation = commands.add_parser(
-        "post-purchase-activate", help="enable EP delivery after the retained test fence"
-    )
-    pp_activation.add_argument("--enable-test-delivery", action="store_true")
-    commands.add_parser("post-purchase-disable", help="stop EP source processing, settle, then disable its handler")
-    pp_provider = commands.add_parser(
-        "post-purchase-reconfigure-provider", help="explicit OFF-only local provider/vault migration; never sends")
-    pp_provider.add_argument("--provider", required=True, choices=tuple(PROVIDER_KEYS))
-    pp_provider.add_argument("--allow-sender-change", action="store_true")
-    pp_provider.add_argument("--allow-credential-change", action="store_true")
-    handoff_pin = commands.add_parser("attest-reviews-handoff", help="attest original test Reviews handoff")
-    handoff_pin.add_argument("--original-handoff", type=Path, required=True)
-    handoff_pin.add_argument("--expected-sender-version", required=True)
-    handoff_pin.add_argument("--attest-original-handoff", action="store_true")
     rollback = commands.add_parser("rollback", help="compatible recorded Worker versions only; never rewind D1")
     rollback.add_argument("--release", type=int, default=-2, help="inventory release index (default previous)")
     request = commands.add_parser("request", help="operator-side call to the existing private Reviews service")
@@ -2201,20 +1846,9 @@ def main():
                 }
             else:
                 credentials = read_private(args.credentials) if args.credentials else None
-                installation = Installation(args.directory, credentials, credential_provider=(
-                    args.provider if args.command == "post-purchase-reconfigure-provider" else None))
+                installation = Installation(args.directory, credentials)
                 if args.command == "activate":
                     result = installation.activate(args.enable_test_delivery)
-                elif args.command == "post-purchase-activate":
-                    result = installation.post_purchase_activate(args.enable_test_delivery)
-                elif args.command == "post-purchase-disable":
-                    result = installation.post_purchase_disable()
-                elif args.command == "post-purchase-reconfigure-provider":
-                    result = installation.post_purchase_reconfigure_provider(
-                        args.provider, args.allow_sender_change, args.allow_credential_change)
-                elif args.command == "attest-reviews-handoff":
-                    result = installation.attest_reviews_handoff(
-                        args.original_handoff, args.expected_sender_version, args.attest_original_handoff)
                 elif args.command == "rollback":
                     result = installation.rollback(args.release)
                 elif args.command == "upgrade":

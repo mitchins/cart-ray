@@ -29,10 +29,3 @@ test('private SMTP2GO activity evidence persists idempotently in Workerd D1',asy
   assert.equal((await db.prepare('SELECT count(*) n FROM review_provider_activity').first()).n,1);
  }finally{await mf.dispose()}
 });
-test('test-only SMTP2GO recovery adapter returns receipt through Workerd',async()=>{
- const script=readFileSync(new URL('../smtp2go-recovery/worker.mjs',import.meta.url),'utf8');
- const outboundService={type:'fetcher',handler:async request=>{assert.equal(new URL(request.url).pathname,'/v3/email/send');const body=await request.json();assert.equal(body.custom_headers[0].value,delivery);return Response.json({data:{succeeded:1,failed:0,failures:[],email_id:'smtp_recovery_1'}})}};
- const mf=new Miniflare({workers:[{config:{name:'recovery-mail',type:'worker',compatibilityDate:'2026-08-31',manifest:{mainModule:'worker.mjs',modules:{'worker.mjs':{type:'esm',contents:script}}},env:{
-  REVIEWS_ENVIRONMENT:{type:'json',value:'test'},SMTP2GO_RECOVERY_MODE:{type:'json',value:'test'},APPROVED_TEST_EMAIL:{type:'json',value:'test@example.org'},RECOVERY_FROM:{type:'json',value:'reviews@example.org'},SMTP2GO_API_KEY:{type:'json',value:'api-synthetic'},SMTP2GO_MAIL_TOKEN:{type:'json',value:'x'.repeat(40)}}},dev:{outboundService}}]});
- try{const response=await mf.dispatchFetch('https://mail.invalid/send',{method:'POST',headers:{'Content-Type':'application/json',Authorization:'Bearer '+'x'.repeat(40)},body:JSON.stringify({from:'reviews@example.org',to:'test@example.org',subject:'Review link',text:'Synthetic link',headers:{'X-Reviews-Delivery-Identity':delivery}})});assert.equal(response.status,200);assert.deepEqual(await response.json(),{email_id:'smtp_recovery_1'});}finally{await mf.dispose()}
-});

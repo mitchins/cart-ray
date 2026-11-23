@@ -1,6 +1,10 @@
 # CartRay Reviews
 
-Reviews is an optional first-party module with a separate Worker and database. Installing CartRay core does not install, bind, schedule or enable Reviews. The checked-in Worker configuration and operator tools are **local test only**: they cannot provision or publish production resources. The Worker defaults to `disabled`; `read_only` exposes only scoped GET endpoints. Collection modes work **only in the test environment** and fail closed in live. There are no checkout subscriptions or scheduled invitation tasks.
+Reviews is an optional first-party module. The merchant installation uses one physical D1
+with separate commerce and Reviews tables, a private native Reviews Worker, the Commerce
+Worker and one private transactional email handler. Checkout does not depend on Reviews
+service availability; a shared D1 outage affects both. Live collection and sending remain
+disabled. See [the operator guide](operator/README.md) and [order Reviews](../../docs/order-reviews.md).
 
 Staff authentication can explicitly exercise Workerd WebCrypto RS256 verification with
 `REVIEWS_STAFF_CRYPTO=webcrypto`; verification errors deny access and never fall back
@@ -23,15 +27,22 @@ This is a test-qualified adapter, not permission to activate live staff access.
 Production policy, edge bindings, rotation/revocation limits, actual provider
 behavior and platform deployment still require separate qualification.
 
-The optional test-only automation intake is separately disabled unless `REVIEWS_AUTOMATION_INTAKE=test` and a distinct issuer token is configured. A separately authenticated test activation endpoint captures a primary-session CartRay outbox watermark and records an immutable policy and fence in Reviews D1. The committed source snapshot is the activation boundary: all earlier outbox IDs are fenced without backfill, and later IDs can be processed, including confirmations in the same second. The authenticated endpoint accepts a CartRay outbox ID, rechecks the bound CartRay database for the confirmed paid order and immutable product mapping, and atomically records an independent Reviews acknowledgement and a due-time intent held for eligibility, recipient and consent verification. Earlier events and excessively late events are recorded without an intent. Duplicate delivery is idempotent; conflicting identities fail closed. It never acknowledges or modifies the CartRay outbox, dispatches a queue, creates a capability or sends mail. This local intake is not a production event subscription or a qualified recipient/consent adapter.
+Confirmed-order processing owns the receipt and optional follow-up. Merchant preferences
+select off, receipt, follow-up or both, and all eligible products or a deterministic
+priority product. The default is receipt inclusion and priority selection. All purchased
+eligible subjects remain accessible; selection controls presentation, not entitlement.
 
-For this synthetic adapter, store and environment are operator assertions about the configured CartRay database and issuer token; the source database does not attest that scope. The outbox snapshot is a single primary read, and checkout records and their outbox events commit together. The snapshot and Reviews D1 write are still cross-database operations: a crash before the Reviews commit does not enable intake, and retries capture a new boundary. Source-binding identity remains an operator assertion rather than a source attestation. Trusted source-scope attestation, an activation-boundary handshake, refund/dispute eligibility, recipient and consent verification, and independent subscriber delivery/reconciliation are unresolved requirements before production integration. The test intake acknowledges receipt into Reviews; it does not implement a CartRay outbox dispatcher or advance a subscriber cursor.
+Capabilities are created from confirmed paid purchases and the recorded checkout permission,
+independently of email acceptance. New links do not expire by default. Existing issued links
+retain their original validity, generation, revocation and submitted-subject progress.
+Recovery uses native invitation generations through the same merchant email provider and
+bounded commerce cron. Unknown provider outcomes are held, never blindly resent.
 
-For held synthetic intents, a separate test-only recipient evidence adapter verifies a scoped HMAC from its own distinct secret and records an immutable acquisition-bound recipient-context hash, binding version, evidence reference and verification time. It accepts only an already-held intent and never stores an address. The existing independently signed `review_invitation` consent adapter remains the source of purpose-bound consent. An authenticated internal status check reports whether a binding was recorded and whether a non-revoked consent record matches that binding; it exposes neither recipient hash nor evidence reference. The intent remains `held_eligibility_recipient_consent` even when both records exist. A recorded synthetic binding is historical evidence, not proof of current recipient eligibility: recipient correction, refund/dispute checks and production authority are not implemented. A separate signed test-only consent-withdrawal endpoint stores an immutable purpose-and-recipient tombstone and suppresses matching invitation issuance and replacement delivery, including when withdrawal arrives before a grant. Existing purchase-bound review capabilities are not withdrawn merely because communication consent is withdrawn. It does not re-grant consent or recall an email already accepted by a provider. No sender, scheduler or delivery authorization is added.
-
-The intended primary collection mode is `verified_acquisition_only`. Its current implementation is test-only: a separately authenticated synthetic settlement adapter reads confirmed paid CartRay orders and version-pinned product mappings. Signed, purpose-bound consent is recorded separately. Invitation generations start inactive and become usable only after a separately authenticated delivery acknowledgement; expiry defaults to 60 days from the recorded acceptance time. Replacement invalidates the previous capability without resetting the purchase's submitted subjects. Possession can be transferred by forwarding the link; it does not establish the bearer's personal or email identity. A purchase can produce at most one review per eligible subject. Free lines are not labelled verified purchases. GET and HEAD do not redeem invitations. Revoking an invitation stops further use and does not withdraw an existing review.
-
-CartRay's settlement record does not establish a recipient identity. In the qualified test setup, generic recovery requests are dispatched automatically through a private queue to an authenticated delivery worker. The worker checks the trusted synthetic recipient binding and purpose-bound consent; uncertain sends are retained for reconciliation rather than blindly resent. The local Maildir processor and explicitly configured `manual_test` recovery mode remain available for testing, not production delivery. Customer management uses a separate scoped bearer capability for edits and withdrawals. Live sending, independent staff authentication, real recipient integration, provider-receipt lookup, operational reconciliation, and production qualification remain release requirements.
+Suppression removes optional review solicitation, including across purchases, without
+suppressing the transactional receipt. No separate Reviews sender, recipient OTP, intake
+queue, due queue or sender activation is provisioned. Historical migrations, audit evidence
+and retained legacy records are not deleted or automatically replayed. Retained old hosted
+installations remain operated by their pinned release until a separately authorized handover.
 
 The separate local `collect` simulation requires a configured test administrator token and a short-lived, one-use test capability issued by that administrator. It does not qualify collection for staging or production. Native submissions start pending; authenticated test moderation approves, rejects or withdraws them. Only approved native revisions enter public reads. Independent staff identity and the static-site withdrawal policy remain activation gates. General anonymous guest verification and Turnstile are optional future adapters; the purchase-bound flow does not require them. WordPress tooling is not a runtime dependency.
 
@@ -147,20 +158,11 @@ secret even when Access authentication is selected; Access-only moderation in
 that mode has not been qualified. The Access boundary does not accept that
 secret as a fallback identity.
 
-### Synthetic due-intent evaluation (development only)
+### Historical automation compatibility
 
-`automation_due` is a test-only keyed claim primitive, not a scheduler
-or delivery authorization. An authenticated test-only HTTP trigger evaluates a
-single explicitly addressed intent and durably records its held completion. A trusted future queue consumer must supply an exact
-acquisition identity, an authenticated scope, an authoritative clock and a fresh
-unpredictable 256-bit claim token. A due held intent can be claimed once; a retry
-with the same token observes the lease, and expiry permits a fenced takeover.
-Completion records only that this evaluation finished. It does not change the held
-intent, create an invitation, check current consent or allow any provider send.
-
-A real integration still requires a qualified event/due-time queue, authenticated
-consumer, authoritative source scope and activation watermark, current eligibility
-and consent decisions, and an explicit re-evaluation policy. In particular, lease
-fencing cannot prevent a paused process from making an external call; provider
-idempotency and uncertain-outcome reconciliation remain mandatory before sending.
-There is no scheduled task, polling loop, or production path in this increment.
+Native internal automation modules and SQL history retain validation/read/recovery semantics
+for existing records and issued capabilities. They are not a deployable default email pipeline.
+The retired JavaScript producer, consumer, due scheduler, initial sender, recovery sender and
+post-checkout verification Workers are removed. Their old qualification receipts remain history;
+new ordinary order processing is exercised by `tests/test_order_reviews.py` and the connected
+Workerd/D1 smoke test.

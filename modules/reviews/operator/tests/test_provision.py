@@ -83,7 +83,7 @@ def test_provision_repeat_and_unknown_create_outcome_preserve_keys_and_resources
         assert provider.creates == count
         for queue in provider.items["queues"]:
             assert queue["settings"]["delivery_paused"] is (queue["queue_name"] != install.name("dlq"))
-    assert len(first) == 13
+    assert len(first) == 4
     assert install.state["pending"] == []
     assert first["database:commerce"]["id"] == "recovered-commerce"
     assert install.state["phase"] == "paused"

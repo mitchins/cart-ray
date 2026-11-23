@@ -491,3 +491,22 @@ def test_enabling_fulfilment_adds_key_to_existing_vault_only_before_capabilities
     assert cloud.query("commerce-id", "SELECT merchant_id FROM post_purchase_installation") == [
         {"merchant_id": "second-merchant"}
     ]
+
+
+def test_retained_queue_inventory_is_not_silently_upgraded(tmp_path):
+    install = planned(tmp_path)
+    install.state["resources"]["queue:events"] = {"id": "retained"}
+    install.state["known_uncertain_claim"] = "preserved"
+    install.save()
+    original = install.state_path.read_bytes()
+    with pytest.raises(ValueError, match="pinned release"):
+        operations.Installation(install.directory)
+    assert install.state_path.read_bytes() == original
+    assert not install.vault_path.exists()
+
+
+def test_new_read_only_reviews_install_has_no_queue_lifecycle(tmp_path):
+    install = planned(tmp_path)
+    assert install.roles == ("source", "reviews")
+    assert install.queues == ()
+    assert len(install.secret_names) == 8
