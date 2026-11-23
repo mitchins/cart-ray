@@ -65,8 +65,9 @@ class PostPurchaseOperator:
 
     def initial_post_purchase_secrets(self):
         actions = self.post_purchase_actions()
+        entries = [actions] if isinstance(actions, dict) else actions
         if (any(a["recipient"].lower() != self.credentials["approved_test_email"].lower()
-                or a["sender"].lower() != self.credentials["test_sender"].lower() for a in actions)):
+                or a["sender"].lower() != self.credentials["test_sender"].lower() for a in entries)):
             raise ValueError("protected post-purchase sender/recipient differ from the approved credential handoff")
         return {"post_purchase_token": secrets.token_hex(32),
                 **{"post_purchase_" + key: self.credentials[key]
@@ -232,7 +233,11 @@ class PostPurchaseOperator:
                 if self.worker_visibility_errors(role):
                     raise ValueError("email reconfiguration requires both Workers and previews to remain private")
             actions = self.post_purchase_actions()
-            action_value = {"schema": 1, "actions": [{**a, "sender": self.credentials["test_sender"]} for a in actions]}
+            if isinstance(actions, dict):
+                action_value = {**actions, "sender": self.credentials["test_sender"]}
+            else:
+                action_value = {"schema": 1, "actions": [{**a, "sender": self.credentials["test_sender"]}
+                                                         for a in actions]}
             raw_actions = (json.dumps(action_value, indent=2) + "\n").encode()
             self.parse_post_purchase_snapshot(raw_actions, self.config, Path(self.config["merchant_inputs"]),
                                               json.loads(Path(self.config["preflight_lock"]).read_text()))
@@ -385,11 +390,13 @@ class PostPurchaseOperator:
         nodes, _ = graph(self, post_purchase_modes={role: mode}, email_provider=email_provider,
                          actions_override=actions_override)
         errors = self.worker_binding_errors(role, nodes[role], actual, version)
-        if allow_legacy_admission and role == "source":
+        if allow_legacy_admission:
             present = {item["name"] for item in actual["resources"]["bindings"]}
-            for name in ("CHECKOUT_STORE_RATE_LIMITER", "CHECKOUT_STATUS_RATE_LIMITER"):
+            legacy_names = (("CHECKOUT_STORE_RATE_LIMITER", "CHECKOUT_STATUS_RATE_LIMITER", "CARTRAY_MERCHANT_ID")
+                            if role == "source" else ("MERCHANT_ID", "MERCHANT_NAME", "STOREFRONT_ORIGIN"))
+            for name in legacy_names:
                 if name not in present:
-                    missing = f"source.bindings.{name}: missing/wrong type"
+                    missing = f"{role}.bindings.{name}: missing/wrong type"
                     errors = [error for error in errors if error != missing]
         if errors:
             raise ValueError("; ".join(errors))
@@ -407,9 +414,10 @@ class PostPurchaseOperator:
             migration = self.state.get("post_purchase_provider_migration", {})
             previous = (migration.get("from") if actual["id"] == migration.get("disabled_versions", {}).get(role)
                         else None)
-            actions = ([dict(sorted(a.items())) for a in
-                        json.loads(self.provider_migration_bundle(migration)["old_actions_raw"])["actions"]]
-                       if previous else None)
+            actions = None
+            if previous:
+                old = json.loads(self.provider_migration_bundle(migration)["old_actions_raw"])
+                actions = old if old.get("schema") == 2 else [dict(sorted(a.items())) for a in old["actions"]]
             self.check_post_purchase_version(role, "disabled", actual, actual["id"], previous, actions,
                                              allow_legacy_admission=True)
 
@@ -497,6 +505,8 @@ class PostPurchaseOperator:
             raise ValueError("finish a fresh OFF build/deploy after email provider reconfiguration before activation")
         if not enable_test_delivery:
             raise ValueError("post-purchase activation requires explicit --enable-test-delivery")
+        if not isinstance(self.post_purchase_actions(), dict):
+            raise ValueError("legacy workflow delivery needs an explicit schema-2 order-confirmation handover")
         deployment, disabled, build = self.post_purchase_runtime()
         transition = self.state.get("post_purchase_transition")
         if transition and transition["operation"] != "activate":

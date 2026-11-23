@@ -232,11 +232,9 @@ def validate_config(config):
             raise ValueError("unsupported post-purchase email provider")
         snapshot = config["post_purchase_config"]
         if (not isinstance(snapshot, str) or not snapshot.strip()
-                or config.get("store_key") != "effective-policy-uat"
-                or config["stripe_account_id"] != "acct_1Ud2XZBKRMfYblCU"
-                or config.get("source_mode") != "private"):
+                or not config.get("store_key") or config.get("source_mode") != "private"):
             raise ValueError(
-                "post-purchase requires the approved EP Stripe test account and private source"
+                "test order confirmations require a merchant identity and private source"
             )
         if "post_purchase_config_sha256" in config and (
                 not isinstance(config["post_purchase_config_sha256"], str)
@@ -411,7 +409,7 @@ class Installation(PostPurchaseOperator):
             config["merchant_inputs"] = "inputs/merchant"
         if "post_purchase_config" in config:
             destination = directory / "inputs/post-purchase.json"
-            atomic_json(destination, {"schema": 1, "actions": actions})
+            atomic_json(destination, actions if isinstance(actions, dict) else {"schema": 1, "actions": actions})
             config["post_purchase_config"] = "inputs/post-purchase.json"
             config["post_purchase_config_sha256"] = digest(read_private(destination, raw=True))
         if "gel" in config:

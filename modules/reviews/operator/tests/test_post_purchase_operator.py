@@ -57,8 +57,22 @@ def test_plan_rejects_wrong_installation_lane(tmp_path, overrides):
     options.update(overrides)
     if options["source_api_path"] is None:
         del options["source_api_path"]
-    with pytest.raises(ValueError, match="approved EP"):
-        validate_config(options)
+    with pytest.raises(ValueError, match="legacy workflow|private source"):
+        Installation.plan(tmp_path / "installation", options)
+
+
+def test_other_merchant_can_plan_test_order_confirmation(tmp_path):
+    options = handoff(tmp_path)
+    options.update(store_key="other-merchant", stripe_account_id="acct_other")
+    atomic_json(Path(options["post_purchase_config"]),
+                {"schema": 2, "sender": CREDS["test_sender"], "recipient": CREDS["approved_test_email"]})
+    install = Installation.plan(tmp_path / "installation", options)
+    assert install.post_purchase_actions()["schema"] == 2
+    install.state["workers_subdomain"] = "example"
+    install.state["resources"]["database:commerce"] = {"id": "db"}
+    nodes, _ = graph(install, post_purchase_modes=OFF)
+    assert nodes["source"]["vars"]["CARTRAY_POST_PURCHASE_MODE"] == "disabled"
+    assert "CARTRAY_POST_PURCHASE_CONFIG" not in nodes["source"]["vars"]
 
 
 def test_ep_test_lane_can_enable_reviews_independently(tmp_path):
@@ -266,6 +280,8 @@ def capture_build(install, commit):
 @pytest.fixture
 def deployed(tmp_path, monkeypatch):
     options = handoff(tmp_path)
+    atomic_json(Path(options["post_purchase_config"]),
+                {"schema": 2, "sender": CREDS["test_sender"], "recipient": CREDS["approved_test_email"]})
     path = Installation.plan(tmp_path / "installation", options).directory
     db = sqlite3.connect(":memory:")
     db.row_factory = sqlite3.Row
@@ -409,7 +425,7 @@ def test_explicit_off_provider_sender_migration_then_fresh_off_deploy(deployed):
     assert "build" not in install.state
     assert install.state["post_purchase_modes"] == OFF
     assert install.config["post_purchase_config_sha256"] != previous_hash
-    assert install.post_purchase_actions() == [{**a, "sender": CF_CREDS["test_sender"]} for a in previous_actions]
+    assert install.post_purchase_actions() == {**previous_actions, "sender": CF_CREDS["test_sender"]}
     for key, value in before_vault.items():
         assert install.vault()[key] == (CF_CREDS["test_sender"] if key == "post_purchase_test_sender" else value)
     assert CF_CREDS["cloudflare_email_api_token"] not in install.state_path.read_text()
@@ -909,7 +925,7 @@ def test_disabled_deploy_and_real_handler_digest(deployed):
     assert not any("REVIEWS" in key for key in source_secrets)
     assert handler_secrets["STRIPE_API_KEY"] == CREDS["stripe_test_key"]
     assert handler_secrets["SMTP2GO_API_KEY"] == CREDS["smtp2go_api_key"]
-    assert LINK not in source["vars"]["CARTRAY_POST_PURCHASE_CONFIG"]
+    assert "CARTRAY_POST_PURCHASE_CONFIG" not in source["vars"]
     assert CREDS["smtp2go_api_key"] not in install.state_path.read_text()
     assert api.events == [("upload", install.name("post-purchase")), ("publish", install.name("post-purchase")),
                           ("upload", install.name("source")), ("publish", install.name("source"))]
@@ -920,14 +936,16 @@ def test_disabled_deploy_and_real_handler_digest(deployed):
         import {readFileSync} from 'node:fs';
         const {handle} = await import(process.argv[1]);
         const {env, source} = JSON.parse(readFileSync(0, 'utf8'));
-        const action = {...source.actions[0], merchant: source.merchant, environment: source.environment,
-                        order_id: 'order-fixture', session_id: 'cs_test_fixture', items: [['EP-UAT-171', 1]]};
+        const action = {type:'order_confirmation', merchant: source.merchant, environment: source.environment,
+                        order_id: 'order-fixture', session_id: 'cs_test_fixture', access_url:null,
+                        items: [{product_key:'EP-UAT-171',title:'Product',quantity:1}]};
         const calls = [];
         const fake = async (url, options) => {
             calls.push(url);
             if (url.endsWith('/v1/account')) return Response.json({id: env.STRIPE_ACCOUNT_ID});
             if (url.endsWith('/cs_test_fixture')) return Response.json({
-              id: action.session_id, livemode: false, mode: 'payment', status: 'complete', payment_status: 'paid',
+              id: action.session_id, livemode: false, mode: 'payment', status: 'complete',
+              payment_status: 'paid', amount_total:100,
               metadata: {cr_order_id: action.order_id}, customer_details: {email: env.APPROVED_TEST_RECIPIENT},
             });
             assert.deepEqual(JSON.parse(options.body).to, [env.APPROVED_TEST_RECIPIENT]);
@@ -943,7 +961,7 @@ def test_disabled_deploy_and_real_handler_digest(deployed):
         assert.equal(calls.length, 3);
     """, handler.as_uri()], input=json.dumps({
         "env": {**nodes["post-purchase"]["vars"], **handler_secrets},
-        "source": json.loads(source["vars"]["CARTRAY_POST_PURCHASE_CONFIG"]),
+        "source": {"merchant": install.config["store_key"], "environment": "test"},
     }), text=True, check=True, cwd=ROOT)
 
 
@@ -960,6 +978,15 @@ def test_activation_requires_flag_fence_and_unchanged_test_credential(deployed):
         install.post_purchase_activate(True)
     assert api.events == []
     assert "post_purchase_transition" not in install.state
+
+
+def test_legacy_workflow_requires_explicit_order_confirmation_handover(deployed, monkeypatch):
+    install, api, _ = deployed
+    monkeypatch.setattr(install, "post_purchase_actions", lambda: [ACTION])
+    api.events.clear()
+    with pytest.raises(ValueError, match="schema-2"):
+        install.post_purchase_activate(True)
+    assert api.events == []
 
 
 @pytest.mark.parametrize("interrupted_role", ["post-purchase", "source"])
@@ -1089,14 +1116,14 @@ def test_rollback_rejects_a_test_version_even_if_the_release_is_labelled_off(dep
     assert list(db.iterdump()) == before
 
 
-def test_doctor_detects_remote_action_digest_and_modes_drift(deployed):
+def test_doctor_detects_remote_identity_and_modes_drift(deployed):
     install, api, _ = deployed
     for binding in api.version(install.name("source"))["resources"]["bindings"]:
-        if binding["name"] == "CARTRAY_POST_PURCHASE_CONFIG":
-            binding["text"] = binding["text"].replace('"config_digest":"', '"config_digest":"0')
+        if binding["name"] == "CARTRAY_MERCHANT_ID":
+            binding["text"] = "other-merchant"
         if binding["name"] == "CARTRAY_POST_PURCHASE_MODE":
             binding["text"] = "test"
     health = install.doctor()
     assert not health["healthy"]
-    assert "source.vars.CARTRAY_POST_PURCHASE_CONFIG: differs from inventory" in health["errors"]
+    assert "source.vars.CARTRAY_MERCHANT_ID: differs from inventory" in health["errors"]
     assert "source.vars.CARTRAY_POST_PURCHASE_MODE: differs from inventory" in health["errors"]

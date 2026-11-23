@@ -444,3 +444,85 @@ async def drain_confirmed_d1(
         previous = event["id"]
         processed += 1
     return processed
+
+
+class OrderReceiptDispatcher(D1Dispatcher):
+    """Deliver one confirmed-order message using the existing execution ledger.
+
+    A legacy workflow claim holds or satisfies the order during handover. It is
+    never reset or automatically resent. Deployments must stop the old sender
+    and let in-flight work settle before enabling this dispatcher.
+    """
+
+    async def dispatch(self, order_id: str, actions: tuple[Action, ...] = (), *,
+                       max_new_claims: int | None = None, deadline: float | None = None) -> dict[str, str]:
+        from inspect import isawaitable
+
+        from cartray.store import _changes, _results
+
+        if not isinstance(order_id, str) or not _IDENTIFIER.fullmatch(order_id):
+            raise ValueError("invalid order")
+        binding = await self._first("SELECT merchant_id,environment FROM post_purchase_installation WHERE singleton=1")
+        if not binding or (binding["merchant_id"], binding["environment"]) != (self.merchant, self.environment):
+            raise ValueError("post-purchase installation binding mismatch")
+        order = await self._first(
+            """SELECT s.external_session_id FROM checkout_sessions s WHERE s.order_id=?
+            AND s.settlement_state='confirmed' AND EXISTS (SELECT 1 FROM outbox e
+            WHERE e.order_id=s.order_id AND e.event_type='OrderConfirmed')""", order_id,
+        )
+        if not order or not order["external_session_id"]:
+            raise ValueError("purchase is not confirmed")
+        existing = _results(await self.database.prepare(
+            """SELECT workflow_key,state FROM post_purchase_executions
+            WHERE merchant_id=? AND environment=? AND order_id=?"""
+        ).bind(self.merchant, self.environment, order_id).all())
+        if existing:
+            return {"receipt": "pending_claim" if any(row["state"] == "claimed" for row in existing)
+                    else "already_claimed"}
+        if ((max_new_claims is not None and max_new_claims < 1)
+                or (deadline is not None and time.monotonic() + 12 >= deadline)):
+            return {"receipt": "deferred"}
+        result = _results(await self.database.prepare(
+            "SELECT product_key,quantity FROM order_items WHERE order_id=? ORDER BY product_key"
+        ).bind(order_id).all())
+        if not result:
+            raise ValueError("confirmed order has no items")
+        purchase = Purchase(order_id, order["external_session_id"],
+                            tuple((row["product_key"], row["quantity"]) for row in result))
+        now = int(time.time())
+        identity = hashlib.sha256(
+            f"order-receipt-v1:{self.merchant}:{self.environment}:{order_id}".encode()
+        ).hexdigest()
+        claim = await self.database.prepare(
+            """INSERT OR IGNORE INTO post_purchase_executions
+            (merchant_id,environment,order_id,workflow_key,action_digest,state,created_at,updated_at)
+            SELECT ?,?,?,'order-receipt',?,'claimed',?,? WHERE NOT EXISTS (
+              SELECT 1 FROM post_purchase_executions WHERE merchant_id=? AND environment=? AND order_id=?)"""
+        ).bind(self.merchant, self.environment, order_id, identity, now, now,
+               self.merchant, self.environment, order_id).run()
+        if _changes(claim) != 1:
+            return {"receipt": "pending_claim"}
+        try:
+            reference = self.handlers["receipt"](purchase)
+            if isawaitable(reference):
+                reference = await reference
+            if not isinstance(reference, str) or not reference or len(reference) > 256:
+                raise ValueError("handler did not confirm acceptance")
+            updated = await self.database.prepare(
+                """UPDATE post_purchase_executions SET state='accepted',provider_reference=?,updated_at=?
+                WHERE merchant_id=? AND environment=? AND order_id=? AND workflow_key='order-receipt'
+                AND state='claimed'"""
+            ).bind(reference, int(time.time()), self.merchant, self.environment, order_id).run()
+            if _changes(updated) != 1:
+                raise RuntimeError("receipt acceptance was not recorded")
+            return {"receipt": "accepted"}
+        except asyncio.CancelledError:
+            await self._hold_after_cancellation(order_id, "order-receipt")
+            raise
+        except Exception:
+            try:
+                await self._mark_uncertain(order_id, "order-receipt")
+            except asyncio.CancelledError:
+                await self._hold_after_cancellation(order_id, "order-receipt")
+                raise
+            return {"receipt": "uncertain"}

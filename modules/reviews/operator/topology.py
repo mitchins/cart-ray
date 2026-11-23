@@ -9,6 +9,17 @@ SUBJECTS = {"ACORN-KIT": "acorn-growing-kit", "ACORN-PLANTER": "woodland-planter
 
 def validate_post_purchase(value, config, commerce_keys):
     """Validate explicit operator-approved test actions, never infer workflows from copy."""
+    if isinstance(value, dict) and value.get("schema") == 2:
+        if set(value) != {"schema", "sender", "recipient"}:
+            raise ValueError("invalid test confirmation configuration")
+        for key in ("sender", "recipient"):
+            address = value[key]
+            if (not isinstance(address, str) or not address.isascii() or len(address) > 254
+                    or not re.fullmatch(r"[^\s@<>]+@[^\s@<>]+\.[A-Za-z]{2,}", address)):
+                raise ValueError("test confirmation requires one approved sender and recipient")
+        return value
+    if config.get("store_key") != "effective-policy-uat" or config.get("stripe_account_id") != "acct_1Ud2XZBKRMfYblCU":
+        raise ValueError("legacy workflow delivery is restricted to the existing EP test installation")
     fields = {"environment", "merchant", "workflow_key", "config_ref", "offer_keys", "links",
               "recipient", "sender", "subject", "stripe_account"}
     if (not isinstance(value, dict) or set(value) != {"schema", "actions"}
@@ -272,17 +283,18 @@ def graph(installation, versions=None, sending=False, post_purchase_modes=None,
     if config["reviews_enabled"]:
         nodes = review_nodes
     if "post_purchase_config" in config:
+        nodes["source"]["vars"].update(CARTRAY_MERCHANT_ID=store)
         actions = actions_override if actions_override is not None else installation.post_purchase_actions()
         modes = post_purchase_modes if post_purchase_modes is not None else state.get("post_purchase_modes", {})
-        nodes["source"]["vars"].update(
-            CARTRAY_POST_PURCHASE_MODE=modes.get("source", "disabled"),
-            CARTRAY_POST_PURCHASE_CONFIG=post_purchase_source_config(actions),
-        )
+        nodes["source"]["vars"].update(CARTRAY_POST_PURCHASE_MODE=modes.get("source", "disabled"))
+        if not isinstance(actions, dict):
+            nodes["source"]["vars"]["CARTRAY_POST_PURCHASE_CONFIG"] = post_purchase_source_config(actions)
         nodes["source"].setdefault("services", {})["POST_PURCHASE_HANDLER"] = "post-purchase"
         nodes["post-purchase"] = {
             "main": "modules/post-purchase/transactional-email/worker.mjs", "public": False,
             "vars": {"ENVIRONMENT": "test", "DELIVERY_MODE": modes.get("post-purchase", "disabled"),
-                     "STRIPE_ACCOUNT_ID": config["stripe_account_id"]},
+                     "STRIPE_ACCOUNT_ID": config["stripe_account_id"], "MERCHANT_ID": store,
+                     "MERCHANT_NAME": config["merchant_name"], "STOREFRONT_ORIGIN": storefront},
         }
         provider = email_provider or config.get("post_purchase_email_provider", "smtp2go")
         if provider == "cloudflare":
@@ -407,7 +419,8 @@ def secret_bindings(installation, role):
         )
     if role == "post-purchase":
         result.update(
-            DELIVERY_CONFIG=post_purchase_handler_config(installation.post_purchase_actions()),
+            DELIVERY_CONFIG=("{}" if isinstance(installation.post_purchase_actions(), dict)
+                             else post_purchase_handler_config(installation.post_purchase_actions())),
             APPROVED_TEST_RECIPIENT=vault["post_purchase_approved_test_email"],
             APPROVED_TEST_SENDER=vault["post_purchase_test_sender"],
             STRIPE_API_KEY=vault["post_purchase_stripe_test_key"],
