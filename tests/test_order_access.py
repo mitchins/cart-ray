@@ -6,7 +6,13 @@ from types import SimpleNamespace
 import pytest
 from kinglet import MockD1Database
 
-from cartray.order_access import issue_order_access, issuer_token, purchased_resources, resolve_configured_resource
+from cartray.order_access import (
+    issue_order_access,
+    issuer_token,
+    purchased_resources,
+    resolve_configured_resource,
+    validate_resource_configuration,
+)
 
 
 @pytest.fixture
@@ -18,7 +24,8 @@ def db():
         "order-1", "request-1", "fingerprint", "catalogue", "digest", "aud", 100, 1,
     ))
     database.conn.commit()
-    return database
+    yield database
+    database.conn.close()
 
 
 def run(value):
@@ -166,3 +173,40 @@ def test_existing_checkout_settlement_produces_one_order_access_with_all_purchas
         {"product_key": "TEST-SUPPORT-HOURS", "quantity": 2, "resources": ["TEST-RESOURCE-SUPPORT-HOURS"]},
     ]
     assert run(issue_order_access(db, "z" * 32, "new-store", "test", order)) == token
+
+
+def test_resource_configuration_rejects_invalid_sources_and_supports_missing_files():
+    good = {"guide": {"provider": "private", "binding": "FILES", "key": "guide.pdf",
+                      "filename": "Guide.pdf", "mime_type": "application/pdf"},
+            "link": {"provider": "external", "url": "https://example.test/resource"}}
+    validate_resource_configuration(good, {"FILES": "private-bucket"})
+    for resources in (
+        [],
+        {"": good["guide"]},
+        {"guide": {"provider": "unknown"}},
+        {"guide": {"provider": "private", "binding": "OTHER", "key": "guide.pdf"}},
+        {"guide": {"provider": "private", "binding": "FILES", "key": ""}},
+        {"link": {"provider": "external", "url": "http://example.test/resource"}},
+        {"link": {"provider": "external", "url": "https://user@example.test/secret"}},
+        {"link": {"provider": "external", "url": "https://example.test/", "filename": "../secret"}},
+        {"link": {"provider": "external", "url": "https://example.test/", "mime_type": "invalid"}},
+    ):
+        with pytest.raises(ValueError):
+            validate_resource_configuration(resources, {"FILES": "private-bucket"})
+    assert run(resolve_configured_resource("missing", good, SimpleNamespace())) == {"status": "unavailable"}
+    assert run(resolve_configured_resource("guide", good, SimpleNamespace())) == {"status": "unavailable"}
+
+    async def unavailable(_key):
+        raise RuntimeError("provider unavailable")
+
+    bindings = SimpleNamespace(FILES=SimpleNamespace(get=unavailable))
+    assert run(resolve_configured_resource("guide", good, bindings)) == {"status": "unavailable"}
+
+
+def test_order_access_rejects_short_keys_and_malformed_tokens(db):
+    with pytest.raises(ValueError, match="key"):
+        run(issue_order_access(db, "short", "merchant", "test", "order-1"))
+    with pytest.raises(ValueError, match="scope"):
+        run(issue_order_access(db, "x" * 32, "invalid merchant", "test", "order-1"))
+    with pytest.raises(ValueError, match="capability"):
+        run(purchased_resources(db, "invalid", "merchant", "test"))
