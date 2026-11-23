@@ -41,6 +41,16 @@ def planned(tmp_path):
     )
 
 
+
+def test_emergency_pause_constructs_without_sender_credentials(tmp_path):
+    planned_installation = planned(tmp_path)
+    installation = operations.Installation(planned_installation.directory,
+                                           {"cloudflare_api_token": "operator-token"},
+                                           emergency_pause=True)
+    assert installation.credentials == {"cloudflare_api_token": "operator-token"}
+    with pytest.raises(ValueError, match="credential handoff"):
+        operations.Installation(planned_installation.directory, {"cloudflare_api_token": "operator-token"})
+
 def test_sender_off_pauses_and_verifies_disabled_version_without_changing_fence(tmp_path, monkeypatch):
     from types import SimpleNamespace
 
@@ -123,11 +133,7 @@ def test_reviews_provider_change_requires_verified_off_and_preserves_fence(monke
     assert state["activation_watermark"] == 7 and "build" not in state
     installation.credentials["smtp2go_api_key"] = "api-test"
     installation.db = lambda role: "db"
-    def failed_cloudflare_query(_database, sql, _params):
-        assert "'failed'" in sql
-        return [{"n": 1}]
-    installation.api.query = failed_cloudflare_query
-    with pytest.raises(ValueError, match="resolve failed, uncertain or in-flight"):
+    with pytest.raises(ValueError, match="switching from Cloudflare to SMTP is unsupported"):
         operations.Installation.reviews_provider(installation, "smtp2go")
     assert config["reviews_email_provider"] == "cloudflare"
 

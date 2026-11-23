@@ -608,3 +608,7 @@ GEL planning copies only image paths referenced by the manifest and product
 presentation content into the private inventory. Unrelated files are excluded;
 missing paths, traversal and symlink components are rejected before inputs are
 written. Asset selection does not authorize reading other operator files.
+
+For this test-only integration, switching a Cloudflare Reviews sender back to
+SMTP is unsupported. Retain the Cloudflare provider configuration when rolling
+back; do not route Cloudflare delivery records through SMTP reconciliation.

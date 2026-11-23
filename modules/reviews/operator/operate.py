@@ -249,7 +249,7 @@ def validate_config(config):
 
 
 class Installation(PostPurchaseOperator):
-    def __init__(self, directory, credentials=None, api=None, *, credential_provider=None):
+    def __init__(self, directory, credentials=None, api=None, *, credential_provider=None, emergency_pause=False):
         self.directory = Path(directory).resolve()
         self.state_path = self.directory / "inventory.json"
         self.vault_path = self.directory / "secrets.json"
@@ -272,7 +272,10 @@ class Installation(PostPurchaseOperator):
             if field in self.config and not Path(self.config[field]).is_absolute():
                 self.config[field] = str(self.directory / self.config[field])
         self.credentials = credentials
-        if credentials is not None:
+        if credentials is not None and emergency_pause:
+            if not isinstance(credentials.get("cloudflare_api_token"), str) or not credentials["cloudflare_api_token"]:
+                raise ValueError("Cloudflare operator credential is required to pause queues")
+        elif credentials is not None:
             required = {"cloudflare_api_token", "stripe_test_key"}
             mailing = self.config["reviews_enabled"] or self.has_post_purchase
             if mailing:
@@ -1634,11 +1637,7 @@ class Installation(PostPurchaseOperator):
         if self.config.get("reviews_email_provider", "smtp2go") == provider:
             return {"reviews_provider": provider, "phase": "paused", "changed": False}
         if self.config.get("reviews_email_provider", "smtp2go") == "cloudflare":
-            unresolved = self.api.query(self.db("reviews"),
-                "SELECT count(*) AS n FROM invitation_generations WHERE store_key=? AND environment='test' "
-                "AND state IN ('dispatching','uncertain','failed')", [self.config.get("store_key", "acorn-store")])
-            if len(unresolved) != 1 or unresolved[0]["n"]:
-                raise ValueError("resolve failed, uncertain or in-flight deliveries before changing from Cloudflare")
+            raise ValueError("switching from Cloudflare to SMTP is unsupported; retain the Cloudflare configuration")
         self.config["reviews_email_provider"] = provider
         self.state["config"]["reviews_email_provider"] = provider
         self.state.pop("build", None)
@@ -2128,7 +2127,8 @@ def main():
             else:
                 credentials = read_private(args.credentials) if args.credentials else None
                 installation = Installation(args.directory, credentials, credential_provider=(
-                    args.provider if args.command == "post-purchase-reconfigure-provider" else None))
+                    args.provider if args.command == "post-purchase-reconfigure-provider" else None),
+                    emergency_pause=args.command in ("pause", "sender-off"))
                 if args.command == "activate":
                     result = installation.activate(args.enable_test_delivery)
                 elif args.command == "post-purchase-activate":
