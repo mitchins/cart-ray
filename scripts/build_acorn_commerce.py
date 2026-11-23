@@ -243,6 +243,8 @@ def repair_missing_pywrangler_vendor(project: Path, env: dict[str, str], package
             "pip",
             "install",
             "--no-build",
+            "--python",
+            str(project / ".venv/bin/python"),
             "--target",
             str(target),
             "-r",

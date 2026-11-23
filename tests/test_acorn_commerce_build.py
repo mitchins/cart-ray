@@ -395,6 +395,7 @@ def test_empty_pywrangler_vendor_uses_explicit_locked_target(tmp_path, monkeypat
 
     def install(command, project, env):
         assert command[:4] == ["uv", "pip", "install", "--no-build"]
+        assert command[command.index("--python")+1] == str(project / ".venv/bin/python")
         assert "pylock.toml" in " ".join(command)
         target = project / "locked-vendor-target"
         (target / "kinglet").mkdir(parents=True)
