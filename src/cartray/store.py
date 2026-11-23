@@ -264,10 +264,16 @@ class SqliteOrderStore:
             "PRAGMA table_info(review_invitation_checkout_grants)"
         )}
         if "request_limit" not in columns:
-            self.connection.execute(
-                "ALTER TABLE review_invitation_checkout_grants "
-                "ADD COLUMN request_limit INTEGER CHECK(request_limit IN (1,2))"
-            )
+            try:
+                self.connection.execute(
+                    "ALTER TABLE review_invitation_checkout_grants "
+                    "ADD COLUMN request_limit INTEGER CHECK(request_limit IN (1,2))"
+                )
+            except sqlite3.OperationalError:
+                # Another opener may have completed the same additive upgrade.
+                current = self.connection.execute("PRAGMA table_info(review_invitation_checkout_grants)")
+                if "request_limit" not in {row["name"] for row in current}:
+                    raise
 
     @classmethod
     def in_memory(cls, *, lease_seconds: int = 60) -> SqliteOrderStore:
