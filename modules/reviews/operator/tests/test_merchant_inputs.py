@@ -324,7 +324,12 @@ def test_explicit_corrected_build_inputs_preserve_installation_state(tmp_path):
     (source / "storefront/cart/index.html").write_text(
         (source / "storefront/cart/index.html").read_text() + "<!-- updated -->"
     )
+    checksum = validate(source, ROOT)
+    partial = install.directory / 'inputs' / ('merchant-' + checksum)
+    partial.mkdir()
+    (partial / 'interrupted.txt').write_text('incomplete generated snapshot')
     install.update_merchant_inputs(source)
+    assert validate(Path(install.config['merchant_inputs']), ROOT) == checksum
     assert install.state["resources"] == before["resources"]
     assert install.state["secret_fingerprints"] == before["secret_fingerprints"]
     assert install.state["activation_authorized"] == before["activation_authorized"]

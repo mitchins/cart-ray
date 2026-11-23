@@ -921,10 +921,21 @@ class Installation(PostPurchaseOperator):
         source = Path(source).resolve(strict=True)
         checksum = validate_merchant_inputs(source, ROOT)
         destination = self.directory / 'inputs' / ('merchant-' + checksum)
-        if not destination.exists():
-            snapshot_merchant_inputs(source, destination, ROOT)
-        if validate_merchant_inputs(destination, ROOT) != checksum:
-            raise ValueError('retained merchant snapshot differs from its fingerprint')
+        try:
+            retained = destination.exists() and validate_merchant_inputs(destination, ROOT) == checksum
+        except (ValueError, FileNotFoundError):
+            retained = False
+        if not retained:
+            with tempfile.TemporaryDirectory(prefix='merchant-copy-', dir=destination.parent) as temporary:
+                candidate = Path(temporary) / 'snapshot'
+                if snapshot_merchant_inputs(source, candidate, ROOT) != checksum:
+                    raise ValueError('merchant source changed while being copied')
+                if destination.exists():
+                    # Preserve an interrupted local copy for diagnosis. No
+                    # database, key, source package or release is deleted.
+                    os.replace(destination, destination.with_name(
+                        destination.name + '-interrupted-' + str(time.time_ns())))
+                os.replace(candidate, destination)
         old = dict(self.config)
         self.config.update(merchant_inputs=str(destination), merchant_inputs_sha256=checksum)
         try:

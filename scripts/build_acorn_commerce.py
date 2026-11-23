@@ -201,10 +201,18 @@ def verify_vendor(project: Path, lock: dict) -> dict:
         expected.update(metadata[0].relative_to(vendor) / n for n in ("INSTALLER", "REQUESTED"))
     # The CartRay package is synchronized after vendoring and separately checked below.
     vendor_files = {
-        p.relative_to(vendor) for p in vendor.rglob("*") if p.is_file() and p.relative_to(vendor).parts[0] != "cartray"
+        p.relative_to(vendor) for p in vendor.rglob("*")
+        if p.is_file() and p.relative_to(vendor).parts[0] not in {"cartray", "cartray_reviews"}
     }
     if vendor_files != expected:
         raise RuntimeError("unexpected vendored dependency files")
+    review_source = project / 'modules/reviews/src/cartray_reviews'
+    review_vendor = vendor / 'cartray_reviews'
+    if review_source.exists() or review_vendor.exists():
+        if (not review_source.is_dir() or not review_vendor.is_dir()
+                or digest_tree(review_source) != digest_tree(review_vendor)):
+            raise RuntimeError('native Reviews library differs from the pinned source')
+
     all_vendor = {p.relative_to(vendor) for p in vendor.rglob("*") if p.is_file()}
     if all_vendor != {p.relative_to(bundle) for p in bundle.rglob("*") if p.is_file()}:
         raise RuntimeError("bundle/vendor file set mismatch")
