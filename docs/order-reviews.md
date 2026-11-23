@@ -117,13 +117,15 @@ and Cloudflare request formats; they are not live provider qualification.
 
 A receipt can be accepted without direct review enrichment after the existing
 four-second timeout. If its native capability was already created, the
-accountless order page reads that same capability. If it was not, the authorised
-order page obtains the recipient from the existing private purchase verifier
+accountless order page reads that same capability. If it was not and the confirmation attempt has finished (accepted or uncertain),
+the authorised order page obtains the recipient from the existing private purchase verifier
 and creates access using the confirmed order, original checkout permission,
 suppression key and activation fence. It never accepts browser-supplied purchase
 or recipient identity. This access-only repair sends no mail, schedules no
 follow-up and does not replace the accepted receipt.
 
+An order page opened before receipt processing does not create a message plan or
+change merchant timing. An existing capability remains readable immediately.
 The read is bounded by the same four-second enrichment limit. Resources remain
 available if Reviews or recipient verification is still unavailable; the buyer
 can reload the order page after recovery. Paused sending permits authenticated

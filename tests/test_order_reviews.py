@@ -835,6 +835,8 @@ def test_order_resources_survive_review_outage_then_permission_checked_access_re
             return SimpleNamespace(status=503)
 
     env.POST_PURCHASE_HANDLER = Unavailable()
+    run(worker._drain_post_purchase(env))
+    assert db.conn.execute('SELECT state FROM post_purchase_executions').fetchone()[0] == 'uncertain'
     env.CARTRAY_POST_PURCHASE_MODE = 'disabled'
     client = TestClient(worker.create_app(),env=vars(env))
     body = {'token':token}
@@ -853,3 +855,39 @@ def test_order_resources_survive_review_outage_then_permission_checked_access_re
     status,_,payload = client.request('POST','/order-access',json_data=body,headers=headers)
     assert status == 200 and 'reviews' not in json.loads(payload)
     assert sent == []
+
+
+def test_order_page_before_receipt_preserves_followup_only_preferences(purchase):
+    from kinglet import TestClient
+
+    db,env,sent,order = purchase
+    env.CARTRAY_REVIEW_SETTINGS = json.dumps({'timing':'followup','delay_days':7})
+    env.CARTRAY_ORDER_ACCESS_MODE = 'test'
+    env.CARTRAY_ORDER_ACCESS_KEY = 'a'*32
+    env.CARTRAY_RESOURCE_CONFIG = '{}'
+    env.CARTRAY_SIGNING_KEY_ID = 'installation'
+
+    async def allow(_):
+        return {'success':True}
+
+    env.CHECKOUT_STATUS_RATE_LIMITER = SimpleNamespace(limit=allow)
+    token = run(worker.issue_order_access(db,'a'*32,'merchant','test',order))
+    body = {'token':token}
+    client = TestClient(worker.create_app(),env=vars(env))
+    headers = {'content-type':'application/json','content-length':str(len(json.dumps(body).encode())),
+               'cf-connecting-ip':'192.0.2.1'}
+    status,_,payload = client.request('POST','/order-access',json_data=body,headers=headers)
+    assert status == 200
+    assert len(json.loads(payload)['items']) == 2
+    assert 'reviews' not in json.loads(payload)
+    assert db.conn.execute('SELECT count(*) FROM order_review_messages').fetchone()[0] == 0
+    run(worker._drain_post_purchase(env))
+    assert len(sent) == 1 and not sent[0].get('reviews')
+    message = run(order_reviews.first(db,'SELECT * FROM order_review_messages'))
+    assert json.loads(message['settings_json'])['timing'] == 'followup'
+    assert message['due_at'] is not None
+    db.conn.execute('UPDATE order_review_messages SET due_at=0')
+    db.conn.commit()
+    run(worker._drain_post_purchase(env))
+    run(worker._drain_post_purchase(env))
+    assert [x['type'] for x in sent] == ['order_confirmation','review_followup']

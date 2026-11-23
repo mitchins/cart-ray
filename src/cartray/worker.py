@@ -857,6 +857,12 @@ async def _order_access_review_links(env, merchant, token, items):
         "SELECT * FROM order_review_messages WHERE merchant_id=? AND environment='test' AND order_id=?",
         merchant, scope['order_id'])
     if not message:
+        receipt = await order_reviews.first(env.DB,
+            "SELECT state FROM post_purchase_executions WHERE merchant_id=? AND environment='test' "
+            "AND order_id=? AND workflow_key='order-receipt' AND state IN ('accepted','uncertain')",
+            merchant, scope['order_id'])
+        if not receipt:
+            return None  # A pre-receipt view must not freeze notification preferences.
         envelope = {'merchant':merchant, 'environment':'test', 'order_id':scope['order_id'],
                     'session_id':scope['external_session_id'], 'access_url':None,
                     'items':[{'product_key':item['product_key'],'quantity':item['quantity'],
