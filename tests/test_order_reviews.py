@@ -408,3 +408,14 @@ def test_receipt_includes_reviews_after_slow_recipient_evidence(purchase):
     run(worker._drain_post_purchase(env))
     assert len(sent) == 1 and sent[0]["reviews"]["subjects"]
     assert db.conn.execute("SELECT receipt_selection_json FROM order_review_messages").fetchone()[0]
+
+
+def test_scheduled_notification_drain_is_awaited(purchase):
+    db, env, sent, _ = purchase
+    entry = worker.Default()
+    entry.env = env
+    # The scheduled argument is a raw JS execution context, not the SDK wrapper.
+    # No coroutine is passed to its waitUntil as though it were a JS Promise.
+    run(entry.scheduled(SimpleNamespace(cron="* * * * *"), env, object()))
+    assert [message["type"] for message in sent] == ["order_confirmation", "review_followup"]
+    assert db.conn.execute("SELECT state FROM order_review_messages").fetchone()[0] == "accepted"

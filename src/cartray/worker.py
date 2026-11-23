@@ -780,7 +780,7 @@ class Default(WorkerEntrypoint):
                     getattr(self.env, "CARTRAY_POST_PURCHASE_MODE", "disabled") == "test"
                     and getattr(self.env, "CARTRAY_ENVIRONMENT", "") == "test"
                 ):
-                    ctx.waitUntil(_drain_post_purchase(self.env))
+                    await _drain_post_purchase(self.env)
             except Exception:
                 pass
 
