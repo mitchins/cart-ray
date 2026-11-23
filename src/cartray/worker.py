@@ -856,7 +856,7 @@ async def _drain_order_notifications(env):
                 ],
             }
             try:
-                envelope["reviews"] = await asyncio.wait_for(_receipt_reviews(env, envelope), timeout=2)
+                envelope["reviews"] = await asyncio.wait_for(_receipt_reviews(env, envelope), timeout=4)
             except Exception as error:
                 print(f"Review inclusion unavailable: {type(error).__name__}")
             body = json.dumps(envelope, separators=(",", ":"))

@@ -480,7 +480,7 @@ class OrderReceiptDispatcher(D1Dispatcher):
             return {"receipt": "pending_claim" if any(row["state"] == "claimed" for row in existing)
                     else "already_claimed"}
         if ((max_new_claims is not None and max_new_claims < 1)
-                or (deadline is not None and time.monotonic() + 12 >= deadline)):
+                or (deadline is not None and time.monotonic() + 16 >= deadline)):
             return {"receipt": "deferred"}
         result = _results(await self.database.prepare(
             "SELECT product_key,quantity FROM order_items WHERE order_id=? ORDER BY product_key"

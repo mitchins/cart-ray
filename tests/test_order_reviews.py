@@ -392,3 +392,19 @@ def test_withdrawn_recovery_is_retired_instead_of_starving_later_customers(purch
     # Repeated scheduled processing does not keep selecting an ineligible request.
     run(worker._drain_post_purchase(env))
     assert len(sent) == 1
+
+
+def test_receipt_includes_reviews_after_slow_recipient_evidence(purchase):
+    db, env, sent, _ = purchase
+    original = env.POST_PURCHASE_HANDLER.fetch
+
+    async def slow_evidence(request):
+        if json.loads(request.body)["type"] == "recipient_evidence":
+            await asyncio.sleep(2.1)
+        return await original(request)
+
+    env.POST_PURCHASE_HANDLER.fetch = slow_evidence
+    env.CARTRAY_REVIEW_SETTINGS = json.dumps({"timing": "receipt"})
+    run(worker._drain_post_purchase(env))
+    assert len(sent) == 1 and sent[0]["reviews"]["subjects"]
+    assert db.conn.execute("SELECT receipt_selection_json FROM order_review_messages").fetchone()[0]
