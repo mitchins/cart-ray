@@ -1591,14 +1591,17 @@ class Installation(PostPurchaseOperator):
         """Pause Reviews queues, then publish and verify a hard-disabled sender version."""
         if not self.config["reviews_enabled"] or not self.state.get("deployment", {}).get("complete"):
             raise ValueError("a completed Reviews deployment is required")
+        if not self.credentials:
+            raise ValueError("protected sender credentials are required before disabling the sender")
         self.check_reviews_handoff()
+        sender_secrets = secret_bindings(self, "sender")
         self.pause()
         deployment = self.state["deployment"]
         build = json.loads((self.directory / "releases" / deployment["commit"] / "build.json").read_text())
         nodes, _ = graph(self, deployment["versions"], sending=False)
         node = nodes["sender"]
         version = self.api.upload(self.name("sender"), self.artifact_modules("sender", build), {
-            "main_module": "sender.mjs", "bindings": node["bindings"] + secret_bindings(self, "sender"),
+            "main_module": "sender.mjs", "bindings": node["bindings"] + sender_secrets,
             "compatibility_date": "2026-08-31",
         })
         self.api.publish(self.name("sender"), version["id"])
@@ -1630,6 +1633,12 @@ class Installation(PostPurchaseOperator):
             raise ValueError("current OFF sender differs: " + "; ".join(errors))
         if self.config.get("reviews_email_provider", "smtp2go") == provider:
             return {"reviews_provider": provider, "phase": "paused", "changed": False}
+        if self.config.get("reviews_email_provider", "smtp2go") == "cloudflare":
+            unresolved = self.api.query(self.db("reviews"),
+                "SELECT count(*) AS n FROM invitation_generations WHERE store_key=? AND environment='test' "
+                "AND state IN ('dispatching','uncertain')", [self.config.get("store_key", "acorn-store")])
+            if len(unresolved) != 1 or unresolved[0]["n"]:
+                raise ValueError("resolve uncertain or in-flight deliveries before changing from Cloudflare")
         self.config["reviews_email_provider"] = provider
         self.state["config"]["reviews_email_provider"] = provider
         self.state.pop("build", None)
@@ -1779,12 +1788,13 @@ class Installation(PostPurchaseOperator):
             "WHERE store_key=? AND environment='test' ORDER BY accepted_at",
             [self.config.get("store_key", "acorn-store")],
         )
-        cloudflare_deliveries = self.api.query(
-            self.db("reviews"),
-            "SELECT delivery_identity,provider_message_id,accepted_at FROM review_cloudflare_deliveries "
-            "WHERE store_key=? AND environment='test' ORDER BY accepted_at",
-            [self.config.get("store_key", "acorn-store")],
-        )
+        cf_schema = self.api.query(self.db("reviews"),
+                                   "SELECT name FROM sqlite_master WHERE type='table' AND name=?",
+                                   ["review_cloudflare_deliveries"])
+        cloudflare_deliveries = (self.api.query(
+            self.db("reviews"), "SELECT delivery_identity,provider_message_id,accepted_at "
+            "FROM review_cloudflare_deliveries WHERE store_key=? AND environment='test' ORDER BY accepted_at",
+            [self.config.get("store_key", "acorn-store")]) if cf_schema else [])
         states = self.api.query(
             self.db("reviews"),
             "SELECT state,COUNT(*) AS count FROM invitation_generations "
@@ -1817,6 +1827,7 @@ class Installation(PostPurchaseOperator):
             "checkpoint": checkpoint,
             "provider_acceptances": deliveries,
             "cloudflare_provider_acceptances": cloudflare_deliveries,
+            "cloudflare_receipt_schema": "available" if cf_schema else "migration_required",
             "generation_states": states,
             "public_subjects": public,
             "recipient_suppression_count": suppressed[0]["count"],

@@ -56,7 +56,7 @@ def test_sender_off_pauses_and_verifies_disabled_version_without_changing_fence(
     state = {"deployment": {"complete": True, "commit": "commit", "versions": {"sender": "on"}, "sending": True},
              "activation_watermark": 42}
     installation = SimpleNamespace(
-        config={"reviews_enabled": True}, state=state, directory=tmp_path, api=api,
+        config={"reviews_enabled": True}, state=state, directory=tmp_path, api=api, credentials={"token": "test"},
         pause=lambda: calls.append(("pause",)), name=lambda role: role, check_reviews_handoff=lambda: None,
         artifact_modules=lambda role, build: {}, worker_binding_errors=lambda *args: [], save=lambda: None,
     )
@@ -66,6 +66,11 @@ def test_sender_off_pauses_and_verifies_disabled_version_without_changing_fence(
 
     monkeypatch.setattr(operations, "graph", disabled_graph)
     monkeypatch.setattr(operations, "secret_bindings", lambda *args: [])
+    installation.credentials = None
+    with pytest.raises(ValueError, match="credentials"):
+        operations.Installation.sender_off(installation)
+    assert not calls
+    installation.credentials = {"token": "test"}
     result = operations.Installation.sender_off(installation)
     assert calls[0] == ("pause",) and calls[-1] == ("publish", "off-version")
     assert calls[1][1]["bindings"][0]["text"] == "disabled"
@@ -115,6 +120,12 @@ def test_reviews_provider_change_requires_verified_off_and_preserves_fence(monke
     result = operations.Installation.reviews_provider(installation, "cloudflare")
     assert result["changed"] and config["reviews_email_provider"] == "cloudflare"
     assert state["activation_watermark"] == 7 and "build" not in state
+    installation.credentials["smtp2go_api_key"] = "api-test"
+    installation.db = lambda role: "db"
+    installation.api.query = lambda *args: [{"n": 1}]
+    with pytest.raises(ValueError, match="resolve uncertain or in-flight"):
+        operations.Installation.reviews_provider(installation, "smtp2go")
+    assert config["reviews_email_provider"] == "cloudflare"
 
 
 def test_plan_is_nonsecret_offline_and_test_only(tmp_path):

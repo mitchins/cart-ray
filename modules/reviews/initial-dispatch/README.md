@@ -8,10 +8,14 @@ The optional `REVIEWS_EMAIL_PROVIDER=cloudflare` test adapter uses the configure
 `CLOUDFLARE_EMAIL_ACCOUNT_ID` and dedicated `CLOUDFLARE_EMAIL_API_TOKEN`. It
 requires exactly one approved recipient in Cloudflare's delivered or queued
 response and records the actual Cloudflare message ID separately from SMTP2GO
-receipts. Acceptance is not proof of mailbox delivery. A missing, ambiguous,
-bounced or suppressed provider response is held as uncertain; there is no
+receipts. Acceptance is not proof of mailbox delivery. A definitive single-recipient
+bounce or provider suppression is recorded as failed; a missing or ambiguous
+provider response is held as uncertain. There is no
 automatic retry or SMTP fallback. Cloudflare activity reconciliation is not yet
-implemented. Recovery email transport is independent and is not changed here.
+implemented. Staff refresh/acknowledge refuses to route Cloudflare receipts to
+the SMTP2GO reconciler. While Cloudflare is selected, a receipt-less uncertain
+delivery is also held rather than guessed to be SMTP2GO, including any older
+receipt-less delivery. Recovery email transport is independent and is not changed here.
 
 The email identifies the merchant and contact and carries an HTTPS one-click unsubscribe endpoint. GET and HEAD show a confirmation page without mutating state; a POST writes both an acquisition withdrawal and a merchant-scoped, purpose-specific pseudonymous recipient suppression. This suppresses later purchases for that merchant, including when collection is disabled. The atomic delivery claim is the start of an in-flight send: withdrawal after that claim cannot recall the provider call, even if it has not yet started. The v2 contact pseudonym uses a stable keyed HMAC, store and environment. Normalization lowercases the domain but preserves the local part; address aliases are not inferred. The stable key must not be rotated without a qualified suppression-preserving migration. Legacy v1 purchase-scoped identifiers cannot be upgraded without authoritative recipient evidence and cannot claim merchant-wide suppression. The endpoint and capability are test-only. The public route must be hosted on the configured `UNSUBSCRIBE_BASE_URL` and bound privately to the Reviews Worker.
 

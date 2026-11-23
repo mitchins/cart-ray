@@ -45,3 +45,11 @@ test('explicit Cloudflare configuration never falls back to an available SMTP ke
  const t=setup();t.env.REVIEWS_EMAIL_PROVIDER='cloudflare';t.env.CLOUDFLARE_EMAIL_ACCOUNT_ID='a'.repeat(32);
  await assert.rejects(t.send(),/unavailable/);assert.equal(t.sent,0);
 });
+test('definitive Cloudflare rejection is failed once and never resent',async()=>{
+ for(const kind of ['permanent_bounces','suppressed_recipients']){
+  const t=setup();t.env.REVIEWS_EMAIL_PROVIDER='cloudflare';t.env.CLOUDFLARE_EMAIL_ACCOUNT_ID='a'.repeat(32);t.env.CLOUDFLARE_EMAIL_API_TOKEN='x'.repeat(32);
+  const result={message_id:'<a@b>',delivered:[],queued:[],permanent_bounces:[],suppressed_recipients:[]};result[kind]=['test@example.org'];
+  t.setProvider(async()=>Response.json({success:true,errors:[],result}));assert.equal(await t.send(),'failed');assert.equal(t.state,'failed');
+  await assert.rejects(t.send(),/reconciliation/);assert.equal(t.sent,1);
+ }
+});

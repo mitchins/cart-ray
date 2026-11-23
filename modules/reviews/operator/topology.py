@@ -274,6 +274,7 @@ def graph(installation, versions=None, sending=False, post_purchase_modes=None,
         if config.get("reviews_email_provider", "smtp2go") == "cloudflare":
             nodes["sender"]["vars"].update(REVIEWS_EMAIL_PROVIDER="cloudflare",
                                            CLOUDFLARE_EMAIL_ACCOUNT_ID=config["account_id"])
+            nodes["reviews"]["vars"]["REVIEWS_INITIAL_EMAIL_PROVIDER"] = "cloudflare"
     if "post_purchase_config" in config:
         actions = actions_override if actions_override is not None else installation.post_purchase_actions()
         modes = post_purchase_modes if post_purchase_modes is not None else state.get("post_purchase_modes", {})

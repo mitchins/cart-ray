@@ -474,6 +474,16 @@ async def provider_operations(request, env, delivery_id, action, actor, data):
     if len(found) != 1:
         return fail(404, "delivery unavailable")
     acquisition, generation = found[0]["acquisition_id"], found[0]["generation_id"]
+    cloudflare = rows(await db.prepare(
+        "SELECT provider_message_id FROM review_cloudflare_deliveries "
+        "WHERE store_key=? AND environment=? AND acquisition_id=? AND generation_id=? AND delivery_identity=?"
+    ).bind(store, environment, acquisition, generation, delivery_id).all())
+    smtp = rows(await db.prepare(
+        "SELECT provider_email_id FROM review_provider_deliveries "
+        "WHERE store_key=? AND environment=? AND acquisition_id=? AND generation_id=? AND delivery_identity=?"
+    ).bind(store, environment, acquisition, generation, delivery_id).all())
+    if cloudflare or (not smtp and getattr(env, "REVIEWS_INITIAL_EMAIL_PROVIDER", "smtp2go") == "cloudflare"):
+        return fail(409, "Cloudflare provider reconciliation unavailable")
     event = None
     if action == "refresh":
         if data:
@@ -487,11 +497,7 @@ async def provider_operations(request, env, delivery_id, action, actor, data):
             str(getattr(env, "REVIEWS_CONSENT_SECRET", "")),
         )):
             return fail(503, "operations unavailable")
-        recorded = rows(await db.prepare(
-            "SELECT provider_email_id FROM review_provider_deliveries "
-            "WHERE store_key=? AND environment=? AND acquisition_id=? AND generation_id=? AND delivery_identity=?"
-        ).bind(store, environment, acquisition, generation, delivery_id).all())
-        target = "reconcile" if recorded else "discover"
+        target = "reconcile" if smtp else "discover"
     elif action == "acknowledge":
         if set(data) != {"provider_email_id", "event_type", "event_at"}:
             return fail(400, "invalid request")

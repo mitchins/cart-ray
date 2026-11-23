@@ -47,7 +47,7 @@ export async function dispatchInitial(message,env,fetcher=fetch,now=()=>Math.flo
  landing.hash='invitation='+draft.token;
  unsubscribeBase.pathname=unsubscribeBase.pathname.replace(/\/$/,'')+'/'+draft.unsubscribe_token;
  const identity={acquisition_id:draft.acquisition_id,generation_id:draft.generation_id,delivery_identity:draft.delivery_identity};
- let providerEmailId;
+ let providerEmailId, providerRejected=false;
  try{
    const text=`Thank you for your purchase from ${env.MERCHANT_NAME}. If you would like to share your experience, visit:\n\n${landing}\n\nAnyone with this link can use it.\n\nContact: ${env.MERCHANT_CONTACT}\nStop review-request emails: ${unsubscribeBase}`;
    const headers={'List-Unsubscribe':`<${unsubscribeBase}>`,'List-Unsubscribe-Post':'List-Unsubscribe=One-Click','X-Reviews-Delivery-Identity':draft.delivery_identity};
@@ -59,16 +59,21 @@ export async function dispatchInitial(message,env,fetcher=fetch,now=()=>Math.flo
      sender:env.TEST_SENDER,to:[env.APPROVED_TEST_EMAIL],subject:`Review your purchase from ${env.MERCHANT_NAME}`,
      text_body:text,
      custom_headers:[{header:'List-Unsubscribe',value:`<${unsubscribeBase}>`},{header:'List-Unsubscribe-Post',value:'List-Unsubscribe=One-Click'},{header:'X-Reviews-Delivery-Identity',value:draft.delivery_identity}],fastaccept:false})});
-   if(cloudflare){const r=result?.result, accepted=[...(Array.isArray(r?.delivered)?r.delivered:[]),...(Array.isArray(r?.queued)?r.queued:[])];
+   if(cloudflare){const r=result?.result;
      if(result?.success!==true||!Array.isArray(result.errors)||result.errors.length||!r||
-       !Array.isArray(r.delivered)||!Array.isArray(r.queued)||!Array.isArray(r.permanent_bounces)||r.permanent_bounces.length||
-       !Array.isArray(r.suppressed_recipients)||r.suppressed_recipients.length||accepted.length!==1||
-       typeof accepted[0]!=='string'||accepted[0].toLowerCase()!==env.APPROVED_TEST_EMAIL.toLowerCase()||
+       !Array.isArray(r.delivered)||!Array.isArray(r.queued)||!Array.isArray(r.permanent_bounces)||
+       !Array.isArray(r.suppressed_recipients))throw Error('unknown provider result');
+     const accepted=[...r.delivered,...r.queued], rejected=[...r.permanent_bounces,...r.suppressed_recipients];
+     if(accepted.length===0&&rejected.length===1&&typeof rejected[0]==='string'&&
+       rejected[0].toLowerCase()===env.APPROVED_TEST_EMAIL.toLowerCase())providerRejected=true;
+     else{if(rejected.length||accepted.length!==1||typeof accepted[0]!=='string'||
+       accepted[0].toLowerCase()!==env.APPROVED_TEST_EMAIL.toLowerCase()||
        typeof r.message_id!=='string'||!/^[\x21-\x7e]{1,512}$/.test(r.message_id))throw Error('unknown provider result');
-     providerEmailId=r.message_id;
+       providerEmailId=r.message_id;}
    }else{if(result?.data?.succeeded!==1||result.data.failed!==0||!Array.isArray(result.data.failures)||result.data.failures.length!==0||typeof result.data.email_id!=='string'||!/^[A-Za-z0-9_-]{1,128}$/.test(result.data.email_id))throw Error('unknown provider result');
      providerEmailId=result.data.email_id;}
  }catch(error){try{await call(env.REVIEWS_API,'/reviews-internal/v1/invitations/delivery-outcome',{...identity,outcome:'uncertain'},env.REVIEWS_DELIVERY_TOKEN)}catch{}throw Error('delivery reconciliation required',{cause:error});}
+ if(providerRejected){try{await call(env.REVIEWS_API,'/reviews-internal/v1/invitations/delivery-outcome',{...identity,outcome:'failed'},env.REVIEWS_DELIVERY_TOKEN)}catch{throw Error('delivery reconciliation required')};return 'failed';}
  const accepted_at=now();
  try{await call(env.REVIEWS_API,'/reviews-internal/v1/invitations/delivery-outcome',{...identity,outcome:'accepted',accepted_at,provider_email_id:providerEmailId,...(env.REVIEWS_EMAIL_PROVIDER==='cloudflare'?{provider:'cloudflare'}:{})},env.REVIEWS_DELIVERY_TOKEN)}catch{throw Error('delivery reconciliation required')}
  return 'sent';

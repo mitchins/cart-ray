@@ -164,6 +164,26 @@ def test_refresh_is_audited_scoped_and_never_sends_or_mutates(lifecycle, monkeyp
     assert result.status == 400
 
 
+def test_cloudflare_receipt_and_unknown_claim_never_enter_smtp_reconciliation(lifecycle, monkeypatch):
+    db = Database()
+    generation = add_delivery(db, 1, state="accepted")
+    add_delivery(db, 2, state="uncertain")
+    delivery = f"{1001:064x}"
+    db.db.execute("INSERT INTO review_cloudflare_deliveries VALUES (?,?,?,?,?,?,?)",
+                  ("store", "test", "private-order-1", generation, delivery, "<cf@example.test>", 101))
+    db.db.commit()
+    calls = []
+    monkeypatch.setattr(lifecycle, "request_provider_refresh", lambda *args: calls.append(args))
+    env = settings(REVIEWS_DB=db, REVIEWS_STAFF_ORIGIN="https://staff.example",
+                   REVIEWS_INITIAL_EMAIL_PROVIDER="cloudflare")
+    request = types.SimpleNamespace(headers={"Origin": "https://staff.example"})
+    for target in (delivery, f"{1002:064x}"):
+        result = asyncio.run(lifecycle.provider_operations(request, env, target, "refresh", "staff-1", {}))
+        assert result.status == 409 and "Cloudflare" in result.body["error"]
+    assert calls == []
+    assert db.db.execute("SELECT count(*) FROM review_provider_operations_audit").fetchone()[0] == 0
+
+
 def test_provider_outcomes_preserve_unknown_and_reject_untrusted_shapes(lifecycle):
     for reason in ("no_provider_identity", "no_activity", "history_window", "ambiguous", "no_match"):
         assert lifecycle.validate_provider_outcome({"status": "unknown", "reason": reason}) == {

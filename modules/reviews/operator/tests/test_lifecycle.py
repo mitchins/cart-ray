@@ -236,6 +236,15 @@ def test_empty_hosted_receipt_and_upgrade_keep_fence_and_keys(tmp_path):
         assert secret not in saved
 
 
+def test_receipt_before_cloudflare_migration_reports_upgrade_needed(tmp_path):
+    install, _, database, _, _ = lifecycle(tmp_path)
+    database.execute(install.db("reviews"), "DROP TABLE review_cloudflare_deliveries;")
+    with patch.object(install, "doctor", return_value={"healthy": True}):
+        receipt = install.receipt()
+    assert receipt["cloudflare_receipt_schema"] == "migration_required"
+    assert receipt["cloudflare_provider_acceptances"] == []
+
+
 def test_interrupted_public_route_configuration_is_reconciled_on_resume(tmp_path):
     install, provider, _, _, _ = lifecycle(tmp_path)
     build_at(install, "a" * 40)
