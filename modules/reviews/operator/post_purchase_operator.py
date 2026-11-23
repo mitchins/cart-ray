@@ -219,7 +219,6 @@ class PostPurchaseOperator:
     def finish_post_purchase_transition(self, deployment, operation, modes):
         self.state["post_purchase_modes"] = dict(modes)
         self.save()
-        self.state["post_purchase_transition"]
         revision = 0
         if modes == OFF:
             build = json.loads((self.directory / "releases" / deployment["commit"] / "build.json").read_text())
@@ -237,8 +236,6 @@ class PostPurchaseOperator:
                 "activation_watermark": self.state.get("post_purchase_watermark")}
 
     def post_purchase_activate(self, enable_test_delivery=False):
-        if self.config["reviews_enabled"] and not getattr(self, 'consolidated', False):
-            self.check_reviews_handoff()
         if self.state.get("post_purchase_provider_migration"):
             raise ValueError("finish a fresh OFF build/deploy after email provider reconfiguration before activation")
         if not enable_test_delivery:

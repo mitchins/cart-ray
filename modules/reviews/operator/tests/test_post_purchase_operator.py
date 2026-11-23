@@ -527,3 +527,11 @@ def test_pages_merchant_can_use_public_checkout_with_private_mail_handler(tmp_pa
     assert not nodes['post-purchase'].get('public', False)
     assert nodes['source']['services']=={'POST_PURCHASE_HANDLER':'post-purchase'}
     assert not install.queues
+
+
+def test_legacy_activation_reports_handover_without_deleted_helpers(tmp_path,monkeypatch):
+    install = Installation.plan(tmp_path / 'installation',handoff(tmp_path))
+    install.config['reviews_enabled'] = True
+    monkeypatch.setattr(install,'post_purchase_actions',lambda: ())
+    with pytest.raises(ValueError,match='schema-2 order-confirmation handover'):
+        install.post_purchase_activate(True)

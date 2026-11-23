@@ -390,8 +390,6 @@ def attest_version(
         "CARTRAY_SIGNING_PRIVATE_KEY_PKCS8_B64",
         "CARTRAY_PROJECTION_PUBLIC_KEYS_JSON",
     } | set(config.get("secrets", {}).get("required", []))
-    if any(service.get("binding") == "REVIEWS_SOURCE_TRIGGER" for service in config.get("services", [])):
-        required_secrets.update({"CARTRAY_REVIEWS_IDENTITY_TOKEN", "CARTRAY_REVIEWS_TRIGGER_TOKEN"})
     secret_names = [b.get("name") for b in bindings if b.get("type") == "secret_text"]
     if len(secret_names) != len(set(secret_names)) or not required_secrets.issubset(secret_names):
         raise ValueError("required deployed secret binding missing or ambiguous")
