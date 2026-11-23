@@ -42,7 +42,7 @@ jobs:
       - name: Test optional Reviews snapshot rehearsal
         run: REVIEWS_QUALIFICATION_BUILD=1 PYTHONPATH=modules/reviews/src uv run pytest modules/reviews/tests
       - name: Test Reviews recovery queue consumer
-        run: node --test modules/reviews/tests/dispatch.test.mjs
+        run: node --test modules/reviews/tests/dispatch.test.mjs modules/reviews/tests/order_access_gateway.test.mjs
       - name: Test Reviews synthetic due queue
         run: node --test modules/reviews/tests/automation_queue.test.mjs
       - name: Test resumable test-only installation operator
@@ -114,6 +114,7 @@ jobs:
           trap 'kill "$worker_pid"' EXIT
           for attempt in $(seq 1 30); do
             if curl --fail --silent --show-error http://127.0.0.1:8797/; then
+              test "$(curl --fail --silent --show-error 'http://127.0.0.1:8797/?download=1')" = 'workerd private file'
               exit 0
             fi
             sleep 1

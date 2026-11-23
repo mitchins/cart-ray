@@ -32,6 +32,7 @@ from post_purchase_operator import (
 from topology import graph, post_purchase_secret_bindings, secret_bindings, validate_post_purchase, wrangler_config
 
 from cartray.merchant_contract import merchant_path, register_path
+from cartray.order_access import validate_resource_configuration
 
 ROOT = Path(__file__).resolve().parents[3]
 ROLES = ("source", "reviews", "consumer", "producer", "evidence", "scheduler", "sender")
@@ -58,6 +59,7 @@ SECRET_NAMES = (
     "settlement",
     "unsubscribe",
     "scheduler",
+    "order_access",
 )
 
 
@@ -116,6 +118,7 @@ def validate_config(config):
         "post_purchase_config",
         "post_purchase_config_sha256",
         "post_purchase_email_provider",
+        "fulfilment",
     }
     if not isinstance(config, dict) or set(config) - required - optional or required - set(config):
         raise ValueError("installation config has missing or unknown fields")
@@ -173,6 +176,14 @@ def validate_config(config):
             or re.search(r"[\x00-\x1f\x7f]", config[name])
         ):
             raise ValueError(f"invalid public {name}")
+    if "fulfilment" in config:
+        fulfilment = config["fulfilment"]
+        if ("merchant_inputs" not in config or not isinstance(fulfilment, dict)
+                or set(fulfilment) != {"buckets"} or not isinstance(fulfilment["buckets"], dict)
+                or any(not isinstance(k, str) or not re.fullmatch(r"[A-Z][A-Z0-9_]{0,63}", k)
+                       or not isinstance(v, str) or not re.fullmatch(r"[a-z0-9][a-z0-9-]{1,62}", v)
+                       for k, v in fulfilment["buckets"].items())):
+            raise ValueError("fulfilment requires merchant inputs and valid private bucket bindings")
     if type(config.get("reviews_enabled", True)) is not bool:
         raise ValueError("reviews_enabled must be a boolean")
     if type(config.get("review_invitation_default_checked", True)) is not bool:
@@ -277,6 +288,8 @@ class Installation(PostPurchaseOperator):
                 "approved_test_email",
                 "test_sender",
             }
+            if "fulfilment" in self.config:
+                required.add("fulfilment_resources")
             mailing = self.config["reviews_enabled"] or self.has_post_purchase
             provider = credential_provider or self.post_purchase_email_provider
             if self.has_post_purchase:
@@ -289,6 +302,14 @@ class Installation(PostPurchaseOperator):
                 not isinstance(credentials[key], str) or not credentials[key] for key in required
             ):
                 raise ValueError("credential handoff is incomplete; use the documented private JSON schema")
+            if "fulfilment" in self.config:
+                try:
+                    resource_config = json.loads(credentials["fulfilment_resources"])
+                    if len(credentials["fulfilment_resources"].encode()) > 65536:
+                        raise ValueError("invalid resources")
+                    validate_resource_configuration(resource_config, self.config["fulfilment"]["buckets"])
+                except (ValueError, TypeError) as error:
+                    raise ValueError("fulfilment resources must be a protected JSON object") from error
             if not credentials["stripe_test_key"].startswith(("sk_test_", "rk_test_")):
                 raise ValueError("only a Stripe test credential is accepted")
             if mailing:
@@ -885,7 +906,7 @@ class Installation(PostPurchaseOperator):
         identity = {key: self.config[key] for key in fields}
         identity.update({key: self.config[key] for key in ("storefront_origin", "success_path", "cancel_path",
                                                          "webhook_url", "source_mode", "source_api_path",
-                                                         "post_purchase_config_sha256")
+                                                         "post_purchase_config_sha256", "fulfilment")
                          if key in self.config})
         if "post_purchase_email_provider" in self.config:
             identity["post_purchase_email_provider"] = self.config["post_purchase_email_provider"]
@@ -1229,7 +1250,7 @@ class Installation(PostPurchaseOperator):
                 (staging / "site-config.js").write_text(
                     "window.CARTRAY_THEME = " + json.dumps(theme, ensure_ascii=True) + ";\n"
                 )
-                if self.config["reviews_enabled"]:
+                if self.config["reviews_enabled"] or "fulfilment" in self.config:
                     shutil.copyfile(ROOT / "modules/reviews/gateway/worker.mjs", staging / "_worker.js")
             else:
                 self.run(
@@ -1289,6 +1310,10 @@ class Installation(PostPurchaseOperator):
             }
         if not self.config["reviews_enabled"]:
             deployment = {"env_vars": {}, "services": {}}
+        if "fulfilment" in self.config:
+            deployment["env_vars"]["ORDER_ACCESS_GATEWAY"] = {"type": "plain_text", "value": "test"}
+            deployment["env_vars"]["REVIEWS_STOREFRONT_ORIGIN"] = {"type": "plain_text", "value": origin}
+            deployment["services"]["CARTRAY_SOURCE"] = {"service": self.name("source"), "environment": "production"}
         self.api.request(
             "pages/projects/" + self.name("store"), "PATCH", {"deployment_configs": {"production": deployment}}
         )
@@ -1612,6 +1637,8 @@ class Installation(PostPurchaseOperator):
                 errors.append(f"{role}.bindings.{name}: missing/wrong type")
             elif kind == "d1" and value.get("database_id") != binding["id"]:
                 errors.append(f"{role}.bindings.{name}: wrong database")
+            elif kind == "r2_bucket" and value.get("bucket_name") != binding["bucket_name"]:
+                errors.append(f"{role}.bindings.{name}: wrong bucket")
             elif kind == "service" and value.get("service") != binding["service"]:
                 errors.append(f"{role}.bindings.{name}: wrong service")
             elif kind == "queue" and value.get("queue_name") != binding["queue_name"]:
@@ -1625,6 +1652,10 @@ class Installation(PostPurchaseOperator):
                 "text", binding.get("json")
             ):
                 errors.append(f"{role}.vars.{name}: differs from inventory")
+        if role == "source" and "fulfilment" in self.config:
+            for name in ("CARTRAY_ORDER_ACCESS_KEY", "CARTRAY_RESOURCE_CONFIG"):
+                if observed.get(name, {}).get("type") != "secret_text":
+                    errors.append(f"{role}.bindings.{name}: missing/wrong secret type")
         if self.has_post_purchase and role in POST_PURCHASE_ROLES:
             for name in post_purchase_secret_bindings(role, expected["vars"].get("EMAIL_PROVIDER", "smtp2go")):
                 if observed.get(name, {}).get("type") != "secret_text":
@@ -1904,6 +1935,25 @@ class Installation(PostPurchaseOperator):
                 self.execute_file(db, sql)
             self.state.setdefault("migration_ledgers", {})[role] = expected
             self.save()
+        if "fulfilment" in self.config:
+            db = self.db("commerce")
+            self.api.query(db, "INSERT OR IGNORE INTO post_purchase_installation VALUES (1,?,?)",
+                           [self.config["store_key"], "test"])
+            scope = self.api.query(
+                db, "SELECT merchant_id,environment FROM post_purchase_installation WHERE singleton=1"
+            )
+            if scope != [{"merchant_id": self.config["store_key"], "environment": "test"}]:
+                raise ValueError("fulfilment installation scope differs; restore the original installation")
+            vault = self.vault()
+            if "order_access" not in self.state["secret_fingerprints"]:
+                count = self.api.query(db, "SELECT count(*) AS n FROM order_access")
+                if len(count) != 1 or count[0]["n"]:
+                    raise ValueError("order access key missing with existing capabilities; restore the original key")
+                if "order_access" not in vault:
+                    vault["order_access"] = secrets.token_hex(32)
+                    atomic_json(self.vault_path, vault)
+                self.state["secret_fingerprints"]["order_access"] = digest(vault["order_access"].encode())
+                self.save()
         self.pin_suppression(allow_create=True)
         self.state["phase"] = "migrated"
         self.save()

@@ -288,6 +288,12 @@ def graph(installation, versions=None, sending=False, post_purchase_modes=None,
         if provider == "cloudflare":
             nodes["post-purchase"]["vars"].update(
                 EMAIL_PROVIDER="cloudflare", CLOUDFLARE_EMAIL_ACCOUNT_ID=config["account_id"])
+    if "fulfilment" in config:
+        nodes["source"]["vars"].update(
+            CARTRAY_ORDER_ACCESS_MODE="test", CARTRAY_MERCHANT_ID=store,
+            CARTRAY_ORDER_ACCESS_PATH=(config.get("source_api_path", "") + "/order-access"),
+        )
+        nodes["source"]["buckets"] = config["fulfilment"]["buckets"]
     for node in nodes.values():
         bindings = [
             {
@@ -299,6 +305,8 @@ def graph(installation, versions=None, sending=False, post_purchase_modes=None,
         ]
         bindings.append({"name": "CF_VERSION_METADATA", "type": "version_metadata"})
         bindings += [{"name": name, "type": "d1", "id": db(role)} for name, role in node.get("db", {}).items()]
+        bindings += [{"name": name, "type": "r2_bucket", "bucket_name": bucket}
+                     for name, bucket in node.get("buckets", {}).items()]
         bindings += [
             {"name": name, "type": "service", "service": worker(role), "environment": "production"}
             for name, role in node.get("services", {}).items()
@@ -375,6 +383,11 @@ def secret_bindings(installation, role):
     if "post_purchase_config" in installation.config and role in ("source", "post-purchase"):
         names[role]["CARTRAY_POST_PURCHASE_TOKEN" if role == "source" else "HANDLER_TOKEN"] = "post_purchase_token"
     result = {name: vault[key] for name, key in names[role].items()}
+    if role == "source" and "fulfilment" in installation.config:
+        if "order_access" not in vault:
+            raise ValueError("order access key missing; restore the original installation key")
+        result["CARTRAY_ORDER_ACCESS_KEY"] = vault["order_access"]
+        result["CARTRAY_RESOURCE_CONFIG"] = credentials["fulfilment_resources"]
     if role == "source":
         result.update(
             STRIPE_API_KEY=credentials["stripe_test_key"],
@@ -431,6 +444,8 @@ def wrangler_config(installation, role, node):
                 f"database_name = {q(binding['id'])}",
                 f"database_id = {q(binding['id'])}",
             ]
+        elif kind == "r2_bucket":
+            lines += ["[[r2_buckets]]", f"binding = {q(name)}", f"bucket_name = {q(binding['bucket_name'])}"]
         elif kind == "service":
             lines += ["[[services]]", f"binding = {q(name)}", f"service = {q(binding['service'])}"]
         elif kind == "queue":

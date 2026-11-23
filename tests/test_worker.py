@@ -895,3 +895,16 @@ def test_missing_post_purchase_service_is_rejected_before_claims(monkeypatch):
     )
     monkeypatch.setattr(worker_module, "D1Dispatcher", lambda *args: pytest.fail("must not claim"))
     asyncio.run(worker_module._drain_post_purchase(env))
+
+
+def test_rate_limit_uses_native_worker_headers_when_wrapper_does_not_capture_client_ip():
+    limiter = FixtureRateLimiter(True)
+    request = SimpleNamespace(
+        env=SimpleNamespace(CHECKOUT_STATUS_RATE_LIMITER=limiter, CARTRAY_SIGNING_KEY_ID="test-install"),
+        header=lambda _name: None,
+        _raw=SimpleNamespace(headers=SimpleNamespace(
+            get=lambda name: "192.0.2.1" if name == "cf-connecting-ip" else None
+        )),
+    )
+    assert asyncio.run(worker_module._client_rate_limit(request, "CHECKOUT_STATUS_RATE_LIMITER", "order-access"))
+    assert limiter.calls == 1

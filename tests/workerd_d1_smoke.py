@@ -8,16 +8,18 @@ import json
 import time
 from types import SimpleNamespace
 
-from js import crypto
+from js import Object, Request, crypto
+from js import Response as JsResponse
 from kinglet.storage import bytes_to_arraybuffer
 from pyodide.ffi import to_js
 from workers import Response, WorkerEntrypoint
 
 from cartray.errors import CheckoutInProgress
 from cartray.models import CheckoutOrder, CheckoutRedirect, OrderItem
+from cartray.order_access import issue_order_access, issuer_token, purchased_resources
 from cartray.post_purchase import Action, D1Dispatcher
 from cartray.store import D1OrderStore, _results
-from cartray.worker import _drain_post_purchase
+from cartray.worker import _drain_post_purchase, create_app
 from cartray.workers_crypto import WorkersEd25519Signer, WorkersEd25519Verifier
 
 TEST_PRIVATE_KEY_PKCS8_B64 = "MC4CAQAwBQYDK2VwBCIEIJZ4orlcGRX4w6SOrvHeEh5ZpFSC0FR4Onu1OKF/Lt87"
@@ -27,7 +29,36 @@ TEST_PAYLOAD = b"cartray-worker-webcrypto-smoke-v1"
 
 
 class Default(WorkerEntrypoint):
+    def order_env(self):
+        async def get_file(key):
+            return SimpleNamespace(body=JsResponse.new("workerd private file").body) if key == "test" else None
+
+        async def allow(_value):
+            return {"success": True}
+
+        return SimpleNamespace(
+            CARTRAY_ORDER_ACCESS_MODE="test", CARTRAY_ENVIRONMENT="test",
+            CARTRAY_MERCHANT_ID="smoke-store", CARTRAY_SIGNING_KEY_ID="smoke-install", DB=self.env.DB,
+            CARTRAY_RESOURCE_CONFIG=json.dumps({
+                "smoke-resource": {"provider": "private", "binding": "FILES", "key": "test",
+                                   "filename": "example.txt", "mime_type": "text/plain"},
+                "smoke-external": {"provider": "external", "url": "https://example.test/resource",
+                                   "filename": "External resource"},
+            }),
+            CHECKOUT_STATUS_RATE_LIMITER=SimpleNamespace(limit=allow), FILES=SimpleNamespace(get=get_file),
+        )
+
     async def fetch(self, _request):
+        if "/order-access" in str(_request.url):
+            headers = {"cf-connecting-ip": "192.0.2.1"}
+            options = {"method": _request.method, "headers": headers}
+            if _request.method == "POST":
+                body = await _request.text()
+                headers["content-type"] = _request.headers.get("content-type")
+                headers["content-length"] = str(len(body.encode()))
+                options["body"] = body
+            request = Request.new(str(_request.url), to_js(options, dict_converter=Object.fromEntries))
+            return await create_app()(request, self.order_env())
         await self.env.DB.prepare(
             """INSERT OR IGNORE INTO post_purchase_checkpoint
             SELECT 1,'smoke-store','test',COALESCE(MAX(id),0),COALESCE(MAX(id),0) FROM outbox"""
@@ -44,7 +75,7 @@ class Default(WorkerEntrypoint):
                     quantity=1,
                     stripe_price_id="price_smoke",
                     unit_amount_minor=1,
-                    fulfilment_resources=("smoke-resource",),
+                    fulfilment_resources=("smoke-resource", "smoke-external"),
                 ),
             ),
             items_digest="sha256:" + "1" * 64,
@@ -169,6 +200,33 @@ class Default(WorkerEntrypoint):
         )
         budget_deferred = len(budget_outcomes) == 100 and all(value == "deferred" for value in budget_outcomes.values())
 
+        access = await issue_order_access(self.env.DB, "s" * 32, "smoke-store", "test", order.order_id)
+        access_items = await purchased_resources(self.env.DB, access, "smoke-store", "test")
+        order_access_ok = access_items == [{"product_key": "SMOKE-TEMPLATE", "quantity": 1,
+                                           "resources": ["smoke-resource", "smoke-external"]}]
+        issue_body = json.dumps({"order_id": order.order_id})
+        issue_env = SimpleNamespace(
+            CARTRAY_ORDER_ACCESS_MODE="test", CARTRAY_ENVIRONMENT="test", CARTRAY_MERCHANT_ID="smoke-store",
+            CARTRAY_ORDER_ACCESS_KEY="s" * 32, DB=self.env.DB,
+        )
+        issue_request = Request.new(
+            "https://test.invalid/internal/order-access",
+            to_js({"method": "POST", "headers": {"authorization": "Bearer " + issuer_token("s" * 32),
+                   "content-length": str(len(issue_body)), "content-type": "application/json"}, "body": issue_body},
+                  dict_converter=Object.fromEntries),
+        )
+        issued_response = await create_app()(issue_request, issue_env)
+        order_access_ok = order_access_ok and issued_response.status == 200
+        if str(_request.url).endswith("?browser=1"):
+            return Response(None, status=302, headers={"Location": "/order-access#token=" + access})
+        if str(_request.url).endswith("?download=1"):
+            form_body = "token=" + access + "&resource=0.0"
+            raw = Request.new("https://test.invalid/order-access", to_js({"method": "POST",
+                "headers": {"cf-connecting-ip": "192.0.2.1", "content-type": "application/x-www-form-urlencoded",
+                            "content-length": str(len(form_body))}, "body": form_body},
+                dict_converter=Object.fromEntries))
+            return await create_app()(raw, self.order_env())
+
         signer = WorkersEd25519Signer(TEST_PRIVATE_KEY_PKCS8_B64)
         signature = await signer.sign(TEST_PAYLOAD)
         public_key = await crypto.subtle.importKey(
@@ -196,6 +254,7 @@ class Default(WorkerEntrypoint):
             "verifier_accepted": verifier_accepted,
             "workflows_once": workflows_once,
             "budget_deferred": budget_deferred,
+            "order_access": order_access_ok,
         }
         expected = {
             "d1_batch_owner": True,
@@ -207,5 +266,6 @@ class Default(WorkerEntrypoint):
             "verifier_accepted": True,
             "workflows_once": True,
             "budget_deferred": True,
+            "order_access": True,
         }
         return Response.json(result, status=200 if result == expected else 500)
