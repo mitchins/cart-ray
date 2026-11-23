@@ -780,7 +780,9 @@ class Default(WorkerEntrypoint):
                     getattr(self.env, "CARTRAY_POST_PURCHASE_MODE", "disabled") == "test"
                     and getattr(self.env, "CARTRAY_ENVIRONMENT", "") == "test"
                 ):
-                    await _drain_post_purchase(self.env)
+                    await _drain_post_purchase(
+                        self.env, priority=('recovery', 'followup', 'receipt')[int(time.time()) // 60 % 3]
+                    )
             except Exception:
                 pass
 
@@ -796,14 +798,14 @@ def _internal_post(url, token, body=None):
     return Request.new(url, to_js(options, dict_converter=__import__("js").Object.fromEntries))
 
 
-async def _drain_post_purchase(env):
+async def _drain_post_purchase(env, *, priority="receipt"):
     try:
-        await asyncio.wait_for(_drain_order_notifications(env), timeout=22)
+        await asyncio.wait_for(_drain_order_notifications(env, priority=priority), timeout=22)
     except TimeoutError:
         print("Order notification invocation reached its time budget")
 
 
-async def _drain_order_notifications(env):
+async def _drain_order_notifications(env, *, priority="receipt"):
     """Test-only best-effort drain; absent checkpoint or handler fails closed."""
     try:
         if getattr(env, "CARTRAY_POST_PURCHASE_MODE", "disabled") != "test" or _test_environment(env) != "test":
@@ -831,9 +833,9 @@ async def _drain_order_notifications(env):
             access_url = None
             if getattr(env, "CARTRAY_ORDER_ACCESS_MODE", "disabled") == "test":
                 try:
-                    capability = await issue_order_access(
+                    capability = await asyncio.wait_for(issue_order_access(
                         env.DB, _required_env(env, "CARTRAY_ORDER_ACCESS_KEY"), merchant, "test", purchase.order_id
-                    )
+                    ), timeout=2)
                     path = getattr(env, "CARTRAY_ORDER_ACCESS_PATH", "/order-access")
                     if not isinstance(path, str) or not re.fullmatch(r"/(?:[A-Za-z0-9_-]+/)*order-access", path):
                         raise ValueError("invalid order path")
@@ -872,13 +874,19 @@ async def _drain_order_notifications(env):
             return result.get("provider_reference")
 
         deadline = time.monotonic() + 21
+        reviews = bool(getattr(env, 'CARTRAY_REVIEW_SUBJECT_MAPS', None))
+        if reviews and priority == 'recovery':
+            await _drain_review_recovery(env, service, token, deadline=deadline)
+        if reviews and priority == 'followup':
+            await _drain_review_followups(env, service, token, deadline=deadline)
         dispatcher = OrderReceiptDispatcher(env.DB, merchant, "test", {"receipt": receipt_handler})
         await asyncio.wait_for(
             drain_confirmed_d1(dispatcher, (), limit=10, max_new_claims=2, deadline=deadline),
             timeout=22,
         )
-        if getattr(env, 'CARTRAY_REVIEW_SUBJECT_MAPS', None):
+        if reviews and priority != 'followup':
             await _drain_review_followups(env, service, token, deadline=deadline)
+        if reviews and priority != 'recovery':
             await _drain_review_recovery(env, service, token, deadline=deadline)
     except Exception as error:
         # Checkout is already committed; cron retries the durable checkpoint.
@@ -1036,9 +1044,9 @@ async def _drain_review_followups(env, service, token, *, deadline):
             await (
                 env.DB.prepare(
                     "UPDATE order_review_messages SET state='skipped' WHERE merchant_id=? "
-                    "AND environment='test' AND order_id=? AND state='pending'"
+                    "AND environment='test' AND order_id=? AND state='pending' AND invitation_token=?"
                 )
-                .bind(merchant, message["order_id"])
+                .bind(merchant, message["order_id"], message["invitation_token"])
                 .run()
             )
             continue
@@ -1109,12 +1117,16 @@ async def _drain_review_recovery(env, service, token, *, deadline):
     rows = _results(
         await env.DB.prepare("""SELECT r.acquisition_id,r.request_id,m.* FROM review_recovery_requests r
         JOIN order_review_messages m ON m.merchant_id=r.store_key AND m.environment=r.environment
-          AND m.order_id=r.acquisition_id WHERE r.store_key=? AND r.environment='test' AND r.state='pending'
+          AND m.order_id=r.acquisition_id LEFT JOIN review_recovery_deferrals d
+          ON d.store_key=r.store_key AND d.environment=r.environment AND d.acquisition_id=r.acquisition_id
+          AND d.request_id=r.request_id
+        WHERE r.store_key=? AND r.environment='test' AND r.state='pending'
+          AND (d.retry_after IS NULL OR d.retry_after<=?)
           AND NOT EXISTS(SELECT 1 FROM invitation_generations g WHERE g.store_key=r.store_key
             AND g.environment=r.environment AND g.acquisition_id=r.acquisition_id
             AND g.request_key='recovery-'||r.request_id AND g.state<>'prepared')
-        ORDER BY r.requested_at LIMIT 1""")
-        .bind(merchant)
+        ORDER BY COALESCE(d.retry_after,r.requested_at),r.requested_at LIMIT 1""")
+        .bind(merchant,int(time.time()))
         .all()
     )
     for message in rows:
@@ -1149,6 +1161,15 @@ async def _drain_review_recovery(env, service, token, *, deadline):
             evidence = await _mail_call(service, token, envelope, fetch_timeout=3)
         except MailRequestRejected:
             await _fail_order_recovery(env.DB, merchant, message)
+            continue
+        except Exception:
+            # Reuse the native request deferral ledger. A temporary failure for
+            # one purchase must not monopolize this merchant's recovery turns.
+            await env.DB.prepare(
+                "INSERT INTO review_recovery_deferrals VALUES (?,'test',?,?,?) "
+                "ON CONFLICT(store_key,environment,acquisition_id) DO UPDATE SET "
+                "request_id=excluded.request_id,retry_after=excluded.retry_after"
+            ).bind(merchant,message['order_id'],message['request_id'],int(time.time())+300).run()
             continue
 
         recipient = order_reviews.recipient_hash(env.CARTRAY_RECIPIENT_HASH_KEY, merchant, "test", evidence["email"])
@@ -1223,6 +1244,7 @@ async def _drain_review_recovery(env, service, token, *, deadline):
             if isinstance(reference, str) and 0 < len(reference) <= 256:
                 outcome = "accepted"
         finally:
+            outcome_time = int(time.time())
             await record_delivery_outcome(
                 env.DB,
                 store=merchant,
@@ -1231,8 +1253,8 @@ async def _drain_review_recovery(env, service, token, *, deadline):
                 generation=draft["generation_id"],
                 delivery=draft["delivery_identity"],
                 outcome=outcome,
-                now=int(time.time()),
-                accepted_at=int(time.time()) if outcome == "accepted" else None,
+                now=outcome_time,
+                accepted_at=outcome_time if outcome == "accepted" else None,
                 lifetime=None,
                 order_message_token=draft["token"] if outcome == "accepted" else None,
                 order_provider_reference=reference if outcome == "accepted" else None,

@@ -7,11 +7,14 @@ export default {async fetch(request, env) {
   const gateway = env.REVIEWS_GATEWAY ?? env.ACORN_REVIEWS_GATEWAY;
   const origin = env.REVIEWS_STOREFRONT_ORIGIN ?? env.ACORN_STOREFRONT_ORIGIN;
   const readMode = env.REVIEWS_READ_MODE ?? env.ACORN_REVIEWS_READ_MODE;
-  if (url.pathname === '/order-access' || url.pathname === '/review-unsubscribe') {
+  const prefix = env.CARTRAY_SOURCE_API_PATH || '';
+  const access = url.pathname === '/order-access' || url.pathname === prefix + '/order-access';
+  const unsubscribe = url.pathname === '/review-unsubscribe' || url.pathname === prefix + '/review-unsubscribe';
+  if (access || unsubscribe) {
     if (!['GET', 'POST'].includes(request.method)) return unavailable(405);
     if (env.ORDER_ACCESS_GATEWAY !== 'test' || !origin || url.origin !== origin || !env.CARTRAY_SOURCE?.fetch)
       return unavailable(404);
-    if (url.pathname === '/review-unsubscribe' ? !/^\?token=[a-f0-9]{64}$/.test(url.search) :
+    if (unsubscribe ? !/^\?token=[a-f0-9]{64}$/.test(url.search) :
         (url.search || (request.method === 'POST' && request.headers.get('Origin') !== origin))) return unavailable(403);
     const headers = new Headers();
     for (const name of ['CF-Connecting-IP', 'Content-Type', 'Content-Length']) {
@@ -20,7 +23,9 @@ export default {async fetch(request, env) {
     }
     const init = {method:request.method, headers, redirect:'manual'};
     if (request.method === 'POST') { init.body = request.body; init.duplex = 'half'; }
-    try { return await env.CARTRAY_SOURCE.fetch(new Request(request.url, init)); }
+    const target = new URL(request.url);
+    target.pathname = access ? '/order-access' : '/review-unsubscribe';
+    try { return await env.CARTRAY_SOURCE.fetch(new Request(target, init)); }
     catch { return unavailable(503); }
   }
   const reviewRoute = url.pathname.startsWith('/reviews/');

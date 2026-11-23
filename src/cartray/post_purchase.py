@@ -489,6 +489,8 @@ class OrderReceiptDispatcher(D1Dispatcher):
             raise ValueError("confirmed order has no items")
         purchase = Purchase(order_id, order["external_session_id"],
                             tuple((row["product_key"], row["quantity"]) for row in result))
+        if deadline is not None and time.monotonic() + 16 >= deadline:
+            return {"receipt": "deferred"}
         now = int(time.time())
         identity = hashlib.sha256(
             f"order-receipt-v1:{self.merchant}:{self.environment}:{order_id}".encode()

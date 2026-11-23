@@ -35,8 +35,8 @@ class ReviewSettings:
             or type(result.delay_days) not in (int, float)
             or not 0 <= result.delay_days <= 365
             or len(result.priorities) > 100
-            or len(set(result.priorities)) != len(result.priorities)
             or any(not isinstance(x, str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", x) for x in result.priorities)
+            or len(set(result.priorities)) != len(result.priorities)
         ):
             raise ValueError("invalid review preferences")
         return result
@@ -192,8 +192,10 @@ async def prepare(
         != hashlib.sha256(existing_message["invitation_token"].encode()).hexdigest()
     ):
         return None
-    grant = await first(db, 'SELECT wording_version FROM review_invitation_checkout_grants WHERE order_id=?', order)
-    if settings.timing == 'both' and grant['wording_version'] != 'review-invitation-v2':
+    grant = await first(db, "SELECT COALESCE(request_limit,CASE WHEN wording_version='review-invitation-v2' "
+                        "THEN 2 ELSE 1 END) AS request_limit FROM review_invitation_checkout_grants "
+                        "WHERE order_id=?", order)
+    if settings.timing == 'both' and grant['request_limit'] != 2:
         settings = replace(settings, timing='receipt')
     settings = replace(settings, priorities=tuple(dict.fromkeys(mapping.get(key, key) for key in settings.priorities)))
     # Insert once; concurrent attempts recover the winning unpredictable token.

@@ -38,3 +38,14 @@ test('human and one-click unsubscribe work without fulfilment or browser credent
   assert.equal(calls[1].headers.get('authorization'),null);
   assert.equal(await calls[1].text(),'List-Unsubscribe=One-Click');
 });
+
+test('same-origin source prefix is stripped for order access and one-click unsubscribe',async()=>{
+  const seen=[];const env={ORDER_ACCESS_GATEWAY:'test',REVIEWS_STOREFRONT_ORIGIN:'https://shop.example',
+    CARTRAY_SOURCE_API_PATH:'/api',CARTRAY_SOURCE:{async fetch(request){seen.push(new URL(request.url));return new Response('ok');}}};
+  for(const method of ['GET','POST'])for(const path of ['/order-access','/review-unsubscribe?token='+'a'.repeat(64)]){
+    const response=await gateway.fetch(new Request('https://shop.example/api'+path,{method,
+      headers:path.startsWith('/order-access')?{Origin:'https://shop.example'}:{},...(method==='POST'?{body:'x'}:{})}),env);
+    assert.equal(response.status,200);assert.equal(seen.at(-1).pathname,path.split('?')[0]);
+    if(path.includes('?'))assert.equal(seen.at(-1).search,'?token='+'a'.repeat(64));
+  }
+});

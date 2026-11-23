@@ -116,6 +116,7 @@ class CheckoutOrder:
     review_invitation_opt_in: bool = False
     review_invitation_policy_enabled: bool = False
     review_invitation_request_limit: int = 1
+    review_invitation_wording_version: str = "review-invitation-v1"
     review_invitation_default_selected: bool = False
 
 

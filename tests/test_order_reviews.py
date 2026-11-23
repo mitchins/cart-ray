@@ -71,8 +71,10 @@ def purchase(fixture_catalogue, monkeypatch, request):
     version, wording = review_invitation_disclosure(1 if getattr(request, "param", None) == "v1" else 2)
     db.conn.execute("INSERT INTO review_invitation_checkout_choices VALUES (?,1,1,?,?,90)", (order, version, wording))
     db.conn.execute(
-        "INSERT INTO review_invitation_checkout_grants VALUES (?,?,?,90,1,'preselected_acceptance')",
-        (order, version, wording),
+        "INSERT INTO review_invitation_checkout_grants "
+        "(order_id,wording_version,wording,granted_at,merchant_default_selected,selection_basis,request_limit) "
+        "VALUES (?,?,?,90,1,'preselected_acceptance',?)",
+        (order, version, wording, 1 if getattr(request,'param',None)=='restricted-v2' else None),
     )
     db.conn.commit()
     assert (
@@ -321,9 +323,10 @@ def test_two_request_disclosure_is_server_scoped_and_old_clients_keep_one(fixtur
         )
         run(checkout.checkout(request))
         row = store.connection.execute(
-            "SELECT wording_version,wording FROM review_invitation_checkout_grants"
+            "SELECT wording_version,wording,request_limit FROM review_invitation_checkout_grants"
         ).fetchone()
-        assert tuple(row) == review_invitation_disclosure(expected)
+        assert tuple(row[:2]) == review_invitation_disclosure(2 if supplied == "review-invitation-v2" else 1)
+        assert row[2] == expected
         store.connection.close()
 
 
@@ -410,8 +413,12 @@ def test_receipt_includes_reviews_after_slow_recipient_evidence(purchase):
     assert db.conn.execute("SELECT receipt_selection_json FROM order_review_messages").fetchone()[0]
 
 
-def test_scheduled_notification_drain_is_awaited(purchase):
+def test_scheduled_notification_drain_is_awaited(purchase,monkeypatch):
     db, env, sent, _ = purchase
+    import time
+
+    # Receipt-first slot; separate coverage checks the rotating priority turns.
+    monkeypatch.setattr(worker,'time',SimpleNamespace(time=lambda:120,monotonic=time.monotonic))
     entry = worker.Default()
     entry.env = env
     # The scheduled argument is a raw JS execution context, not the SDK wrapper.
@@ -421,7 +428,8 @@ def test_scheduled_notification_drain_is_awaited(purchase):
     assert db.conn.execute("SELECT state FROM order_review_messages").fetchone()[0] == "accepted"
 
 
-def test_rejected_recovery_is_retired_before_later_requests(purchase, fixture_catalogue):
+@pytest.mark.parametrize('refusal,first_state',[(422,'failed'),(503,'pending')])
+def test_rejected_or_deferred_recovery_allows_later_requests(purchase, fixture_catalogue,refusal,first_state):
     from cartray.models import CheckoutRedirect
 
     db, env, sent, first_order = purchase
@@ -448,14 +456,16 @@ def test_rejected_recovery_is_retired_before_later_requests(purchase, fixture_ca
     async def reject_old_request(request):
         body = json.loads(request.body)
         if body['type'] == 'recipient_evidence' and body['order_id'] == first_order:
-            return SimpleNamespace(status=422)
+            return SimpleNamespace(status=refusal)
         return await original(request)
 
     env.POST_PURCHASE_HANDLER.fetch = reject_old_request
     run(worker._drain_post_purchase(env))
     run(worker._drain_post_purchase(env))
     states = dict(db.conn.execute('SELECT acquisition_id,state FROM review_recovery_requests'))
-    assert states == {first_order:'failed',later_order:'fulfilled'}
+    assert states == {first_order:first_state,later_order:'fulfilled'}
+    if first_state == 'pending':
+        assert db.conn.execute('SELECT count(*) FROM review_recovery_deferrals').fetchone()[0] == 1
     assert len(sent) == 3 and sent[-1]['order_id'] == later_order
 
 
@@ -617,3 +627,115 @@ def test_concurrent_recovery_loser_cannot_overwrite_winning_send(purchase,monkey
     assert db.conn.execute('SELECT state FROM invitation_generations').fetchone()[0] == 'accepted'
     assert db.conn.execute('SELECT count(*) FROM invitation_generations').fetchone()[0] == 1
     assert len(sent) == 2
+
+
+def test_checkout_retry_survives_reduced_invitation_policy(fixture_catalogue):
+    from cartray.store import SqliteOrderStore
+
+    store = SqliteOrderStore.in_memory()
+    checkout = CheckoutService(fixture_catalogue,store,FakePaymentGateway(),review_invitations_enabled=True,
+                               review_invitation_default_selected=True,review_invitation_request_limit=2)
+    request = CheckoutRequest('wording-retry',fixture_catalogue.version,(CanonicalItem('TEST-BUNDLE',1),),True,
+                              'review-invitation-v2')
+    first = run(checkout.checkout(request))
+    checkout.review_invitation_request_limit = 1
+    assert run(checkout.checkout(request)) == first
+    assert store.connection.execute('SELECT request_limit FROM review_invitation_checkout_grants').fetchone()[0] == 2
+    store.connection.close()
+
+
+def test_invalid_priority_objects_are_validation_errors():
+    with pytest.raises(ValueError,match='review preferences'):
+        order_reviews.ReviewSettings.parse('{"priorities":[{}]}')
+
+
+@pytest.mark.parametrize('priority,expected',[('receipt','pending'),('recovery','fulfilled')])
+def test_busy_receipts_do_not_starve_recovery_turn(purchase,monkeypatch,priority,expected):
+    import time
+
+    db,env,sent,order = purchase
+    env.CARTRAY_REVIEW_SETTINGS = json.dumps({'timing':'receipt'})
+    env.CARTRAY_REVIEW_INVITATION_KEY = 'i'*32
+    run(worker._drain_post_purchase(env))
+    db.conn.execute("INSERT INTO review_recovery_requests VALUES ('merchant','test',?,?,100,'pending')",(order,'8'*64))
+    db.conn.commit()
+    clock = [100]
+    monkeypatch.setattr(worker,'time',SimpleNamespace(time=time.time,monotonic=lambda:clock[0]))
+
+    async def busy_receipts(*args,**kwargs):
+        clock[0] += 4
+
+    monkeypatch.setattr(worker,'drain_confirmed_d1',busy_receipts)
+    run(worker._drain_post_purchase(env,priority=priority))
+    assert db.conn.execute('SELECT state FROM review_recovery_requests').fetchone()[0] == expected
+
+
+def test_stale_followup_snapshot_does_not_skip_replaced_capability(purchase,monkeypatch):
+    import time
+
+    db,env,sent,order = purchase
+    env.CARTRAY_REVIEW_SETTINGS = json.dumps({'timing':'both','delay_days':7})
+    env.CARTRAY_REVIEW_INVITATION_KEY = 'i'*32
+    run(worker._drain_post_purchase(env))
+    db.conn.execute('UPDATE order_review_messages SET due_at=0')
+    db.conn.execute("INSERT INTO review_recovery_requests VALUES ('merchant','test',?,?,100,'pending')",(order,'7'*64))
+    db.conn.commit()
+    original = worker._review_message_links
+
+    async def replaced_after_read(env,message,**kwargs):
+        await worker._drain_review_recovery(env,env.POST_PURCHASE_HANDLER,env.CARTRAY_POST_PURCHASE_TOKEN,
+                                            deadline=time.monotonic()+21)
+        return await original(env,message,**kwargs)
+
+    monkeypatch.setattr(worker,'_review_message_links',replaced_after_read)
+    run(worker._drain_post_purchase(env))
+    assert db.conn.execute('SELECT state FROM order_review_messages').fetchone()[0] == 'pending'
+    monkeypatch.setattr(worker,'_review_message_links',original)
+    run(worker._drain_post_purchase(env))
+    assert db.conn.execute('SELECT state FROM order_review_messages').fetchone()[0] == 'accepted'
+    assert len(sent) == 3
+
+
+def test_recovery_acceptance_uses_one_clock_read(purchase,monkeypatch):
+    import itertools
+    import time
+
+    db,env,sent,order = purchase
+    env.CARTRAY_REVIEW_SETTINGS = json.dumps({'timing':'receipt'})
+    env.CARTRAY_REVIEW_INVITATION_KEY = 'i'*32
+    run(worker._drain_post_purchase(env))
+    db.conn.execute("INSERT INTO review_recovery_requests VALUES ('merchant','test',?,?,100,'pending')",(order,'6'*64))
+    db.conn.commit()
+    clock = itertools.count(2_000_000_000)
+    monkeypatch.setattr(worker,'time',SimpleNamespace(time=lambda:next(clock),monotonic=time.monotonic))
+    run(worker._drain_post_purchase(env))
+    assert db.conn.execute('SELECT state FROM invitation_generations').fetchone()[0] == 'accepted'
+    assert len(sent) == 2
+
+
+@pytest.mark.parametrize('purchase',['restricted-v2'],indirect=True)
+def test_server_request_limit_remains_narrow_after_timing_change(purchase):
+    db,env,sent,_ = purchase
+    env.CARTRAY_REVIEW_SETTINGS = json.dumps({'timing':'both','delay_days':0})
+    run(worker._drain_post_purchase(env))
+    assert len(sent) == 1 and sent[0]['reviews']
+    row = run(order_reviews.first(db,'SELECT settings_json,due_at FROM order_review_messages'))
+    assert json.loads(row['settings_json'])['timing'] == 'receipt' and row['due_at'] is None
+
+
+def test_scheduled_priority_rotates_without_additional_infrastructure(purchase,monkeypatch):
+    import time
+
+    _,env,_,_ = purchase
+    observed = []
+
+    async def drain(env,*,priority):
+        observed.append(priority)
+
+    monkeypatch.setattr(worker,'_drain_post_purchase',drain)
+    entry = worker.Default()
+    entry.env = env
+    for minute in (0,1,2):
+        monkeypatch.setattr(worker,'time',SimpleNamespace(time=lambda:minute*60,monotonic=time.monotonic))
+        run(entry.scheduled(SimpleNamespace(cron='* * * * *'),env,object()))
+    assert observed == ['recovery','followup','receipt']

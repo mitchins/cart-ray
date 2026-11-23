@@ -66,14 +66,15 @@ export async function createAdapter(config) {
         throw new Error('A previous checkout may have started. Contact the store before starting another.');
       if(!attempt){
         attempt={requestId:`checkout_${crypto.randomUUID().replaceAll('-','')}`,catalogueVersion:catalogue.version,
-          revision,items:snapshot,permission};
+          revision,items:snapshot,permission,wordingVersion:source.reviewInvitationWordingVersion || 'review-invitation-v1'};
         try {storage?.setItem(attemptKey,JSON.stringify(attempt));} catch { /* retain in memory */ }
       }
       this.attemptPending=true;this.checkoutLocked=true;
       try{
         const result=await createCheckoutAndStorePending({configuration:source,catalogueVersion:catalogue.version,cart,revision,
           requestId:attempt.requestId,storage,
-          reviewInvitationOptIn:this.permissionEnabled?attempt.permission:undefined});
+          reviewInvitationOptIn:this.permissionEnabled?attempt.permission:undefined,
+          reviewInvitationWordingVersion:attempt.wordingVersion || 'review-invitation-v1'});
         try {storage?.removeItem(attemptKey);} catch { /* return may still be checked */ }
         attempt=null;this.attemptPending=false;
         return result.url;

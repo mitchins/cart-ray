@@ -39,12 +39,7 @@ class CheckoutService:
         requested_items = canonical_items(request.items)
         fingerprint = request_fingerprint(request.manifest_version, requested_items)
         if self.review_invitations_enabled:
-            version = (
-                "review-invitation-v2"
-                if self.review_invitation_request_limit == 2
-                and request.review_invitation_wording_version == "review-invitation-v2"
-                else "review-invitation-v1"
-            )
+            version = request.review_invitation_wording_version
             fingerprint = (
                 "sha256:"
                 + sha256(
@@ -128,6 +123,7 @@ class CheckoutService:
                 else 1
             ),
             review_invitation_default_selected=self.review_invitation_default_selected,
+            review_invitation_wording_version=request.review_invitation_wording_version,
         )
 
 

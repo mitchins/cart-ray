@@ -120,13 +120,13 @@ export async function startCheckout(configuration, payload, fetchImpl = fetch) {
   return { url: result.checkout_url, sessionId: result.session_id };
 }
 
-export async function createCheckoutAndStorePending({ configuration, catalogueVersion, cart, revision, requestId, storage, fetchImpl, reviewInvitationOptIn = undefined }) {
+export async function createCheckoutAndStorePending({ configuration, catalogueVersion, cart, revision, requestId, storage, fetchImpl, reviewInvitationOptIn = undefined, reviewInvitationWordingVersion = undefined }) {
   const submittedCart = new Map(cart);
   const submittedRevision = revision;
   const checkout = await startCheckout(
     configuration,
     checkoutPayload(catalogueVersion, submittedCart, requestId, reviewInvitationOptIn,
-      configuration.reviewInvitationWordingVersion),
+      reviewInvitationWordingVersion ?? configuration.reviewInvitationWordingVersion),
     fetchImpl,
   );
   storePendingCheckout(storage, checkout, catalogueVersion, submittedCart, submittedRevision);
