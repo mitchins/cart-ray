@@ -141,7 +141,8 @@ preview.
 
 The test store config selects automatic invitations. When test checkout is
 configured, the cart displays a checkbox asking permission
-for one post-purchase review email. The choice travels with checkout; the
+using “I'm happy to receive invitations to review products I purchase.” (v3).
+The permission is independent of merchant timing and featured-product preferences. The choice travels with checkout; the
 server records its own wording version and binds any grant to the created
 order. The browser does not supply a recipient or establish payment authority.
 The separately deployed CartRay test Worker must also opt in with

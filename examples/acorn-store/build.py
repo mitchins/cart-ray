@@ -217,6 +217,8 @@ def build(
         "reviewInvitationsEnabled": bool(api and config.get("review_invitations") == "automatic"),
         "reviewInvitationDefaultChecked": config.get("review_invitations_default_checked", False),
     }
+    from cartray.store import review_invitation_disclosure
+    base['reviewInvitationWordingVersion'],base['reviewInvitationWording'] = review_invitation_disclosure()
     # JSON is external JS, not HTML: no user-provided text is interpolated into markup.
     (output / "storefront-config.js").write_text(
         "window.CARTRAY_STOREFRONT = "

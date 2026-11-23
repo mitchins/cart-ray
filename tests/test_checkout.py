@@ -39,7 +39,8 @@ def test_review_invitation_grant_is_optional_immutable_and_bound_to_order(checko
         "SELECT order_id, wording_version, wording, granted_at FROM review_invitation_checkout_grants"
     ).fetchall()
     assert len(rows) == 1
-    assert tuple(rows[0])[:3] == (order_id, "review-invitation-v1", "Email me one request to review my purchase.")
+    assert tuple(rows[0])[:3] == (order_id, "review-invitation-v3",
+                                 "I'm happy to receive invitations to review products I purchase.")
     assert rows[0]["granted_at"] > 0
     with pytest.raises(sqlite3.IntegrityError, match="immutable"):
         service.store.connection.execute("DELETE FROM review_invitation_checkout_grants WHERE order_id=?", (order_id,))
@@ -74,7 +75,8 @@ def test_checkout_without_opt_in_records_no_grant(checkout_service):
         "SELECT selected,merchant_default_selected,wording_version,wording,recorded_at "
         "FROM review_invitation_checkout_choices"
     ).fetchone()
-    assert tuple(row)[:4] == (0, 1, "review-invitation-v1", "Email me one request to review my purchase.")
+    assert tuple(row)[:4] == (0, 1, "review-invitation-v3",
+                              "I'm happy to receive invitations to review products I purchase.")
     assert row["recorded_at"] > 0
 
 
@@ -300,7 +302,6 @@ def test_reopened_sqlite_preserves_old_grants_and_records_new_limits(checkout_se
     db.commit()
     service.store = SqliteOrderStore(db)
     service.review_invitations_enabled = True
-    service.review_invitation_request_limit = 2
     request = replace(valid_request(service.catalogue,'new-order'),review_invitation_opt_in=True,
                       review_invitation_wording_version='review-invitation-v2')
     checkout(service,request)

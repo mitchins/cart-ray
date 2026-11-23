@@ -43,9 +43,10 @@ Use schema 2 for the protected `post_purchase_config` file:
 
 `review_requests` accepts `timing` (`off`, `receipt`, `followup`, `both`), `selection`
 (`all`, `priority`), `delay_days` and an ordered `priorities` list. Defaults encourage
-Reviews with the receipt and the highest-priority outstanding product. Both mode uses
-the truthful two-request checkout disclosure; old one-request grants cannot authorize a
-second request. Reviews suppression never removes the receipt. Private resource locators
+Reviews with the receipt and the highest-priority outstanding product. New checkouts
+use the general permission “I'm happy to receive invitations to review products I purchase.”
+(v3), independently of timing and product preferences. Historical one-request grants
+cannot authorize a second request. Reviews suppression never removes the receipt. Private resource locators
 belong in the protected `fulfilment_resources` credential value, not the public catalogue.
 
 ## One resumable workflow

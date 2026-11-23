@@ -8,21 +8,21 @@ from enum import StrEnum
 from uuid import uuid4
 
 from .errors import CheckoutInProgress, IdempotencyConflict, SettlementInconsistency
-from .models import CheckoutOrder, CheckoutRedirect, OrderItem
+from .models import REVIEW_INVITATION_WORDING_VERSION, CheckoutOrder, CheckoutRedirect, OrderItem
 
-REVIEW_INVITATION_WORDING_VERSION = "review-invitation-v1"
-REVIEW_INVITATION_WORDING = "Email me one request to review my purchase."
+REVIEW_INVITATION_WORDING = "I'm happy to receive invitations to review products I purchase."
 
 
-def review_invitation_disclosure(limit=1, *, version=None):
-    if version is not None:
-        if version not in ('review-invitation-v1', 'review-invitation-v2'):
-            raise ValueError('invalid review disclosure version')
-        limit = 2 if version == 'review-invitation-v2' else 1
-    if limit == 2:
-        return ('review-invitation-v2',
-                'Include a review request in my order confirmation and send one review follow-up.')
-    return REVIEW_INVITATION_WORDING_VERSION, REVIEW_INVITATION_WORDING
+def review_invitation_disclosure(*, version=REVIEW_INVITATION_WORDING_VERSION):
+    historical = {
+        'review-invitation-v1': 'Email me one request to review my purchase.',
+        'review-invitation-v2': 'Include a review request in my order confirmation and send one review follow-up.',
+    }
+    if version == REVIEW_INVITATION_WORDING_VERSION:
+        return version, REVIEW_INVITATION_WORDING
+    if version not in historical:
+        raise ValueError('invalid review disclosure version')
+    return version, historical[version]
 
 
 # Public receipt allowlist: never select buyer data, provider IDs or fulfilment resources.

@@ -105,7 +105,6 @@ def graph(
             ),
             CARTRAY_REVIEW_SETTINGS=json.dumps(preferences),
             CARTRAY_REVIEW_SUBJECT_MAPS=mapping,
-            CARTRAY_REVIEW_INVITATION_LIMIT="2" if preferences.get("timing") == "both" else "1",
         )
         nodes["reviews"] = {
             "main": "modules/reviews/src/worker.py",

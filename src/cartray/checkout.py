@@ -28,7 +28,6 @@ class CheckoutService:
     cancel_url: str = "https://store.invalid/checkout-cancelled/"
     review_invitations_enabled: bool = False
     review_invitation_default_selected: bool = False
-    review_invitation_request_limit: int = 1
 
     async def checkout(self, request: CheckoutRequest) -> CheckoutRedirect:
         # The browser may request an opt-in, but cannot enable the merchant's
@@ -116,12 +115,12 @@ class CheckoutService:
             subtotal_minor=sum(item.unit_amount_minor * item.quantity for item in order_items),
             review_invitation_opt_in=request.review_invitation_opt_in,
             review_invitation_policy_enabled=self.review_invitations_enabled,
-            review_invitation_request_limit=(
-                2
-                if self.review_invitation_request_limit == 2
-                and request.review_invitation_wording_version == "review-invitation-v2"
-                else 1
-            ),
+            # Historical clients retain their original promise. General
+            # permission has no customer-imposed count; the message ledgers
+            # independently enforce one confirmation and at most one follow-up.
+            review_invitation_request_limit={
+                "review-invitation-v1": 1, "review-invitation-v2": 2
+            }.get(request.review_invitation_wording_version),
             review_invitation_default_selected=self.review_invitation_default_selected,
             review_invitation_wording_version=request.review_invitation_wording_version,
         )
