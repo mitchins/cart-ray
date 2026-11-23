@@ -249,7 +249,7 @@ def migrated(tmp_path):
 def test_shared_real_sqlite_migration_chains_resume_without_reapplication(tmp_path):
     installation, cloud = migrated(tmp_path)
     first = installation.migrate()
-    assert first == {"commerce": 8, "subscriber": 2, "reviews": 33, "context": 2}
+    assert first == {"commerce": 9, "subscriber": 2, "reviews": 33, "context": 2}
     counts = {
         role: len(cloud.query(installation.db(role), "SELECT * FROM cartray_operator_migrations"))
         for role in operations.DATABASES
@@ -320,7 +320,7 @@ def test_shared_bindings_and_namespace_tampering_fail_closed(tmp_path):
     installation.migrate()
     assert len(cloud.databases) == 1
     assert {installation.db(role) for role in ("commerce", "reviews", "context")} == {"commerce-id"}
-    assert len(cloud.query("commerce-id", "SELECT * FROM cartray_operator_migrations")) == 45
+    assert len(cloud.query("commerce-id", "SELECT * FROM cartray_operator_migrations")) == 46
     cloud.query("commerce-id", "INSERT INTO cartray_operator_migrations VALUES ('unknown',1,'unknown','bad')")
     with pytest.raises(ValueError, match="namespace"):
         installation.migrate()
@@ -439,3 +439,55 @@ def test_gel_gallery_snapshot_rejects_invalid_images(tmp_path, images):
     content.write_text(json.dumps({"products": [{"image": "assets/product.svg", "images": images}]}))
     with pytest.raises(ValueError):
         operations.Installation.gel_inputs(manifest, tmp_path, content)
+
+
+def test_fulfilment_migration_binds_existing_installation_and_keeps_key(tmp_path):
+    installation, cloud = migrated(tmp_path)
+    installation.config["fulfilment"] = {"buckets": {"FILES": "private-test-files"}}
+    installation.config["store_key"] = "second-merchant"
+    installation.migrate()
+    assert cloud.query("commerce-id", "SELECT merchant_id,environment FROM post_purchase_installation") == [
+        {"merchant_id": "second-merchant", "environment": "test"}
+    ]
+    key = installation.vault()["order_access"]
+    installation.migrate()
+    assert installation.vault()["order_access"] == key
+    installation.config["store_key"] = "another-merchant"
+    with pytest.raises(ValueError, match="installation scope differs"):
+        installation.migrate()
+
+
+def test_fulfilment_uses_existing_source_with_private_bucket_and_secret_mapping(tmp_path):
+    installation, _ = migrated(tmp_path)
+    installation.config.update(reviews_enabled=False, store_key="second-merchant",
+                               fulfilment={"buckets": {"FILES": "merchant-test-files"}})
+    installation.state.update(workers_subdomain="example", pages_subdomain="example.pages.dev")
+    installation.credentials = {"stripe_test_key": "sk_test_fixture", "fulfilment_resources": "{}"}
+    installation.vault = lambda: {"order_access": "a" * 64, "webhook_secret": "webhook",
+                                  "signing_private": "private", "signing_public": "public"}
+    nodes, _ = operations.graph(installation)
+    source = nodes["source"]
+    assert source["vars"]["CARTRAY_ORDER_ACCESS_MODE"] == "test"
+    assert source["vars"]["CARTRAY_MERCHANT_ID"] == "second-merchant"
+    assert {"name": "FILES", "type": "r2_bucket", "bucket_name": "merchant-test-files"} in source["bindings"]
+    secrets = operations.secret_bindings(installation, "source")
+    assert {item["name"] for item in secrets} >= {"CARTRAY_ORDER_ACCESS_KEY", "CARTRAY_RESOURCE_CONFIG"}
+    assert "CARTRAY_RESOURCE_CONFIG" not in source["vars"]
+
+
+def test_enabling_fulfilment_adds_key_to_existing_vault_only_before_capabilities_exist(tmp_path):
+    installation, cloud = migrated(tmp_path)
+    vault = installation.vault()
+    vault.pop("order_access")
+    operations.atomic_json(installation.vault_path, vault)
+    installation.state["secret_fingerprints"].pop("order_access")
+    installation.save()
+    installation.config["fulfilment"] = {"buckets": {}}
+    installation.config["store_key"] = "second-merchant"
+    installation.migrate()
+    key = installation.vault()["order_access"]
+    assert len(key) >= 32
+    assert installation.migrate() and installation.vault()["order_access"] == key
+    assert cloud.query("commerce-id", "SELECT merchant_id FROM post_purchase_installation") == [
+        {"merchant_id": "second-merchant"}
+    ]

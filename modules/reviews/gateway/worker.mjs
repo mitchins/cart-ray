@@ -7,6 +7,21 @@ export default {async fetch(request, env) {
   const gateway = env.REVIEWS_GATEWAY ?? env.ACORN_REVIEWS_GATEWAY;
   const origin = env.REVIEWS_STOREFRONT_ORIGIN ?? env.ACORN_STOREFRONT_ORIGIN;
   const readMode = env.REVIEWS_READ_MODE ?? env.ACORN_REVIEWS_READ_MODE;
+  if (url.pathname === '/order-access') {
+    if (!['GET', 'POST'].includes(request.method)) return unavailable(405);
+    if (env.ORDER_ACCESS_GATEWAY !== 'test' || !origin || url.origin !== origin || !env.CARTRAY_SOURCE?.fetch)
+      return unavailable(404);
+    if (url.search || (request.method === 'POST' && request.headers.get('Origin') !== origin)) return unavailable(403);
+    const headers = new Headers();
+    for (const name of ['CF-Connecting-IP', 'Content-Type', 'Content-Length']) {
+      const value = request.headers.get(name);
+      if (value !== null) headers.set(name, value);
+    }
+    const init = {method:request.method, headers, redirect:'manual'};
+    if (request.method === 'POST') { init.body = request.body; init.duplex = 'half'; }
+    try { return await env.CARTRAY_SOURCE.fetch(new Request(request.url, init)); }
+    catch { return unavailable(503); }
+  }
   const reviewRoute = url.pathname.startsWith('/reviews/');
   if (!reviewRoute) {
     if (url.pathname.startsWith('/reviews-admin/') || url.pathname.startsWith('/reviews-internal/')) return unavailable(404);

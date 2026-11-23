@@ -297,3 +297,13 @@ def test_merchant_reviews_require_correct_subject_pages_and_native_clients(tmp_p
     installation.config["merchant_inputs_sha256"] = validate(snap, ROOT)
     with pytest.raises(ValueError, match="unapproved review subject"):
         installation.verify_merchant_inputs()
+
+
+def test_fulfilment_credentials_are_required_by_resumed_merchant_installation(tmp_path):
+    source = merchant(tmp_path / "source")
+    installation = plan_merchant(tmp_path, source, fulfilment={"buckets": {}})
+    credentials = {"cloudflare_api_token": "operator", "stripe_test_key": "sk_test_fixture"}
+    with pytest.raises(ValueError, match="credential handoff is incomplete"):
+        Installation(installation.directory, credentials)
+    resumed = Installation(installation.directory, {**credentials, "fulfilment_resources": "{}"})
+    assert resumed.config["fulfilment"] == {"buckets": {}}
