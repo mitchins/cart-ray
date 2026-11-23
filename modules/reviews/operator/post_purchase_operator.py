@@ -444,13 +444,14 @@ class PostPurchaseOperator:
         if current != target:
             staged = self.api.request(f"workers/scripts/{self.name(role)}/versions/{target}")
             self.check_post_purchase_version(role, mode, staged, target, allow_legacy_admission=legacy)
-        self.set_worker_visibility(role, False)
+        private = role == 'post-purchase' or self.config.get('source_mode','public')=='private'
+        self.set_worker_visibility(role, not private)
         if current != target:
             self.api.publish(self.name(role), target)
-            self.set_worker_visibility(role, False)
+            self.set_worker_visibility(role, not private)
         self.check_post_purchase_version(role, mode, self.api.version(self.name(role)), target,
                                          allow_legacy_admission=legacy)
-        errors = self.worker_visibility_errors(role)
+        errors = self.worker_visibility_errors(role) if private else []
         if errors:
             raise ValueError("; ".join(errors))
         deployment["versions"][role] = target

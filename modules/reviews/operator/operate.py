@@ -235,9 +235,9 @@ def validate_config(config):
             raise ValueError("unsupported post-purchase email provider")
         snapshot = config["post_purchase_config"]
         if (not isinstance(snapshot, str) or not snapshot.strip()
-                or not config.get("store_key") or config.get("source_mode") != "private"):
+                or not config.get("store_key")):
             raise ValueError(
-                "test order confirmations require a merchant identity and private source"
+                "test order confirmations require a merchant identity"
             )
         if "post_purchase_config_sha256" in config and (
                 not isinstance(config["post_purchase_config_sha256"], str)
@@ -1188,7 +1188,8 @@ class Installation(PostPurchaseOperator):
             for role in POST_PURCHASE_ROLES:
                 self.check_post_purchase_version(role, "disabled", self.api.version(self.name(role)),
                                                  progress["versions"][role])
-                errors = self.worker_visibility_errors(role)
+                errors = (self.worker_visibility_errors(role) if role=='post-purchase'
+                          or self.config.get('source_mode','public')=='private' else [])
                 if errors:
                     raise ValueError("; ".join(errors))
             self.record_post_purchase_off(build)

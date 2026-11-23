@@ -1172,3 +1172,20 @@ def test_consolidated_reviews_use_only_the_selected_email_provider(tmp_path):
     assert 'REVIEWS_SOURCE_TRIGGER' not in nodes['source'].get('services',{})
     assert 'CARTRAY_REVIEWS_PRODUCER' not in nodes['source']['vars']
     assert nodes['reviews']['vars']['REVIEWS_RECOVERY_MODE'] == 'order_notifications'
+
+
+def test_pages_merchant_can_use_public_checkout_with_private_mail_handler(tmp_path):
+    options = handoff(tmp_path)
+    options.update(source_mode='public', reviews_enabled=True)
+    for field in ('source_api_path','webhook_url','storefront_origin'):
+        options.pop(field, None)
+    atomic_json(Path(options['post_purchase_config']),
+                {'schema':2,'sender':CREDS['test_sender'],'recipient':CREDS['approved_test_email']})
+    install = Installation.plan(tmp_path/'pages-mail-install', options)
+    install.state.update(workers_subdomain='example',pages_subdomain='merchant.pages.dev')
+    install.state['resources']['database:commerce']={'id':'db'}
+    nodes, _ = graph(install, post_purchase_modes=OFF)
+    assert nodes['source']['public'] is True
+    assert not nodes['post-purchase'].get('public', False)
+    assert nodes['source']['services']=={'POST_PURCHASE_HANDLER':'post-purchase'}
+    assert not install.queues

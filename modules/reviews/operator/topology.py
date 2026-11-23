@@ -18,6 +18,8 @@ def validate_post_purchase(value, config, commerce_keys):
                     or not re.fullmatch(r"[^\s@<>]+@[^\s@<>]+\.[A-Za-z]{2,}", address)):
                 raise ValueError("test confirmation requires one approved sender and recipient")
         return value
+    if config.get('source_mode') != 'private':
+        raise ValueError('legacy workflow delivery requires a private source')
     if config.get("store_key") != "effective-policy-uat" or config.get("stripe_account_id") != "acct_1Ud2XZBKRMfYblCU":
         raise ValueError("legacy workflow delivery is restricted to the existing EP test installation")
     fields = {"environment", "merchant", "workflow_key", "config_ref", "offer_keys", "links",
