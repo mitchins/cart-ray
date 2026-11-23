@@ -1,0 +1,114 @@
+# Product cruft audit: D1 schema inventory
+
+Baseline `7e33b0959fcfbe7cd04d7ac018854ae8a607322f`. This is a source-definition inventory, not a query of any hosted database. A name may occur twice where a migration rebuilds a table; `_next` tables are migration staging, not evidence of a second live table. The operator migration ledger `cartray_operator_migrations` is created by operator code rather than a SQL migration. Nothing here authorizes removing any migration or data.
+
+| Table defined | Migration source | Scope / proposed treatment |
+|---|---|---|
+| `orders` | [`migrations/0001_commerce_kernel.sql`](../../migrations/0001_commerce_kernel.sql#L3) | Commerce or post-purchase; retain order, payment and execution history |
+| `order_items` | [`migrations/0001_commerce_kernel.sql`](../../migrations/0001_commerce_kernel.sql#L14) | Commerce or post-purchase; retain order, payment and execution history |
+| `checkout_sessions` | [`migrations/0001_commerce_kernel.sql`](../../migrations/0001_commerce_kernel.sql#L24) | Commerce or post-purchase; retain order, payment and execution history |
+| `outbox` | [`migrations/0001_commerce_kernel.sql`](../../migrations/0001_commerce_kernel.sql#L35) | Commerce or post-purchase; retain order, payment and execution history |
+| `stripe_events` | [`migrations/0001_commerce_kernel.sql`](../../migrations/0001_commerce_kernel.sql#L45) | Commerce or post-purchase; retain order, payment and execution history |
+| `checkout_sessions_next` | [`migrations/0003_checkout_expiry.sql`](../../migrations/0003_checkout_expiry.sql#L5) | Commerce or post-purchase; retain order, payment and execution history |
+| `stripe_events_next` | [`migrations/0003_checkout_expiry.sql`](../../migrations/0003_checkout_expiry.sql#L67) | Commerce or post-purchase; retain order, payment and execution history |
+| `checkout_reconciliations` | [`migrations/0004_checkout_reconciliation.sql`](../../migrations/0004_checkout_reconciliation.sql#L1) | Commerce or post-purchase; retain order, payment and execution history |
+| `review_invitation_checkout_grants` | [`migrations/0005_review_invitation_checkout_grants.sql`](../../migrations/0005_review_invitation_checkout_grants.sql#L4) | Commerce or post-purchase; retain order, payment and execution history |
+| `review_invitation_checkout_choices` | [`migrations/0005_review_invitation_checkout_grants.sql`](../../migrations/0005_review_invitation_checkout_grants.sql#L13) | Commerce or post-purchase; retain order, payment and execution history |
+| `post_purchase_installation` | [`migrations/0006_post_purchase_actions.sql`](../../migrations/0006_post_purchase_actions.sql#L1) | Commerce or post-purchase; retain order, payment and execution history |
+| `post_purchase_executions` | [`migrations/0006_post_purchase_actions.sql`](../../migrations/0006_post_purchase_actions.sql#L13) | Commerce or post-purchase; retain order, payment and execution history |
+| `post_purchase_checkpoint` | [`migrations/0007_post_purchase_checkpoint.sql`](../../migrations/0007_post_purchase_checkpoint.sql#L1) | Commerce or post-purchase; retain order, payment and execution history |
+| `post_purchase_recovery_audit` | [`migrations/0008_post_purchase_recovery.sql`](../../migrations/0008_post_purchase_recovery.sql#L3) | Commerce or post-purchase; retain order, payment and execution history |
+| `review_subjects` | [`modules/reviews/migrations/0001_native_subjects.sql`](../../modules/reviews/migrations/0001_native_subjects.sql#L2) | Native Reviews, moderation or publication; keep records and audit |
+| `review_snapshots` | [`modules/reviews/migrations/0002_native_reviews.sql`](../../modules/reviews/migrations/0002_native_reviews.sql#L1) | Historical/public projection or provenance; preserve immutable history and aliases |
+| `review_snapshot_subjects` | [`modules/reviews/migrations/0002_native_reviews.sql`](../../modules/reviews/migrations/0002_native_reviews.sql#L10) | Historical/public projection or provenance; preserve immutable history and aliases |
+| `review_contributions` | [`modules/reviews/migrations/0002_native_reviews.sql`](../../modules/reviews/migrations/0002_native_reviews.sql#L19) | Historical/public projection or provenance; preserve immutable history and aliases |
+| `review_publications` | [`modules/reviews/migrations/0002_native_reviews.sql`](../../modules/reviews/migrations/0002_native_reviews.sql#L40) | Historical/public projection or provenance; preserve immutable history and aliases |
+| `review_import_guard` | [`modules/reviews/migrations/0002_native_reviews.sql`](../../modules/reviews/migrations/0002_native_reviews.sql#L47) | Historical/public projection or provenance; preserve immutable history and aliases |
+| `native_capabilities` | [`modules/reviews/migrations/0003_native_lifecycle.sql`](../../modules/reviews/migrations/0003_native_lifecycle.sql#L1) | Native Reviews, moderation or publication; keep records and audit |
+| `native_reviews` | [`modules/reviews/migrations/0003_native_lifecycle.sql`](../../modules/reviews/migrations/0003_native_lifecycle.sql#L6) | Native Reviews, moderation or publication; keep records and audit |
+| `native_revisions` | [`modules/reviews/migrations/0003_native_lifecycle.sql`](../../modules/reviews/migrations/0003_native_lifecycle.sql#L16) | Native Reviews, moderation or publication; keep records and audit |
+| `native_requests` | [`modules/reviews/migrations/0003_native_lifecycle.sql`](../../modules/reviews/migrations/0003_native_lifecycle.sql#L22) | Native Reviews, moderation or publication; keep records and audit |
+| `native_audit` | [`modules/reviews/migrations/0003_native_lifecycle.sql`](../../modules/reviews/migrations/0003_native_lifecycle.sql#L27) | Native Reviews, moderation or publication; keep records and audit |
+| `native_effect_outbox` | [`modules/reviews/migrations/0003_native_lifecycle.sql`](../../modules/reviews/migrations/0003_native_lifecycle.sql#L32) | Native Reviews, moderation or publication; keep records and audit |
+| `native_rate_limits` | [`modules/reviews/migrations/0003_native_lifecycle.sql`](../../modules/reviews/migrations/0003_native_lifecycle.sql#L36) | Native Reviews, moderation or publication; keep records and audit |
+| `native_guard` | [`modules/reviews/migrations/0003_native_lifecycle.sql`](../../modules/reviews/migrations/0003_native_lifecycle.sql#L41) | Native Reviews, moderation or publication; keep records and audit |
+| `native_publication_versions` | [`modules/reviews/migrations/0003_native_lifecycle.sql`](../../modules/reviews/migrations/0003_native_lifecycle.sql#L42) | Native Reviews, moderation or publication; keep records and audit |
+| `acquisition_invitations` | [`modules/reviews/migrations/0004_acquisition_invitations.sql`](../../modules/reviews/migrations/0004_acquisition_invitations.sql#L1) | Capability, eligibility, consent, recovery or suppression; preserve issued links and state |
+| `native_review_acquisitions` | [`modules/reviews/migrations/0004_acquisition_invitations.sql`](../../modules/reviews/migrations/0004_acquisition_invitations.sql#L15) | Native Reviews, moderation or publication; keep records and audit |
+| `acquisition_invitation_subjects` | [`modules/reviews/migrations/0004_acquisition_invitations.sql`](../../modules/reviews/migrations/0004_acquisition_invitations.sql#L24) | Capability, eligibility, consent, recovery or suppression; preserve issued links and state |
+| `review_subject_display_names` | [`modules/reviews/migrations/0005_subject_display_names.sql`](../../modules/reviews/migrations/0005_subject_display_names.sql#L3) | Native Reviews, moderation or publication; keep records and audit |
+| `review_invitation_consents` | [`modules/reviews/migrations/0006_review_invitation_consent.sql`](../../modules/reviews/migrations/0006_review_invitation_consent.sql#L3) | Capability, eligibility, consent, recovery or suppression; preserve issued links and state |
+| `acquisition_rate_backstop` | [`modules/reviews/migrations/0007_acquisition_rate_limits.sql`](../../modules/reviews/migrations/0007_acquisition_rate_limits.sql#L2) | Capability, eligibility, consent, recovery or suppression; preserve issued links and state |
+| `acquisition_rate_maintenance` | [`modules/reviews/migrations/0008_acquisition_rate_maintenance.sql`](../../modules/reviews/migrations/0008_acquisition_rate_maintenance.sql#L1) | Capability, eligibility, consent, recovery or suppression; preserve issued links and state |
+| `invitation_generations` | [`modules/reviews/migrations/0009_invitation_generations.sql`](../../modules/reviews/migrations/0009_invitation_generations.sql#L7) | Capability, eligibility, consent, recovery or suppression; preserve issued links and state |
+| `invitation_generations` | [`modules/reviews/migrations/0010_invitation_delivery_claim.sql`](../../modules/reviews/migrations/0010_invitation_delivery_claim.sql#L3) | Capability, eligibility, consent, recovery or suppression; preserve issued links and state |
+| `native_management_requests` | [`modules/reviews/migrations/0011_review_management.sql`](../../modules/reviews/migrations/0011_review_management.sql#L1) | Native Reviews, moderation or publication; keep records and audit |
+| `review_recovery_requests` | [`modules/reviews/migrations/0012_review_recovery_requests.sql`](../../modules/reviews/migrations/0012_review_recovery_requests.sql#L3) | Capability, eligibility, consent, recovery or suppression; preserve issued links and state |
+| `review_recovery_deferrals` | [`modules/reviews/migrations/0013_recovery_retry_deferrals.sql`](../../modules/reviews/migrations/0013_recovery_retry_deferrals.sql#L2) | Capability, eligibility, consent, recovery or suppression; preserve issued links and state |
+| `review_import_titles` | [`modules/reviews/migrations/0015_imported_titles.sql`](../../modules/reviews/migrations/0015_imported_titles.sql#L2) | Historical/public projection or provenance; preserve immutable history and aliases |
+| `review_snapshot_provenance` | [`modules/reviews/migrations/0016_snapshot_provenance.sql`](../../modules/reviews/migrations/0016_snapshot_provenance.sql#L1) | Historical/public projection or provenance; preserve immutable history and aliases |
+| `review_identity_links` | [`modules/reviews/migrations/0017_review_identity_links.sql`](../../modules/reviews/migrations/0017_review_identity_links.sql#L2) | Historical/public projection or provenance; preserve immutable history and aliases |
+| `review_subject_aliases` | [`modules/reviews/migrations/0019_subject_aliases.sql`](../../modules/reviews/migrations/0019_subject_aliases.sql#L2) | Historical/public projection or provenance; preserve immutable history and aliases |
+| `review_automation_activation` | [`modules/reviews/migrations/0020_automation_intake.sql`](../../modules/reviews/migrations/0020_automation_intake.sql#L2) | Reviews automation, delivery evidence or operations; consolidate execution only after state transition plan |
+| `review_automation_intake` | [`modules/reviews/migrations/0020_automation_intake.sql`](../../modules/reviews/migrations/0020_automation_intake.sql#L19) | Reviews automation, delivery evidence or operations; consolidate execution only after state transition plan |
+| `review_automation_intents` | [`modules/reviews/migrations/0020_automation_intake.sql`](../../modules/reviews/migrations/0020_automation_intake.sql#L35) | Reviews automation, delivery evidence or operations; consolidate execution only after state transition plan |
+| `review_automation_recipient_bindings` | [`modules/reviews/migrations/0022_automation_recipient_evidence.sql`](../../modules/reviews/migrations/0022_automation_recipient_evidence.sql#L2) | Reviews automation, delivery evidence or operations; consolidate execution only after state transition plan |
+| `native_staff_replies` | [`modules/reviews/migrations/0023_staff_reply_lifecycle.sql`](../../modules/reviews/migrations/0023_staff_reply_lifecycle.sql#L2) | Native Reviews, moderation or publication; keep records and audit |
+| `native_staff_reply_revisions` | [`modules/reviews/migrations/0023_staff_reply_lifecycle.sql`](../../modules/reviews/migrations/0023_staff_reply_lifecycle.sql#L9) | Native Reviews, moderation or publication; keep records and audit |
+| `native_staff_reply_requests` | [`modules/reviews/migrations/0023_staff_reply_lifecycle.sql`](../../modules/reviews/migrations/0023_staff_reply_lifecycle.sql#L14) | Native Reviews, moderation or publication; keep records and audit |
+| `native_staff_reply_audit` | [`modules/reviews/migrations/0023_staff_reply_lifecycle.sql`](../../modules/reviews/migrations/0023_staff_reply_lifecycle.sql#L20) | Native Reviews, moderation or publication; keep records and audit |
+| `review_automation_due_claims` | [`modules/reviews/migrations/0025_automation_due_claims.sql`](../../modules/reviews/migrations/0025_automation_due_claims.sql#L2) | Reviews automation, delivery evidence or operations; consolidate execution only after state transition plan |
+| `review_automation_fence` | [`modules/reviews/migrations/0026_automation_activation_fence.sql`](../../modules/reviews/migrations/0026_automation_activation_fence.sql#L3) | Reviews automation, delivery evidence or operations; consolidate execution only after state transition plan |
+| `review_invitation_consent_withdrawals` | [`modules/reviews/migrations/0027_consent_withdrawal.sql`](../../modules/reviews/migrations/0027_consent_withdrawal.sql#L2) | Capability, eligibility, consent, recovery or suppression; preserve issued links and state |
+| `review_automation_due_schedule` | [`modules/reviews/migrations/0028_automation_due_schedule.sql`](../../modules/reviews/migrations/0028_automation_due_schedule.sql#L2) | Reviews automation, delivery evidence or operations; consolidate execution only after state transition plan |
+| `review_recipient_suppressions` | [`modules/reviews/migrations/0029_merchant_recipient_suppression.sql`](../../modules/reviews/migrations/0029_merchant_recipient_suppression.sql#L2) | Capability, eligibility, consent, recovery or suppression; preserve issued links and state |
+| `review_suppression_rotation` | [`modules/reviews/migrations/0030_suppression_rotation.sql`](../../modules/reviews/migrations/0030_suppression_rotation.sql#L3) | Capability, eligibility, consent, recovery or suppression; preserve issued links and state |
+| `review_suppression_aliases` | [`modules/reviews/migrations/0030_suppression_rotation.sql`](../../modules/reviews/migrations/0030_suppression_rotation.sql#L13) | Capability, eligibility, consent, recovery or suppression; preserve issued links and state |
+| `review_provider_deliveries` | [`modules/reviews/migrations/0031_provider_delivery_receipts.sql`](../../modules/reviews/migrations/0031_provider_delivery_receipts.sql#L2) | Reviews automation, delivery evidence or operations; consolidate execution only after state transition plan |
+| `review_provider_activity` | [`modules/reviews/migrations/0031_provider_delivery_receipts.sql`](../../modules/reviews/migrations/0031_provider_delivery_receipts.sql#L21) | Reviews automation, delivery evidence or operations; consolidate execution only after state transition plan |
+| `review_provider_identity_discoveries` | [`modules/reviews/migrations/0031_provider_delivery_receipts.sql`](../../modules/reviews/migrations/0031_provider_delivery_receipts.sql#L39) | Reviews automation, delivery evidence or operations; consolidate execution only after state transition plan |
+| `review_provider_operations_audit` | [`modules/reviews/migrations/0032_provider_operations_audit.sql`](../../modules/reviews/migrations/0032_provider_operations_audit.sql#L2) | Reviews automation, delivery evidence or operations; consolidate execution only after state transition plan |
+| `review_historical_recipient_audit` | [`modules/reviews/migrations/0033_historical_recipient_audit.sql`](../../modules/reviews/migrations/0033_historical_recipient_audit.sql#L2) | Reviews automation, delivery evidence or operations; consolidate execution only after state transition plan |
+| `reviews_subscriber_checkpoint` | [`modules/reviews/automation-intake-producer/migrations/0001_reviews_subscriber.sql`](../../modules/reviews/automation-intake-producer/migrations/0001_reviews_subscriber.sql#L2) | Reviews source installation/checkpoint; preserve fence and cursor while replacing orchestration |
+| `reviews_verified_deployment` | [`modules/reviews/automation-intake-producer/migrations/0002_verified_deployments.sql`](../../modules/reviews/automation-intake-producer/migrations/0002_verified_deployments.sql#L2) | Reviews source installation/checkpoint; preserve fence and cursor while replacing orchestration |
+| `purchaser_contexts` | [`modules/reviews/consent/migrations/0001_purchaser_context.sql`](../../modules/reviews/consent/migrations/0001_purchaser_context.sql#L1) | Purchaser context/evidence and suppression key registry; retain existing records and keys; OTP use requires deployment inventory |
+| `purchaser_email_challenges` | [`modules/reviews/consent/migrations/0001_purchaser_context.sql`](../../modules/reviews/consent/migrations/0001_purchaser_context.sql#L9) | Purchaser context/evidence and suppression key registry; retain existing records and keys; OTP use requires deployment inventory |
+| `purchaser_consent_grants` | [`modules/reviews/consent/migrations/0001_purchaser_context.sql`](../../modules/reviews/consent/migrations/0001_purchaser_context.sql#L24) | Purchaser context/evidence and suppression key registry; retain existing records and keys; OTP use requires deployment inventory |
+| `purchaser_verified_recipients` | [`modules/reviews/consent/migrations/0001_purchaser_context.sql`](../../modules/reviews/consent/migrations/0001_purchaser_context.sql#L33) | Purchaser context/evidence and suppression key registry; retain existing records and keys; OTP use requires deployment inventory |
+| `purchaser_test_email_claims` | [`modules/reviews/consent/migrations/0001_purchaser_context.sql`](../../modules/reviews/consent/migrations/0001_purchaser_context.sql#L47) | Purchaser context/evidence and suppression key registry; retain existing records and keys; OTP use requires deployment inventory |
+| `review_suppression_key_registry` | [`modules/reviews/consent/migrations/0002_suppression_key_registry.sql`](../../modules/reviews/consent/migrations/0002_suppression_key_registry.sql#L3) | Purchaser context/evidence and suppression key registry; retain existing records and keys; OTP use requires deployment inventory |
+| `review_suppression_key_current` | [`modules/reviews/consent/migrations/0002_suppression_key_registry.sql`](../../modules/reviews/consent/migrations/0002_suppression_key_registry.sql#L11) | Purchaser context/evidence and suppression key registry; retain existing records and keys; OTP use requires deployment inventory |
+| `review_suppression_key_guard` | [`modules/reviews/consent/migrations/0002_suppression_key_registry.sql`](../../modules/reviews/consent/migrations/0002_suppression_key_registry.sql#L20) | Purchaser context/evidence and suppression key registry; retain existing records and keys; OTP use requires deployment inventory |
+
+75 CREATE TABLE definitions are listed, including repeated/rebuilt names. `cartray_operator_migrations` is additionally created in [`operate.py`](../../modules/reviews/operator/operate.py#L1870).
+
+PR #90 adds its own fulfilment definitions; review them in [the PR diff](https://github.com/mitchins/cart-ray/pull/90/files) before deciding which identity, entitlement and access tables survive. PR #92 proposes `review_cloudflare_deliveries`; it is not in this baseline. None of the proposed PR schemas is currently established as production state.
+
+## Proposed, not merged: PR #90 fulfilment
+
+These definitions exist only in proposed PR #90 at `164ea67664f2`; their presence is not evidence that they exist in a deployed merchant database. Retain the proposed entitlement and capability protections if the feature is revised; do not adopt the per-workflow notification model uncritically.
+
+| Proposed table | Definition |
+|---|---|
+| `fulfilment_resources` | [PR #90 migration line 2](https://github.com/mitchins/cart-ray/blob/164ea67664f2/migrations/0009_fulfilment.sql#L2) |
+| `fulfilment_order_bindings` | [PR #90 migration line 21](https://github.com/mitchins/cart-ray/blob/164ea67664f2/migrations/0009_fulfilment.sql#L21) |
+| `fulfilment_entitlements` | [PR #90 migration line 47](https://github.com/mitchins/cart-ray/blob/164ea67664f2/migrations/0009_fulfilment.sql#L47) |
+| `fulfilment_capabilities` | [PR #90 migration line 61](https://github.com/mitchins/cart-ray/blob/164ea67664f2/migrations/0009_fulfilment.sql#L61) |
+| `fulfilment_order_plans` | [PR #90 migration line 78](https://github.com/mitchins/cart-ray/blob/164ea67664f2/migrations/0009_fulfilment.sql#L78) |
+| `fulfilment_notification_intents` | [PR #90 migration line 112](https://github.com/mitchins/cart-ray/blob/164ea67664f2/migrations/0009_fulfilment.sql#L112) |
+| `fulfilment_recovery_audit` | [PR #90 migration line 124](https://github.com/mitchins/cart-ray/blob/164ea67664f2/migrations/0009_fulfilment.sql#L124) |
+| `fulfilment_preparation_failures` | [PR #90 migration line 170](https://github.com/mitchins/cart-ray/blob/164ea67664f2/migrations/0009_fulfilment.sql#L170) |
+| `fulfilment_order_holds` | [PR #90 migration line 187](https://github.com/mitchins/cart-ray/blob/164ea67664f2/migrations/0009_fulfilment.sql#L187) |
+| `fulfilment_revocation_audit` | [PR #90 migration line 211](https://github.com/mitchins/cart-ray/blob/164ea67664f2/migrations/0009_fulfilment.sql#L211) |
+
+PR #90 also proposes `ALTER TABLE post_purchase_executions ADD COLUMN fulfilment_nonce`; the column is not in the baseline. PR #92 proposes [`review_cloudflare_deliveries`](https://github.com/mitchins/cart-ray/blob/047f776ec445/modules/reviews/migrations/0034_cloudflare_delivery_receipts.sql), keyed by store, environment, acquisition and generation with delivery identity, provider message ID and acceptance time; it is not in the baseline.
+
+## Separate publication Worker schema
+
+These five definitions are in the optional, independently deployed [publication schema](../../modules/reviews/publication/schema.sql). It is not one of the four installer chains counted above; actual deployment and live rows were not inspected. Preserve artifact lineage, retirement, record/media tombstones and the quarantine gate.
+
+- [`publication_artifacts`](../../modules/reviews/publication/schema.sql#L1)
+- [`publication_retired`](../../modules/reviews/publication/schema.sql#L15)
+- [`publication_tombstones`](../../modules/reviews/publication/schema.sql#L16)
+- [`publication_media_tombstones`](../../modules/reviews/publication/schema.sql#L17)
+- [`publication_gate`](../../modules/reviews/publication/schema.sql#L18)
