@@ -885,7 +885,8 @@ def test_order_page_before_receipt_preserves_followup_only_preferences(purchase)
     assert 'reviews' not in json.loads(payload)
     assert db.conn.execute('SELECT count(*) FROM order_review_messages').fetchone()[0] == 0
     run(worker._drain_post_purchase(env))
-    assert len(sent) == 1 and not sent[0].get('reviews')
+    assert len(sent) == 1
+    assert not sent[0].get('reviews')
     message = run(order_reviews.first(db,'SELECT * FROM order_review_messages'))
     assert json.loads(message['settings_json'])['timing'] == 'followup'
     assert message['due_at'] is not None
