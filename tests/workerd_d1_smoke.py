@@ -71,7 +71,8 @@ async def order_reviews_journey(db):
         async def fetch(self, request):
             envelope = json.loads(await request.text())
             if envelope['type'] == 'recipient_evidence':
-                return JsResponse.json(to_js({'email':'buyer-'+suffix+'@example.test'},dict_converter=Object.fromEntries))
+                return JsResponse.json(
+                    to_js({'email':'buyer-'+suffix+'@example.test'},dict_converter=Object.fromEntries))
             messages.append(envelope)
             if envelope['type'] == 'order_confirmation':
                 bearer = envelope['reviews']['url'].split('invitation=')[1].split('&')[0]
