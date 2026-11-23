@@ -547,15 +547,32 @@ def test_concurrent_recovery_loser_cannot_overwrite_winning_send(purchase,monkey
 
     async def scenario():
         both_prepared, sending, release, loser = (asyncio.Event() for _ in range(4))
-        # D1 serializes transactions. The SQLite test adapter shares a single
-        # connection, so serialize its batches rather than nesting transactions.
-        batch_lock, original_batch = asyncio.Lock(), db.batch
+        # D1 serializes operations around transactions. Serialize the shared
+        # SQLite adapter's individual reads too (its queries use worker threads).
+        batch_lock, original_batch, original_prepare = asyncio.Lock(), db.batch, db.prepare
+
+        class SerializedStatement:
+            def __init__(self, statement):
+                self.statement = statement
+
+            def bind(self,*values):
+                self.statement = self.statement.bind(*values)
+                return self
+
+            async def all(self):
+                async with batch_lock:
+                    return await self.statement.all()
+
+            async def run(self):
+                async with batch_lock:
+                    return await self.statement.run()
 
         async def serial_batch(statements):
             async with batch_lock:
-                return await original_batch(statements)
+                return await original_batch([statement.statement for statement in statements])
 
         monkeypatch.setattr(db,'batch',serial_batch)
+        monkeypatch.setattr(db,'prepare',lambda sql: SerializedStatement(original_prepare(sql)))
         prepared = 0
         prepare, claim = invitations.prepare_replacement,invitations.claim_delivery
         mail = env.POST_PURCHASE_HANDLER.fetch
