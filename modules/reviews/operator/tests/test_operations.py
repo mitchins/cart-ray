@@ -57,7 +57,7 @@ def test_sender_off_pauses_and_verifies_disabled_version_without_changing_fence(
              "activation_watermark": 42}
     installation = SimpleNamespace(
         config={"reviews_enabled": True}, state=state, directory=tmp_path, api=api,
-        pause=lambda: calls.append(("pause",)), name=lambda role: role,
+        pause=lambda: calls.append(("pause",)), name=lambda role: role, check_reviews_handoff=lambda: None,
         artifact_modules=lambda role, build: {}, worker_binding_errors=lambda *args: [], save=lambda: None,
     )
     def disabled_graph(*args, **kwargs):

@@ -1591,6 +1591,7 @@ class Installation(PostPurchaseOperator):
         """Pause Reviews queues, then publish and verify a hard-disabled sender version."""
         if not self.config["reviews_enabled"] or not self.state.get("deployment", {}).get("complete"):
             raise ValueError("a completed Reviews deployment is required")
+        self.check_reviews_handoff()
         self.pause()
         deployment = self.state["deployment"]
         build = json.loads((self.directory / "releases" / deployment["commit"] / "build.json").read_text())
