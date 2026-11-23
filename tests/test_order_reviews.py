@@ -26,7 +26,7 @@ def run(value):
 
 
 @pytest.fixture
-def purchase(fixture_catalogue, monkeypatch):
+def purchase(fixture_catalogue, monkeypatch, request):
     monkeypatch.syspath_prepend(str(ROOT / "modules/reviews/src"))
     db = MockD1Database()
     for folder in ("migrations", "modules/reviews/migrations", "modules/reviews/consent/migrations"):
@@ -66,13 +66,13 @@ def purchase(fixture_catalogue, monkeypatch):
         )
     )
     order = gateway.requests[0].order_id
+    from cartray.store import review_invitation_disclosure
+
+    version, wording = review_invitation_disclosure(1 if getattr(request, "param", None) == "v1" else 2)
+    db.conn.execute("INSERT INTO review_invitation_checkout_choices VALUES (?,1,1,?,?,90)", (order, version, wording))
     db.conn.execute(
-        "INSERT INTO review_invitation_checkout_choices VALUES (?,1,1,'v1','One review invitation',90)", (order,)
-    )
-    db.conn.execute(
-        "INSERT INTO review_invitation_checkout_grants "
-        "VALUES (?,'v1','One review invitation',90,1,'preselected_acceptance')",
-        (order,),
+        "INSERT INTO review_invitation_checkout_grants VALUES (?,?,?,90,1,'preselected_acceptance')",
+        (order, version, wording),
     )
     db.conn.commit()
     assert (
@@ -273,21 +273,122 @@ def test_revoked_grant_and_activation_fence_block_new_links(purchase):
 
 def test_customer_recovery_uses_the_receipt_provider_and_preserves_progress(purchase):
     db, env, sent, order = purchase
-    env.CARTRAY_REVIEW_SETTINGS = json.dumps({'timing':'receipt'})
-    env.CARTRAY_REVIEW_INVITATION_KEY = 'i'*32
+    env.CARTRAY_REVIEW_SETTINGS = json.dumps({"timing": "receipt"})
+    env.CARTRAY_REVIEW_INVITATION_KEY = "i" * 32
     run(worker._drain_post_purchase(env))
-    original = run(order_reviews.first(db, 'SELECT * FROM order_review_messages'))
+    original = run(order_reviews.first(db, "SELECT * FROM order_review_messages"))
     db.conn.execute("UPDATE acquisition_invitation_subjects SET consumed_at=100 WHERE subject_id='first'")
-    db.conn.execute("INSERT INTO review_recovery_requests VALUES ('merchant','test',?,?,100,'pending')", (order,'b'*64))
+    db.conn.execute(
+        "INSERT INTO review_recovery_requests VALUES ('merchant','test',?,?,100,'pending')", (order, "b" * 64)
+    )
     db.conn.commit()
     run(worker._drain_post_purchase(env))
     run(worker._drain_post_purchase(env))
     assert len(sent) == 2
-    assert sent[1]['reviews']['subjects'] == ['second']
-    assert original['invitation_token'] not in sent[1]['reviews']['url']
-    current = run(order_reviews.first(db, 'SELECT * FROM acquisition_invitations'))
-    replacement = run(order_reviews.first(db, 'SELECT * FROM order_review_messages'))
-    assert current['token_hash'] == hashlib.sha256(replacement['invitation_token'].encode()).hexdigest()
-    assert db.conn.execute('SELECT state FROM review_recovery_requests').fetchone()[0] == 'fulfilled'
-    assert db.conn.execute(
-        "SELECT consumed_at FROM acquisition_invitation_subjects WHERE subject_id='first'").fetchone()[0] == 100
+    assert sent[1]["reviews"]["subjects"] == ["second"]
+    assert original["invitation_token"] not in sent[1]["reviews"]["url"]
+    current = run(order_reviews.first(db, "SELECT * FROM acquisition_invitations"))
+    replacement = run(order_reviews.first(db, "SELECT * FROM order_review_messages"))
+    assert current["token_hash"] == hashlib.sha256(replacement["invitation_token"].encode()).hexdigest()
+    assert db.conn.execute("SELECT state FROM review_recovery_requests").fetchone()[0] == "fulfilled"
+    assert (
+        db.conn.execute("SELECT consumed_at FROM acquisition_invitation_subjects WHERE subject_id='first'").fetchone()[
+            0
+        ]
+        == 100
+    )
+
+
+def test_two_request_disclosure_is_server_scoped_and_old_clients_keep_one(fixture_catalogue):
+    from cartray.store import SqliteOrderStore, review_invitation_disclosure
+
+    for configured, supplied, expected in [
+        (2, "review-invitation-v2", 2),
+        (2, "review-invitation-v1", 1),
+        (1, "review-invitation-v2", 1),
+    ]:
+        store = SqliteOrderStore.in_memory()
+        checkout = CheckoutService(
+            fixture_catalogue,
+            store,
+            FakePaymentGateway(),
+            review_invitations_enabled=True,
+            review_invitation_default_selected=True,
+            review_invitation_request_limit=configured,
+        )
+        request = CheckoutRequest(
+            "disclosure", fixture_catalogue.version, (CanonicalItem("TEST-BUNDLE", 1),), True, supplied
+        )
+        run(checkout.checkout(request))
+        row = store.connection.execute(
+            "SELECT wording_version,wording FROM review_invitation_checkout_grants"
+        ).fetchone()
+        assert tuple(row) == review_invitation_disclosure(expected)
+        store.connection.close()
+
+
+@pytest.mark.parametrize("purchase", ["v1"], indirect=True)
+def test_old_one_request_grant_cannot_be_expanded_to_both(purchase):
+    db, env, sent, _ = purchase
+    run(worker._drain_post_purchase(env))
+    run(worker._drain_post_purchase(env))
+    assert len(sent) == 1 and sent[0]["reviews"]
+    row = run(order_reviews.first(db, "SELECT settings_json,due_at FROM order_review_messages"))
+    assert json.loads(row["settings_json"])["timing"] == "receipt" and row["due_at"] is None
+
+
+def test_unsubscribe_preserves_the_next_purchase_receipt(purchase, fixture_catalogue):
+    import time
+    from cartray.models import CheckoutRedirect
+
+    db, env, sent, _ = purchase
+    env.CARTRAY_REVIEW_SETTINGS = json.dumps({"timing": "receipt"})
+    run(worker._drain_post_purchase(env))
+    original = run(order_reviews.first(db, "SELECT * FROM order_review_messages"))
+    run(order_reviews.unsubscribe(db, "merchant", "test", original["unsubscribe_token"], int(time.time())))
+    gateway = FakePaymentGateway(redirects={"previous": CheckoutRedirect("occupied", "https://checkout.invalid")})
+    store = D1OrderStore(db)
+    checkout = CheckoutService(
+        fixture_catalogue, store, gateway, review_invitations_enabled=True, review_invitation_default_selected=True
+    )
+    redirect = run(
+        checkout.checkout(
+            CheckoutRequest("next-purchase", fixture_catalogue.version, (CanonicalItem("TEST-BUNDLE", 1),), True)
+        )
+    )
+    order = gateway.requests[0].order_id
+    run(
+        store.confirm_settlement(
+            order_id=order,
+            session_id=redirect.session_id,
+            event_id="evt_repeat",
+            payload={"id": "evt_repeat"},
+            payload_sha256="sha256:repeat",
+            payment_status="paid",
+            amount_total_minor=100,
+            now=int(time.time()),
+        )
+    )
+    run(worker._drain_post_purchase(env))
+    assert len(sent) == 2 and sent[1]["type"] == "order_confirmation" and not sent[1].get("reviews")
+    assert db.conn.execute("SELECT count(*) FROM order_review_messages").fetchone()[0] == 1
+
+
+def test_withdrawn_recovery_is_retired_instead_of_starving_later_customers(purchase):
+    import time
+
+    db, env, sent, order = purchase
+    env.CARTRAY_REVIEW_SETTINGS = json.dumps({"timing": "receipt"})
+    env.CARTRAY_REVIEW_INVITATION_KEY = "i" * 32
+    run(worker._drain_post_purchase(env))
+    db.conn.execute(
+        "INSERT INTO review_recovery_requests VALUES ('merchant','test',?,?,100,'pending')", (order, "c" * 64)
+    )
+    db.conn.execute("UPDATE review_invitation_consents SET revoked_at=100 WHERE acquisition_id=?", (order,))
+    db.conn.commit()
+    run(worker._drain_post_purchase(env))
+    assert db.conn.execute("SELECT state FROM review_recovery_requests").fetchone()[0] == "failed"
+    assert len(sent) == 1
+    # Repeated scheduled processing does not keep selecting an ineligible request.
+    run(worker._drain_post_purchase(env))
+    assert len(sent) == 1

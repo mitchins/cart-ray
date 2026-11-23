@@ -52,12 +52,14 @@ class CheckoutRequest:
     manifest_version: str
     items: tuple[CanonicalItem, ...]
     review_invitation_opt_in: bool = False
+    review_invitation_wording_version: str = "review-invitation-v1"
 
     @classmethod
     def from_payload(cls, payload: dict[str, object]) -> CheckoutRequest:
         if not isinstance(payload, dict):
             raise CheckoutValidationError("checkout request must be a JSON object")
-        allowed = {"checkout_request_id", "manifest_version", "items", "review_invitation_opt_in"}
+        allowed = {"checkout_request_id", "manifest_version", "items", "review_invitation_opt_in",
+                   "review_invitation_wording_version"}
         unknown = set(payload) - allowed
         if unknown:
             raise CheckoutValidationError(f"unsupported checkout fields: {sorted(unknown)!r}")
@@ -71,6 +73,9 @@ class CheckoutRequest:
                 raise TypeError
             request_id = payload["checkout_request_id"]
             manifest_version = payload["manifest_version"]
+            wording = payload.get('review_invitation_wording_version', 'review-invitation-v1')
+            if wording not in ('review-invitation-v1', 'review-invitation-v2'):
+                raise TypeError
             opt_in = payload.get("review_invitation_opt_in", False)
             if not isinstance(opt_in, bool):
                 raise TypeError
@@ -83,7 +88,7 @@ class CheckoutRequest:
                 checkout_request_id=request_id,
                 manifest_version=manifest_version,
                 items=items,
-                review_invitation_opt_in=opt_in,
+                review_invitation_opt_in=opt_in, review_invitation_wording_version=wording,
             )
         except (KeyError, TypeError) as error:
             raise CheckoutValidationError("invalid checkout request") from error
@@ -110,6 +115,7 @@ class CheckoutOrder:
     subtotal_minor: int
     review_invitation_opt_in: bool = False
     review_invitation_policy_enabled: bool = False
+    review_invitation_request_limit: int = 1
     review_invitation_default_selected: bool = False
 
 

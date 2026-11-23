@@ -1253,6 +1253,11 @@ class Installation(PostPurchaseOperator):
                 storefront["reviewInvitationDefaultChecked"] = (
                     self.config["reviews_enabled"] and self.config["review_invitation_default_checked"]
                 )
+                from cartray.store import review_invitation_disclosure
+                version, wording = review_invitation_disclosure(
+                    2 if self.config.get('review_requests', {}).get('timing') == 'both' else 1)
+                storefront['reviewInvitationWordingVersion'] = version
+                storefront['reviewInvitationWording'] = wording
                 storefront["reviewSubjects"] = self.config["subject_map"] if self.config["reviews_enabled"] else {}
                 theme = javascript_json(site / "site-config.js", "window.CARTRAY_THEME = ")
                 theme["contextPath"] = None

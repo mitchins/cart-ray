@@ -13,6 +13,14 @@ from .models import CheckoutOrder, CheckoutRedirect, OrderItem
 REVIEW_INVITATION_WORDING_VERSION = "review-invitation-v1"
 REVIEW_INVITATION_WORDING = "Email me one request to review my purchase."
 
+
+def review_invitation_disclosure(limit=1):
+    if limit == 2:
+        return ('review-invitation-v2',
+                'Include a review request in my order confirmation and send one review follow-up.')
+    return REVIEW_INVITATION_WORDING_VERSION, REVIEW_INVITATION_WORDING
+
+
 # Public receipt allowlist: never select buyer data, provider IDs or fulfilment resources.
 _CHECKOUT_RECEIPT_SQL = """SELECT i.product_key, i.quantity, i.unit_amount_minor, o.currency
     FROM checkout_sessions AS s
@@ -320,21 +328,22 @@ class SqliteOrderStore:
                 (order.order_id, nonce, now + self.lease_seconds, now),
             )
             if order.review_invitation_policy_enabled:
+                wording_version, wording = review_invitation_disclosure(order.review_invitation_request_limit)
                 try:
                     self.connection.execute(
                         "INSERT INTO review_invitation_checkout_choices "
                         "(order_id, selected, merchant_default_selected, wording_version, wording, recorded_at) "
                         "VALUES (?, ?, ?, ?, ?, ?)",
                         (order.order_id, int(order.review_invitation_opt_in),
-                         int(order.review_invitation_default_selected), REVIEW_INVITATION_WORDING_VERSION,
-                         REVIEW_INVITATION_WORDING, now),
+                         int(order.review_invitation_default_selected), wording_version,
+                         wording, now),
                     )
                     if order.review_invitation_opt_in:
                         self.connection.execute(
                             "INSERT INTO review_invitation_checkout_grants "
                             "(order_id, wording_version, wording, granted_at, merchant_default_selected, "
                             "selection_basis) VALUES (?, ?, ?, ?, ?, ?)",
-                            (order.order_id, REVIEW_INVITATION_WORDING_VERSION, REVIEW_INVITATION_WORDING, now,
+                            (order.order_id, wording_version, wording, now,
                              int(order.review_invitation_default_selected),
                              "preselected_acceptance" if order.review_invitation_default_selected
                              else "express_opt_in"),
@@ -938,19 +947,20 @@ class D1OrderStore:
         )
         try:
             if order.review_invitation_policy_enabled:
+                wording_version, wording = review_invitation_disclosure(order.review_invitation_request_limit)
                 choices = [self.database.prepare(
                     "INSERT INTO review_invitation_checkout_choices "
                     "(order_id, selected, merchant_default_selected, wording_version, wording, recorded_at) "
                     "VALUES (?, ?, ?, ?, ?, ?)"
                 ).bind(order.order_id, int(order.review_invitation_opt_in),
-                       int(order.review_invitation_default_selected), REVIEW_INVITATION_WORDING_VERSION,
-                       REVIEW_INVITATION_WORDING, now)]
+                       int(order.review_invitation_default_selected), wording_version,
+                       wording, now)]
                 if order.review_invitation_opt_in:
                     choices.append(self.database.prepare(
                         "INSERT INTO review_invitation_checkout_grants "
                         "(order_id, wording_version, wording, granted_at, merchant_default_selected, "
                         "selection_basis) VALUES (?, ?, ?, ?, ?, ?)"
-                    ).bind(order.order_id, REVIEW_INVITATION_WORDING_VERSION, REVIEW_INVITATION_WORDING, now,
+                    ).bind(order.order_id, wording_version, wording, now,
                            int(order.review_invitation_default_selected),
                            "preselected_acceptance" if order.review_invitation_default_selected else "express_opt_in"))
                 try:

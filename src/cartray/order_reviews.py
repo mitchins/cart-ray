@@ -192,6 +192,9 @@ async def prepare(
         != hashlib.sha256(existing_message["invitation_token"].encode()).hexdigest()
     ):
         return None
+    grant = await first(db, 'SELECT wording_version FROM review_invitation_checkout_grants WHERE order_id=?', order)
+    if settings.timing == 'both' and grant['wording_version'] != 'review-invitation-v2':
+        settings = replace(settings, timing='receipt')
     settings = replace(settings, priorities=tuple(dict.fromkeys(mapping.get(key, key) for key in settings.priorities)))
     # Insert once; concurrent attempts recover the winning unpredictable token.
     token, unsubscribe = secrets.token_hex(32), secrets.token_hex(32)

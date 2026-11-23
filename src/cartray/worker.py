@@ -515,6 +515,7 @@ async def checkout_service_from_environment(env) -> CheckoutService:
         cancel_url,
         review_invitations_enabled=_automatic_invitation_enabled(env),
         review_invitation_default_selected=getattr(env, "CARTRAY_REVIEW_INVITATION_DEFAULT", None) == "checked",
+        review_invitation_request_limit=2 if getattr(env, 'CARTRAY_REVIEW_INVITATION_LIMIT', '1') == '2' else 1,
     )
 
 
@@ -1113,6 +1114,7 @@ async def _drain_review_recovery(env, service, token, *, deadline):
         if time.monotonic() + 18 >= deadline:
             return
         if not await order_reviews.permitted(env.DB, merchant, "test", message["order_id"], message["recipient_hash"]):
+            await _fail_order_recovery(env.DB, merchant, message)
             continue
         purchase = await order_reviews.first(
             env.DB,

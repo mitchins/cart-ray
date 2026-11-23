@@ -47,7 +47,7 @@ async def order_reviews_journey(db):
                          fulfilment_resources=('smoke-external',))),
         items_digest='sha256:'+'2'*64,currency='aud',subtotal_minor=3,
         review_invitation_opt_in=True,review_invitation_policy_enabled=True,
-        review_invitation_default_selected=True)
+        review_invitation_default_selected=True,review_invitation_request_limit=2)
     store = D1OrderStore(db)
     await store.start_or_load(order, nonce='reviews', now=now)
     await store.attach_redirect(order.order_id, CheckoutRedirect('cs_test_'+suffix,'https://stripe.test'), now=now)

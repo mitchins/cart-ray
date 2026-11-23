@@ -321,7 +321,8 @@ def graph(installation, versions=None, sending=False, post_purchase_modes=None,
             ReviewSettings.parse(json.dumps(preferences))
             if preferences.get('timing') == 'off':
                 source['vars']['CARTRAY_REVIEW_INVITATION_MODE'] = 'disabled'
-            source['vars'].update(CARTRAY_REVIEW_SETTINGS=json.dumps(preferences), CARTRAY_REVIEW_SUBJECT_MAPS=mapping)
+            source['vars'].update(CARTRAY_REVIEW_SETTINGS=json.dumps(preferences), CARTRAY_REVIEW_SUBJECT_MAPS=mapping,
+                CARTRAY_REVIEW_INVITATION_LIMIT='2' if preferences.get('timing') == 'both' else '1')
             nodes['reviews']['vars'].update(REVIEWS_AUTOMATION_INTAKE='disabled', REVIEWS_AUTOMATION_SENDING='disabled',
                 REVIEWS_RECOVERY_MODE='order_notifications')
         if 'post-purchase' in nodes:

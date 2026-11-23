@@ -38,6 +38,7 @@ export async function createAdapter(config) {
   const adapter={
     preview:false, products, currency:[...currencies][0], state:{permission:attempt ? attempt.permission : source.reviewInvitationDefaultChecked===true},
     permissionEnabled:source.reviewInvitationsEnabled===true,
+    permissionWording:source.reviewInvitationWording,
     checkoutEnabled:source.checkoutEnabled===true,
     checkoutLocked:params.get('checkout')==='complete',
     attemptPending:Boolean(attempt),
