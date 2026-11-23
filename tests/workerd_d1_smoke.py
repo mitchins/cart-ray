@@ -28,6 +28,73 @@ TEST_PUBLIC_KEY_SPKI_B64 = "MCowBQYDK2VwAyEAmjCIMxYDlWSJsqHfrQZ+nVkoUEXEiajZ00z2
 TEST_PAYLOAD = b"cartray-worker-webcrypto-smoke-v1"
 
 
+async def order_reviews_journey(db):
+    """Real D1/native submission, synthetic mail: the link works BEFORE acceptance."""
+    import hashlib
+    import hmac
+    import secrets
+
+    from cartray_reviews.invitations import redeem_purchase
+
+    from cartray import order_reviews
+    now = int(time.time())
+    suffix = str(time.time_ns())
+    order = CheckoutOrder(order_id='cr_reviews_'+suffix, checkout_request_id='reviews_'+suffix,
+        request_fingerprint='fp_'+suffix, manifest_version='smoke-review-version',
+        items=(OrderItem(product_key='REVIEW-A',quantity=2,stripe_price_id='price_a',unit_amount_minor=1,
+                         fulfilment_resources=('smoke-resource',)),
+               OrderItem(product_key='REVIEW-B',quantity=1,stripe_price_id='price_b',unit_amount_minor=1,
+                         fulfilment_resources=('smoke-external',))),
+        items_digest='sha256:'+'2'*64,currency='aud',subtotal_minor=3,
+        review_invitation_opt_in=True,review_invitation_policy_enabled=True,
+        review_invitation_default_selected=True)
+    store = D1OrderStore(db)
+    await store.start_or_load(order, nonce='reviews', now=now)
+    await store.attach_redirect(order.order_id, CheckoutRedirect('cs_test_'+suffix,'https://stripe.test'), now=now)
+    await store.confirm_settlement(order_id=order.order_id,session_id='cs_test_'+suffix,
+        event_id='evt_'+suffix,payload={'id':'evt_'+suffix},payload_sha256='sha256:smoke',
+        payment_status='paid',amount_total_minor=3,now=now)
+    key = 'h'*32
+    check = hmac.new(key.encode(), json.dumps(['reviews-suppression-key-check-v1','smoke-store','test',
+        'smoke-install','key1'],separators=(',', ':')).encode(), hashlib.sha256).hexdigest()
+    await db.prepare("INSERT OR IGNORE INTO review_suppression_key_registry "
+        "VALUES ('smoke-store','test','smoke-install','key1',?)").bind(check).run()
+    await db.prepare("INSERT OR IGNORE INTO review_suppression_key_current "
+        "VALUES ('smoke-store','test','smoke-install','key1')").run()
+    for subject in ('review-a','review-b'):
+        await (db.prepare("INSERT OR IGNORE INTO review_subjects VALUES ('smoke-store','test',?,'product',?)")
+            .bind(subject,'/'+subject+'/').run())
+        await (db.prepare("INSERT OR IGNORE INTO review_subject_display_names VALUES ('smoke-store','test',?,?)")
+            .bind(subject,subject).run())
+    messages = []
+    class Mail:
+        async def fetch(self, request):
+            envelope = json.loads(await request.text())
+            if envelope['type'] == 'recipient_evidence':
+                return JsResponse.json(to_js({'email':'buyer@example.test'},dict_converter=Object.fromEntries))
+            messages.append(envelope)
+            if envelope['type'] == 'order_confirmation':
+                bearer = envelope['reviews']['url'].split('invitation=')[1].split('&')[0]
+                await redeem_purchase(db, store='smoke-store',environment='test',subject='review-a',token=bearer,
+                    request_key='review_'+suffix,author='Buyer',title='',body='Helpful',rating=5,
+                    reviewer_key_secret=b'r'*32,now=now,random_token=lambda:secrets.token_hex(32))
+            return JsResponse.json(to_js({'provider_reference':'provider_'+suffix},dict_converter=Object.fromEntries))
+    env = SimpleNamespace(DB=db,CARTRAY_ENVIRONMENT='test',CARTRAY_POST_PURCHASE_MODE='test',
+        CARTRAY_MERCHANT_ID='smoke-store',CARTRAY_POST_PURCHASE_TOKEN='t'*32,
+        CARTRAY_STOREFRONT_ORIGIN='https://shop.example',POST_PURCHASE_HANDLER=Mail(),
+        CARTRAY_RECIPIENT_HASH_KEY=key,CARTRAY_INSTALLATION_ID='smoke-install',
+        CARTRAY_REVIEW_SETTINGS=json.dumps({'timing':'both','delay_days':0,'priorities':['REVIEW-A']}),
+        CARTRAY_REVIEW_SUBJECT_MAPS=json.dumps({'smoke-review-version':{'REVIEW-A':'review-a','REVIEW-B':'review-b'}}))
+    await _drain_post_purchase(env)
+    await _drain_post_purchase(env)
+    if len(messages)!=2 or [m['type'] for m in messages]!=['order_confirmation','review_followup']:
+        return False
+    message = await order_reviews.first(db,'SELECT * FROM order_review_messages WHERE order_id=?',order.order_id)
+    await order_reviews.unsubscribe(db,'smoke-store','test',message['unsubscribe_token'],now)
+    return (messages[0]['reviews']['subjects']==['review-a'] and messages[1]['reviews']['subjects']==['review-b']
+        and not await order_reviews.permitted(db,'smoke-store','test',order.order_id,message['recipient_hash']))
+
+
 class Default(WorkerEntrypoint):
     def order_env(self):
         async def get_file(key):
@@ -198,7 +265,9 @@ class Default(WorkerEntrypoint):
         verifier = WorkersEd25519Verifier(TEST_PUBLIC_KEY_SPKI_B64)
         verifier_accepted = await verifier.verify(TEST_PAYLOAD, signature)
         session_rows = _results(session)
+        reviews_ok = await order_reviews_journey(self.env.DB)
         result = {
+            "order_reviews": reviews_ok,
             "d1_batch_owner": first.owner,
             "first_confirmation": confirmed is False,
             "lease_rejected": lease_rejected,
@@ -213,6 +282,7 @@ class Default(WorkerEntrypoint):
             "order_access": order_access_ok,
         }
         expected = {
+            "order_reviews": True,
             "d1_batch_owner": True,
             "first_confirmation": True,
             "lease_rejected": True,

@@ -1474,7 +1474,8 @@ async def handle_write(request, env, path):
         token = data["invitation_token"]
         recovery_mode = str(getattr(env, "REVIEWS_RECOVERY_MODE", "automatic"))
         queue = getattr(env, "REVIEWS_RECOVERY_QUEUE", None)
-        if recovery_mode not in ("automatic", "manual_test") or (recovery_mode == "automatic" and queue is None):
+        if (recovery_mode not in ("automatic", "manual_test", "order_notifications")
+                or (recovery_mode == "automatic" and queue is None)):
             return fail(503, "recovery temporarily unavailable")
         if recovery_mode == "automatic":
             if not isinstance(token, str) or not re.fullmatch(r"[0-9a-f]{64}", token):

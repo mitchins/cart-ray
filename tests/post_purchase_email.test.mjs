@@ -149,3 +149,29 @@ test('a full checkout with unicode titles fits the receipt', async () => {
   assert.equal((await handle(request({...body,items}),env,p.fetch)).status,200);
   assert.match(JSON.parse(p.calls.at(-1).init.body).text_body,/item|é/);
 });
+
+test('receipt, followup and recipient evidence use the same verified provider boundary', async () => {
+  const preferences={...env,MERCHANT_CONTACT:'help@example.test'};
+  const reviews={url:'https://shop.example/review/#invitation='+'a'.repeat(64)+'&featured=second',
+    unsubscribe_url:'https://shop.example/review-unsubscribe?token='+'b'.repeat(64), subjects:['second'],names:{second:'Second product'}};
+  const p=provider({email:'Recipient@example.test'});
+  const evidence=await handle(request({...body,type:'recipient_evidence'}),preferences,p.fetch);
+  assert.deepEqual(await evidence.json(),{email:env.APPROVED_TEST_RECIPIENT});
+  assert.equal(p.calls.filter(c=>c.url.includes('/email/send')).length,0);
+  for(const type of ['order_confirmation','review_followup']) {
+    const result=await handle(request({...body,type,reviews}),preferences,p.fetch);
+    assert.equal(result.status,200);
+    const message=JSON.parse(p.calls.at(-1).init.body);
+    assert.ok(message.text_body.includes(reviews.url));
+    assert.match(message.text_body,/Second product/);
+    assert.equal(message.custom_headers.find(h=>h.header==='List-Unsubscribe-Post').value,'List-Unsubscribe=One-Click');
+    assert.equal(message.to[0],env.APPROVED_TEST_RECIPIENT);
+  }
+});
+
+test('invalid optional review data never blocks the payment receipt', async () => {
+  const p=provider();
+  assert.equal((await handle(request({...body,reviews:{url:'https://evil.example'}}),env,p.fetch)).status,200);
+  assert.match(JSON.parse(p.calls.at(-1).init.body).text_body,/Your purchased|View your purchased/);
+  assert.equal((await handle(request({...body,type:'review_followup',reviews:{}}),env,p.fetch)).status,400);
+});

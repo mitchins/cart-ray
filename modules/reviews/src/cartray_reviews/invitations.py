@@ -649,7 +649,7 @@ async def claim_delivery(db, *, store, environment, acquisition, generation, del
 
 async def record_delivery_outcome(
     db, *, store, environment, acquisition, generation, delivery, outcome, now, accepted_at=None,
-    lifetime=60 * 86400, provider_email_id=None
+    lifetime=60 * 86400, provider_email_id=None, order_message_token=None, order_provider_reference=None
 ):
     """Record a trusted provider outcome; only acceptance activates a generation."""
     if (
@@ -667,6 +667,12 @@ async def record_delivery_outcome(
         or (lifetime is not None and (type(lifetime) is not int or not 1 <= lifetime <= 365 * 86400))
     ):
         raise ValueError("delivery unavailable")
+    if order_message_token is not None and (
+        outcome != 'accepted' or not isinstance(order_message_token, str)
+        or not re.fullmatch(r'[a-f0-9]{64}', order_message_token)
+        or not isinstance(order_provider_reference, str) or not 1 <= len(order_provider_reference) <= 256
+    ):
+        raise ValueError('invalid order recovery identity')
     current = _rows(
         await db.prepare(
             "SELECT token_hash,expected_token_hash,expected_revoked,state,prepared_at,accepted_at, "
@@ -773,6 +779,13 @@ async def record_delivery_outcome(
                 ).bind(accepted_at, expiry, store, environment, acquisition, generation),
             ]
         )
+        if order_message_token is not None:
+            if hashlib.sha256(order_message_token.encode()).hexdigest() != item['token_hash']:
+                raise ValueError('order recovery token mismatch')
+            statements.append(db.prepare(
+                "UPDATE order_review_messages SET invitation_token=?,recovery_provider_reference=? "
+                "WHERE merchant_id=? AND environment=? AND order_id=?").bind(
+                    order_message_token, order_provider_reference, store, environment, acquisition))
         if item["request_key"].startswith("recovery-"):
             statements.append(
                 db.prepare(

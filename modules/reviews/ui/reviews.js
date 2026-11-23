@@ -2,6 +2,7 @@
 (() => {
   "use strict";
   const token = new URLSearchParams(location.hash.slice(1)).get("invitation");
+  const featured = (new URLSearchParams(location.hash.slice(1)).get("featured") || "").split(",");
   const message = document.querySelector("#message");
   const content = document.querySelector("#content");
   const unavailable = "This invitation is unavailable. It may have expired or already been replaced. Please contact the store for help.";
@@ -114,6 +115,7 @@
         return;
       }
       const data = await response.json();
+      data.subjects.sort((a,b) => Number(featured.includes(b.subject_id)) - Number(featured.includes(a.subject_id)));
       content.replaceChildren(element("p", `Your invitation from ${data.store_name}`), ...data.subjects.map(subject => formFor(subject, data.draft_scope)));
       message.textContent = confirmation || "Choose a product to review. Reviews are checked before they appear publicly.";
     } catch (_) { message.textContent = "We couldn't reach the store. Please try again shortly."; }

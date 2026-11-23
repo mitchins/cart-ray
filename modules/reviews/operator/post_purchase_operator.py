@@ -53,6 +53,11 @@ class PostPurchaseOperator:
         return "post_purchase_config" in self.config
 
     @property
+    def consolidated(self):
+        return (not any(key.startswith('queue:') for key in self.state.get('resources', {}))
+                and self.has_post_purchase and isinstance(self.post_purchase_actions(), dict))
+
+    @property
     def post_purchase_email_provider(self):
         return self.config.get("post_purchase_email_provider", "smtp2go")
 
@@ -456,7 +461,7 @@ class PostPurchaseOperator:
         self.save()
         transition = self.state["post_purchase_transition"]
         revision = 0
-        if self.config["reviews_enabled"]:
+        if self.config["reviews_enabled"] and not getattr(self, 'consolidated', False):
             nodes, _ = graph(self, deployment["versions"], sending=deployment.get("sending", False))
             if "evidence_version" not in transition:
                 build = json.loads((self.directory / "releases" / deployment["commit"] / "build.json").read_text())
@@ -494,12 +499,16 @@ class PostPurchaseOperator:
             if not self.state["releases"] or self.state["releases"][-1] != release:
                 self.state["releases"].append(release)
         self.state.pop("post_purchase_transition")
+        if getattr(self, 'consolidated', False) and self.config['reviews_enabled']:
+            self.state['phase'] = 'active' if modes == ON else 'paused'
+            self.state['activation_authorized'] = modes == ON
+            self.state['automation_paused'] = modes != ON
         self.save()
         return {"post_purchase": operation, "modes": modes, "versions": dict(deployment["versions"]),
                 "activation_watermark": self.state.get("post_purchase_watermark")}
 
     def post_purchase_activate(self, enable_test_delivery=False):
-        if self.config["reviews_enabled"]:
+        if self.config["reviews_enabled"] and not getattr(self, 'consolidated', False):
             self.check_reviews_handoff()
         if self.state.get("post_purchase_provider_migration"):
             raise ValueError("finish a fresh OFF build/deploy after email provider reconfiguration before activation")

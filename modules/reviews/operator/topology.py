@@ -108,7 +108,12 @@ def graph(installation, versions=None, sending=False, post_purchase_modes=None,
     db = installation.db
     worker = installation.name
 
+    consolidated = (getattr(installation, 'consolidated', False) if actions_override is None else
+                    isinstance(actions_override, dict) and not any(k.startswith('queue:') for k in state['resources']))
+
     def queue(role):
+        if consolidated:
+            return "disabled"
         return state["resources"]["queue:" + role]["id"] if config["reviews_enabled"] else "disabled"
 
     source_origin = f"https://{worker('source')}.{state['workers_subdomain']}.workers.dev"
@@ -300,6 +305,27 @@ def graph(installation, versions=None, sending=False, post_purchase_modes=None,
         if provider == "cloudflare":
             nodes["post-purchase"]["vars"].update(
                 EMAIL_PROVIDER="cloudflare", CLOUDFLARE_EMAIL_ACCOUNT_ID=config["account_id"])
+    if consolidated:
+        # The ordinary product uses commerce cron and one mail provider.
+        # Legacy queue roles are only retained for explicitly old installations.
+        nodes = {role: node for role, node in nodes.items() if role in ('source', 'reviews', 'post-purchase')}
+        source = nodes['source']
+        source['vars'].pop('CARTRAY_REVIEWS_PRODUCER', None)
+        source.get('services', {}).pop('REVIEWS_SOURCE_TRIGGER', None)
+        source['vars'].update(CARTRAY_MERCHANT_ID=store, CARTRAY_INSTALLATION_ID=config['namespace'],
+            CARTRAY_SOURCE_API_PATH=config.get('source_api_path', ''),
+            CARTRAY_RECIPIENT_HASH_KEY_VERSION='key1')
+        if config['reviews_enabled']:
+            from cartray.order_reviews import ReviewSettings
+            preferences = config.get('review_requests', {})
+            ReviewSettings.parse(json.dumps(preferences))
+            if preferences.get('timing') == 'off':
+                source['vars']['CARTRAY_REVIEW_INVITATION_MODE'] = 'disabled'
+            source['vars'].update(CARTRAY_REVIEW_SETTINGS=json.dumps(preferences), CARTRAY_REVIEW_SUBJECT_MAPS=mapping)
+            nodes['reviews']['vars'].update(REVIEWS_AUTOMATION_INTAKE='disabled', REVIEWS_AUTOMATION_SENDING='disabled',
+                REVIEWS_RECOVERY_MODE='order_notifications')
+        if 'post-purchase' in nodes:
+            nodes['post-purchase']['vars']['MERCHANT_CONTACT'] = config['merchant_contact']
     if "fulfilment" in config:
         nodes["source"]["vars"].update(
             CARTRAY_ORDER_ACCESS_MODE="test", CARTRAY_MERCHANT_ID=store,
@@ -390,11 +416,20 @@ def secret_bindings(installation, role):
         },
         "post-purchase": {},
     }
+    if getattr(installation, 'consolidated', False):
+        names['source'] = {}
+        names['reviews'] = {key:value for key,value in names['reviews'].items()
+                            if key in ('REVIEWS_SETTLEMENT_TOKEN','REVIEWS_TEST_ADMIN_TOKEN',
+                                       'REVIEWS_INVITATION_KEY','REVIEWS_REVIEWER_KEY','REVIEWS_DELIVERY_TOKEN',
+                                       'REVIEWS_UNSUBSCRIBE_KEY')}
     if role == "source" and not installation.config["reviews_enabled"]:
         names[role] = {}
     if "post_purchase_config" in installation.config and role in ("source", "post-purchase"):
         names[role]["CARTRAY_POST_PURCHASE_TOKEN" if role == "source" else "HANDLER_TOKEN"] = "post_purchase_token"
     result = {name: vault[key] for name, key in names[role].items()}
+    if role == 'source' and getattr(installation, 'consolidated', False) and installation.config['reviews_enabled']:
+        result['CARTRAY_RECIPIENT_HASH_KEY'] = vault['recipient_hash']
+        result['CARTRAY_REVIEW_INVITATION_KEY'] = vault['invitation']
     if role == "source" and "fulfilment" in installation.config:
         if "order_access" not in vault:
             raise ValueError("order access key missing; restore the original installation key")

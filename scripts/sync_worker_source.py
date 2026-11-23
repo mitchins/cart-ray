@@ -38,6 +38,9 @@ def _synchronize(profile: CatalogueProfile, destination: Path) -> None:
     if destination.exists():
         shutil.rmtree(destination)
     shutil.copytree(SOURCE, destination, dirs_exist_ok=True, ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
+    reviews = ROOT / "modules/reviews/src/cartray_reviews"
+    shutil.copytree(reviews, destination.parent / "cartray_reviews", dirs_exist_ok=True,
+                    ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
     if profile.name != "synthetic":
         subprocess.run(
             [

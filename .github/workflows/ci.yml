@@ -109,6 +109,8 @@ jobs:
       - name: Smoke-test Workerd D1 and Web Crypto boundaries
         run: |
           uv run pywrangler d1 migrations apply cartray-workerd-smoke --local --config workerd-d1-smoke.toml
+          python3 -c "from pathlib import Path; Path('/tmp/cartray-review-smoke.sql').write_text('\n'.join(p.read_text() for d in ('modules/reviews/migrations','modules/reviews/consent/migrations') for p in sorted(Path(d).glob('*.sql'))))"
+          npx --no-install wrangler d1 execute DB --local --config workerd-d1-smoke.toml --file /tmp/cartray-review-smoke.sql
           uv run pywrangler dev --config workerd-d1-smoke.toml --local --port 8797 --log-level=error &
           worker_pid=$!
           trap 'kill "$worker_pid"' EXIT

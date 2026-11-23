@@ -1,5 +1,6 @@
 """EP operator coverage with a provider fake, real fence SQL, and the existing email handler."""
 
+import hashlib
 import importlib.util
 import json
 import sqlite3
@@ -309,6 +310,30 @@ def deployed(tmp_path, monkeypatch):
     db.close()
 
 
+@pytest.fixture
+def legacy_deployed(deployed):
+    """Retained queue-era inventory; new stores must not create this topology."""
+    from operate import SECRET_NAMES
+    install, api, db = deployed
+    vault = install.vault()
+    for key in SECRET_NAMES:
+        if key not in vault:
+            vault[key] = ('historical-fixture-' + key).ljust(64, 'x')
+            install.state['secret_fingerprints'][key] = hashlib.sha256(vault[key].encode()).hexdigest()
+    atomic_json(install.vault_path, vault)
+    for role in ('events','schedule','due','dlq'):
+        install.state['resources']['queue:'+role] = {'id':role, 'name':install.name(role)}
+    install.save()
+    original_request = api.request
+    def request(path, *args):
+        if path.startswith('queues/'):
+            role = path.split('/')[1]
+            return {'queue_name':install.name(role), 'settings':{'delivery_paused':True}}
+        return original_request(path, *args)
+    api.request = request
+    return install, api, db
+
+
 def initialise(install, db):
     spec = importlib.util.spec_from_file_location(
         "post_purchase_installation", ROOT / "scripts/post_purchase_installation.py")
@@ -321,8 +346,8 @@ def initialise(install, db):
             db.execute(query["sql"], query["params"]).fetchall()
 
 
-def test_combined_delivery_transition_keeps_reviews_active_and_fence(deployed, monkeypatch):
-    install, api, db = deployed
+def test_combined_delivery_transition_keeps_reviews_active_and_fence(legacy_deployed, monkeypatch):
+    install, api, db = legacy_deployed
     initialise(install, db)
     install.config["reviews_enabled"] = True
     install.state.update(phase="active", activation_authorized=True, activation_watermark=17,
@@ -582,8 +607,8 @@ def test_active_reviews_sender_blocks_credential_replacement(deployed, monkeypat
     assert list(db.iterdump()) == before_db and api.events == before_events
 
 
-def test_unpinned_cloudflare_reviews_activation_rejects_changed_smtp(deployed):
-    original, api, db = deployed
+def test_unpinned_cloudflare_reviews_activation_rejects_changed_smtp(legacy_deployed):
+    original, api, db = legacy_deployed
     install = email_migration_install(original, api)
     install.post_purchase_reconfigure_provider("cloudflare", True)
     capture_build(install, "cloudflare-old-commit")
@@ -610,8 +635,8 @@ def test_cloudflare_credential_replacement_cannot_redeploy_unpinned_reviews_send
     assert "post_purchase_provider_migration" not in replacement.state
 
 
-def test_attested_reviews_handoff_guards_operations_without_mutating_claims(deployed, monkeypatch, tmp_path):
-    install, api, db = deployed
+def test_attested_reviews_handoff_guards_operations_without_mutating_claims(legacy_deployed, monkeypatch, tmp_path):
+    install, api, db = legacy_deployed
     initialise(install, db)
     install.config["reviews_enabled"] = True
     sender = "0e63c9b2-f464-4daa-bcdc-59d32f85738b"
@@ -706,8 +731,8 @@ def test_pinned_rotation_resume_rejects_changed_reviews_handoff(deployed, monkey
     assert list(db.iterdump()) == before_db
 
 
-def test_pinned_combined_rotation_survives_restart_and_off_deploy(deployed, monkeypatch, tmp_path):
-    original, api, db = deployed
+def test_pinned_combined_rotation_survives_restart_and_off_deploy(legacy_deployed, monkeypatch, tmp_path):
+    original, api, db = legacy_deployed
     initialise(original, db)
     install = email_migration_install(original, api)
     install.post_purchase_reconfigure_provider("cloudflare", True)
@@ -1127,3 +1152,23 @@ def test_doctor_detects_remote_identity_and_modes_drift(deployed):
     assert not health["healthy"]
     assert "source.vars.CARTRAY_MERCHANT_ID: differs from inventory" in health["errors"]
     assert "source.vars.CARTRAY_POST_PURCHASE_MODE: differs from inventory" in health["errors"]
+
+
+def test_consolidated_reviews_use_only_the_selected_email_provider(tmp_path):
+    options = handoff(tmp_path)
+    options.update(reviews_enabled=True, post_purchase_email_provider='cloudflare')
+    atomic_json(Path(options['post_purchase_config']),
+                {'schema':2, 'sender':CREDS['test_sender'], 'recipient':CREDS['approved_test_email']})
+    planned = Installation.plan(tmp_path / 'shared-email-install', options)
+    credentials = {**CREDS, 'cloudflare_email_api_token':'v1.0-provider-fixture-'*3}
+    credentials.pop('smtp2go_api_key')
+    install = Installation(planned.directory, credentials)
+    install.state['workers_subdomain'] = 'example'
+    install.state['resources']['database:commerce'] = {'id':'db'}
+    assert set(install.roles) == {'source','reviews','post-purchase'}
+    assert not install.queues
+    nodes, _ = graph(install, post_purchase_modes=OFF)
+    assert nodes['post-purchase']['vars']['EMAIL_PROVIDER'] == 'cloudflare'
+    assert 'REVIEWS_SOURCE_TRIGGER' not in nodes['source'].get('services',{})
+    assert 'CARTRAY_REVIEWS_PRODUCER' not in nodes['source']['vars']
+    assert nodes['reviews']['vars']['REVIEWS_RECOVERY_MODE'] == 'order_notifications'
