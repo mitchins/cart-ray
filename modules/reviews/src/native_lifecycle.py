@@ -468,7 +468,7 @@ async def provider_operations(request, env, delivery_id, action, actor, data):
         return fail(400, "invalid request")
     db, store, environment = env.REVIEWS_DB, str(env.REVIEWS_STORE_KEY), str(env.REVIEWS_ENVIRONMENT)
     found = rows(await db.prepare(
-        "SELECT acquisition_id,generation_id FROM invitation_generations "
+        "SELECT acquisition_id,generation_id,request_key FROM invitation_generations "
         "WHERE store_key=? AND environment=? AND delivery_identity=? LIMIT 1"
     ).bind(store, environment, delivery_id).all())
     if len(found) != 1:
@@ -482,7 +482,8 @@ async def provider_operations(request, env, delivery_id, action, actor, data):
         "SELECT provider_email_id FROM review_provider_deliveries "
         "WHERE store_key=? AND environment=? AND acquisition_id=? AND generation_id=? AND delivery_identity=?"
     ).bind(store, environment, acquisition, generation, delivery_id).all())
-    if cloudflare or (not smtp and getattr(env, "REVIEWS_INITIAL_EMAIL_PROVIDER", "smtp2go") == "cloudflare"):
+    if cloudflare or (not smtp and not found[0]["request_key"].startswith("recovery-")
+                      and getattr(env, "REVIEWS_INITIAL_EMAIL_PROVIDER", "smtp2go") == "cloudflare"):
         return fail(409, "Cloudflare provider reconciliation unavailable")
     event = None
     if action == "refresh":

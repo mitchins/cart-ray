@@ -77,11 +77,12 @@ def test_sender_off_pauses_and_verifies_disabled_version_without_changing_fence(
     monkeypatch.setattr(operations, "graph", disabled_graph)
     monkeypatch.setattr(operations, "secret_bindings", lambda *args: [])
     installation.credentials = None
-    with pytest.raises(ValueError, match="credentials"):
+    with pytest.raises(ValueError, match="sender handoff"):
         operations.Installation.sender_off(installation)
     assert calls == [("pause",)]
     calls.clear()
-    installation.credentials = {"token": "test"}
+    installation.credentials = {"smtp2go_api_key": "api-test", "approved_test_email": "test@example.test",
+                                "test_sender": "sender@example.test"}
     result = operations.Installation.sender_off(installation)
     assert calls[0] == ("pause",) and calls[-1] == ("publish", "off-version")
     assert calls[1][1]["bindings"][0]["text"] == "disabled"
@@ -536,3 +537,29 @@ def test_gel_gallery_snapshot_rejects_invalid_images(tmp_path, images):
     content.write_text(json.dumps({"products": [{"image": "assets/product.svg", "images": images}]}))
     with pytest.raises(ValueError):
         operations.Installation.gel_inputs(manifest, tmp_path, content)
+
+
+def test_cloudflare_reviews_activation_does_not_require_legacy_smtp_handoff():
+    from types import SimpleNamespace
+
+    def reached_queues(**_kwargs):
+        raise RuntimeError("reached staged verification")
+
+    installation = SimpleNamespace(
+        config={"reviews_enabled": True, "reviews_email_provider": "cloudflare"},
+        state={"phase": "deployed", "build": "revision",
+               "deployment": {"complete": True, "commit": "revision"}},
+        has_post_purchase=True, post_purchase_email_provider="cloudflare",
+        check_reviews_handoff=lambda: None, check_post_purchase_handoff=lambda: None,
+        configure_queues=reached_queues,
+    )
+    with pytest.raises(RuntimeError, match="reached staged verification"):
+        operations.Installation.activate(installation, True)
+
+
+def test_schema_check_requires_current_source_migrations(tmp_path):
+    installation, _ = migrated(tmp_path)
+    installation.migrate()
+    installation.state["migration_ledgers"]["reviews"] = installation.state["migration_ledgers"]["reviews"][:-1]
+    with pytest.raises(ValueError, match="source migrations differ"):
+        installation.check_schema()

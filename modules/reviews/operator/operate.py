@@ -758,6 +758,11 @@ class Installation(PostPurchaseOperator):
         if {row["namespace"] for row in namespaces} != set(self.migrations()):
             raise ValueError("unknown or missing migration namespace")
         for role, expected in self.state.get("migration_ledgers", {}).items():
+            paths = self.migrations().get(role, [])
+            current = [{"position": i + 1, "path": str(path.relative_to(ROOT)), "checksum": digest(path.read_bytes())}
+                       for i, path in enumerate(paths)]
+            if expected != current:
+                raise ValueError(f"{role}: source migrations differ; run migrate before building or deploying")
             actual = self.api.query(
                 self.db(role),
                 "SELECT position,path,checksum FROM cartray_operator_migrations WHERE namespace=? ORDER BY position",
@@ -774,7 +779,8 @@ class Installation(PostPurchaseOperator):
         if self.config["reviews_enabled"]:
             self.check_reviews_handoff()
         current = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip()
-        if self.state["phase"] in ("active", "paused") and self.state["deployment"]["commit"] == current:
+        if (self.state["phase"] in ("active", "paused") and self.state["deployment"]["commit"] == current
+                and not self.state.get("reviews_provider_change_from")):
             return self.doctor()
         self.require_post_purchase_off()
         was_active = self.state["activation_authorized"]
@@ -908,9 +914,14 @@ class Installation(PostPurchaseOperator):
         merchant_config_hash = self.merchant_config_hash()
         commit = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip()
         subprocess.run(["git", "diff", "--quiet", "HEAD"], cwd=ROOT, check=True)
+        if self.state.get("reviews_provider_change_from") == commit:
+            raise ValueError("provider changed: build a distinct reviewed commit before deployment")
         release = self.directory / "releases" / commit
         if (release / "build.json").exists():
             recorded = json.loads((release / "build.json").read_text())
+            if (recorded.get("reviews_email_provider", "smtp2go")
+                    != self.config.get("reviews_email_provider", "smtp2go")):
+                raise ValueError("cached release uses a different Reviews provider; build a distinct reviewed commit")
             if (recorded.get("merchant_inputs_sha256") != self.config.get("merchant_inputs_sha256")
                     or recorded.get("merchant_lock_sha256") != merchant_lock_hash
                     or recorded.get("merchant_config_sha256") != merchant_config_hash):
@@ -1073,6 +1084,11 @@ class Installation(PostPurchaseOperator):
         if "build" not in self.state:
             raise ValueError("build the clean commit before deployment")
         build = json.loads((self.directory / "releases" / self.state["build"] / "build.json").read_text())
+        if build.get("reviews_email_provider", "smtp2go") != self.config.get("reviews_email_provider", "smtp2go"):
+            raise ValueError("release Reviews provider differs; rebuild before deploying")
+        if (self.state.get("reviews_provider_change_from")
+                and self.state["reviews_provider_change_from"] == build.get("commit")):
+            raise ValueError("provider changed: deploy a distinct reviewed commit")
         if build.get("merchant_inputs_sha256") != self.config.get("merchant_inputs_sha256"):
             raise ValueError("release merchant inputs differ; rebuild before deploying")
         if build.get("merchant_config_sha256") != self.merchant_config_hash():
@@ -1162,6 +1178,7 @@ class Installation(PostPurchaseOperator):
                     raise ValueError("; ".join(errors))
             self.record_post_purchase_off(build)
         self.state["deployment"]["complete"] = True
+        self.state.pop("reviews_provider_change_from", None)
         migration = self.state.pop("post_purchase_provider_migration", None)
         if migration:
             self.state.setdefault("post_purchase_provider_migrations", []).append({**migration, "status": "complete"})
@@ -1423,6 +1440,7 @@ class Installation(PostPurchaseOperator):
             }
         self.check_post_purchase_handoff()
         if (self.has_post_purchase and self.post_purchase_email_provider == "cloudflare"
+                and self.config.get("reviews_email_provider", "smtp2go") == "smtp2go"
                 and not self.state.get("reviews_handoff_attestation")):
             retained = self.vault().get("post_purchase_smtp2go_api_key")
             if not retained or not hmac.compare_digest(retained, self.credentials.get("smtp2go_api_key", "")):
@@ -1464,6 +1482,7 @@ class Installation(PostPurchaseOperator):
         self.api.publish(self.name("sender"), version["id"])
         self.state["deployment"]["versions"]["sender"] = version["id"]
         self.state["deployment"]["sending"] = True
+        self.state.pop("reviews_sender_hard_off", None)
         self.api.request(f"workers/scripts/{self.name('producer')}/schedules", "PUT", [{"cron": "* * * * *"}])
         self.private("PRODUCER", "/run", token=vault["trigger"])
         if record.get("activation_status") != "active":
@@ -1593,12 +1612,21 @@ class Installation(PostPurchaseOperator):
 
     def sender_off(self):
         """Pause Reviews queues, then publish and verify a hard-disabled sender version."""
-        if not self.config["reviews_enabled"] or not self.state.get("deployment", {}).get("complete"):
-            raise ValueError("a completed Reviews deployment is required")
+        if not self.config["reviews_enabled"]:
+            raise ValueError("Reviews must be installed before disabling its sender")
         self.pause()
-        if not self.credentials:
-            raise ValueError("queues paused; protected sender credentials are required to disable the sender")
-        self.check_reviews_handoff()
+        if not self.state.get("deployment", {}).get("complete"):
+            raise ValueError("queues paused; complete the interrupted deployment before disabling the sender")
+        try:
+            validate_email_credential(self.credentials or {}, self.config.get("reviews_email_provider", "smtp2go"))
+            for field in ("approved_test_email", "test_sender"):
+                if not re.fullmatch(r"[^\s@<>]+@[^\s@<>]+\.[A-Za-z]{2,}", (self.credentials or {}).get(field, "")):
+                    raise ValueError("invalid sender or recipient")
+            self.check_reviews_handoff()
+        except (KeyError, ValueError) as error:
+            raise ValueError(
+                "queues paused; restore the original valid sender handoff to disable the sender"
+            ) from error
         sender_secrets = secret_bindings(self, "sender")
         deployment = self.state["deployment"]
         build = json.loads((self.directory / "releases" / deployment["commit"] / "build.json").read_text())
@@ -1615,6 +1643,7 @@ class Installation(PostPurchaseOperator):
             raise ValueError("sender OFF verification failed: " + "; ".join(errors))
         deployment["versions"]["sender"] = version["id"]
         deployment["sending"] = False
+        self.state["reviews_sender_hard_off"] = True
         self.save()
         return {"phase": "paused", "sender_mode": "disabled", "version": version["id"],
                 "activation_watermark": self.state.get("activation_watermark")}
@@ -1639,6 +1668,7 @@ class Installation(PostPurchaseOperator):
             return {"reviews_provider": provider, "phase": "paused", "changed": False}
         if self.config.get("reviews_email_provider", "smtp2go") == "cloudflare":
             raise ValueError("switching from Cloudflare to SMTP is unsupported; retain the Cloudflare configuration")
+        self.state["reviews_provider_change_from"] = deployment.get("commit")
         self.config["reviews_email_provider"] = provider
         self.state["config"]["reviews_email_provider"] = provider
         self.state.pop("build", None)
@@ -1856,6 +1886,8 @@ class Installation(PostPurchaseOperator):
             raise ValueError("rollback release uses SMTP; retain a Cloudflare-compatible release")
         versions = release["versions"]
         release_sending = release.get("sending", bool(release.get("record_revision", 0)))
+        if self.state.get("reviews_sender_hard_off") and release_sending:
+            raise ValueError("rollback would re-enable the sender; select a disabled release")
         reviews_authorized = (self.state.get("activation_authorized")
                               and not self.state.get("reviews_explicit_activation_required"))
         if self.config["reviews_enabled"] and bool(release_sending) != bool(reviews_authorized):

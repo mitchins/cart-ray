@@ -612,3 +612,7 @@ written. Asset selection does not authorize reading other operator files.
 For this test-only integration, switching a Cloudflare Reviews sender back to
 SMTP is unsupported. Retain the Cloudflare provider configuration when rolling
 back; do not route Cloudflare delivery records through SMTP reconciliation.
+
+Changing the Reviews provider requires a distinct reviewed source commit from
+the currently deployed release. Build and deploy that commit after selecting
+the provider; the installer rejects reuse of the old deployment.

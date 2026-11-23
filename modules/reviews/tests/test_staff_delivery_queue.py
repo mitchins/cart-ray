@@ -197,3 +197,26 @@ def test_provider_outcomes_preserve_unknown_and_reject_untrusted_shapes(lifecycl
                     {"status": "observed", "events": ["delivered"] * 501}):
         with pytest.raises(ValueError):
             lifecycle.validate_provider_outcome(payload)
+
+
+def test_cloudflare_initial_provider_preserves_smtp_recovery_discovery(lifecycle, monkeypatch):
+    db = Database()
+    generation = add_delivery(db, 3, state="uncertain")
+    db.db.execute("UPDATE invitation_generations SET request_key=? WHERE acquisition_id=?",
+                  ("recovery-example", "private-order-3"))
+    db.db.commit()
+    calls = []
+
+    async def refresh(*args):
+        calls.append(args[2])
+        return {"status": "unknown", "reason": "no_match"}
+
+    monkeypatch.setattr(lifecycle, "request_provider_refresh", refresh)
+    monkeypatch.setattr(lifecycle, "random_token", lambda: "f" * 64)
+    env = settings(REVIEWS_DB=db, REVIEWS_STAFF_ORIGIN="https://staff.example",
+                   REVIEWS_INITIAL_EMAIL_PROVIDER="cloudflare", REVIEWS_RECONCILIATION=object(),
+                   RECONCILIATION_TOKEN="z" * 40)
+    request = types.SimpleNamespace(headers={"Origin": "https://staff.example"})
+    result = asyncio.run(lifecycle.provider_operations(request, env, f"{1003:064x}", "refresh", "staff-1", {}))
+    assert result.status == 200 and calls == ["discover"]
+    assert generation

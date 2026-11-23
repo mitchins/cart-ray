@@ -177,6 +177,10 @@ def test_connected_build_deploy_verify_explicit_activation_upgrade_and_rollback(
     with pytest.raises(ValueError, match="rollback release uses SMTP"):
         install.rollback(0)
     install.config.pop("reviews_email_provider")
+    install.state["reviews_sender_hard_off"] = True
+    with pytest.raises(ValueError, match="rollback would re-enable"):
+        install.rollback(0)
+    install.state.pop("reviews_sender_hard_off")
     result = install.rollback(0)
     assert result["database_rewind"] is False
     assert database.writes == writes
@@ -532,3 +536,18 @@ def test_commerce_only_connected_lifecycle_has_no_review_runtime_dependency(tmp_
     assert calls == []
     assert install.receipt()["doctor"]["healthy"] is True
     assert not any(path.startswith("queues/") for path, _ in provider.calls)
+
+
+def test_provider_change_requires_new_reviewed_build_and_cannot_deploy_old_sender(tmp_path):
+    install, _, _, _, _ = lifecycle(tmp_path)
+    old_commit = "a" * 40
+    build_at(install, old_commit)
+    install.deploy()
+    install.config["reviews_email_provider"] = "cloudflare"
+    install.state["reviews_provider_change_from"] = old_commit
+    with pytest.raises(ValueError, match="distinct reviewed commit"):
+        build_at(install, old_commit)
+    with pytest.raises(ValueError, match="Reviews provider differs"):
+        install.deploy()
+    build_at(install, "b" * 40)
+    assert install.state["build"] == "b" * 40

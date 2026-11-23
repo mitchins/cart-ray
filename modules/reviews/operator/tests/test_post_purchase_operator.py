@@ -271,15 +271,18 @@ def deployed(tmp_path, monkeypatch):
     db.row_factory = sqlite3.Row
     db.executescript("CREATE TABLE orders(order_id TEXT PRIMARY KEY); "
                      "CREATE TABLE outbox(id INTEGER PRIMARY KEY, order_id TEXT, event_type TEXT);"
-                     "CREATE TABLE cartray_operator_migrations(namespace TEXT, position INT, path TEXT, checksum TEXT);"
-                     "INSERT INTO cartray_operator_migrations VALUES ('commerce', 1, 'fixture', 'hash');")
+                     "CREATE TABLE cartray_operator_migrations(namespace TEXT, position INT, "
+                     "path TEXT, checksum TEXT);")
     for migration in ("0006_post_purchase_actions.sql", "0007_post_purchase_checkpoint.sql"):
         db.executescript((ROOT / "migrations" / migration).read_text())
     api = Backend(db)
     install = Installation(path, deepcopy(CREDS), api)
     install.vault(create=True)
-    install.state.update(workers_subdomain="account", phase="migrated", migration_ledgers={
-        "commerce": [{"position": 1, "path": "fixture", "checksum": "hash"}]})
+    ledger = [{"position": i + 1, "path": str(item.relative_to(ROOT)), "checksum": digest(item.read_bytes())}
+              for i, item in enumerate(install.migrations()["commerce"])]
+    db.executemany("INSERT INTO cartray_operator_migrations VALUES ('commerce',?,?,?)",
+                   [(item["position"], item["path"], item["checksum"]) for item in ledger])
+    install.state.update(workers_subdomain="account", phase="migrated", migration_ledgers={"commerce": ledger})
     install.state["resources"]["database:commerce"] = {"id": "database", "name": install.name("commerce")}
     for role in install.roles:
         install.state["resources"]["worker:" + role] = {"id": install.name(role), "name": install.name(role)}
