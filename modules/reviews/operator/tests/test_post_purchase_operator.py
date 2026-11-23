@@ -57,8 +57,22 @@ def test_plan_rejects_wrong_installation_lane(tmp_path, overrides):
     options.update(overrides)
     if options["source_api_path"] is None:
         del options["source_api_path"]
-    with pytest.raises(ValueError, match="approved EP"):
-        validate_config(options)
+    with pytest.raises(ValueError, match="legacy workflow|private source"):
+        Installation.plan(tmp_path / "installation", options)
+
+
+def test_other_merchant_can_plan_test_order_confirmation(tmp_path):
+    options = handoff(tmp_path)
+    options.update(store_key="other-merchant", stripe_account_id="acct_other")
+    atomic_json(Path(options["post_purchase_config"]),
+                {"schema": 2, "sender": CREDS["test_sender"], "recipient": CREDS["approved_test_email"]})
+    install = Installation.plan(tmp_path / "installation", options)
+    assert install.post_purchase_actions()["schema"] == 2
+    install.state["workers_subdomain"] = "example"
+    install.state["resources"]["database:commerce"] = {"id": "db"}
+    nodes, _ = graph(install, post_purchase_modes=OFF)
+    assert nodes["source"]["vars"]["CARTRAY_POST_PURCHASE_MODE"] == "disabled"
+    assert "CARTRAY_POST_PURCHASE_CONFIG" not in nodes["source"]["vars"]
 
 
 def test_ep_test_lane_can_enable_reviews_independently(tmp_path):
@@ -920,14 +934,16 @@ def test_disabled_deploy_and_real_handler_digest(deployed):
         import {readFileSync} from 'node:fs';
         const {handle} = await import(process.argv[1]);
         const {env, source} = JSON.parse(readFileSync(0, 'utf8'));
-        const action = {...source.actions[0], merchant: source.merchant, environment: source.environment,
-                        order_id: 'order-fixture', session_id: 'cs_test_fixture', items: [['EP-UAT-171', 1]]};
+        const action = {type:'order_confirmation', merchant: source.merchant, environment: source.environment,
+                        order_id: 'order-fixture', session_id: 'cs_test_fixture', access_url:null,
+                        items: [{product_key:'EP-UAT-171',title:'Product',quantity:1}]};
         const calls = [];
         const fake = async (url, options) => {
             calls.push(url);
             if (url.endsWith('/v1/account')) return Response.json({id: env.STRIPE_ACCOUNT_ID});
             if (url.endsWith('/cs_test_fixture')) return Response.json({
-              id: action.session_id, livemode: false, mode: 'payment', status: 'complete', payment_status: 'paid',
+              id: action.session_id, livemode: false, mode: 'payment', status: 'complete',
+              payment_status: 'paid', amount_total:100,
               metadata: {cr_order_id: action.order_id}, customer_details: {email: env.APPROVED_TEST_RECIPIENT},
             });
             assert.deepEqual(JSON.parse(options.body).to, [env.APPROVED_TEST_RECIPIENT]);

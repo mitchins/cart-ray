@@ -17,7 +17,7 @@ from workers import Response, WorkerEntrypoint
 from cartray.errors import CheckoutInProgress
 from cartray.models import CheckoutOrder, CheckoutRedirect, OrderItem
 from cartray.order_access import issue_order_access, issuer_token, purchased_resources
-from cartray.post_purchase import Action, D1Dispatcher
+from cartray.post_purchase import OrderReceiptDispatcher
 from cartray.store import D1OrderStore, _results
 from cartray.worker import _drain_post_purchase, create_app
 from cartray.workers_crypto import WorkersEd25519Signer, WorkersEd25519Verifier
@@ -119,27 +119,22 @@ class Default(WorkerEntrypoint):
         ).run()
         calls = []
 
-        async def action_handler(purchase, execution):
-            calls.append((purchase.order_id, execution.workflow_key))
+        async def receipt_handler(purchase):
+            calls.append(purchase.order_id)
             return "test-provider-reference"
 
-        actions = (
-            Action("workflow-one", ("SMOKE-TEMPLATE",), "email", "test/one", "a" * 64),
-            Action("workflow-two", ("SMOKE-TEMPLATE",), "email", "test/two", "b" * 64),
-        )
-        dispatcher = D1Dispatcher(self.env.DB, "smoke-store", "test", {"email": action_handler})
+        dispatcher = OrderReceiptDispatcher(self.env.DB, "smoke-store", "test", {"receipt": receipt_handler})
+        budget = await dispatcher.dispatch(order.order_id, (), max_new_claims=0)
+        budget_deferred = budget == {"receipt": "deferred"}
         runs = await asyncio.gather(
-            dispatcher.dispatch(order.order_id, actions), dispatcher.dispatch(order.order_id, actions)
+            dispatcher.dispatch(order.order_id, ()), dispatcher.dispatch(order.order_id, ())
         )
-        replay = await dispatcher.dispatch(order.order_id, actions)
+        replay = await dispatcher.dispatch(order.order_id, ())
         service_calls = []
 
         class TestService:
             async def fetch(self, request):
-                body = await request.json()
-                if hasattr(body, "to_py"):
-                    body = body.to_py()
-                service_calls.append((body["order_id"], body["workflow_key"], body["config_digest"]))
+                service_calls.append(1)
 
                 async def response_json():
                     return {"provider_reference": "test-service-receipt"}
@@ -147,58 +142,19 @@ class Default(WorkerEntrypoint):
                 return SimpleNamespace(status=200, json=response_json)
 
         test_env = SimpleNamespace(
-            DB=self.env.DB,
-            CARTRAY_ENVIRONMENT="test",
-            CARTRAY_POST_PURCHASE_MODE="test",
-            CARTRAY_POST_PURCHASE_TOKEN="t" * 32,
+            DB=self.env.DB, CARTRAY_ENVIRONMENT="test", CARTRAY_POST_PURCHASE_MODE="test",
+            CARTRAY_POST_PURCHASE_TOKEN="t" * 32, CARTRAY_MERCHANT_ID="smoke-store",
             POST_PURCHASE_HANDLER=TestService(),
-            CARTRAY_POST_PURCHASE_CONFIG=json.dumps(
-                {
-                    "merchant": "smoke-store",
-                    "environment": "test",
-                    "actions": [
-                        {
-                            "workflow_key": "workflow-three",
-                            "offer_keys": ["SMOKE-TEMPLATE"],
-                            "handler": "service",
-                            "config_ref": "test/three",
-                            "config_digest": "c" * 64,
-                        }
-                    ],
-                }
-            ),
         )
         await _drain_post_purchase(test_env)
         await _drain_post_purchase(test_env)
-        workflow_receipts = (
-            await self.env.DB.prepare(
-                "SELECT workflow_key,state FROM post_purchase_executions WHERE order_id=? ORDER BY workflow_key"
-            )
-            .bind(order.order_id)
-            .all()
-        )
-        workflow_rows = _results(workflow_receipts)
-        workflows_once = (
-            sorted(calls)
-            == [
-                (order.order_id, "workflow-one"),
-                (order.order_id, "workflow-two"),
-            ]
-            and replay == {"workflow-one": "already_claimed", "workflow-two": "already_claimed"}
-            and service_calls == [(order.order_id, "workflow-three", "c" * 64)]
-            and len(workflow_rows) == 3
-            and all(row["state"] == "accepted" for row in workflow_rows)
-            and all(set(result) == {"workflow-one", "workflow-two"} for result in runs)
-        )
-
-        budget_actions = tuple(
-            Action(f"budget-{n}", ("SMOKE-TEMPLATE",), "email", f"test/{n}", "d" * 64)
-            for n in range(100)
-        )
-        budget_outcomes = await dispatcher.dispatch(
-            order.order_id, budget_actions, max_new_claims=2, deadline=time.monotonic() + 5
-        )
-        budget_deferred = len(budget_outcomes) == 100 and all(value == "deferred" for value in budget_outcomes.values())
+        receipt_rows = _results(await self.env.DB.prepare(
+            "SELECT workflow_key,state FROM post_purchase_executions WHERE order_id=?"
+        ).bind(order.order_id).all())
+        workflows_once = (calls == [order.order_id] and replay == {"receipt": "already_claimed"}
+                          and not service_calls and len(receipt_rows) == 1
+                          and receipt_rows[0] == {"workflow_key": "order-receipt", "state": "accepted"}
+                          and all(set(result) == {"receipt"} for result in runs))
 
         access = await issue_order_access(self.env.DB, "s" * 32, "smoke-store", "test", order.order_id)
         access_items = await purchased_resources(self.env.DB, access, "smoke-store", "test")

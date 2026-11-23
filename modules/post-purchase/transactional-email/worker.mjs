@@ -12,8 +12,7 @@ function sendingProvider(env) {
   return null;
 }
 
-async function sendEmail(env, config, provider, deadline, fetcher) {
-  const text = 'This test purchase contains dummy materials only.\n\n' + config.links.join('\n');
+async function sendEmail(env, config, provider, deadline, fetcher, text) {
   const cloudflare = provider === 'cloudflare';
   const sent = await fetcher(cloudflare
     ? `https://api.cloudflare.com/client/v4/accounts/${env.CLOUDFLARE_EMAIL_ACCOUNT_ID}/email/sending/send`
@@ -64,7 +63,7 @@ async function readBounded(request) {
       if (done) break;
       total += value.byteLength;
       // Allow the full 100-line checkout envelope, including action identifiers.
-      if (total > 32768) throw new Error('oversized body');
+      if (total > 262144) throw new Error('oversized body');
       chunks.push(value);
     }
   } finally {
@@ -76,15 +75,26 @@ async function readBounded(request) {
   return JSON.parse(new TextDecoder('utf-8', {fatal: true}).decode(data));
 }
 
-function allowedLink(value) {
+function orderLink(value, origin) {
+  if (value === null) return true;
   try {
     const url = new URL(value);
-    return url.protocol === 'https:' && url.hostname === 'www.dropbox.com' &&
-      !url.username && !url.password && !url.port && !url.search && !url.hash && /^\/t\/[A-Za-z0-9]+$/.test(url.pathname);
+    return url.protocol === 'https:' && url.origin === origin && !url.username && !url.password && !url.search &&
+      /^\/(?:[A-Za-z0-9_-]+\/)*order-access$/.test(url.pathname) && /^#token=[A-Za-z0-9_-]{43}$/.test(url.hash);
   } catch { return false; }
 }
 
-/** The service token and config are operator provisioned, never browser inputs. */
+function formatTotal(session) {
+  if (!Number.isSafeInteger(session.amount_total) || session.amount_total < 0 ||
+      !/^[a-z]{3}$/.test(session.currency || '')) return '';
+  try {
+    const format = new Intl.NumberFormat('en', {style:'currency', currency:session.currency.toUpperCase()});
+    const units = 10 ** format.resolvedOptions().maximumFractionDigits;
+    return `\nTotal: ${format.format(session.amount_total / units)}`;
+  } catch { return ''; }
+}
+
+/** The source Worker has already claimed one order receipt; this handler never retries. */
 export async function handle(request, env, fetcher = fetch) {
   if (request.method !== 'POST' || env.DELIVERY_MODE !== 'test' || env.ENVIRONMENT !== 'test' ||
       typeof env.HANDLER_TOKEN !== 'string' || env.HANDLER_TOKEN.length < 32 ||
@@ -92,59 +102,46 @@ export async function handle(request, env, fetcher = fetch) {
   try {
     const provider = sendingProvider(env);
     const body = await readBounded(request);
-    const raw = env.DELIVERY_CONFIG;
-    if (typeof raw !== 'string' || raw.length > 16384) return fail(503);
-    const registry = JSON.parse(raw);
-    if (!registry || !Array.isArray(registry.actions) || !registry.actions.length || registry.actions.length > 100)
-      return fail(503);
-    const matches = registry.actions.filter(action => action && action.workflow_key === body.workflow_key);
-    if (matches.length !== 1) return fail(400);
-    const config = matches[0];
-    // Configuration digests bind the exact JSON serialization of each action,
-    // allowing separate matching workflows to share one private handler.
-    const serialized = JSON.stringify(config);
-    const hash = Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(serialized))),
-      x => x.toString(16).padStart(2, '0')).join('');
-    if (!config || config.environment !== 'test' || !identifier.test(config.merchant) ||
-        !identifier.test(config.workflow_key) || typeof config.config_ref !== 'string' ||
-        body.merchant !== config.merchant || body.environment !== 'test' ||
-        body.workflow_key !== config.workflow_key || body.config_ref !== config.config_ref ||
-        !constantEqual(body.config_digest, hash) || typeof body.order_id !== 'string' || !identifier.test(body.order_id) ||
-        typeof body.session_id !== 'string' || !sessionId.test(body.session_id) ||
-        !Array.isArray(body.items) || !body.items.length || body.items.length > 100 ||
-        !Array.isArray(config.offer_keys) || !config.offer_keys.length ||
-        !body.items.some(item => Array.isArray(item) && config.offer_keys.includes(item[0]) &&
-          Number.isSafeInteger(item[1]) && item[1] > 0) ||
-        !Array.isArray(config.links) || !config.links.length || config.links.length > 20 ||
-        !config.links.every(allowedLink) || typeof config.recipient !== 'string' ||
-        typeof config.sender !== 'string' || typeof config.subject !== 'string' || config.subject.length > 180 ||
-        !/^[^\s@<>]+@[^\s@<>]+\.[A-Za-z]{2,}$/.test(config.recipient) ||
-        !/^[^\s@<>]+@[^\s@<>]+\.[A-Za-z]{2,}$/.test(config.sender) || /[\r\n]/.test(config.subject) ||
-        config.recipient.toLowerCase() !== env.APPROVED_TEST_RECIPIENT?.toLowerCase() ||
-        config.sender.toLowerCase() !== env.APPROVED_TEST_SENDER?.toLowerCase() ||
-        !/^acct_[A-Za-z0-9]+$/.test(config.stripe_account || '') || config.stripe_account !== env.STRIPE_ACCOUNT_ID ||
+    if (!body || body.type !== 'order_confirmation' || body.environment !== 'test' ||
+        !identifier.test(body.merchant || '') || body.merchant !== env.MERCHANT_ID ||
+        !identifier.test(body.order_id || '') || !sessionId.test(body.session_id || '') ||
+        typeof env.MERCHANT_NAME !== 'string' || !env.MERCHANT_NAME.trim() || env.MERCHANT_NAME.length > 100 ||
+        /[\x00-\x1f\x7f]/.test(env.MERCHANT_NAME) || !Array.isArray(body.items) ||
+        !body.items.length || body.items.length > 100 || body.items.some(item =>
+          !item || !identifier.test(item.product_key || '') || !Number.isSafeInteger(item.quantity) ||
+          item.quantity < 1 || typeof item.title !== 'string' || !item.title.trim() ||
+          item.title.length > 200 || /[\x00-\x1f\x7f]/.test(item.title)) ||
+        !/^acct_[A-Za-z0-9]+$/.test(env.STRIPE_ACCOUNT_ID || '') ||
         (!env.STRIPE_API_KEY?.startsWith('sk_test_') && !env.STRIPE_API_KEY?.startsWith('rk_test_')) ||
-        !provider) return fail(400);
+        !/^[^\s@<>]+@[^\s@<>]+\.[A-Za-z]{2,}$/.test(env.APPROVED_TEST_RECIPIENT || '') ||
+        !/^[^\s@<>]+@[^\s@<>]+\.[A-Za-z]{2,}$/.test(env.APPROVED_TEST_SENDER || '') ||
+        !orderLink(body.access_url, env.STOREFRONT_ORIGIN) || !provider) return fail(400);
 
-    // One shared budget bounds the complete provider sequence, not each request separately.
     const deadline = AbortSignal.timeout(7000);
     const account = await fetcher('https://api.stripe.com/v1/account', {
       headers: {Authorization: `Bearer ${env.STRIPE_API_KEY}`}, redirect: 'manual', signal: deadline,
     });
-    if (!account.ok || (await account.json()).id !== config.stripe_account) return fail(403);
+    if (!account.ok || (await account.json()).id !== env.STRIPE_ACCOUNT_ID) return fail(403);
     const stripe = await fetcher(`https://api.stripe.com/v1/checkout/sessions/${body.session_id}`, {
       headers: {Authorization: `Bearer ${env.STRIPE_API_KEY}`}, redirect: 'manual', signal: deadline,
     });
     if (!stripe.ok) return fail(502);
     const session = await stripe.json();
     if (session.id !== body.session_id || session.livemode !== false || session.mode !== 'payment' ||
-        session.status !== 'complete' || session.payment_status !== 'paid' || session.metadata?.cr_order_id !== body.order_id ||
+        session.status !== 'complete' || !Number.isSafeInteger(session.amount_total) || session.amount_total < 0 ||
+        !(session.payment_status === 'paid' || (session.amount_total === 0 && session.payment_status === 'no_payment_required')) ||
+        session.metadata?.cr_order_id !== body.order_id ||
         typeof session.customer_details?.email !== 'string' ||
-        session.customer_details.email.toLowerCase() !== config.recipient.toLowerCase()) return fail(403);
+        session.customer_details.email.toLowerCase() !== env.APPROVED_TEST_RECIPIENT.toLowerCase()) return fail(403);
 
-    // The caller has already durably claimed (merchant, order, workflow).
-    // Failure or timeout is uncertain and must never trigger an automatic resend.
-    const reference = await sendEmail(env, config, provider, deadline, fetcher);
+    const lines = body.items.map(item => `${item.title} × ${item.quantity}`);
+    const total = formatTotal(session);
+    const access = body.access_url ? `View your purchased resources: ${body.access_url}`
+      : 'Your purchased resources will be available when ready. Please contact the merchant if needed.';
+    const text = `Thank you for your order from ${env.MERCHANT_NAME}.\n\nOrder: ${body.order_id}\n\n` +
+      lines.join('\n') + total + `\n\n${access}`;
+    const reference = await sendEmail(env, {sender:env.APPROVED_TEST_SENDER, recipient:env.APPROVED_TEST_RECIPIENT,
+      subject:`Your order from ${env.MERCHANT_NAME}`}, provider, deadline, fetcher, text);
     if (!reference) return fail(502);
     return Response.json({provider_reference: reference}, {headers: {'Cache-Control': 'no-store'}});
   } catch { return fail(503); }

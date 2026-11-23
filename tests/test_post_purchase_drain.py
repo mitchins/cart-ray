@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from cartray.post_purchase import Action, D1Dispatcher, drain_confirmed_d1
+from cartray.post_purchase import Action, D1Dispatcher, OrderReceiptDispatcher, drain_confirmed_d1
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -60,10 +60,22 @@ def setup_database():
     db.executescript((ROOT / "migrations/0006_post_purchase_actions.sql").read_text())
     db.executescript((ROOT / "migrations/0007_post_purchase_checkpoint.sql").read_text())
     db.executescript((ROOT / "migrations/0008_post_purchase_recovery.sql").read_text())
+    db.executescript((ROOT / "migrations/0010_receipt_handover.sql").read_text())
     db.execute("INSERT INTO post_purchase_installation VALUES (1,'store','test')")
     db.execute("INSERT INTO post_purchase_checkpoint VALUES (1,'store','test',1,1)")
     db.commit()
     return db
+
+
+@pytest.mark.parametrize("first,second", [("order-receipt", "old-workflow"), ("old-workflow", "order-receipt")])
+def test_handover_does_not_allow_legacy_and_receipt_claims_for_same_order(first, second):
+    db = setup_database()
+    statement = """INSERT OR IGNORE INTO post_purchase_executions
+        (merchant_id,environment,order_id,workflow_key,action_digest,state,created_at,updated_at)
+        VALUES ('store','test','after',?,?,'claimed',1,1)"""
+    assert db.execute(statement, (first, 'a' * 64)).rowcount == 1
+    assert db.execute(statement, (second, 'b' * 64)).rowcount == 0
+    assert db.execute("SELECT workflow_key FROM post_purchase_executions").fetchone()[0] == first
 
 
 def test_drain_preserves_watermark_and_replay():
@@ -352,12 +364,10 @@ def test_worker_drain_calls_scoped_handler_and_never_replays(monkeypatch, respon
     assert seen[0].url == "https://post-purchase-handler.internal/"
     assert seen[0].options["headers"]["authorization"] == "Bearer " + "t" * 32
     body = json.loads(seen[0].options["body"])
-    assert (body["merchant"], body["environment"], body["order_id"], body["workflow_key"]) == (
-        "store",
-        "test",
-        "after",
-        "delivery",
+    assert (body["merchant"], body["environment"], body["order_id"], body["type"]) == (
+        "store", "test", "after", "order_confirmation"
     )
+    assert body["items"] == [{"product_key": "product", "quantity": 1, "title": "product"}]
     assert db.execute("SELECT state FROM post_purchase_executions").fetchone()[0] == expected_state
     assert db.execute("SELECT last_outbox_id FROM post_purchase_checkpoint").fetchone()[0] == 2
 
@@ -408,3 +418,39 @@ def test_worker_handler_timeout_is_held_and_never_resent(monkeypatch):
     assert len(calls) == 1
     assert db.execute("SELECT state FROM post_purchase_executions").fetchone()[0] == "uncertain"
     assert db.execute("SELECT last_outbox_id FROM post_purchase_checkpoint").fetchone()[0] == 2
+
+
+def test_order_receipt_collapses_workflows_and_replay_without_backfill():
+    db = setup_database()
+    db.execute("INSERT INTO order_items VALUES ('after','second',2)")
+    db.commit()
+    sent = []
+    dispatcher = OrderReceiptDispatcher(Database(db), "store", "test",
+                                        {"receipt": lambda purchase: sent.append(purchase) or "accepted"})
+    actions = (Action("first", ("product",), "service", "a", "a" * 64),
+               Action("second", ("second",), "service", "b", "b" * 64))
+    assert asyncio.run(drain_confirmed_d1(dispatcher, actions)) == 1
+    assert asyncio.run(drain_confirmed_d1(dispatcher, actions)) == 0
+    assert len(sent) == 1 and sent[0].items == (("product", 1), ("second", 2))
+    assert db.execute("SELECT workflow_key,state FROM post_purchase_executions").fetchall()[0][:] == (
+        "order-receipt", "accepted"
+    )
+    assert db.execute("SELECT last_outbox_id FROM post_purchase_checkpoint").fetchone()[0] == 2
+
+
+def test_order_receipt_holds_unknown_and_never_resends_legacy_claim():
+    db = setup_database()
+    calls = []
+    def failed(purchase):
+        calls.append(purchase.order_id)
+        raise TimeoutError()
+    dispatcher = OrderReceiptDispatcher(Database(db), "store", "test", {"receipt": failed})
+    assert asyncio.run(dispatcher.dispatch("after")) == {"receipt": "uncertain"}
+    assert asyncio.run(dispatcher.dispatch("after")) == {"receipt": "already_claimed"}
+    assert calls == ["after"]
+    db.execute("DELETE FROM post_purchase_executions")
+    db.execute("INSERT INTO post_purchase_executions VALUES (?,?,?,?,?,'claimed',NULL,?,?)",
+               ("store", "test", "after", "legacy", "a" * 64, 1, 1))
+    db.commit()
+    assert asyncio.run(dispatcher.dispatch("after")) == {"receipt": "pending_claim"}
+    assert calls == ["after"]

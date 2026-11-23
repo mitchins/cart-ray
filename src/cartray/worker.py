@@ -24,7 +24,7 @@ from cartray.errors import (
 )
 from cartray.models import CheckoutRequest
 from cartray.order_access import issue_order_access, issuer_token, purchased_resources, resolve_configured_resource
-from cartray.post_purchase import D1Dispatcher, drain_confirmed_d1, parse_action_config
+from cartray.post_purchase import OrderReceiptDispatcher, drain_confirmed_d1, parse_action_config
 from cartray.reconciliation import StripeReconciliationService
 from cartray.settlement import StripeSettlementService
 from cartray.store import D1OrderStore
@@ -710,24 +710,43 @@ async def _drain_post_purchase(env):
     try:
         if getattr(env, "CARTRAY_POST_PURCHASE_MODE", "disabled") != "test" or _test_environment(env) != "test":
             return
-        merchant, environment, actions = parse_action_config(_required_env(env, "CARTRAY_POST_PURCHASE_CONFIG"))
+        merchant = getattr(env, "CARTRAY_MERCHANT_ID", None)
+        if not merchant:
+            # Retained test installations already have a pinned workflow config.
+            merchant, _, _ = parse_action_config(_required_env(env, "CARTRAY_POST_PURCHASE_CONFIG"))
         token = _required_env(env, "CARTRAY_POST_PURCHASE_TOKEN")
         service = getattr(env, "POST_PURCHASE_HANDLER", None)
         if len(token) < 32 or not callable(getattr(service, "fetch", None)):
             return
 
-        async def service_handler(purchase, execution):
+        async def receipt_handler(purchase):
+            names = {source.product_key: source.title for source in COMPILED_CATALOGUE.catalogue_sources}
+            def receipt_title(key):
+                title = names.get(key, key)
+                if not isinstance(title, str):
+                    return key
+                title = " ".join("".join(c if c.isprintable() else " " for c in title).split())
+                return title[:100] or key
+            access_url = None
+            if getattr(env, "CARTRAY_ORDER_ACCESS_MODE", "disabled") == "test":
+                try:
+                    capability = await issue_order_access(
+                        env.DB, _required_env(env, "CARTRAY_ORDER_ACCESS_KEY"), merchant, "test", purchase.order_id
+                    )
+                    path = getattr(env, "CARTRAY_ORDER_ACCESS_PATH", "/order-access")
+                    if not isinstance(path, str) or not re.fullmatch(r"/(?:[A-Za-z0-9_-]+/)*order-access", path):
+                        raise ValueError("invalid order path")
+                    access_url = (
+                        _origin(_required_env(env, "CARTRAY_STOREFRONT_ORIGIN")) + path + "#token=" + capability
+                    )
+                except Exception:
+                    # A resource outage never prevents the payment receipt.
+                    access_url = None
             body = json.dumps(
-                {
-                    "merchant": execution.merchant,
-                    "environment": execution.environment,
-                    "workflow_key": execution.workflow_key,
-                    "config_ref": execution.config_ref,
-                    "config_digest": execution.config_digest,
-                    "order_id": purchase.order_id,
-                    "session_id": purchase.session_id,
-                    "items": purchase.items,
-                },
+                {"type": "order_confirmation", "merchant": merchant, "environment": "test",
+                 "order_id": purchase.order_id, "session_id": purchase.session_id, "access_url": access_url,
+                 "items": [{"product_key": key, "quantity": quantity, "title": receipt_title(key)}
+                           for key, quantity in purchase.items]},
                 separators=(",", ":"),
             )
             request = _internal_post("https://post-purchase-handler.internal/", token, body)
@@ -741,9 +760,9 @@ async def _drain_post_purchase(env):
                 raise RuntimeError("post-purchase handler outcome uncertain")
             return result.get("provider_reference")
 
-        dispatcher = D1Dispatcher(env.DB, merchant, environment, {"service": service_handler})
+        dispatcher = OrderReceiptDispatcher(env.DB, merchant, "test", {"receipt": receipt_handler})
         await asyncio.wait_for(
-            drain_confirmed_d1(dispatcher, actions, limit=10, max_new_claims=2, deadline=time.monotonic() + 21),
+            drain_confirmed_d1(dispatcher, (), limit=10, max_new_claims=2, deadline=time.monotonic() + 21),
             timeout=22,
         )
     except Exception as error:

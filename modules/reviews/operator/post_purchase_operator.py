@@ -65,8 +65,9 @@ class PostPurchaseOperator:
 
     def initial_post_purchase_secrets(self):
         actions = self.post_purchase_actions()
+        entries = [actions] if isinstance(actions, dict) else actions
         if (any(a["recipient"].lower() != self.credentials["approved_test_email"].lower()
-                or a["sender"].lower() != self.credentials["test_sender"].lower() for a in actions)):
+                or a["sender"].lower() != self.credentials["test_sender"].lower() for a in entries)):
             raise ValueError("protected post-purchase sender/recipient differ from the approved credential handoff")
         return {"post_purchase_token": secrets.token_hex(32),
                 **{"post_purchase_" + key: self.credentials[key]
@@ -232,7 +233,11 @@ class PostPurchaseOperator:
                 if self.worker_visibility_errors(role):
                     raise ValueError("email reconfiguration requires both Workers and previews to remain private")
             actions = self.post_purchase_actions()
-            action_value = {"schema": 1, "actions": [{**a, "sender": self.credentials["test_sender"]} for a in actions]}
+            if isinstance(actions, dict):
+                action_value = {**actions, "sender": self.credentials["test_sender"]}
+            else:
+                action_value = {"schema": 1, "actions": [{**a, "sender": self.credentials["test_sender"]}
+                                                         for a in actions]}
             raw_actions = (json.dumps(action_value, indent=2) + "\n").encode()
             self.parse_post_purchase_snapshot(raw_actions, self.config, Path(self.config["merchant_inputs"]),
                                               json.loads(Path(self.config["preflight_lock"]).read_text()))

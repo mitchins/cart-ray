@@ -893,7 +893,7 @@ def test_missing_post_purchase_service_is_rejected_before_claims(monkeypatch):
         CARTRAY_POST_PURCHASE_CONFIG=json.dumps({"merchant": "store", "environment": "test", "actions": [action]}),
         CARTRAY_POST_PURCHASE_TOKEN="a" * 32,
     )
-    monkeypatch.setattr(worker_module, "D1Dispatcher", lambda *args: pytest.fail("must not claim"))
+    monkeypatch.setattr(worker_module, "OrderReceiptDispatcher", lambda *args: pytest.fail("must not claim"))
     asyncio.run(worker_module._drain_post_purchase(env))
 
 
