@@ -339,6 +339,7 @@ def test_old_one_request_grant_cannot_be_expanded_to_both(purchase):
 
 def test_unsubscribe_preserves_the_next_purchase_receipt(purchase, fixture_catalogue):
     import time
+
     from cartray.models import CheckoutRedirect
 
     db, env, sent, _ = purchase
@@ -375,7 +376,6 @@ def test_unsubscribe_preserves_the_next_purchase_receipt(purchase, fixture_catal
 
 
 def test_withdrawn_recovery_is_retired_instead_of_starving_later_customers(purchase):
-    import time
 
     db, env, sent, order = purchase
     env.CARTRAY_REVIEW_SETTINGS = json.dumps({"timing": "receipt"})
