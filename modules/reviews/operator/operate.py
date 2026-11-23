@@ -1483,6 +1483,24 @@ class Installation(PostPurchaseOperator):
 
     def receipt(self):
         health = self.doctor()
+        merchant = self.config.get("store_key", "acorn-store")
+        checkpoint = self.api.query(
+            self.db("commerce"),
+            "SELECT activation_watermark,last_outbox_id FROM post_purchase_checkpoint "
+            "WHERE singleton=1 AND merchant_id=? AND environment='test'", [merchant])
+        messages = self.api.query(
+            self.db("commerce"),
+            "SELECT order_id,'order_confirmation' AS purpose,state,provider_reference,"
+            "created_at AS attempted_at FROM post_purchase_executions "
+            "WHERE merchant_id=? AND environment='test' ORDER BY created_at,order_id", [merchant])
+        if self.config['reviews_enabled']:
+            messages += self.api.query(
+                self.db("commerce"),
+                "SELECT order_id,'review_followup' AS purpose,state,provider_reference,attempted_at "
+                "FROM order_review_messages WHERE merchant_id=? AND environment='test' "
+                "AND due_at IS NOT NULL ORDER BY due_at,order_id", [merchant])
+        for message in messages:
+            message['order_fingerprint'] = digest(message.pop('order_id').encode())
         if not self.config["reviews_enabled"]:
             result = {
                 "format": 2,
@@ -1490,6 +1508,7 @@ class Installation(PostPurchaseOperator):
                 "doctor": health,
                 "resources": self.state["resources"],
                 "migration_ledgers": self.state["migration_ledgers"],
+                "checkpoint": checkpoint, "order_messages": messages,
                 **({"worker_versions": self.state.get("deployment", {}).get("versions"),
                     "post_purchase_config_sha256": self.config["post_purchase_config_sha256"]}
                    if self.has_post_purchase else {}),
@@ -1505,11 +1524,6 @@ class Installation(PostPurchaseOperator):
             "FROM outbox b LEFT JOIN review_invitation_checkout_choices c ON c.order_id=b.order_id "
             "LEFT JOIN review_invitation_checkout_grants g ON g.order_id=b.order_id "
             "WHERE b.event_type='OrderConfirmed' ORDER BY b.id",
-        )
-        checkpoint = self.api.query(
-            self.db("commerce"),
-            "SELECT activation_watermark,last_outbox_id FROM reviews_subscriber_checkpoint WHERE subscriber_id=?",
-            [self.config["namespace"]],
         )
         deliveries = self.api.query(
             self.db("reviews"),
@@ -1547,7 +1561,9 @@ class Installation(PostPurchaseOperator):
             "suppression_key_fingerprint": self.state["secret_fingerprints"]["recipient_hash"],
             "checkout_choices": choices,
             "checkpoint": checkpoint,
-            "provider_acceptances": deliveries,
+            "order_messages": messages,
+            "provider_acceptances": [m for m in messages if m['state']=='accepted'],
+            "legacy_generation_provider_acceptances": deliveries,
             "generation_states": states,
             "public_subjects": public,
             "recipient_suppression_count": suppressed[0]["count"],

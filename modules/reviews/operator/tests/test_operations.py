@@ -510,3 +510,31 @@ def test_new_read_only_reviews_install_has_no_queue_lifecycle(tmp_path):
     assert install.roles == ("source", "reviews")
     assert install.queues == ()
     assert len(install.secret_names) == 8
+
+
+def test_receipt_reports_active_order_messages_not_retired_subscriber(tmp_path, monkeypatch):
+    install, cloud = migrated(tmp_path)
+    install.migrate()
+    merchant = install.config.get('store_key', 'acorn-store')
+    db = install.db('commerce')
+    # Only the real active ledgers are populated; no legacy subscriber exists.
+    cloud.query(db, "INSERT INTO post_purchase_installation VALUES (1,?,'test')", [merchant])
+    cloud.query(db, "INSERT INTO post_purchase_checkpoint VALUES (1,?,'test',3,4)", [merchant])
+    with cloud.databases[db][1] as connection:
+        connection.execute('PRAGMA foreign_keys=OFF')
+        connection.execute("INSERT INTO post_purchase_executions VALUES (?,?,?,'order-receipt',?,'accepted',?,1,1)",
+                           (merchant,'test','test-order','a'*64,'receipt-provider'))
+        connection.execute("INSERT INTO order_review_messages "
+                           "(merchant_id,environment,order_id,recipient_hash,invitation_token,unsubscribe_token,"
+                           "settings_json,due_at,state,attempted_at,provider_reference,created_at) "
+                           "VALUES (?,'test','test-order',?,?,?,'{}',2,'accepted',3,'followup-provider',1)",
+                           (merchant,'b'*64,'c'*64,'d'*64))
+    monkeypatch.setattr(install, 'doctor', lambda: {'healthy':True})
+    result = install.receipt()
+    assert result['checkpoint'] == [{'activation_watermark':3,'last_outbox_id':4}]
+    assert [(m['purpose'],m['state'],m['provider_reference']) for m in result['order_messages']] == [
+        ('order_confirmation','accepted','receipt-provider'),('review_followup','accepted','followup-provider')]
+    assert len(result['provider_acceptances']) == 2
+    assert not result['legacy_generation_provider_acceptances']
+    serialized = json.dumps(result)
+    assert 'test-order' not in serialized and 'c'*64 not in serialized and 'd'*64 not in serialized
