@@ -173,6 +173,10 @@ def test_connected_build_deploy_verify_explicit_activation_upgrade_and_rollback(
     assert install.vault() == keys
     assert len(install.state["releases"]) == 2
     writes = database.writes
+    install.config["reviews_email_provider"] = "cloudflare"
+    with pytest.raises(ValueError, match="rollback release uses SMTP"):
+        install.rollback(0)
+    install.config.pop("reviews_email_provider")
     result = install.rollback(0)
     assert result["database_rewind"] is False
     assert database.writes == writes

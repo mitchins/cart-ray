@@ -1005,6 +1005,7 @@ class Installation(PostPurchaseOperator):
         result = {
             "commit": commit,
             "merchant_inputs_sha256": self.config.get("merchant_inputs_sha256"),
+            "reviews_email_provider": self.config.get("reviews_email_provider", "smtp2go"),
             "merchant_lock_sha256": merchant_lock_hash,
             "merchant_config_sha256": merchant_config_hash,
             "artifacts": artifacts,
@@ -1850,6 +1851,9 @@ class Installation(PostPurchaseOperator):
             or release["suppression_key_fingerprint"] != self.state["secret_fingerprints"]["recipient_hash"]
         ):
             raise ValueError("rollback schema/key contract is incompatible; databases are never rewound")
+        if (self.config["reviews_enabled"] and self.config.get("reviews_email_provider", "smtp2go") == "cloudflare"
+                and release.get("reviews_email_provider", "smtp2go") != "cloudflare"):
+            raise ValueError("rollback release uses SMTP; retain a Cloudflare-compatible release")
         versions = release["versions"]
         release_sending = release.get("sending", bool(release.get("record_revision", 0)))
         reviews_authorized = (self.state.get("activation_authorized")
