@@ -74,7 +74,8 @@ def _run(argv=None):
         exceptions = read_json(args.exceptions) if args.exceptions else ()
         if args.command == "transition-check":
             result = transition_check(
-                read_json(args.source), read_json(args.candidate), read_json(args.record), exceptions
+                read_json(args.source), read_json(args.candidate), read_json(args.record),
+                Path(args.previous_artifact).read_bytes(), exceptions
             )
             ready = result["ready_for_owner_review"]
         else:
