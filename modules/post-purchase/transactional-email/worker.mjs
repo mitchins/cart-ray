@@ -89,7 +89,10 @@ function formatTotal(session) {
       !/^[a-z]{3}$/.test(session.currency || '')) return '';
   try {
     const format = new Intl.NumberFormat('en', {style:'currency', currency:session.currency.toUpperCase()});
-    const units = 10 ** format.resolvedOptions().maximumFractionDigits;
+    // Stripe charges ISK and UGX in hundredths for backwards compatibility,
+    // even though their normal display format has no decimal places.
+    const units = ['isk', 'ugx'].includes(session.currency)
+      ? 100 : 10 ** format.resolvedOptions().maximumFractionDigits;
     return `\nTotal: ${format.format(session.amount_total / units)}`;
   } catch { return ''; }
 }
@@ -105,7 +108,7 @@ export async function handle(request, env, fetcher = fetch) {
     if (!body || body.type !== 'order_confirmation' || body.environment !== 'test' ||
         !identifier.test(body.merchant || '') || body.merchant !== env.MERCHANT_ID ||
         !identifier.test(body.order_id || '') || !sessionId.test(body.session_id || '') ||
-        typeof env.MERCHANT_NAME !== 'string' || !env.MERCHANT_NAME.trim() || env.MERCHANT_NAME.length > 100 ||
+        typeof env.MERCHANT_NAME !== 'string' || !env.MERCHANT_NAME.trim() || [...env.MERCHANT_NAME].length > 100 ||
         /[\x00-\x1f\x7f]/.test(env.MERCHANT_NAME) || !Array.isArray(body.items) ||
         !body.items.length || body.items.length > 100 || body.items.some(item =>
           !item || !identifier.test(item.product_key || '') || !Number.isSafeInteger(item.quantity) ||

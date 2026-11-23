@@ -83,6 +83,21 @@ test('zero-decimal currency total is not divided by one hundred', async () => {
   assert.match(JSON.parse(p.calls.at(-1).init.body).text_body,/500/);
 });
 
+test('Stripe special-case charge units use hundredths for ISK and UGX', async () => {
+  for (const currency of ['isk', 'ugx']) {
+    const p=provider({currency,amount:500});
+    assert.equal((await handle(request(),env,p.fetch)).status,200);
+    const total=JSON.parse(p.calls.at(-1).init.body).text_body.split('\n').find(line=>line.startsWith('Total:'));
+    assert.match(total,/5/);
+    assert.doesNotMatch(total,/500/);
+  }
+});
+
+test('merchant name bound counts Unicode code points', async () => {
+  const p=provider();
+  assert.equal((await handle(request(),{...env,MERCHANT_NAME:'🌲'.repeat(51)},p.fetch)).status,200);
+});
+
 test('confirmed free orders receive a receipt, but unpaid orders do not', async () => {
   let p=provider({amount:0,payment:'no_payment_required'});
   assert.equal((await handle(request(),env,p.fetch)).status,200);
