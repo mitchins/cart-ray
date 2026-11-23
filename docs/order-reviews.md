@@ -51,6 +51,12 @@ uv run python modules/reviews/operator/operate.py --directory PRIVATE_INSTALL --
 uv run python modules/reviews/operator/operate.py --directory PRIVATE_INSTALL --credentials PRIVATE_CREDENTIALS pause
 ```
 
+If a merchant input package fails full review-page validation before its first
+successful build, correct the source package and repeat `build --merchant-inputs
+PATH`. This explicitly snapshots and validates the correction while sending is
+OFF, preserving provisioned resources, keys and checkpoints. It does not weaken
+catalogue/Price-lock compatibility or overwrite a retained build artifact.
+
 Activation explicitly initializes the existing order checkpoint at the current
 outbox maximum, excluding historical purchases. Repeated activation preserves
 it. Pause disables both sides of the shared mail path; checkout, order access,

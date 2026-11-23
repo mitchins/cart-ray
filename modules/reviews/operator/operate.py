@@ -911,6 +911,31 @@ class Installation(PostPurchaseOperator):
                 if (site / dest).read_bytes() != (ROOT / source).read_bytes():
                     raise ValueError("merchant review client differs from the supported Reviews module")
 
+    def update_merchant_inputs(self, source):
+        """Explicit local input refresh while sending is OFF; never changes keys or storage."""
+        self.require_post_purchase_off()
+        if self.state.get('activation_authorized') and not self.state.get('automation_paused'):
+            raise ValueError('pause sending before replacing merchant build inputs')
+        if 'merchant_inputs' not in self.config or self.state.get('post_purchase_transition'):
+            raise ValueError('a paused merchant installation is required to replace build inputs')
+        source = Path(source).resolve(strict=True)
+        checksum = validate_merchant_inputs(source, ROOT)
+        destination = self.directory / 'inputs' / ('merchant-' + checksum)
+        if not destination.exists():
+            snapshot_merchant_inputs(source, destination, ROOT)
+        if validate_merchant_inputs(destination, ROOT) != checksum:
+            raise ValueError('retained merchant snapshot differs from its fingerprint')
+        old = dict(self.config)
+        self.config.update(merchant_inputs=str(destination), merchant_inputs_sha256=checksum)
+        try:
+            self.verify_merchant_inputs()
+        except Exception:
+            self.config = old
+            raise
+        self.state['config'].update(merchant_inputs=str(destination.relative_to(self.directory)),
+                                    merchant_inputs_sha256=checksum)
+        self.save()
+
     def merchant_config_hash(self):
         if "merchant_inputs" not in self.config:
             return None
@@ -1188,8 +1213,7 @@ class Installation(PostPurchaseOperator):
             for role in POST_PURCHASE_ROLES:
                 self.check_post_purchase_version(role, "disabled", self.api.version(self.name(role)),
                                                  progress["versions"][role])
-                errors = (self.worker_visibility_errors(role) if role=='post-purchase'
-                          or self.config.get('source_mode','public')=='private' else [])
+                errors = self.post_purchase_visibility_errors(role)
                 if errors:
                     raise ValueError("; ".join(errors))
             self.record_post_purchase_off(build)
@@ -1331,7 +1355,7 @@ class Installation(PostPurchaseOperator):
             }
         if not self.config["reviews_enabled"]:
             deployment = {"env_vars": {}, "services": {}}
-        if "fulfilment" in self.config:
+        if "fulfilment" in self.config or (self.consolidated and self.config['reviews_enabled']):
             deployment["env_vars"]["ORDER_ACCESS_GATEWAY"] = {"type": "plain_text", "value": "test"}
             deployment["env_vars"]["REVIEWS_STOREFRONT_ORIGIN"] = {"type": "plain_text", "value": origin}
             deployment["services"]["CARTRAY_SOURCE"] = {"service": self.name("source"), "environment": "production"}
@@ -1730,7 +1754,9 @@ class Installation(PostPurchaseOperator):
         errors = self.private_source_visibility_errors()
         delivery = {}
         if self.has_post_purchase:
-            errors.extend(self.worker_visibility_errors("post-purchase"))
+            errors.extend(self.post_purchase_visibility_errors("post-purchase"))
+            if self.config.get('source_mode','public') == 'public':
+                errors.extend(self.post_purchase_visibility_errors('source'))
             try:
                 deployment, disabled, build = self.post_purchase_runtime()
                 for role in POST_PURCHASE_ROLES:
@@ -2111,7 +2137,10 @@ def main():
     plan = commands.add_parser("plan", help="write a non-secret plan; creates no cloud resources or keys")
     plan.add_argument("--config", type=Path, required=True)
     for name in ("provision", "migrate", "build", "deploy", "verify", "doctor", "upgrade", "receipt", "pause"):
-        commands.add_parser(name)
+        command = commands.add_parser(name)
+        if name == 'build':
+            command.add_argument('--merchant-inputs', type=Path,
+                                 help='explicitly snapshot corrected merchant inputs while sending is OFF')
     activation = commands.add_parser(
         "activate", help="explicitly authorize the fixed no-backfill fence and test delivery"
     )
@@ -2176,6 +2205,10 @@ def main():
                     result = installation.rollback(args.release)
                 elif args.command == "upgrade":
                     result = installation.upgrade()
+                elif args.command == 'build':
+                    if args.merchant_inputs:
+                        installation.update_merchant_inputs(args.merchant_inputs)
+                    result = installation.build()
                 elif args.command == "request":
                     result = installation.private(
                         "REVIEWS",

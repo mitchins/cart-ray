@@ -216,6 +216,7 @@ class Backend:
         self.db = db
         self.active, self.versions, self.visibility, self.events = {}, {}, {}, []
         self.fail_publish = None
+        self.public_source = None
 
     def request(self, path, method="GET", body=None):
         if path == "d1/database/database":
@@ -244,7 +245,8 @@ class Backend:
         return {"id": identifier}
 
     def publish(self, name, identifier):
-        assert self.visibility[name] == OFF_VISIBILITY
+        if name != self.public_source:
+            assert self.visibility[name] == OFF_VISIBILITY
         self.active[name] = identifier
         self.events.append(("publish", name))
         if self.fail_publish == name:
@@ -279,10 +281,14 @@ def capture_build(install, commit):
 
 
 @pytest.fixture
-def deployed(tmp_path, monkeypatch):
+def deployed(tmp_path, monkeypatch, request):
     options = handoff(tmp_path)
     atomic_json(Path(options["post_purchase_config"]),
                 {"schema": 2, "sender": CREDS["test_sender"], "recipient": CREDS["approved_test_email"]})
+    if getattr(request, 'param', None)=='public':
+        options['source_mode']='public'
+        for field in ('source_api_path','webhook_url'):
+            options.pop(field,None)
     path = Installation.plan(tmp_path / "installation", options).directory
     db = sqlite3.connect(":memory:")
     db.row_factory = sqlite3.Row
@@ -293,6 +299,8 @@ def deployed(tmp_path, monkeypatch):
     for migration in ("0006_post_purchase_actions.sql", "0007_post_purchase_checkpoint.sql"):
         db.executescript((ROOT / "migrations" / migration).read_text())
     api = Backend(db)
+    if options.get('source_mode')=='public':
+        api.public_source = options['namespace']+'-source'
     install = Installation(path, deepcopy(CREDS), api)
     install.vault(create=True)
     install.state.update(workers_subdomain="account", phase="migrated", migration_ledgers={
@@ -1189,3 +1197,16 @@ def test_pages_merchant_can_use_public_checkout_with_private_mail_handler(tmp_pa
     assert not nodes['post-purchase'].get('public', False)
     assert nodes['source']['services']=={'POST_PURCHASE_HANDLER':'post-purchase'}
     assert not install.queues
+
+
+@pytest.mark.parametrize('deployed', ['public'], indirect=True)
+def test_public_checkout_survives_repeat_pause_and_off_provider_change(deployed):
+    install, api, db = deployed
+    assert api.visibility[install.name('source')]['enabled'] is True
+    assert api.visibility[install.name('post-purchase')]['enabled'] is False
+    assert install.post_purchase_disable()['post_purchase']=='already-disabled'
+    assert install.post_purchase_disable()['post_purchase']=='already-disabled'
+    changed = email_migration_install(install, api)
+    assert changed.post_purchase_reconfigure_provider('cloudflare', True)['provider']=='cloudflare'
+    assert api.visibility[install.name('source')]['enabled'] is True
+    assert api.visibility[install.name('post-purchase')]['enabled'] is False

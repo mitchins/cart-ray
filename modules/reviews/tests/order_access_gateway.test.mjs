@@ -22,3 +22,19 @@ test('order gateway forwards only the customer body and edge address without fol
   assert.equal((await gateway.fetch(new Request(request.url + '?token=secret'), env)).status, 403);
   assert.equal((await gateway.fetch(new Request(request.url), {...env, ORDER_ACCESS_GATEWAY:'disabled'})).status, 404);
 });
+
+test('human and one-click unsubscribe work without fulfilment or browser credentials', async () => {
+  const calls=[];
+  const env={ORDER_ACCESS_GATEWAY:'test',REVIEWS_STOREFRONT_ORIGIN:'https://shop.example',
+    CARTRAY_SOURCE:{fetch:async request=>{calls.push(request);return new Response('unsubscribed')}}};
+  const url='https://shop.example/review-unsubscribe?token='+'a'.repeat(64);
+  assert.equal((await gateway.fetch(new Request(url),env)).status,200);
+  assert.equal((await gateway.fetch(new Request(url,{method:'POST',headers:{
+    'Content-Type':'application/x-www-form-urlencoded','Cookie':'private=secret','Authorization':'Bearer browser'},
+    body:'List-Unsubscribe=One-Click'}),env)).status,200);
+  assert.equal(calls.length,2);
+  assert.equal(calls[1].headers.get('origin'),null);
+  assert.equal(calls[1].headers.get('cookie'),null);
+  assert.equal(calls[1].headers.get('authorization'),null);
+  assert.equal(await calls[1].text(),'List-Unsubscribe=One-Click');
+});
