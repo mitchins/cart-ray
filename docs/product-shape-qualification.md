@@ -53,18 +53,54 @@ this release does not silently migrate that installation.
   additive migrations, paused upgrades and re-verification retained keys,
   purchase, review and delivery state. No historical mail backfill.
 
+## Final hosted continuation
+
+The owner completed the existing second AUD42 Checkout. Stripe authoritatively
+reported complete/paid, live mode false, for Toolkit and Planter quantity 1 each.
+The same installation was rebuilt and deployed from implementation commit
+`fa421ee9d8dc6d2df94efed8b68e92b2f4b70e6c`, preserving its keys and activation
+watermark. Source version `8b0343ad-a71c-45d9-8e71-06f75dcadf99`, native Reviews
+`85a6fc52-983b-4c1e-b962-b6959ee9b7f9`, private email handler
+`47906112-2cee-453b-ac25-dbf7854dc54a`.
+
+- Order fingerprint
+  `9a33e349299c68521b0df1d53a816fdc040c09bc061a37646b2a89a7dae5b044`.
+- Exactly one accepted confirmation for that order, provider reference
+  `1xVQJD-FnQW0hPraPE-X38P`, actually received in the approved inbox.
+- The received body contains both purchased items, stable resource access and
+  the direct native review link, featuring Toolkit. Reading that link through
+  the customer invitation API returned both eligible subjects, without checkout
+  cookies or an extra permission step.
+- The actual scheduled source invocation completed successfully in 931ms wall
+  time and 112ms CPU. This is one observed invocation, not a performance SLA.
+- Raw received headers contain List-Unsubscribe and List-Unsubscribe-Post with
+  DKIM coverage. HTTPS one-click POST using the original order's unsubscribe
+  link returned 200 without confirmation. The second order's pending follow-up
+  became skipped, with no provider reference, while both transactional receipts
+  and the original accepted follow-up remained unchanged. Suppression count 1.
+- The retained activation watermark is still 0; the cursor reached 6, with two
+  confirmation execution identities. No historical message was resent.
+
+The first receipt had reached the inbox with working order access but omitted
+its direct review enrichment after a two-second timeout. The corrected
+four-second enrichment budget is now qualified by the actual second receipt;
+the earlier browser-payment handoff is resolved.
+
+One pause attempt observed stale Cloudflare deployment metadata immediately
+after publication and stopped with its disable journal intact. Repeating the
+supported pause command resumed that journal without replacing keys, resetting
+claims or changing the checkpoint. Sending finishes OFF.
+
 ## Limits of the hosted evidence
 
-The first receipt reached the inbox with order access but omitted direct review
-links because its optional enrichment exceeded a two-second budget. Capabilities
-already existed and were reachable through the order page. The budget was
-corrected to four seconds. A second existing AUD42 sandbox Checkout is open to
-verify direct receipt inclusion after that correction. Browser security blocked
-further payment interaction; the owner handoff is pending. No API or alternate
-browser was used to bypass that restriction, and the unpaid order is not proof
-of successful qualification. Provider uncertainty/cancellation and all timing,
-selection, consent, suppression and recovery races are executable local
-Workerd/D1 or unit evidence, not induced live SMTP uncertainty.
+Provider uncertainty/cancellation and all timing, selection, consent,
+suppression and recovery races have executable local Workerd/D1 or unit
+coverage. This run did not deliberately induce ambiguous acceptance at the live
+SMTP provider. No real merchant materials, production purchases or campaigns
+were used. The first order's repeated quantities and native submission,
+moderation/publication and outstanding-product follow-up remain the hosted
+end-to-end evidence; the second order proves immediate receipt inclusion and
+cross-order unsubscribe suppression.
 
 The follow-up delay was shortened to 432 seconds for this test. Maintenance,
 pauses and diagnosis delayed observed sending; this run is not a timing SLA.
