@@ -24,7 +24,7 @@ from cartray.errors import (
 )
 from cartray.models import CheckoutRequest
 from cartray.order_access import issue_order_access, issuer_token, purchased_resources, resolve_configured_resource
-from cartray.post_purchase import OrderReceiptDispatcher, drain_confirmed_d1, parse_action_config
+from cartray.post_purchase import OrderReceiptDispatcher, drain_confirmed_d1
 from cartray.reconciliation import StripeReconciliationService
 from cartray.settlement import StripeSettlementService
 from cartray.store import D1OrderStore
@@ -710,10 +710,11 @@ async def _drain_post_purchase(env):
     try:
         if getattr(env, "CARTRAY_POST_PURCHASE_MODE", "disabled") != "test" or _test_environment(env) != "test":
             return
-        merchant = getattr(env, "CARTRAY_MERCHANT_ID", None)
-        if not merchant:
-            # Retained test installations already have a pinned workflow config.
-            merchant, _, _ = parse_action_config(_required_env(env, "CARTRAY_POST_PURCHASE_CONFIG"))
+        # A legacy workflow grant does not authorize order-wide confirmations.
+        # A deliberate schema-2 handover removes this binding.
+        if getattr(env, "CARTRAY_POST_PURCHASE_CONFIG", None):
+            return
+        merchant = _required_env(env, "CARTRAY_MERCHANT_ID")
         token = _required_env(env, "CARTRAY_POST_PURCHASE_TOKEN")
         service = getattr(env, "POST_PURCHASE_HANDLER", None)
         if len(token) < 32 or not callable(getattr(service, "fetch", None)):

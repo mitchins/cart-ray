@@ -45,6 +45,11 @@ GUARD_SQL = """SELECT json(CASE WHEN (
   AND (SELECT COUNT(*) FROM post_purchase_checkpoint)=0
   AND (SELECT COUNT(*) FROM post_purchase_executions)=0)
  OR ((SELECT COUNT(*) FROM post_purchase_installation)=1
+  AND (SELECT COUNT(*) FROM post_purchase_checkpoint)=0
+  AND (SELECT COUNT(*) FROM post_purchase_executions)=0
+  AND EXISTS (SELECT 1 FROM post_purchase_installation
+    WHERE singleton=1 AND merchant_id=?1 AND environment='test'))
+ OR ((SELECT COUNT(*) FROM post_purchase_installation)=1
   AND (SELECT COUNT(*) FROM post_purchase_checkpoint)=1
   AND NOT EXISTS (SELECT 1 FROM post_purchase_executions
     WHERE merchant_id IS NOT ?1 OR environment IS NOT 'test')
@@ -74,6 +79,9 @@ def statements(merchant, apply=False):
 
 def classify(status, merchant):
     if status["installation_count"] == status["checkpoint_count"] == status["execution_count"] == 0:
+        return "uninitialised"
+    if (status["installation_count"] == 1 and status["checkpoint_count"] == status["execution_count"] == 0
+            and status["installation_merchant"] == merchant and status["installation_environment"] == "test"):
         return "uninitialised"
     if (status["installation_count"] == status["checkpoint_count"] == 1
             and status["foreign_execution_count"] == 0

@@ -62,7 +62,6 @@ def test_empty_outbox_initialises_zero_and_partial_insert_rolls_back():
 
 
 @pytest.mark.parametrize("seed", [
-    "INSERT INTO post_purchase_installation VALUES (1,'merchant','test')",
     "INSERT INTO post_purchase_checkpoint VALUES (1,'merchant','test',0,0)",
     "INSERT INTO post_purchase_installation VALUES (1,'other','test');"
     "INSERT INTO post_purchase_checkpoint VALUES (1,'other','test',0,0)",
@@ -89,6 +88,16 @@ def test_scope_guard_rechecks_after_dry_run():
         with pytest.raises(sqlite3.OperationalError):
             batch(db, True)
         assert db.execute("SELECT COUNT(*) FROM post_purchase_checkpoint").fetchone()[0] == 0
+
+
+def test_matching_fulfilment_binding_can_initialize_a_fresh_fence():
+    with database() as db:
+        db.execute("INSERT INTO post_purchase_installation VALUES (1,'merchant','test')")
+        db.execute("INSERT INTO outbox VALUES (7)")
+        assert installer.classify(batch(db), "merchant") == "uninitialised"
+        status = batch(db, True)
+        assert status["activation_watermark"] == status["last_outbox_id"] == 7
+        assert installer.classify(status, "merchant") == "retained"
 
 
 @pytest.mark.parametrize("merchant,environment", [("other", "test"), ("merchant", "live"), ("other", "live")])

@@ -390,11 +390,13 @@ class PostPurchaseOperator:
         nodes, _ = graph(self, post_purchase_modes={role: mode}, email_provider=email_provider,
                          actions_override=actions_override)
         errors = self.worker_binding_errors(role, nodes[role], actual, version)
-        if allow_legacy_admission and role == "source":
+        if allow_legacy_admission:
             present = {item["name"] for item in actual["resources"]["bindings"]}
-            for name in ("CHECKOUT_STORE_RATE_LIMITER", "CHECKOUT_STATUS_RATE_LIMITER"):
+            legacy_names = (("CHECKOUT_STORE_RATE_LIMITER", "CHECKOUT_STATUS_RATE_LIMITER", "CARTRAY_MERCHANT_ID")
+                            if role == "source" else ("MERCHANT_ID", "MERCHANT_NAME", "STOREFRONT_ORIGIN"))
+            for name in legacy_names:
                 if name not in present:
-                    missing = f"source.bindings.{name}: missing/wrong type"
+                    missing = f"{role}.bindings.{name}: missing/wrong type"
                     errors = [error for error in errors if error != missing]
         if errors:
             raise ValueError("; ".join(errors))
@@ -412,9 +414,10 @@ class PostPurchaseOperator:
             migration = self.state.get("post_purchase_provider_migration", {})
             previous = (migration.get("from") if actual["id"] == migration.get("disabled_versions", {}).get(role)
                         else None)
-            actions = ([dict(sorted(a.items())) for a in
-                        json.loads(self.provider_migration_bundle(migration)["old_actions_raw"])["actions"]]
-                       if previous else None)
+            actions = None
+            if previous:
+                old = json.loads(self.provider_migration_bundle(migration)["old_actions_raw"])
+                actions = old if old.get("schema") == 2 else [dict(sorted(a.items())) for a in old["actions"]]
             self.check_post_purchase_version(role, "disabled", actual, actual["id"], previous, actions,
                                              allow_legacy_admission=True)
 

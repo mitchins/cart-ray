@@ -319,13 +319,6 @@ def test_worker_drain_calls_scoped_handler_and_never_replays(monkeypatch, respon
 
     db = setup_database()
     seen = []
-    action = {
-        "workflow_key": "delivery",
-        "offer_keys": ["product"],
-        "handler": "service",
-        "config_ref": "private/config",
-        "config_digest": "a" * 64,
-    }
 
     class Request:
         @staticmethod
@@ -356,7 +349,7 @@ def test_worker_drain_calls_scoped_handler_and_never_replays(monkeypatch, respon
         CARTRAY_POST_PURCHASE_MODE="test",
         CARTRAY_POST_PURCHASE_TOKEN="t" * 32,
         POST_PURCHASE_HANDLER=Service(),
-        CARTRAY_POST_PURCHASE_CONFIG=json.dumps({"merchant": "store", "environment": "test", "actions": [action]}),
+        CARTRAY_MERCHANT_ID="store",
     )
     asyncio.run(worker._drain_post_purchase(env))
     asyncio.run(worker._drain_post_purchase(env))
@@ -406,18 +399,26 @@ def test_worker_handler_timeout_is_held_and_never_resent(monkeypatch):
         return await original_wait_for(awaitable, timeout=0.01 if timeout == 8 else timeout)
 
     monkeypatch.setattr(worker.asyncio, "wait_for", short_handler_timeout)
-    action = {"workflow_key": "delivery", "offer_keys": ["product"], "handler": "service",
-              "config_ref": "private/config", "config_digest": "a" * 64}
     env = SimpleNamespace(
         DB=Database(db), CARTRAY_ENVIRONMENT="test", CARTRAY_POST_PURCHASE_MODE="test",
         CARTRAY_POST_PURCHASE_TOKEN="t" * 32, POST_PURCHASE_HANDLER=Service(),
-        CARTRAY_POST_PURCHASE_CONFIG=json.dumps({"merchant": "store", "environment": "test", "actions": [action]}),
+        CARTRAY_MERCHANT_ID="store",
     )
     asyncio.run(worker._drain_post_purchase(env))
     asyncio.run(worker._drain_post_purchase(env))
     assert len(calls) == 1
     assert db.execute("SELECT state FROM post_purchase_executions").fetchone()[0] == "uncertain"
     assert db.execute("SELECT last_outbox_id FROM post_purchase_checkpoint").fetchone()[0] == 2
+
+
+def test_legacy_workflow_binding_does_not_authorize_order_wide_receipts():
+    from types import SimpleNamespace
+
+    from cartray.worker import _drain_post_purchase
+
+    env = SimpleNamespace(CARTRAY_ENVIRONMENT="test", CARTRAY_POST_PURCHASE_MODE="test",
+                          CARTRAY_POST_PURCHASE_CONFIG='{"legacy":true}')
+    asyncio.run(_drain_post_purchase(env))
 
 
 def test_order_receipt_collapses_workflows_and_replay_without_backfill():
