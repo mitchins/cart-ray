@@ -1,0 +1,48 @@
+{
+  "schema": 1,
+  "merchant": "squirrel-demo",
+  "channel": "google",
+  "account": "test-account",
+  "catalogue": "primary",
+  "source": "legacy",
+  "captured_at": "2026-11-20T00:00:00Z",
+  "coverage": "complete",
+  "content_language": "en",
+  "feed_label": "AU",
+  "items": [
+    {
+      "item_id": "external-456",
+      "merchant_product_id": "variant-blue",
+      "landing_url": "https://example.test/product/Thing/?variant=Blue",
+      "canonical_url": "https://example.test/product/Thing/",
+      "image_url": "https://example.test/Images/Blue.webp",
+      "title": "Blue",
+      "description": "A blue item",
+      "price": "1.25 AUD",
+      "availability": "in stock",
+      "group_id": "family",
+      "published": true,
+      "eligible": true,
+      "condition": "new",
+      "attributes": {
+        "color": "blue"
+      }
+    },
+    {
+      "item_id": "external-123",
+      "merchant_product_id": "enquiry",
+      "landing_url": "https://example.test/enquiry/",
+      "canonical_url": "https://example.test/enquiry/",
+      "image_url": "https://example.test/enquiry.webp",
+      "title": "Enquire",
+      "description": "A service",
+      "price": "0.00 AUD",
+      "availability": "out of stock",
+      "group_id": null,
+      "published": true,
+      "eligible": false,
+      "condition": "new",
+      "attributes": {}
+    }
+  ]
+}
