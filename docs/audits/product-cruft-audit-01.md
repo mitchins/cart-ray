@@ -42,6 +42,21 @@ Status labels describe source/declared graph, not proof of current hosted config
 | Proposed fulfilment #90 [`fulfilment.py`](https://github.com/mitchins/cart-ray/blob/164ea67664f2/src/cartray/fulfilment.py) | Purchased resource identities, private/external access, mixed providers | proposed entitlement/capability tables, private storage bindings and notification intents | **REVISE / SPLIT**: keep durable purchase access; separate grants from notification composition and per-workflow mail. |
 | Proposed Reviews Cloudflare sender #92 [`diff`](https://github.com/mitchins/cart-ray/pull/92/files) | Adds Cloudflare to separate initial Reviews sender | another provider configuration, credential, receipt table and operator transition | **CLOSE, do not merge as designed**; preserve branch and evidence for reuse in common delivery. Do not touch retained hosted state. |
 
+### Customer email call sites
+
+The checked-in runtime and example source contains these direct delivery implementations. Each uses its own claim/configuration today; shared names do not imply shared state. This static inventory does not prove which stand-alone services are currently deployed.
+
+| Direct sender | Actual use and disposition |
+|---|---|
+| [`modules/post-purchase/transactional-email/worker.mjs`](../../modules/post-purchase/transactional-email/worker.mjs) | Private test workflow handler; SMTP2GO or Cloudflare. Consolidate provider delivery into the receipt boundary. |
+| [`modules/reviews/initial-dispatch/worker.mjs`](../../modules/reviews/initial-dispatch/worker.mjs) | Independent SMTP2GO test initial review request on the due queue. PR #92 adds another provider to this path; do not add another default sender. |
+| [`modules/reviews/smtp2go-recovery/worker.mjs`](../../modules/reviews/smtp2go-recovery/worker.mjs), called by [`dispatch/worker.mjs`](../../modules/reviews/dispatch/worker.mjs) | Optional, separately bound recovery email. Consolidate the provider call but retain scoped recovery and uncertain-outcome behavior. |
+| [`modules/reviews/consent/test_email_transport.mjs`](../../modules/reviews/consent/test_email_transport.mjs), called by [`authority.mjs`](../../modules/reviews/consent/authority.mjs) | Test email-verification code for the superseded post-checkout journey. Not in the standard installer graph; deployed use remains unverified. |
+| [`examples/ep-uat/delivery_email.py`](../../examples/ep-uat/delivery_email.py) | Local EP UAT SMTP2GO experiment with its own `uat_delivery_emails` SQLite claim keyed by order. It is not the supported hosted handler; retain evidence and retire the example only after its remaining callers are checked. |
+| [`modules/reviews/tools/test_mailbox.py`](../../modules/reviews/tools/test_mailbox.py) | Local Maildir sink for synthetic tests; it does not send external mail. Keep only as useful test tooling, not another merchant email provider. |
+
+Provider-activity reconciliation queries SMTP2GO history but does not send an email. Stripe may independently send its own receipt according to account settings; no claim is made that this external configuration can include CartRay capabilities.
+
 ### Current topology and event paths
 
 ```mermaid
