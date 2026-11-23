@@ -33,6 +33,8 @@ def validate_email_credential(credentials, provider):
              isinstance(value, str) and re.fullmatch(r"[!-~]{20,1024}", value))
     if not valid:
         raise ValueError("invalid test email provider credential")
+    if provider == "cloudflare" and value == credentials.get("cloudflare_api_token"):
+        raise ValueError("email sender credential must differ from the Cloudflare operator credential")
 
 
 def eligible_offers(merchant_inputs, lock):

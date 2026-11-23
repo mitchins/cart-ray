@@ -563,3 +563,11 @@ def test_schema_check_requires_current_source_migrations(tmp_path):
     installation.state["migration_ledgers"]["reviews"] = installation.state["migration_ledgers"]["reviews"][:-1]
     with pytest.raises(ValueError, match="source migrations differ"):
         installation.check_schema()
+
+
+def test_cloudflare_email_credential_cannot_be_operator_token():
+    shared = "same-secret-" * 3
+    with pytest.raises(ValueError, match="must differ"):
+        operations.validate_email_credential(
+            {"cloudflare_email_api_token": shared, "cloudflare_api_token": shared}, "cloudflare"
+        )
