@@ -88,11 +88,13 @@ function formatTotal(session) {
   if (!Number.isSafeInteger(session.amount_total) || session.amount_total < 0 ||
       !/^[a-z]{3}$/.test(session.currency || '')) return '';
   try {
-    const format = new Intl.NumberFormat('en', {style:'currency', currency:session.currency.toUpperCase()});
-    // Stripe charges ISK and UGX in hundredths for backwards compatibility,
-    // even though their normal display format has no decimal places.
-    const units = ['isk', 'ugx'].includes(session.currency)
-      ? 100 : 10 ** format.resolvedOptions().maximumFractionDigits;
+    // Stripe charge units differ from locale display defaults for some currencies.
+    const zero = new Set(['bif','clp','djf','gnf','jpy','kmf','krw','mga','pyg','rwf','vnd','vuv','xaf','xof','xpf']);
+    const digits = zero.has(session.currency) ? 0 : 2;
+    const displayDigits = ['isk', 'ugx'].includes(session.currency) ? 0 : digits;
+    const format = new Intl.NumberFormat('en', {style:'currency', currency:session.currency.toUpperCase(),
+      minimumFractionDigits:displayDigits, maximumFractionDigits:displayDigits});
+    const units = 10 ** digits;
     return `\nTotal: ${format.format(session.amount_total / units)}`;
   } catch { return ''; }
 }

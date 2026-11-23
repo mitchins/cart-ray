@@ -93,6 +93,14 @@ test('Stripe special-case charge units use hundredths for ISK and UGX', async ()
   }
 });
 
+test('Stripe two-decimal charges retain fractions when locale defaults omit them', async () => {
+  for (const currency of ['huf','idr','cop']) {
+    const p=provider({currency,amount:1045});
+    assert.equal((await handle(request(),env,p.fetch)).status,200);
+    assert.match(JSON.parse(p.calls.at(-1).init.body).text_body,/10\.45/);
+  }
+});
+
 test('merchant name bound counts Unicode code points', async () => {
   const p=provider();
   assert.equal((await handle(request(),{...env,MERCHANT_NAME:'🌲'.repeat(51)},p.fetch)).status,200);
