@@ -56,6 +56,13 @@ def main():
                     "FROM order_review_messages WHERE merchant_id=" + merchant +
                     " AND environment='test' AND state IN ('claimed','uncertain') "
                     f"ORDER BY attempted_at,order_id LIMIT 100 OFFSET {args.offset};")
+            sql += ("SELECT g.acquisition_id AS order_id,'review-recovery' AS purpose,g.state,"
+                    "g.generation_id,g.delivery_identity,g.prepared_at "
+                    "FROM invitation_generations g JOIN order_review_messages m "
+                    "ON m.merchant_id=g.store_key AND m.environment=g.environment AND m.order_id=g.acquisition_id "
+                    "WHERE g.store_key=" + merchant + " AND g.environment='test' "
+                    "AND g.state IN ('dispatching','uncertain') "
+                    f"ORDER BY g.prepared_at,g.generation_id LIMIT 100 OFFSET {args.offset};")
     else:
         if (not args.confirm_worker_paused or not args.order or not IDENTIFIER.fullmatch(args.order)
                 or not args.workflow or not IDENTIFIER.fullmatch(args.workflow)

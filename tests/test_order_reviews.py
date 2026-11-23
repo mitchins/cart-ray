@@ -419,3 +419,97 @@ def test_scheduled_notification_drain_is_awaited(purchase):
     run(entry.scheduled(SimpleNamespace(cron="* * * * *"), env, object()))
     assert [message["type"] for message in sent] == ["order_confirmation", "review_followup"]
     assert db.conn.execute("SELECT state FROM order_review_messages").fetchone()[0] == "accepted"
+
+
+def test_rejected_recovery_is_retired_before_later_requests(purchase, fixture_catalogue):
+    from cartray.models import CheckoutRedirect
+
+    db, env, sent, first_order = purchase
+    env.CARTRAY_REVIEW_SETTINGS = json.dumps({"timing": "receipt"})
+    env.CARTRAY_REVIEW_INVITATION_KEY = "i" * 32
+    run(worker._drain_post_purchase(env))
+    gateway = FakePaymentGateway(redirects={"previous": CheckoutRedirect("occupied", "https://checkout.invalid")})
+    store = D1OrderStore(db)
+    checkout = CheckoutService(fixture_catalogue, store, gateway, review_invitations_enabled=True)
+    redirect = run(checkout.checkout(CheckoutRequest(
+        "later-recovery", fixture_catalogue.version, (CanonicalItem("TEST-BUNDLE", 1),), True)))
+    later_order = gateway.requests[0].order_id
+    run(store.confirm_settlement(order_id=later_order, session_id=redirect.session_id, event_id="evt_later",
+                                 payload={"id":"evt_later"}, payload_sha256="sha256:later",
+                                 payment_status="paid", amount_total_minor=100, now=2_000_000_000))
+    run(worker._drain_post_purchase(env))
+    assert len(sent) == 2
+    for order, when, key in ((first_order,100,'a'), (later_order,101,'b')):
+        db.conn.execute("INSERT INTO review_recovery_requests VALUES ('merchant','test',?,?,?,'pending')",
+                        (order,key*64,when))
+    db.conn.commit()
+    original = env.POST_PURCHASE_HANDLER.fetch
+
+    async def reject_old_request(request):
+        body = json.loads(request.body)
+        if body['type'] == 'recipient_evidence' and body['order_id'] == first_order:
+            return SimpleNamespace(status=403)
+        return await original(request)
+
+    env.POST_PURCHASE_HANDLER.fetch = reject_old_request
+    run(worker._drain_post_purchase(env))
+    run(worker._drain_post_purchase(env))
+    states = dict(db.conn.execute('SELECT acquisition_id,state FROM review_recovery_requests'))
+    assert states == {first_order:'failed',later_order:'fulfilled'}
+    assert len(sent) == 3 and sent[-1]['order_id'] == later_order
+
+
+def test_recovery_reserves_send_budget_and_reuses_prepared_generation(purchase, monkeypatch):
+    import time
+
+    db, env, sent, order = purchase
+    env.CARTRAY_REVIEW_SETTINGS = json.dumps({"timing":"receipt"})
+    env.CARTRAY_REVIEW_INVITATION_KEY = 'i'*32
+    run(worker._drain_post_purchase(env))
+    db.conn.execute("INSERT INTO review_recovery_requests VALUES ('merchant','test',?,?,100,'pending')",(order,'e'*64))
+    db.conn.commit()
+    clock = [100]
+    monkeypatch.setattr(worker,'time',SimpleNamespace(time=time.time,monotonic=lambda:clock[0]))
+    original = env.POST_PURCHASE_HANDLER.fetch
+
+    async def slow_evidence(request):
+        if json.loads(request.body)['type']=='recipient_evidence':
+            clock[0] += 9
+        return await original(request)
+
+    env.POST_PURCHASE_HANDLER.fetch = slow_evidence
+    run(worker._drain_review_recovery(env,env.POST_PURCHASE_HANDLER,env.CARTRAY_POST_PURCHASE_TOKEN,deadline=121))
+    assert db.conn.execute('SELECT state FROM invitation_generations').fetchone()[0] == 'prepared'
+    assert len(sent) == 1
+    env.POST_PURCHASE_HANDLER.fetch = original
+    clock[0] = 100
+    run(worker._drain_review_recovery(env,env.POST_PURCHASE_HANDLER,env.CARTRAY_POST_PURCHASE_TOKEN,deadline=121))
+    assert db.conn.execute('SELECT state FROM invitation_generations').fetchone()[0] == 'accepted'
+    assert db.conn.execute('SELECT count(*) FROM invitation_generations').fetchone()[0] == 1
+    assert len(sent) == 2
+
+
+def test_recovery_cancellation_after_claim_is_recorded_uncertain(purchase,monkeypatch):
+    import time
+
+    from cartray_reviews import invitations
+
+    db, env, sent, order = purchase
+    env.CARTRAY_REVIEW_SETTINGS = json.dumps({"timing":"receipt"})
+    env.CARTRAY_REVIEW_INVITATION_KEY = 'i'*32
+    run(worker._drain_post_purchase(env))
+    db.conn.execute("INSERT INTO review_recovery_requests VALUES ('merchant','test',?,?,100,'pending')",(order,'f'*64))
+    db.conn.commit()
+    original = invitations.claim_delivery
+
+    async def committed_then_cancelled(*args,**kwargs):
+        await original(*args,**kwargs)
+        raise asyncio.CancelledError()
+
+    monkeypatch.setattr(invitations,'claim_delivery',committed_then_cancelled)
+    with pytest.raises(asyncio.CancelledError):
+        run(worker._drain_review_recovery(env,env.POST_PURCHASE_HANDLER,env.CARTRAY_POST_PURCHASE_TOKEN,
+                                         deadline=time.monotonic()+21))
+    assert db.conn.execute('SELECT state FROM invitation_generations').fetchone()[0] == 'uncertain'
+    run(worker._drain_post_purchase(env))
+    assert len(sent) == 1

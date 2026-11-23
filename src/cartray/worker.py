@@ -886,15 +886,21 @@ async def _drain_order_notifications(env):
         return
 
 
-async def _mail_call(service, token, envelope):
+class MailRequestRejected(ValueError):
+    """The private handler definitively refused this request before delivery."""
+
+
+async def _mail_call(service, token, envelope, *, fetch_timeout=8):
     response = await asyncio.wait_for(
         service.fetch(
             _internal_post(
                 "https://post-purchase-handler.internal/", token, json.dumps(envelope, separators=(",", ":"))
             )
         ),
-        8,
+        fetch_timeout,
     )
+    if 400 <= response.status < 500:
+        raise MailRequestRejected("mail request rejected")
     if response.status != 200:
         raise ValueError("mail service unavailable")
     value = await asyncio.wait_for(response.json(), 2)
@@ -1018,7 +1024,7 @@ async def _drain_review_followups(env, service, token, *, deadline):
         .all()
     )
     for message in rows:
-        if time.monotonic() + 10 >= deadline:
+        if time.monotonic() + 12 >= deadline:
             return
         links = None
         settings = order_reviews.ReviewSettings.parse(getattr(env, "CARTRAY_REVIEW_SETTINGS", "{}"))
@@ -1122,6 +1128,9 @@ async def _drain_review_recovery(env, service, token, *, deadline):
             "SELECT external_session_id FROM checkout_sessions WHERE order_id=? AND settlement_state='confirmed'",
             message["order_id"],
         )
+        if not purchase or not purchase.get("external_session_id"):
+            await _fail_order_recovery(env.DB, merchant, message)
+            continue
         items = _results(
             await env.DB.prepare("SELECT product_key,quantity FROM order_items WHERE order_id=?")
             .bind(message["order_id"])
@@ -1136,7 +1145,12 @@ async def _drain_review_recovery(env, service, token, *, deadline):
             "access_url": None,
             "items": [{**item, "title": item["product_key"]} for item in items],
         }
-        evidence = await _mail_call(service, token, envelope)
+        try:
+            evidence = await _mail_call(service, token, envelope, fetch_timeout=3)
+        except MailRequestRejected:
+            await _fail_order_recovery(env.DB, merchant, message)
+            continue
+
         recipient = order_reviews.recipient_hash(env.CARTRAY_RECIPIENT_HASH_KEY, merchant, "test", evidence["email"])
         if not hmac.compare_digest(recipient, message["recipient_hash"]):
             await _fail_order_recovery(env.DB, merchant, message)
@@ -1168,17 +1182,21 @@ async def _drain_review_recovery(env, service, token, *, deadline):
         )
         if draft["state"] != "prepared":
             continue  # Accepted, dispatching and uncertain deliveries are never resent.
-        await claim_delivery(
-            env.DB,
-            store=merchant,
-            environment="test",
-            acquisition=message["order_id"],
-            generation=draft["generation_id"],
-            delivery=draft["delivery_identity"],
-            now=now,
-        )
+        # Reserve the final send, result read and durable outcome write before
+        # claiming. A prepared generation can safely resume without sending.
+        if time.monotonic() + 12 >= deadline:
+            return
         outcome, reference = "uncertain", None
         try:
+            await claim_delivery(
+                env.DB,
+                store=merchant,
+                environment="test",
+                acquisition=message["order_id"],
+                generation=draft["generation_id"],
+                delivery=draft["delivery_identity"],
+                now=now,
+            )
             origin = _origin(env.CARTRAY_STOREFRONT_ORIGIN)
             result = await _mail_call(
                 service,

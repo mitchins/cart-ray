@@ -71,3 +71,19 @@ def test_many_uncertain_rows_do_not_hide_claimed_executions(monkeypatch):
     assert db.execute(checkpoint_query).fetchone() == (4, 0, 5, "blocked")
     claim_query = calls[0][0][0][-1].split(";", 1)[1]
     assert db.execute(claim_query).fetchone()[0] == "blocked"
+
+
+def test_shared_inspection_includes_native_recovery_claims_without_capabilities(monkeypatch):
+    calls = invoke(monkeypatch, "inspect", "--account", "a"*32, "--database", "merchant-test",
+                   "--merchant", "merchant", "--include-review-followups")
+    query = calls[0][0][0][-1].split(';')[3]
+    db = sqlite3.connect(':memory:')
+    db.executescript("CREATE TABLE invitation_generations (store_key TEXT,environment TEXT,acquisition_id TEXT,"
+                     "state TEXT,generation_id TEXT,delivery_identity TEXT,prepared_at INTEGER,token_hash TEXT);"
+                     "CREATE TABLE order_review_messages (merchant_id TEXT,environment TEXT,order_id TEXT);")
+    db.execute("INSERT INTO invitation_generations VALUES ('merchant','test','order','dispatching',?,?,1,?)",
+               ('b'*64,'c'*64,'private-token-hash'))
+    db.execute("INSERT INTO order_review_messages VALUES ('merchant','test','order')")
+    row = db.execute(query).fetchone()
+    assert row == ('order','review-recovery','dispatching','b'*64,'c'*64,1)
+    assert 'token_hash' not in query and 'recipient' not in query
