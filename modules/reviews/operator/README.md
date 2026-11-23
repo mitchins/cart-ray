@@ -425,6 +425,29 @@ Repeating `pause` is safe. Upgrades and compatible rollbacks retain the paused
 intent; only explicit activation resumes it. Keep the installation paused after
 qualification.
 
+`pause` alone does not change the initial sender Worker's `INITIAL_SEND_MODE`. To pause
+queues **and** publish and verify an initial sender with `INITIAL_SEND_MODE=disabled`, run:
+
+```sh
+uv run --locked python modules/reviews/operator/operate.py --directory /private/acorn-install --credentials /private/credentials.json sender-off
+```
+
+An in-flight send can still finish. Confirm its outcome separately. This command
+does not control an independently deployed replacement/recovery sender, which
+must be disabled separately if present. This does
+not reset the activation watermark, unsubscribe state or existing claims.
+To select the test-only Cloudflare Reviews transport for a new installation,
+set `reviews_email_provider` to `cloudflare` in the non-secret configuration
+and supply `cloudflare_email_api_token` in the private credential handoff.
+The token needs Email Sending permission for the configured Cloudflare account;
+the sender and one approved test recipient remain explicit. The default remains
+SMTP2GO for existing installations. Configure the Reviews provider independently
+of the post-purchase provider; neither path falls back to the other. To change an
+existing installation, run `sender-off` first, retain the original credential
+handoff and invoke `reviews-provider --provider cloudflare` with both the
+existing and Cloudflare test credentials. Then migrate, build and deploy the new
+release OFF. Explicit activation is separate and does not backfill old orders.
+
 To intentionally resume, repeat the documented explicit
 `activate --enable-test-delivery` command. It verifies the retained installation
 before resuming queues and preserves the original no-backfill fence. Retained

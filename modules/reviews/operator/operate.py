@@ -116,6 +116,7 @@ def validate_config(config):
         "post_purchase_config",
         "post_purchase_config_sha256",
         "post_purchase_email_provider",
+        "reviews_email_provider",
     }
     if not isinstance(config, dict) or set(config) - required - optional or required - set(config):
         raise ValueError("installation config has missing or unknown fields")
@@ -175,6 +176,8 @@ def validate_config(config):
             raise ValueError(f"invalid public {name}")
     if type(config.get("reviews_enabled", True)) is not bool:
         raise ValueError("reviews_enabled must be a boolean")
+    if config.get("reviews_email_provider", "smtp2go") not in ("smtp2go", "cloudflare"):
+        raise ValueError("unsupported Reviews email provider")
     if type(config.get("review_invitation_default_checked", True)) is not bool:
         raise ValueError("review_invitation_default_checked must be a boolean")
     if config.get("theme", "minimal") not in ("minimal", "studio", "classic"):
@@ -270,31 +273,26 @@ class Installation(PostPurchaseOperator):
                 self.config[field] = str(self.directory / self.config[field])
         self.credentials = credentials
         if credentials is not None:
-            required = {
-                "cloudflare_api_token",
-                "stripe_test_key",
-                "smtp2go_api_key",
-                "approved_test_email",
-                "test_sender",
-            }
+            required = {"cloudflare_api_token", "stripe_test_key"}
             mailing = self.config["reviews_enabled"] or self.has_post_purchase
+            if mailing:
+                required.update({"approved_test_email", "test_sender"})
             provider = credential_provider or self.post_purchase_email_provider
+            reviews_provider = self.config.get("reviews_email_provider", "smtp2go")
+            if self.config["reviews_enabled"]:
+                required.add(PROVIDER_KEYS[reviews_provider])
             if self.has_post_purchase:
-                if not self.config["reviews_enabled"]:
-                    required.remove("smtp2go_api_key")
                 required.add(PROVIDER_KEYS[provider])
-            if not mailing:
-                required -= {"smtp2go_api_key", "approved_test_email", "test_sender"}
             if not required.issubset(credentials) or any(
                 not isinstance(credentials[key], str) or not credentials[key] for key in required
             ):
                 raise ValueError("credential handoff is incomplete; use the documented private JSON schema")
             if not credentials["stripe_test_key"].startswith(("sk_test_", "rk_test_")):
                 raise ValueError("only a Stripe test credential is accepted")
-            if mailing:
+            if self.has_post_purchase:
                 validate_email_credential(credentials, provider)
-                if self.config["reviews_enabled"] and provider != "smtp2go":
-                    validate_email_credential(credentials, "smtp2go")
+            if self.config["reviews_enabled"]:
+                validate_email_credential(credentials, reviews_provider)
             for field in ("approved_test_email", "test_sender") if mailing else ():
                 if not re.fullmatch(r"[^\s@<>]+@[^\s@<>]+\.[A-Za-z]{2,}", credentials[field]):
                     raise ValueError(f"invalid approved test mailbox field {field}")
@@ -889,6 +887,8 @@ class Installation(PostPurchaseOperator):
                          if key in self.config})
         if "post_purchase_email_provider" in self.config:
             identity["post_purchase_email_provider"] = self.config["post_purchase_email_provider"]
+        if "reviews_email_provider" in self.config:
+            identity["reviews_email_provider"] = self.config["reviews_email_provider"]
         encoded = json.dumps(identity, sort_keys=True, separators=(",", ":"))
         return digest(encoded.encode())
 
@@ -1587,6 +1587,55 @@ class Installation(PostPurchaseOperator):
             "queued_work_retained": True,
         }
 
+    def sender_off(self):
+        """Pause Reviews queues, then publish and verify a hard-disabled sender version."""
+        if not self.config["reviews_enabled"] or not self.state.get("deployment", {}).get("complete"):
+            raise ValueError("a completed Reviews deployment is required")
+        self.pause()
+        deployment = self.state["deployment"]
+        build = json.loads((self.directory / "releases" / deployment["commit"] / "build.json").read_text())
+        nodes, _ = graph(self, deployment["versions"], sending=False)
+        node = nodes["sender"]
+        version = self.api.upload(self.name("sender"), self.artifact_modules("sender", build), {
+            "main_module": "sender.mjs", "bindings": node["bindings"] + secret_bindings(self, "sender"),
+            "compatibility_date": "2026-08-31",
+        })
+        self.api.publish(self.name("sender"), version["id"])
+        actual = self.api.version(self.name("sender"))
+        errors = self.worker_binding_errors("sender", node, actual, version["id"])
+        if errors:
+            raise ValueError("sender OFF verification failed: " + "; ".join(errors))
+        deployment["versions"]["sender"] = version["id"]
+        deployment["sending"] = False
+        self.save()
+        return {"phase": "paused", "sender_mode": "disabled", "version": version["id"],
+                "activation_watermark": self.state.get("activation_watermark")}
+
+    def reviews_provider(self, provider):
+        """Select a test provider only after queues and the sender are verifiably off."""
+        if (not self.config["reviews_enabled"] or provider not in ("smtp2go", "cloudflare")
+                or not self.credentials):
+            raise ValueError("a Reviews test installation and protected provider credentials are required")
+        if (self.state.get("phase") != "paused" or not self.state.get("automation_paused")
+                or self.state.get("deployment", {}).get("sending") is not False):
+            raise ValueError("run sender-off before changing the Reviews provider")
+        self.check_reviews_handoff()
+        validate_email_credential(self.credentials, provider)
+        deployment = self.state["deployment"]
+        nodes, _ = graph(self, deployment["versions"], sending=False)
+        current = self.api.version(self.name("sender"))
+        errors = self.worker_binding_errors("sender", nodes["sender"], current, deployment["versions"]["sender"])
+        if errors:
+            raise ValueError("current OFF sender differs: " + "; ".join(errors))
+        if self.config.get("reviews_email_provider", "smtp2go") == provider:
+            return {"reviews_provider": provider, "phase": "paused", "changed": False}
+        self.config["reviews_email_provider"] = provider
+        self.state["config"]["reviews_email_provider"] = provider
+        self.state.pop("build", None)
+        self.save()
+        return {"reviews_provider": provider, "phase": "paused", "changed": True,
+                "next": "migrate, build and deploy the new release OFF; explicitly activate only for an approved test"}
+
     def private_source_visibility_errors(self):
         if self.config.get("source_mode", "public") != "private":
             return []
@@ -1629,6 +1678,9 @@ class Installation(PostPurchaseOperator):
             for name in post_purchase_secret_bindings(role, expected["vars"].get("EMAIL_PROVIDER", "smtp2go")):
                 if observed.get(name, {}).get("type") != "secret_text":
                     errors.append(f"{role}.bindings.{name}: missing/wrong secret type")
+        if role == "sender" and self.config.get("reviews_email_provider", "smtp2go") == "cloudflare":
+            if observed.get("CLOUDFLARE_EMAIL_API_TOKEN", {}).get("type") != "secret_text":
+                errors.append("sender.bindings.CLOUDFLARE_EMAIL_API_TOKEN: missing/wrong secret type")
         return errors
 
     def doctor(self):
@@ -1726,6 +1778,12 @@ class Installation(PostPurchaseOperator):
             "WHERE store_key=? AND environment='test' ORDER BY accepted_at",
             [self.config.get("store_key", "acorn-store")],
         )
+        cloudflare_deliveries = self.api.query(
+            self.db("reviews"),
+            "SELECT delivery_identity,provider_message_id,accepted_at FROM review_cloudflare_deliveries "
+            "WHERE store_key=? AND environment='test' ORDER BY accepted_at",
+            [self.config.get("store_key", "acorn-store")],
+        )
         states = self.api.query(
             self.db("reviews"),
             "SELECT state,COUNT(*) AS count FROM invitation_generations "
@@ -1757,6 +1815,7 @@ class Installation(PostPurchaseOperator):
             "checkout_choices": choices,
             "checkpoint": checkpoint,
             "provider_acceptances": deliveries,
+            "cloudflare_provider_acceptances": cloudflare_deliveries,
             "generation_states": states,
             "public_subjects": public,
             "recipient_suppression_count": suppressed[0]["count"],
@@ -2005,7 +2064,8 @@ def main():
     commands = parser.add_subparsers(dest="command", required=True)
     plan = commands.add_parser("plan", help="write a non-secret plan; creates no cloud resources or keys")
     plan.add_argument("--config", type=Path, required=True)
-    for name in ("provision", "migrate", "build", "deploy", "verify", "doctor", "upgrade", "receipt", "pause"):
+    for name in ("provision", "migrate", "build", "deploy", "verify", "doctor", "upgrade", "receipt", "pause",
+                 "sender-off"):
         commands.add_parser(name)
     activation = commands.add_parser(
         "activate", help="explicitly authorize the fixed no-backfill fence and test delivery"
@@ -2021,6 +2081,8 @@ def main():
     pp_provider.add_argument("--provider", required=True, choices=tuple(PROVIDER_KEYS))
     pp_provider.add_argument("--allow-sender-change", action="store_true")
     pp_provider.add_argument("--allow-credential-change", action="store_true")
+    reviews_provider = commands.add_parser("reviews-provider", help="select a test Reviews email provider while OFF")
+    reviews_provider.add_argument("--provider", choices=("smtp2go", "cloudflare"), required=True)
     handoff_pin = commands.add_parser("attest-reviews-handoff", help="attest original test Reviews handoff")
     handoff_pin.add_argument("--original-handoff", type=Path, required=True)
     handoff_pin.add_argument("--expected-sender-version", required=True)
@@ -2064,11 +2126,15 @@ def main():
                 elif args.command == "post-purchase-reconfigure-provider":
                     result = installation.post_purchase_reconfigure_provider(
                         args.provider, args.allow_sender_change, args.allow_credential_change)
+                elif args.command == "reviews-provider":
+                    result = installation.reviews_provider(args.provider)
                 elif args.command == "attest-reviews-handoff":
                     result = installation.attest_reviews_handoff(
                         args.original_handoff, args.expected_sender_version, args.attest_original_handoff)
                 elif args.command == "rollback":
                     result = installation.rollback(args.release)
+                elif args.command == "sender-off":
+                    result = installation.sender_off()
                 elif args.command == "upgrade":
                     result = installation.upgrade()
                 elif args.command == "request":

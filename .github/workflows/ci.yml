@@ -43,6 +43,8 @@ jobs:
         run: REVIEWS_QUALIFICATION_BUILD=1 PYTHONPATH=modules/reviews/src uv run pytest modules/reviews/tests
       - name: Test Reviews recovery queue consumer
         run: node --test modules/reviews/tests/dispatch.test.mjs
+      - name: Test Cloudflare Reviews initial sender
+        run: node --test modules/reviews/tests/initial_dispatch.test.mjs modules/reviews/tests/initial_dispatch_cloudflare_workerd.test.mjs
       - name: Test Reviews synthetic due queue
         run: node --test modules/reviews/tests/automation_queue.test.mjs
       - name: Test resumable test-only installation operator
@@ -73,6 +75,8 @@ jobs:
         run: REVIEWS_TEST_VERBOSE=1 uv run python modules/reviews/tests/native_workerd.py
       - name: Exercise verified acquisition invitations on Workerd and D1
         run: REVIEWS_TEST_VERBOSE=1 uv run python modules/reviews/tests/native_acquisition_workerd.py
+      - name: Exercise Cloudflare receipt on Workerd and D1
+        run: REVIEWS_CLOUDFLARE_RECEIPT_TEST=1 uv run --locked python modules/reviews/tests/native_acquisition_workerd.py
       - name: Exercise Reviews no-backfill activation on Workerd and D1
         run: REVIEWS_TEST_VERBOSE=1 PYTHONPATH=modules/reviews/src uv run --locked python modules/reviews/tests/activation_workerd.py
       - name: Exercise initial delivery and withdrawal replay on Workerd and D1

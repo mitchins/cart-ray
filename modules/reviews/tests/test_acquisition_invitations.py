@@ -648,6 +648,64 @@ def test_replacement_is_pending_until_delivery_and_preserves_consumed_subjects()
     assert reviews.db.execute("SELECT COUNT(*) FROM native_review_acquisitions").fetchone()[0] == 2
 
 
+def test_cloudflare_receipt_is_atomic_idempotent_and_never_mislabeled_as_smtp():
+    from cartray_reviews.invitations import claim_delivery, prepare_replacement, record_delivery_outcome
+
+    reviews, commerce = stores()
+    issue(reviews, commerce)
+    replacement = asyncio.run(prepare_replacement(
+        reviews, store="store", environment="test", acquisition="order_1", request_key="cloudflare",
+        key_version="v2", secret=b"z" * 32, now=102, random_token=lambda: "f" * 64))
+    claim = dict(store="store", environment="test", acquisition="order_1", generation=replacement["generation_id"],
+                 delivery=replacement["delivery_identity"], now=102)
+    asyncio.run(claim_delivery(reviews, **claim))
+    outcome = claim | {"now": 200, "outcome": "accepted", "accepted_at": 103,
+                       "provider": "cloudflare", "provider_email_id": "<message@example.test>"}
+    reviews.db.execute("CREATE TRIGGER fail_cf BEFORE INSERT ON review_cloudflare_deliveries "
+                       "BEGIN SELECT RAISE(ABORT, 'injected'); END")
+    with pytest.raises(ValueError):
+        asyncio.run(record_delivery_outcome(reviews, **outcome))
+    assert reviews.db.execute("SELECT state FROM invitation_generations WHERE generation_id=?",
+                              (replacement["generation_id"],)).fetchone()[0] == "dispatching"
+    reviews.db.execute("DROP TRIGGER fail_cf")
+    assert asyncio.run(record_delivery_outcome(reviews, **outcome)) == {"state": "accepted"}
+    assert asyncio.run(record_delivery_outcome(reviews, **outcome)) == {"state": "accepted"}
+    saved = reviews.db.execute("SELECT provider_message_id FROM review_cloudflare_deliveries").fetchone()[0]
+    assert saved == "<message@example.test>"
+    assert reviews.db.execute("SELECT COUNT(*) FROM review_provider_deliveries").fetchone()[0] == 0
+    with pytest.raises(ValueError):
+        asyncio.run(record_delivery_outcome(reviews, **(outcome | {"provider_email_id": "<other@example.test>"})))
+    with pytest.raises(ValueError):
+        asyncio.run(record_delivery_outcome(reviews, **(outcome | {"provider": None, "provider_email_id": "smtp_id"})))
+
+
+def test_cloudflare_migration_adds_table_without_rewriting_existing_smtp_receipt():
+    from pathlib import Path
+
+    from cartray_reviews.invitations import claim_delivery, prepare_replacement, record_delivery_outcome
+
+    reviews, commerce = stores()
+    issue(reviews, commerce)
+    draft = asyncio.run(prepare_replacement(
+        reviews, store="store", environment="test", acquisition="order_1", request_key="existing-smtp",
+        key_version="v2", secret=b"z" * 32, now=102, random_token=lambda: "f" * 64))
+    identity = dict(store="store", environment="test", acquisition="order_1", generation=draft["generation_id"],
+                    delivery=draft["delivery_identity"], now=102)
+    asyncio.run(claim_delivery(reviews, **identity))
+    asyncio.run(record_delivery_outcome(reviews, **(identity | {"now": 200, "outcome": "accepted",
+                                                                "accepted_at": 103, "provider_email_id": "smtp_1"})))
+    before = tuple(reviews.db.execute("SELECT * FROM review_provider_deliveries").fetchone())
+    state = tuple(reviews.db.execute("SELECT state,accepted_at FROM invitation_generations WHERE generation_id=?",
+                                     (draft["generation_id"],)).fetchone())
+    reviews.db.execute("DROP TABLE review_cloudflare_deliveries")
+    migration = Path(__file__).resolve().parents[1] / "migrations/0034_cloudflare_delivery_receipts.sql"
+    reviews.db.executescript(migration.read_text())
+    assert tuple(reviews.db.execute("SELECT * FROM review_provider_deliveries").fetchone()) == before
+    assert tuple(reviews.db.execute("SELECT state,accepted_at FROM invitation_generations WHERE generation_id=?",
+                                    (draft["generation_id"],)).fetchone()) == state
+    assert reviews.db.execute("SELECT count(*) FROM review_cloudflare_deliveries").fetchone()[0] == 0
+
+
 def test_uncertain_delivery_cannot_be_replaced_or_activated_without_resolution():
     import secrets
 

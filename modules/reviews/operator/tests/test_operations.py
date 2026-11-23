@@ -41,6 +41,82 @@ def planned(tmp_path):
     )
 
 
+def test_sender_off_pauses_and_verifies_disabled_version_without_changing_fence(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    release = tmp_path / "releases/commit"
+    release.mkdir(parents=True)
+    (release / "build.json").write_text("{}")
+    calls = []
+    api = SimpleNamespace(
+        upload=lambda name, modules, metadata: calls.append(("upload", metadata)) or {"id": "off-version"},
+        publish=lambda name, version: calls.append(("publish", version)),
+        version=lambda name: {"id": "off-version", "resources": {"bindings": []}},
+    )
+    state = {"deployment": {"complete": True, "commit": "commit", "versions": {"sender": "on"}, "sending": True},
+             "activation_watermark": 42}
+    installation = SimpleNamespace(
+        config={"reviews_enabled": True}, state=state, directory=tmp_path, api=api,
+        pause=lambda: calls.append(("pause",)), name=lambda role: role,
+        artifact_modules=lambda role, build: {}, worker_binding_errors=lambda *args: [], save=lambda: None,
+    )
+    def disabled_graph(*args, **kwargs):
+        assert kwargs["sending"] is False
+        return {"sender": {"bindings": [{"name": "INITIAL_SEND_MODE", "type": "plain_text", "text": "disabled"}]}}, {}
+
+    monkeypatch.setattr(operations, "graph", disabled_graph)
+    monkeypatch.setattr(operations, "secret_bindings", lambda *args: [])
+    result = operations.Installation.sender_off(installation)
+    assert calls[0] == ("pause",) and calls[-1] == ("publish", "off-version")
+    assert calls[1][1]["bindings"][0]["text"] == "disabled"
+    assert result["sender_mode"] == "disabled" and result["activation_watermark"] == 42
+    assert state["deployment"]["sending"] is False and state["deployment"]["versions"]["sender"] == "off-version"
+    state["deployment"].update(sending=True, versions={"sender": "on"})
+    installation.worker_binding_errors = lambda *args: ["wrong version"]
+    with pytest.raises(ValueError, match="sender OFF verification failed"):
+        operations.Installation.sender_off(installation)
+    assert state["deployment"]["sending"] is True
+
+
+def test_reviews_cloudflare_provider_requires_its_own_test_credentials(tmp_path):
+    installation = planned(tmp_path)
+    installation.state["config"]["reviews_email_provider"] = "cloudflare"
+    installation.save()
+    credentials = {"cloudflare_api_token": "operator", "stripe_test_key": "sk_test_fixture",
+                   "approved_test_email": "test@example.org", "test_sender": "reviews@example.org",
+                   "cloudflare_email_api_token": "e" * 32}
+    selected = operations.Installation(installation.directory, credentials)
+    assert selected.config["reviews_email_provider"] == "cloudflare"
+    with pytest.raises(ValueError, match="incomplete"):
+        operations.Installation(installation.directory, {k: v for k, v in credentials.items()
+                                                         if k != "cloudflare_email_api_token"})
+
+
+def test_reviews_provider_change_requires_verified_off_and_preserves_fence(monkeypatch):
+    from types import SimpleNamespace
+
+    config = {"reviews_enabled": True}
+    state = {"phase": "paused", "automation_paused": True, "config": {}, "activation_watermark": 7,
+             "deployment": {"sending": False, "versions": {"sender": "off"}}, "build": "old"}
+    installation = SimpleNamespace(config=config, state=state,
+        credentials={"cloudflare_email_api_token": "x" * 32}, check_reviews_handoff=lambda: None,
+        api=SimpleNamespace(version=lambda name: {"id": "off"}), name=lambda role: role,
+        worker_binding_errors=lambda *args: [], save=lambda: None)
+    monkeypatch.setattr(operations, "graph", lambda *args, **kwargs: ({"sender": {}}, {}))
+    state["deployment"]["sending"] = True
+    with pytest.raises(ValueError, match="sender-off"):
+        operations.Installation.reviews_provider(installation, "cloudflare")
+    state["deployment"]["sending"] = False
+    installation.worker_binding_errors = lambda *args: ["sender version mismatch"]
+    with pytest.raises(ValueError, match="current OFF sender differs"):
+        operations.Installation.reviews_provider(installation, "cloudflare")
+    assert "reviews_email_provider" not in config
+    installation.worker_binding_errors = lambda *args: []
+    result = operations.Installation.reviews_provider(installation, "cloudflare")
+    assert result["changed"] and config["reviews_email_provider"] == "cloudflare"
+    assert state["activation_watermark"] == 7 and "build" not in state
+
+
 def test_plan_is_nonsecret_offline_and_test_only(tmp_path):
     installation = planned(tmp_path)
     assert installation.state["resources"] == {}
@@ -249,7 +325,7 @@ def migrated(tmp_path):
 def test_shared_real_sqlite_migration_chains_resume_without_reapplication(tmp_path):
     installation, cloud = migrated(tmp_path)
     first = installation.migrate()
-    assert first == {"commerce": 8, "subscriber": 2, "reviews": 33, "context": 2}
+    assert first == {"commerce": 8, "subscriber": 2, "reviews": 34, "context": 2}
     counts = {
         role: len(cloud.query(installation.db(role), "SELECT * FROM cartray_operator_migrations"))
         for role in operations.DATABASES
@@ -320,7 +396,7 @@ def test_shared_bindings_and_namespace_tampering_fail_closed(tmp_path):
     installation.migrate()
     assert len(cloud.databases) == 1
     assert {installation.db(role) for role in ("commerce", "reviews", "context")} == {"commerce-id"}
-    assert len(cloud.query("commerce-id", "SELECT * FROM cartray_operator_migrations")) == 45
+    assert len(cloud.query("commerce-id", "SELECT * FROM cartray_operator_migrations")) == 46
     cloud.query("commerce-id", "INSERT INTO cartray_operator_migrations VALUES ('unknown',1,'unknown','bad')")
     with pytest.raises(ValueError, match="namespace"):
         installation.migrate()

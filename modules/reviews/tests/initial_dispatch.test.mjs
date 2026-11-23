@@ -17,3 +17,31 @@ test('accepted provider identity is sent with durable delivery outcome',async()=
  t.env.REVIEWS_API.fetch=async(url,opts)=>{if(url.endsWith('/delivery-outcome'))evidence=JSON.parse(opts.body);return original(url,opts)};
  assert.equal(await t.send(),'sent');assert.equal(evidence.provider_email_id,'id_1');assert.equal(evidence.delivery_identity,del);
 });
+test('Cloudflare sends only the trusted recipient with unsubscribe headers and records its actual receipt',async()=>{
+ for(const status of ['queued','delivered']){
+  const t=setup(), normal=t.env.REVIEWS_API.fetch;let outcome;
+  t.env.REVIEWS_EMAIL_PROVIDER='cloudflare';t.env.CLOUDFLARE_EMAIL_ACCOUNT_ID='a'.repeat(32);t.env.CLOUDFLARE_EMAIL_API_TOKEN='x'.repeat(32);
+  delete t.env.SMTP2GO_API_KEY;
+  t.env.REVIEWS_API.fetch=async(url,opts)=>{if(url.endsWith('/delivery-outcome'))outcome=JSON.parse(opts.body);return normal(url,opts)};
+  t.setProvider(async(url,opts)=>{assert.match(url,/^https:\/\/api\.cloudflare\.com\/client\/v4\/accounts\/[a-f0-9]{32}\/email\/sending\/send$/);
+   const body=JSON.parse(opts.body);assert.equal(body.to,'test@example.org');assert.equal(body.headers['List-Unsubscribe-Post'],'List-Unsubscribe=One-Click');
+   assert.match(body.headers['List-Unsubscribe'],/^<https:\/\//);assert.equal(body.headers['X-Reviews-Delivery-Identity'],del);
+   assert.match(body.text,/Contact: help@example.org/);return Response.json({success:true,errors:[],result:{message_id:'<test@example.org>',delivered:status==='delivered'?['test@example.org']:[],queued:status==='queued'?['test@example.org']:[],permanent_bounces:[],suppressed_recipients:[]}})});
+  assert.equal(await t.send(),'sent');assert.equal(outcome.provider,'cloudflare');assert.equal(outcome.provider_email_id,'<test@example.org>');
+  assert.equal(await t.send(),'done');assert.equal(t.sent,1);
+ }
+});
+test('Cloudflare malformed, rejected, suppressed or ambiguous results never trigger fallback or resend',async()=>{
+ for(const result of [null,{success:true,errors:[],result:{message_id:'<a@b>',delivered:[],queued:[],permanent_bounces:[],suppressed_recipients:[]}},
+  {success:true,errors:[],result:{message_id:'<a@b>',delivered:[],queued:['test@example.org'],permanent_bounces:['test@example.org'],suppressed_recipients:[]}},
+  {success:true,errors:[],result:{message_id:'<a@b>',delivered:[],queued:['test@example.org'],permanent_bounces:[],suppressed_recipients:['test@example.org']}},
+  {success:true,errors:[],result:{message_id:'<a@b>',delivered:['test@example.org'],queued:['test@example.org'],permanent_bounces:[],suppressed_recipients:[]}}]){
+  const t=setup();t.env.REVIEWS_EMAIL_PROVIDER='cloudflare';t.env.CLOUDFLARE_EMAIL_ACCOUNT_ID='a'.repeat(32);t.env.CLOUDFLARE_EMAIL_API_TOKEN='x'.repeat(32);
+  t.setProvider(async()=>Response.json(result));await assert.rejects(t.send(),/reconciliation/);assert.equal(t.state,'uncertain');
+  await assert.rejects(t.send(),/reconciliation/);assert.equal(t.sent,1);
+ }
+});
+test('explicit Cloudflare configuration never falls back to an available SMTP key',async()=>{
+ const t=setup();t.env.REVIEWS_EMAIL_PROVIDER='cloudflare';t.env.CLOUDFLARE_EMAIL_ACCOUNT_ID='a'.repeat(32);
+ await assert.rejects(t.send(),/unavailable/);assert.equal(t.sent,0);
+});

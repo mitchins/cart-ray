@@ -423,8 +423,12 @@ async def provider_evidence_staff_read(request, env, query, delivery_id):
     acquisition, generation_id = generation[0]["acquisition_id"], generation[0]["generation_id"]
     identities = rows(await env.REVIEWS_DB.prepare(
         "SELECT provider,provider_email_id,accepted_at FROM review_provider_deliveries "
-        "WHERE store_key=? AND environment=? AND acquisition_id=? AND generation_id=? AND delivery_identity=?"
-    ).bind(store, environment, acquisition, generation_id, delivery_id).all())
+        "WHERE store_key=? AND environment=? AND acquisition_id=? AND generation_id=? AND delivery_identity=? "
+        "UNION ALL SELECT 'cloudflare' AS provider,provider_message_id AS provider_email_id,accepted_at "
+        "FROM review_cloudflare_deliveries WHERE store_key=? AND environment=? AND acquisition_id=? "
+        "AND generation_id=? AND delivery_identity=?"
+    ).bind(store, environment, acquisition, generation_id, delivery_id,
+           store, environment, acquisition, generation_id, delivery_id).all())
     activity = rows(await env.REVIEWS_DB.prepare(
         "SELECT event_type,event_at,observed_at FROM review_provider_activity "
         "WHERE store_key=? AND environment=? AND acquisition_id=? AND generation_id=? "
@@ -1201,6 +1205,8 @@ async def handle_write(request, env, path):
                 expected.add("accepted_at")
                 if "provider_email_id" in data:
                     expected.add("provider_email_id")
+                if "provider" in data:
+                    expected.add("provider")
             if set(data) != expected:
                 return fail(400, "invalid delivery outcome")
             lifetime_setting = str(getattr(env, "REVIEWS_INVITATION_LIFETIME", "5184000"))
@@ -1217,6 +1223,7 @@ async def handle_write(request, env, path):
                 accepted_at=data.get("accepted_at"),
                 lifetime=lifetime,
                 provider_email_id=data.get("provider_email_id"),
+                provider=data.get("provider"),
             )
             return Response.json(result, headers={"Cache-Control": "no-store"})
         except (ValueError, TypeError, AttributeError, KeyError):

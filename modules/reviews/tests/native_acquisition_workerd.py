@@ -429,6 +429,9 @@ def main(on_customer_ready=None, public_store_name="Example Store", public_names
                 "accepted_at": int(time.time()),
                 "provider_email_id": "smtp_test_1",
             }
+            cloudflare_receipt = os.environ.get("REVIEWS_CLOUDFLARE_RECEIPT_TEST") == "1"
+            if cloudflare_receipt:
+                delivery.update(provider="cloudflare", provider_email_id="<synthetic@example.test>")
             with ThreadPoolExecutor(max_workers=2) as pool:
                 outcomes = list(
                     pool.map(
@@ -446,10 +449,13 @@ def main(on_customer_ready=None, public_store_name="Example Store", public_names
                 return
             receipt_result = subprocess.run(
                 [wrangler, "d1", "execute", "cartray-reviews-local-test", *common, "--json", "--command",
-                 "SELECT provider_email_id FROM review_provider_deliveries"],
+                 ("SELECT provider_message_id FROM review_cloudflare_deliveries" if cloudflare_receipt else
+                  "SELECT provider_email_id FROM review_provider_deliveries")],
                 cwd=ROOT, check=True, capture_output=True, text=True,
             )
-            assert json.loads(receipt_result.stdout)[0]["results"] == [{"provider_email_id": "smtp_test_1"}]
+            expected_receipt = ({"provider_message_id": "<synthetic@example.test>"} if cloudflare_receipt else
+                                {"provider_email_id": "smtp_test_1"})
+            assert json.loads(receipt_result.stdout)[0]["results"] == [expected_receipt]
             if os.environ.get("REVIEWS_INVITATION_LIFETIME") == "never":
                 expiry_result = subprocess.run(
                     [wrangler, "d1", "execute", "cartray-reviews-local-test", *common, "--json", "--command",

@@ -42,7 +42,8 @@
     "migrations/0030_suppression_rotation.sql",
     "migrations/0031_provider_delivery_receipts.sql",
     "migrations/0032_provider_operations_audit.sql",
-    "migrations/0033_historical_recipient_audit.sql"
+    "migrations/0033_historical_recipient_audit.sql",
+    "migrations/0034_cloudflare_delivery_receipts.sql"
   ],
   "routes": [
     "GET /reviews/v1/subject-lookup?alias={alias}",

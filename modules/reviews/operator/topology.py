@@ -271,6 +271,9 @@ def graph(installation, versions=None, sending=False, post_purchase_modes=None,
     }
     if config["reviews_enabled"]:
         nodes = review_nodes
+        if config.get("reviews_email_provider", "smtp2go") == "cloudflare":
+            nodes["sender"]["vars"].update(REVIEWS_EMAIL_PROVIDER="cloudflare",
+                                           CLOUDFLARE_EMAIL_ACCOUNT_ID=config["account_id"])
     if "post_purchase_config" in config:
         actions = actions_override if actions_override is not None else installation.post_purchase_actions()
         modes = post_purchase_modes if post_purchase_modes is not None else state.get("post_purchase_modes", {})
@@ -388,10 +391,13 @@ def secret_bindings(installation, role):
         )
     if role == "sender":
         result.update(
-            SMTP2GO_API_KEY=credentials["smtp2go_api_key"],
             APPROVED_TEST_EMAIL=credentials["approved_test_email"],
             TEST_SENDER=credentials["test_sender"],
         )
+        if installation.config.get("reviews_email_provider", "smtp2go") == "cloudflare":
+            result["CLOUDFLARE_EMAIL_API_TOKEN"] = credentials["cloudflare_email_api_token"]
+        else:
+            result["SMTP2GO_API_KEY"] = credentials["smtp2go_api_key"]
     if role == "post-purchase":
         result.update(
             DELIVERY_CONFIG=post_purchase_handler_config(installation.post_purchase_actions()),

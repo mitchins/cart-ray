@@ -7,7 +7,10 @@ function configured(e){
     [e.REVIEWS_AUTOMATION_TOKEN,e.AUTOMATION_RECIPIENT_TOKEN,e.REVIEWS_DELIVERY_TOKEN].every(x=>typeof x==='string'&&x.length>=32) &&
     new Set([e.REVIEWS_AUTOMATION_TOKEN,e.AUTOMATION_RECIPIENT_TOKEN,e.REVIEWS_DELIVERY_TOKEN]).size===3 &&
     mailbox.test(e.APPROVED_TEST_EMAIL||'') && mailbox.test(e.TEST_SENDER||'') &&
-    typeof e.SMTP2GO_API_KEY==='string' && e.SMTP2GO_API_KEY.startsWith('api-') &&
+    ((e.REVIEWS_EMAIL_PROVIDER===undefined || e.REVIEWS_EMAIL_PROVIDER==='smtp2go') &&
+      typeof e.SMTP2GO_API_KEY==='string' && e.SMTP2GO_API_KEY.startsWith('api-') ||
+     e.REVIEWS_EMAIL_PROVIDER==='cloudflare' && /^[a-f0-9]{32}$/.test(e.CLOUDFLARE_EMAIL_ACCOUNT_ID||'') &&
+      typeof e.CLOUDFLARE_EMAIL_API_TOKEN==='string' && /^[\x21-\x7e]{20,1024}$/.test(e.CLOUDFLARE_EMAIL_API_TOKEN)) &&
     typeof e.MERCHANT_NAME==='string' && e.MERCHANT_NAME.trim().length>0 && e.MERCHANT_NAME.length<=100 && !/[\x00-\x1f\x7f]/.test(e.MERCHANT_NAME) &&
     typeof e.MERCHANT_CONTACT==='string' && e.MERCHANT_CONTACT.trim().length>0 && e.MERCHANT_CONTACT.length<=200 && !/[\x00-\x1f\x7f]/.test(e.MERCHANT_CONTACT);
 }
@@ -46,15 +49,28 @@ export async function dispatchInitial(message,env,fetcher=fetch,now=()=>Math.flo
  const identity={acquisition_id:draft.acquisition_id,generation_id:draft.generation_id,delivery_identity:draft.delivery_identity};
  let providerEmailId;
  try{
-   const result=await bounded(fetcher,'https://api.smtp2go.com/v3/email/send',{method:'POST',headers:{'content-type':'application/json','X-Smtp2go-Api-Key':env.SMTP2GO_API_KEY},body:JSON.stringify({
+   const text=`Thank you for your purchase from ${env.MERCHANT_NAME}. If you would like to share your experience, visit:\n\n${landing}\n\nAnyone with this link can use it.\n\nContact: ${env.MERCHANT_CONTACT}\nStop review-request emails: ${unsubscribeBase}`;
+   const headers={'List-Unsubscribe':`<${unsubscribeBase}>`,'List-Unsubscribe-Post':'List-Unsubscribe=One-Click','X-Reviews-Delivery-Identity':draft.delivery_identity};
+   const cloudflare=env.REVIEWS_EMAIL_PROVIDER==='cloudflare';
+   const result=cloudflare ? await bounded(fetcher,`https://api.cloudflare.com/client/v4/accounts/${env.CLOUDFLARE_EMAIL_ACCOUNT_ID}/email/sending/send`,{
+     method:'POST',headers:{'content-type':'application/json',authorization:`Bearer ${env.CLOUDFLARE_EMAIL_API_TOKEN}`},
+     body:JSON.stringify({from:env.TEST_SENDER,to:env.APPROVED_TEST_EMAIL,subject:`Review your purchase from ${env.MERCHANT_NAME}`,text,headers})
+   }) : await bounded(fetcher,'https://api.smtp2go.com/v3/email/send',{method:'POST',headers:{'content-type':'application/json','X-Smtp2go-Api-Key':env.SMTP2GO_API_KEY},body:JSON.stringify({
      sender:env.TEST_SENDER,to:[env.APPROVED_TEST_EMAIL],subject:`Review your purchase from ${env.MERCHANT_NAME}`,
-     text_body:`Thank you for your purchase from ${env.MERCHANT_NAME}. If you would like to share your experience, visit:\n\n${landing}\n\nAnyone with this link can use it.\n\nContact: ${env.MERCHANT_CONTACT}\nStop review-request emails: ${unsubscribeBase}`,
+     text_body:text,
      custom_headers:[{header:'List-Unsubscribe',value:`<${unsubscribeBase}>`},{header:'List-Unsubscribe-Post',value:'List-Unsubscribe=One-Click'},{header:'X-Reviews-Delivery-Identity',value:draft.delivery_identity}],fastaccept:false})});
-   if(result?.data?.succeeded!==1||result.data.failed!==0||!Array.isArray(result.data.failures)||result.data.failures.length!==0||typeof result.data.email_id!=='string'||!/^[A-Za-z0-9_-]{1,128}$/.test(result.data.email_id))throw Error('unknown provider result');
-   providerEmailId=result.data.email_id;
+   if(cloudflare){const r=result?.result, accepted=[...(Array.isArray(r?.delivered)?r.delivered:[]),...(Array.isArray(r?.queued)?r.queued:[])];
+     if(result?.success!==true||!Array.isArray(result.errors)||result.errors.length||!r||
+       !Array.isArray(r.delivered)||!Array.isArray(r.queued)||!Array.isArray(r.permanent_bounces)||r.permanent_bounces.length||
+       !Array.isArray(r.suppressed_recipients)||r.suppressed_recipients.length||accepted.length!==1||
+       typeof accepted[0]!=='string'||accepted[0].toLowerCase()!==env.APPROVED_TEST_EMAIL.toLowerCase()||
+       typeof r.message_id!=='string'||!/^[\x21-\x7e]{1,512}$/.test(r.message_id))throw Error('unknown provider result');
+     providerEmailId=r.message_id;
+   }else{if(result?.data?.succeeded!==1||result.data.failed!==0||!Array.isArray(result.data.failures)||result.data.failures.length!==0||typeof result.data.email_id!=='string'||!/^[A-Za-z0-9_-]{1,128}$/.test(result.data.email_id))throw Error('unknown provider result');
+     providerEmailId=result.data.email_id;}
  }catch(error){try{await call(env.REVIEWS_API,'/reviews-internal/v1/invitations/delivery-outcome',{...identity,outcome:'uncertain'},env.REVIEWS_DELIVERY_TOKEN)}catch{}throw Error('delivery reconciliation required',{cause:error});}
  const accepted_at=now();
- try{await call(env.REVIEWS_API,'/reviews-internal/v1/invitations/delivery-outcome',{...identity,outcome:'accepted',accepted_at,provider_email_id:providerEmailId},env.REVIEWS_DELIVERY_TOKEN)}catch{throw Error('delivery reconciliation required')}
+ try{await call(env.REVIEWS_API,'/reviews-internal/v1/invitations/delivery-outcome',{...identity,outcome:'accepted',accepted_at,provider_email_id:providerEmailId,...(env.REVIEWS_EMAIL_PROVIDER==='cloudflare'?{provider:'cloudflare'}:{})},env.REVIEWS_DELIVERY_TOKEN)}catch{throw Error('delivery reconciliation required')}
  return 'sent';
 }
 export async function unsubscribeGateway(request,env){

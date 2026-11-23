@@ -649,7 +649,7 @@ async def claim_delivery(db, *, store, environment, acquisition, generation, del
 
 async def record_delivery_outcome(
     db, *, store, environment, acquisition, generation, delivery, outcome, now, accepted_at=None,
-    lifetime=60 * 86400, provider_email_id=None
+    lifetime=60 * 86400, provider_email_id=None, provider=None
 ):
     """Record a trusted provider outcome; only acceptance activates a generation."""
     if (
@@ -662,8 +662,11 @@ async def record_delivery_outcome(
         or type(now) is not int
         or (outcome == "accepted" and (type(accepted_at) is not int or accepted_at > now))
         or (outcome != "accepted" and accepted_at is not None)
+        or (provider not in (None, "cloudflare"))
+        or (provider == "cloudflare" and provider_email_id is None)
         or (provider_email_id is not None and (outcome != "accepted" or not isinstance(provider_email_id, str)
-            or not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", provider_email_id)))
+            or not re.fullmatch(r"[\x21-\x7e]{1,512}" if provider == "cloudflare" else
+                                r"[A-Za-z0-9_-]{1,128}", provider_email_id)))
         or (lifetime is not None and (type(lifetime) is not int or not 1 <= lifetime <= 365 * 86400))
     ):
         raise ValueError("delivery unavailable")
@@ -684,6 +687,19 @@ async def record_delivery_outcome(
     def provider_identity_statements():
         if provider_email_id is None:
             return []
+        if provider == "cloudflare":
+            return [
+                db.prepare("INSERT OR IGNORE INTO review_cloudflare_deliveries VALUES (?,?,?,?,?,?,?)")
+                .bind(store, environment, acquisition, generation, delivery, provider_email_id, accepted_at),
+                db.prepare("INSERT INTO native_guard SELECT CASE WHEN EXISTS(SELECT 1 "
+                    "FROM review_cloudflare_deliveries "
+                    "WHERE store_key=? AND environment=? AND acquisition_id=? AND generation_id=? "
+                    "AND delivery_identity=? AND provider_message_id=? AND accepted_at=?) "
+                    "AND NOT EXISTS(SELECT 1 FROM review_provider_deliveries WHERE store_key=? AND environment=? "
+                    "AND acquisition_id=? AND generation_id=?) THEN 1 ELSE 0 END")
+                .bind(store, environment, acquisition, generation, delivery, provider_email_id, accepted_at,
+                      store, environment, acquisition, generation),
+            ]
         return [
                 db.prepare(
                     "INSERT OR IGNORE INTO review_provider_deliveries VALUES (?,?,?,?,?,'smtp2go',?,?)"
@@ -692,8 +708,10 @@ async def record_delivery_outcome(
                     "INSERT INTO native_guard SELECT CASE WHEN EXISTS(SELECT 1 FROM review_provider_deliveries "
                     "WHERE store_key=? AND environment=? AND acquisition_id=? AND generation_id=? "
                     "AND delivery_identity=? AND provider='smtp2go' AND provider_email_id=? AND accepted_at=?) "
-                    "THEN 1 ELSE 0 END"
-                ).bind(store, environment, acquisition, generation, delivery, provider_email_id, accepted_at),
+                    "AND NOT EXISTS(SELECT 1 FROM review_cloudflare_deliveries WHERE store_key=? AND environment=? "
+                    "AND acquisition_id=? AND generation_id=?) THEN 1 ELSE 0 END"
+                ).bind(store, environment, acquisition, generation, delivery, provider_email_id, accepted_at,
+                       store, environment, acquisition, generation),
             ]
 
     async def record_provider_identity():
