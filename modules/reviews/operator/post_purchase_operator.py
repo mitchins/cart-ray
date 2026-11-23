@@ -53,6 +53,11 @@ class PostPurchaseOperator:
         return "post_purchase_config" in self.config
 
     @property
+    def consolidated(self):
+        return (not any(key.startswith('queue:') for key in self.state.get('resources', {}))
+                and self.has_post_purchase and isinstance(self.post_purchase_actions(), dict))
+
+    @property
     def post_purchase_email_provider(self):
         return self.config.get("post_purchase_email_provider", "smtp2go")
 
@@ -230,7 +235,7 @@ class PostPurchaseOperator:
             if sender_changed:
                 self.check_sender_change_checkpoint()
             for role in POST_PURCHASE_ROLES:
-                if self.worker_visibility_errors(role):
+                if self.post_purchase_visibility_errors(role):
                     raise ValueError("email reconfiguration requires both Workers and previews to remain private")
             actions = self.post_purchase_actions()
             if isinstance(actions, dict):
@@ -288,7 +293,7 @@ class PostPurchaseOperator:
                 raise ValueError("post-purchase sender changes are unavailable while Reviews shares the sender handoff")
             self.check_sender_change_checkpoint()
         for role in POST_PURCHASE_ROLES:
-            if self.worker_visibility_errors(role):
+            if self.post_purchase_visibility_errors(role):
                 raise ValueError("email reconfiguration requires both Workers and previews to remain private")
         # The write-ahead bundle authenticates both sides of each local rename.
         # Only this explicit command may resume across the multi-file boundary.
@@ -433,19 +438,27 @@ class PostPurchaseOperator:
                                          allow_legacy_admission=actual["id"] in {disabled, recorded})
         return actual["id"]
 
+    def post_purchase_visibility_errors(self, role):
+        if role == 'post-purchase' or self.config.get('source_mode', 'public') == 'private':
+            return self.worker_visibility_errors(role)
+        actual = self.api.request(f"workers/scripts/{self.name(role)}/subdomain")
+        return [] if actual.get('enabled') is True and actual.get('previews_enabled') is False else [
+            f'{role}: public checkout endpoint is disabled or preview exposure differs from configuration']
+
     def set_post_purchase_version(self, role, target, mode, deployment, transition):
         current = self.post_purchase_live_version(role, deployment, transition)
         legacy = target == deployment["post_purchase_disabled_versions"][role]
         if current != target:
             staged = self.api.request(f"workers/scripts/{self.name(role)}/versions/{target}")
             self.check_post_purchase_version(role, mode, staged, target, allow_legacy_admission=legacy)
-        self.set_worker_visibility(role, False)
+        private = role == 'post-purchase' or self.config.get('source_mode','public')=='private'
+        self.set_worker_visibility(role, not private)
         if current != target:
             self.api.publish(self.name(role), target)
-            self.set_worker_visibility(role, False)
+            self.set_worker_visibility(role, not private)
         self.check_post_purchase_version(role, mode, self.api.version(self.name(role)), target,
                                          allow_legacy_admission=legacy)
-        errors = self.worker_visibility_errors(role)
+        errors = self.post_purchase_visibility_errors(role)
         if errors:
             raise ValueError("; ".join(errors))
         deployment["versions"][role] = target
@@ -456,7 +469,7 @@ class PostPurchaseOperator:
         self.save()
         transition = self.state["post_purchase_transition"]
         revision = 0
-        if self.config["reviews_enabled"]:
+        if self.config["reviews_enabled"] and not getattr(self, 'consolidated', False):
             nodes, _ = graph(self, deployment["versions"], sending=deployment.get("sending", False))
             if "evidence_version" not in transition:
                 build = json.loads((self.directory / "releases" / deployment["commit"] / "build.json").read_text())
@@ -494,12 +507,16 @@ class PostPurchaseOperator:
             if not self.state["releases"] or self.state["releases"][-1] != release:
                 self.state["releases"].append(release)
         self.state.pop("post_purchase_transition")
+        if getattr(self, 'consolidated', False) and self.config['reviews_enabled']:
+            self.state['phase'] = 'active' if modes == ON else 'paused'
+            self.state['activation_authorized'] = modes == ON
+            self.state['automation_paused'] = modes != ON
         self.save()
         return {"post_purchase": operation, "modes": modes, "versions": dict(deployment["versions"]),
                 "activation_watermark": self.state.get("post_purchase_watermark")}
 
     def post_purchase_activate(self, enable_test_delivery=False):
-        if self.config["reviews_enabled"]:
+        if self.config["reviews_enabled"] and not getattr(self, 'consolidated', False):
             self.check_reviews_handoff()
         if self.state.get("post_purchase_provider_migration"):
             raise ValueError("finish a fresh OFF build/deploy after email provider reconfiguration before activation")
@@ -556,7 +573,7 @@ class PostPurchaseOperator:
         transition = self.state.get("post_purchase_transition")
         if not transition and self.state.get("post_purchase_modes", OFF) == OFF:
             self.check_current_post_purchase_off()
-            errors = [error for role in POST_PURCHASE_ROLES for error in self.worker_visibility_errors(role)]
+            errors = [error for role in POST_PURCHASE_ROLES for error in self.post_purchase_visibility_errors(role)]
             if errors:
                 raise ValueError("; ".join(errors))
             return {"post_purchase": "already-disabled", "modes": dict(OFF),

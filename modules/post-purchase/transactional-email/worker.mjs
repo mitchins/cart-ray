@@ -21,8 +21,8 @@ async function sendEmail(env, config, provider, deadline, fetcher, text) {
       ? {Authorization: `Bearer ${env.CLOUDFLARE_EMAIL_API_TOKEN}`}
       : {'X-Smtp2go-Api-Key': env.SMTP2GO_API_KEY})},
     body: JSON.stringify(cloudflare
-      ? {from: config.sender, to: config.recipient, subject: config.subject, text}
-      : {sender: config.sender, to: [config.recipient], subject: config.subject, text_body: text}),
+      ? {from: config.sender, to: config.recipient, subject: config.subject, text, ...(config.headers ? {headers:Object.fromEntries(config.headers.map(x=>[x.name,x.value]))} : {})}
+      : {sender: config.sender, to: [config.recipient], subject: config.subject, text_body: text, ...(config.headers ? {custom_headers:config.headers.map(x=>({header:x.name,value:x.value}))} : {})}),
   });
   if (!sent.ok) return null;
   const response = await sent.json();
@@ -110,7 +110,7 @@ export async function handle(request, env, fetcher = fetch) {
     const sender = env.ENVIRONMENT === 'test' ? env.APPROVED_TEST_SENDER : env.MERCHANT_SENDER;
     const email = /^[^\s@<>]+@[^\s@<>]+\.[A-Za-z]{2,}$/;
     const mode = env.ENVIRONMENT;
-    if (!body || body.type !== 'order_confirmation' || body.environment !== mode ||
+    if (!body || !['order_confirmation','review_followup','recipient_evidence'].includes(body.type) || body.environment !== mode ||
         !identifier.test(body.merchant || '') || body.merchant !== env.MERCHANT_ID ||
         !identifier.test(body.order_id || '') ||
         !(mode === 'test' ? /^cs_test_[A-Za-z0-9_]{1,200}$/ : /^cs_live_[A-Za-z0-9_]{1,200}$/).test(body.session_id || '') ||
@@ -129,7 +129,8 @@ export async function handle(request, env, fetcher = fetch) {
     const account = await fetcher('https://api.stripe.com/v1/account', {
       headers: {Authorization: `Bearer ${env.STRIPE_API_KEY}`}, redirect: 'manual', signal: deadline,
     });
-    if (!account.ok || (await account.json()).id !== env.STRIPE_ACCOUNT_ID) return fail(403);
+    if (!account.ok) return fail(502);
+    if ((await account.json()).id !== env.STRIPE_ACCOUNT_ID) return fail(403);
     const stripe = await fetcher(`https://api.stripe.com/v1/checkout/sessions/${body.session_id}`, {
       headers: {Authorization: `Bearer ${env.STRIPE_API_KEY}`}, redirect: 'manual', signal: deadline,
     });
@@ -141,17 +142,52 @@ export async function handle(request, env, fetcher = fetch) {
         session.metadata?.cr_order_id !== body.order_id ||
         typeof session.customer_details?.email !== 'string' || !email.test(session.customer_details.email) ||
         (mode === 'test' &&
-         session.customer_details.email.toLowerCase() !== env.APPROVED_TEST_RECIPIENT.toLowerCase())) return fail(403);
+         session.customer_details.email.toLowerCase() !== env.APPROVED_TEST_RECIPIENT.toLowerCase())) return fail(422);
     const recipient = mode === 'test' ? env.APPROVED_TEST_RECIPIENT : session.customer_details.email;
+
+    if (body.type === 'recipient_evidence') return Response.json({email:recipient}, {headers:{'Cache-Control':'no-store'}});
 
     const lines = body.items.map(item => `${item.title} × ${item.quantity}`);
     const total = formatTotal(session);
     const access = body.access_url ? `View your purchased resources: ${body.access_url}`
       : 'Your purchased resources will be available when ready. Please contact the merchant if needed.';
-    const text = `Thank you for your order from ${env.MERCHANT_NAME}.\n\nOrder: ${body.order_id}\n\n` +
+    let text = `Thank you for your order from ${env.MERCHANT_NAME}.\n\nOrder: ${body.order_id}\n\n` +
       lines.join('\n') + total + `\n\n${access}`;
-    const reference = await sendEmail(env, {sender, recipient,
-      subject:`Your order from ${env.MERCHANT_NAME}`}, provider, deadline, fetcher, text);
+    let reviews = body.reviews;
+    const identity = body.delivery_identity ?? [...new Uint8Array(await crypto.subtle.digest('SHA-256',
+      new TextEncoder().encode(JSON.stringify([body.merchant,mode,body.order_id,body.type]))))]
+      .map(x=>x.toString(16).padStart(2,'0')).join('');
+    if (!/^[a-f0-9]{64}$/.test(identity)) return fail(400);
+    const identityHeaders = [{name:'X-CartRay-Message-Identity',value:identity},
+      ...(body.delivery_identity ? [{name:'X-Reviews-Delivery-Identity',value:identity}] : [])];
+    let unsubscribeHeaders;
+    try {
+    if (reviews !== undefined && reviews !== null) {
+      const landing = new URL(reviews.url), stop = new URL(reviews.unsubscribe_url);
+      if (landing.origin !== env.STOREFRONT_ORIGIN || stop.origin !== env.STOREFRONT_ORIGIN ||
+          landing.protocol !== 'https:' || stop.protocol !== 'https:' || landing.username || stop.username ||
+          landing.password || stop.password || landing.search || stop.hash ||
+          !/^\/(?:[A-Za-z0-9_-]+\/)*review-unsubscribe$/.test(stop.pathname) ||
+          !/^\?token=[a-f0-9]{64}$/.test(stop.search) ||
+          !/^#invitation=[a-f0-9]{64}(?:&featured=[A-Za-z0-9_,%.-]+)?$/.test(landing.hash) ||
+          !Array.isArray(reviews.subjects) || !reviews.subjects.length || reviews.subjects.length > 100 ||
+          reviews.subjects.some(x => !identifier.test(x)) ||
+          typeof env.MERCHANT_CONTACT !== 'string' || !env.MERCHANT_CONTACT.trim() ||
+          env.MERCHANT_CONTACT.length > 200 || /[\x00-\x1f\x7f]/.test(env.MERCHANT_CONTACT)) throw new Error('review content unavailable');
+      unsubscribeHeaders = [{name:'List-Unsubscribe',value:`<${stop}>`},
+        {name:'List-Unsubscribe-Post',value:'List-Unsubscribe=One-Click'}];
+      const titles = reviews.subjects.map(subject => reviews.names?.[subject] || subject);
+      const invitation = `Share your experience with ${env.MERCHANT_NAME}: ${landing}\n` +
+        `Featured products: ${titles.join(', ')}\n` +
+        `Stop review requests: ${stop}\nContact: ${env.MERCHANT_CONTACT}`;
+      text = body.type === 'review_followup' ? invitation : text + '\n\n' + invitation;
+    } else if (body.type === 'review_followup') throw new Error('review content unavailable');
+    } catch {
+      if (body.type === 'review_followup') return fail(400);
+      unsubscribeHeaders = undefined; // Optional Reviews cannot block the transactional receipt.
+    }
+    const reference = await sendEmail(env, {sender, recipient, headers:[...identityHeaders,...(unsubscribeHeaders || [])],
+      subject:body.type === 'review_followup' ? `Review your purchase from ${env.MERCHANT_NAME}` : `Your order from ${env.MERCHANT_NAME}`}, provider, deadline, fetcher, text);
     if (!reference) return fail(502);
     return Response.json({provider_reference: reference}, {headers: {'Cache-Control': 'no-store'}});
   } catch { return fail(503); }

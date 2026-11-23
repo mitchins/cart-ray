@@ -100,3 +100,29 @@ test('a rejected checkout can be edited while an in-progress checkout remains re
   await assert.rejects(adapter.checkout());assert.equal(adapter.attemptPending,true);
   assert.equal(adapter.quantity('ACORN-KIT',1),false);
 });
+
+test('retry pins disclosure version across a changed merchant setting',async()=>{
+  const {storage}=setup();window.CARTRAY_STOREFRONT.reviewInvitationWordingVersion='review-invitation-v2';
+  let adapter=await createAdapter(presentation);adapter.add('ACORN-KIT');adapter.setPermission(true);
+  let original;globalThis.fetch=async(_url,request)=>{original=JSON.parse(request.body);throw Error('lost response');};
+  await assert.rejects(adapter.checkout());
+  assert.equal(JSON.parse(storage.getItem('cartray.checkout-attempt.v1')).wordingVersion,'review-invitation-v2');
+  window.CARTRAY_STOREFRONT.reviewInvitationWordingVersion='review-invitation-v1';
+  globalThis.fetch=async(url,request)=>String(url).endsWith('/catalogue')?{ok:true,json:async()=>catalogue}:
+    {ok:true,json:async()=>{assert.deepEqual(JSON.parse(request.body),original);return {session_id:'cs_test_retry',checkout_url:'https://checkout.stripe.com/test'};}};
+  adapter=await createAdapter(presentation);await adapter.checkout();
+});
+
+test('pre-upgrade attempt retains the original configured v2 request on retry',async()=>{
+  const {storage}=setup();window.CARTRAY_STOREFRONT.reviewInvitationWordingVersion='review-invitation-v2';
+  const requestId=`checkout_${'b'.repeat(32)}`;
+  storage.setItem('cartray.cart.v1',JSON.stringify({catalogueVersion:catalogue.version,revision:1,items:[['ACORN-KIT',1]]}));
+  storage.setItem('cartray.checkout-attempt.v1',JSON.stringify({requestId,catalogueVersion:catalogue.version,
+    revision:1,items:[['ACORN-KIT',1]],permission:true}));
+  const adapter=await createAdapter(presentation);
+  globalThis.fetch=async(_url,request)=>{const sent=JSON.parse(request.body);
+    assert.equal(sent.checkout_request_id,requestId);assert.equal(sent.review_invitation_wording_version,'review-invitation-v2');
+    assert.equal(sent.review_invitation_opt_in,true);
+    return {ok:true,json:async()=>({session_id:'cs_test_existing',checkout_url:'https://checkout.stripe.com/test'})};};
+  await adapter.checkout();assert.equal(adapter.attemptPending,false);
+});

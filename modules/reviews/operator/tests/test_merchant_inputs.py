@@ -193,7 +193,8 @@ def test_cached_build_and_deploy_reject_changed_merchant_configuration(tmp_path)
         p.deploy()
 
 
-def test_merchant_reviews_require_correct_subject_pages_and_native_clients(tmp_path):
+@pytest.mark.parametrize("shared_mail", [False, True])
+def test_merchant_reviews_require_correct_subject_pages_and_native_clients(tmp_path, monkeypatch, shared_mail):
     source = merchant(tmp_path / "source")
     site = source / "storefront"
     page = site / "products/one/index.html"
@@ -232,8 +233,13 @@ def test_merchant_reviews_require_correct_subject_pages_and_native_clients(tmp_p
     installation.api = Cloud()
     installation.credentials = {"cloudflare_api_token": "test-token"}
     installation.state["resources"]["database:commerce"] = {"id": "test-db"}
-    installation.state["resources"]["queue:events"] = {"id": "events"}
-    installation.state["resources"]["queue:dlq"] = {"id": "dlq"}
+    if shared_mail:
+        installation.config['source_api_path'] = '/api'
+        installation.config['post_purchase_config'] = 'fixture-config'
+        monkeypatch.setattr(installation, 'post_purchase_actions', lambda: {'schema':2})
+    else:
+        installation.state["resources"]["queue:events"] = {"id": "events"}
+        installation.state["resources"]["queue:dlq"] = {"id": "dlq"}
     installation.state["workers_subdomain"] = "workers-test"
     installation.state["pages_subdomain"] = "shop.example.test"
     installation.state["urls"] = {"source": "https://checkout.example.test", "storefront": "https://shop.example.test"}
@@ -254,6 +260,11 @@ def test_merchant_reviews_require_correct_subject_pages_and_native_clients(tmp_p
     assert all(call[1][2][0] == "merchant-one" for call in calls if call[0] == "query")
     assert any(call[0] == "request" and "REVIEWS_GATEWAY" in call[1][2]["deployment_configs"]["production"]["env_vars"]
                for call in calls)
+    if shared_mail:
+        deployments = [call[1][2]['deployment_configs']['production'] for call in calls if call[0]=='request']
+        assert deployments[-1]['env_vars']['ORDER_ACCESS_GATEWAY']['value']=='test'
+        assert deployments[-1]['env_vars']['CARTRAY_SOURCE_API_PATH']['value']=='/api'
+        assert deployments[-1]['services']['CARTRAY_SOURCE']['service']==installation.name('source')
     output_page = output / "products/one/index.html"
     original_output = output_page.read_text()
     output_page.write_text(original_output + "tampered")
@@ -307,3 +318,24 @@ def test_fulfilment_credentials_are_required_by_resumed_merchant_installation(tm
         Installation(installation.directory, credentials)
     resumed = Installation(installation.directory, {**credentials, "fulfilment_resources": "{}"})
     assert resumed.config["fulfilment"] == {"buckets": {}}
+
+def test_explicit_corrected_build_inputs_preserve_installation_state(tmp_path):
+    source = merchant(tmp_path / "source")
+    install = plan_merchant(tmp_path, source)
+    before = json.loads(json.dumps(install.state))
+    (source / "storefront/cart/index.html").write_text(
+        (source / "storefront/cart/index.html").read_text() + "<!-- updated -->"
+    )
+    checksum = validate(source, ROOT)
+    partial = install.directory / 'inputs' / ('merchant-' + checksum)
+    partial.mkdir()
+    (partial / 'interrupted.txt').write_text('incomplete generated snapshot')
+    install.update_merchant_inputs(source)
+    assert validate(Path(install.config['merchant_inputs']), ROOT) == checksum
+    assert install.state["resources"] == before["resources"]
+    assert install.state["secret_fingerprints"] == before["secret_fingerprints"]
+    assert install.state["activation_authorized"] == before["activation_authorized"]
+    assert install.config["merchant_inputs_sha256"] != before["config"]["merchant_inputs_sha256"]
+    resumed = Installation(install.directory)
+    resumed.verify_merchant_inputs()
+    assert resumed.config["merchant_inputs_sha256"] == install.config["merchant_inputs_sha256"]

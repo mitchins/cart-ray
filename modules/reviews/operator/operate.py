@@ -99,6 +99,7 @@ def validate_config(config):
         "delay_seconds",
         "max_lateness",
         "reviews_enabled",
+        "review_requests",
         "theme",
         "gel",
         "theme_content",
@@ -176,6 +177,9 @@ def validate_config(config):
             or re.search(r"[\x00-\x1f\x7f]", config[name])
         ):
             raise ValueError(f"invalid public {name}")
+    if 'review_requests' in config:
+        from cartray.order_reviews import ReviewSettings
+        ReviewSettings.parse(json.dumps(config['review_requests']))
     if "fulfilment" in config:
         fulfilment = config["fulfilment"]
         if ("merchant_inputs" not in config or not isinstance(fulfilment, dict)
@@ -213,7 +217,6 @@ def validate_config(config):
                        or not re.fullmatch(r"[a-z0-9-]{1,128}", x[0])
                        or not merchant_path(x[1], product=True)
                        or not x[2].strip() or len(x[2]) > 200 for x in details)
-                or len(set(mapping.values())) != len(mapping)
                 or len({x[0] for x in details}) != len(details)
                 or len({x[1].casefold() for x in details}) != len(details)
                 or not set(mapping.values()).issubset({x[0] for x in details})):
@@ -232,9 +235,9 @@ def validate_config(config):
             raise ValueError("unsupported post-purchase email provider")
         snapshot = config["post_purchase_config"]
         if (not isinstance(snapshot, str) or not snapshot.strip()
-                or not config.get("store_key") or config.get("source_mode") != "private"):
+                or not config.get("store_key")):
             raise ValueError(
-                "test order confirmations require a merchant identity and private source"
+                "test order confirmations require a merchant identity"
             )
         if "post_purchase_config_sha256" in config and (
                 not isinstance(config["post_purchase_config_sha256"], str)
@@ -291,7 +294,7 @@ class Installation(PostPurchaseOperator):
             mailing = self.config["reviews_enabled"] or self.has_post_purchase
             provider = credential_provider or self.post_purchase_email_provider
             if self.has_post_purchase:
-                if not self.config["reviews_enabled"]:
+                if not self.config["reviews_enabled"] or self.consolidated:
                     required.remove("smtp2go_api_key")
                 required.add(PROVIDER_KEYS[provider])
             if not mailing:
@@ -312,7 +315,7 @@ class Installation(PostPurchaseOperator):
                 raise ValueError("only a Stripe test credential is accepted")
             if mailing:
                 validate_email_credential(credentials, provider)
-                if self.config["reviews_enabled"] and provider != "smtp2go":
+                if self.config["reviews_enabled"] and not self.consolidated and provider != "smtp2go":
                     validate_email_credential(credentials, "smtp2go")
             for field in ("approved_test_email", "test_sender") if mailing else ():
                 if not re.fullmatch(r"[^\s@<>]+@[^\s@<>]+\.[A-Za-z]{2,}", credentials[field]):
@@ -442,7 +445,17 @@ class Installation(PostPurchaseOperator):
         return cls(directory)
 
     @property
+    def secret_names(self):
+        if self.consolidated:
+            return ('invitation', 'reviewer', 'admin', 'settlement', 'delivery', 'unsubscribe',
+                    'recipient_hash', 'order_access')
+        return SECRET_NAMES
+
+    @property
     def roles(self):
+        if self.consolidated:
+            return ('source', *(('reviews',) if self.config['reviews_enabled'] else ()),
+                    *(('post-purchase',) if self.has_post_purchase else ()))
         if self.config["reviews_enabled"]:
             return (*ROLES, "post-purchase") if self.has_post_purchase else ROLES
         return ("source", "post-purchase") if self.has_post_purchase else ("source",)
@@ -475,7 +488,7 @@ class Installation(PostPurchaseOperator):
 
     @property
     def queues(self):
-        return QUEUES if self.config["reviews_enabled"] else ()
+        return QUEUES if self.config["reviews_enabled"] and not self.consolidated else ()
 
     def save(self):
         atomic_json(self.state_path, self.state)
@@ -490,7 +503,7 @@ class Installation(PostPurchaseOperator):
             if not expected and create and not self.state["resources"] and self.state["phase"] == "planned":
                 # A crash may occur after the private vault rename and before its
                 # public fingerprints are saved. No resources can yet use these keys.
-                required = {*SECRET_NAMES, "signing_private", "signing_public", *self.post_purchase_vault_fields}
+                required = {*self.secret_names, "signing_private", "signing_public", *self.post_purchase_vault_fields}
                 if set(value) != required or any(not isinstance(item, str) or not item for item in value.values()):
                     raise ValueError("incomplete initial vault; restore its original backup")
                 self.state["secret_fingerprints"] = {key: digest(item.encode()) for key, item in value.items()}
@@ -505,7 +518,7 @@ class Installation(PostPurchaseOperator):
             return value
         if not create or self.state["secret_fingerprints"] or self.state["resources"]:
             raise ValueError("installation vault missing; restore its original backup before continuing")
-        values = {name: secrets.token_hex(32) for name in SECRET_NAMES}
+        values = {name: secrets.token_hex(32) for name in self.secret_names}
         if self.has_post_purchase:
             values.update(self.initial_post_purchase_secrets())
         generated = subprocess.run(
@@ -734,6 +747,8 @@ class Installation(PostPurchaseOperator):
             'compatibility_date = "2026-08-31"',
         ]
         for binding, role in names.items():
+            if role not in self.roles:
+                continue
             lines += ["[[services]]", f'binding = "{binding}"', f'service = "{self.name(role)}"', "remote = true"]
         bindings.write_text("\n".join(lines) + "\n")
         headers = {"content-type": "application/json"}
@@ -896,6 +911,42 @@ class Installation(PostPurchaseOperator):
                 if (site / dest).read_bytes() != (ROOT / source).read_bytes():
                     raise ValueError("merchant review client differs from the supported Reviews module")
 
+    def update_merchant_inputs(self, source):
+        """Explicit local input refresh while sending is OFF; never changes keys or storage."""
+        self.require_post_purchase_off()
+        if self.state.get('activation_authorized') and not self.state.get('automation_paused'):
+            raise ValueError('pause sending before replacing merchant build inputs')
+        if 'merchant_inputs' not in self.config or self.state.get('post_purchase_transition'):
+            raise ValueError('a paused merchant installation is required to replace build inputs')
+        source = Path(source).resolve(strict=True)
+        checksum = validate_merchant_inputs(source, ROOT)
+        destination = self.directory / 'inputs' / ('merchant-' + checksum)
+        try:
+            retained = destination.exists() and validate_merchant_inputs(destination, ROOT) == checksum
+        except (ValueError, FileNotFoundError):
+            retained = False
+        if not retained:
+            with tempfile.TemporaryDirectory(prefix='merchant-copy-', dir=destination.parent) as temporary:
+                candidate = Path(temporary) / 'snapshot'
+                if snapshot_merchant_inputs(source, candidate, ROOT) != checksum:
+                    raise ValueError('merchant source changed while being copied')
+                if destination.exists():
+                    # Preserve an interrupted local copy for diagnosis. No
+                    # database, key, source package or release is deleted.
+                    os.replace(destination, destination.with_name(
+                        destination.name + '-interrupted-' + str(time.time_ns())))
+                os.replace(candidate, destination)
+        old = dict(self.config)
+        self.config.update(merchant_inputs=str(destination), merchant_inputs_sha256=checksum)
+        try:
+            self.verify_merchant_inputs()
+        except Exception:
+            self.config = old
+            raise
+        self.state['config'].update(merchant_inputs=str(destination.relative_to(self.directory)),
+                                    merchant_inputs_sha256=checksum)
+        self.save()
+
     def merchant_config_hash(self):
         if "merchant_inputs" not in self.config:
             return None
@@ -904,7 +955,7 @@ class Installation(PostPurchaseOperator):
         identity = {key: self.config[key] for key in fields}
         identity.update({key: self.config[key] for key in ("storefront_origin", "success_path", "cancel_path",
                                                          "webhook_url", "source_mode", "source_api_path",
-                                                         "post_purchase_config_sha256", "fulfilment")
+                                                         "post_purchase_config_sha256", "fulfilment", "review_requests")
                          if key in self.config})
         if "post_purchase_email_provider" in self.config:
             identity["post_purchase_email_provider"] = self.config["post_purchase_email_provider"]
@@ -1137,7 +1188,7 @@ class Installation(PostPurchaseOperator):
             progress["versions"][role] = result["id"]
             self.save()
             self.set_worker_visibility(role, node.get("public", False))
-        for role in ("consumer", "scheduler", "sender") if self.config["reviews_enabled"] else ():
+        for role in ("consumer", "scheduler", "sender") if self.queues else ():
             nodes, _ = graph(self, progress["versions"])
             queue_role = nodes[role]["consumes"]
             key = "consumer:" + queue_role
@@ -1164,7 +1215,8 @@ class Installation(PostPurchaseOperator):
             self.state["resources"][key] = {"id": identifier, "name": self.name(role)}
             self.save()
         self.configure_queues(pause_processing=True)
-        self.api.request(f"workers/scripts/{self.name('source')}/schedules", "PUT", [{"cron": "0 * * * *"}])
+        self.api.request(f"workers/scripts/{self.name('source')}/schedules", "PUT",
+                         [{"cron": "0 * * * *"}] + ([{"cron":"* * * * *"}] if self.consolidated else []))
         self.render(progress["versions"])
         self.seed_subjects()
         self.deploy_storefront(build)
@@ -1172,7 +1224,7 @@ class Installation(PostPurchaseOperator):
             for role in POST_PURCHASE_ROLES:
                 self.check_post_purchase_version(role, "disabled", self.api.version(self.name(role)),
                                                  progress["versions"][role])
-                errors = self.worker_visibility_errors(role)
+                errors = self.post_purchase_visibility_errors(role)
                 if errors:
                     raise ValueError("; ".join(errors))
             self.record_post_purchase_off(build)
@@ -1232,10 +1284,16 @@ class Installation(PostPurchaseOperator):
                 shutil.copytree(site, staging)
                 storefront = javascript_json(site / "storefront-config.js", "window.CARTRAY_STOREFRONT = ")
                 storefront["reviewsEnabled"] = self.config["reviews_enabled"]
-                storefront["reviewInvitationsEnabled"] = self.config["reviews_enabled"]
+                storefront["reviewInvitationsEnabled"] = (self.config["reviews_enabled"] and
+                    self.config.get("review_requests", {}).get("timing", "receipt") != "off")
                 storefront["reviewInvitationDefaultChecked"] = (
                     self.config["reviews_enabled"] and self.config["review_invitation_default_checked"]
                 )
+                from cartray.store import review_invitation_disclosure
+                version, wording = review_invitation_disclosure(
+                    2 if self.config.get('review_requests', {}).get('timing') == 'both' else 1)
+                storefront['reviewInvitationWordingVersion'] = version
+                storefront['reviewInvitationWording'] = wording
                 storefront["reviewSubjects"] = self.config["subject_map"] if self.config["reviews_enabled"] else {}
                 theme = javascript_json(site / "site-config.js", "window.CARTRAY_THEME = ")
                 theme["contextPath"] = None
@@ -1308,8 +1366,11 @@ class Installation(PostPurchaseOperator):
             }
         if not self.config["reviews_enabled"]:
             deployment = {"env_vars": {}, "services": {}}
-        if "fulfilment" in self.config:
+        if "fulfilment" in self.config or (self.consolidated and self.config['reviews_enabled']):
             deployment["env_vars"]["ORDER_ACCESS_GATEWAY"] = {"type": "plain_text", "value": "test"}
+            deployment["env_vars"]["CARTRAY_SOURCE_API_PATH"] = {
+                "type": "plain_text", "value": self.config.get("source_api_path", "")
+            }
             deployment["env_vars"]["REVIEWS_STOREFRONT_ORIGIN"] = {"type": "plain_text", "value": origin}
             deployment["services"]["CARTRAY_SOURCE"] = {"service": self.name("source"), "environment": "production"}
         self.api.request(
@@ -1335,6 +1396,19 @@ class Installation(PostPurchaseOperator):
         )
 
     def verifier(self, mode):
+        if self.consolidated:
+            self.check_schema()
+            nodes, _ = graph(self, self.state['deployment']['versions'])
+            errors = []
+            for role, node in nodes.items():
+                errors.extend(self.worker_binding_errors(role, node, self.api.version(self.name(role)),
+                              self.state['deployment']['versions'].get(role)))
+            if errors:
+                raise ValueError('; '.join(errors))
+            # The immutable commerce installation row and existing checkpoint
+            # remain runtime authority; no second subscriber or watermark.
+            fence = self.post_purchase_fence() if self.has_post_purchase else {'status':'uninitialised'}
+            return {'status':'active' if fence['status']=='retained' else 'uninitialised', 'revision':0}
         if not self.config["reviews_enabled"]:
             self.check_schema()
             return {"status": "active", "revision": 0}
@@ -1404,6 +1478,23 @@ class Installation(PostPurchaseOperator):
         }
 
     def activate(self, enable_test_delivery=False):
+        if self.consolidated:
+            if not self.has_post_purchase:
+                raise ValueError('configure the shared order-confirmation email provider before activation')
+            if not enable_test_delivery:
+                raise ValueError('activation requires explicit --enable-test-delivery')
+            if self.state.get('post_purchase_provider_migration'):
+                raise ValueError('finish credential reconfiguration and OFF deployment before activation')
+            if (not self.state.get('deployment', {}).get('complete') or
+                    self.state.get('build') != self.state['deployment'].get('commit')):
+                raise ValueError('deploy the selected build before activation')
+            self.verify()
+            if self.post_purchase_fence()['status'] == 'uninitialised':
+                from scripts.post_purchase_installation import remote_import, validate_backend
+                database, name = validate_backend(self, self.api)
+                remote_import(self.config['account_id'], database, name,
+                              self.credentials['cloudflare_api_token'], self.config['store_key'])
+            return self.post_purchase_activate(enable_test_delivery)
         if self.config["reviews_enabled"]:
             self.check_reviews_handoff()
             if self.state.get("post_purchase_provider_migration"):
@@ -1589,6 +1680,10 @@ class Installation(PostPurchaseOperator):
 
     def pause(self):
         """Stop new automation deliveries without changing checkout or unsubscribe."""
+        if self.consolidated:
+            if not self.has_post_purchase:
+                return {'phase':'paused', 'sending':False}
+            return self.post_purchase_disable()
         self.assert_resources()
         self.vault()
         if not self.state.get("automation_paused"):
@@ -1673,7 +1768,9 @@ class Installation(PostPurchaseOperator):
         errors = self.private_source_visibility_errors()
         delivery = {}
         if self.has_post_purchase:
-            errors.extend(self.worker_visibility_errors("post-purchase"))
+            errors.extend(self.post_purchase_visibility_errors("post-purchase"))
+            if self.config.get('source_mode','public') == 'public':
+                errors.extend(self.post_purchase_visibility_errors('source'))
             try:
                 deployment, disabled, build = self.post_purchase_runtime()
                 for role in POST_PURCHASE_ROLES:
@@ -2054,7 +2151,10 @@ def main():
     plan = commands.add_parser("plan", help="write a non-secret plan; creates no cloud resources or keys")
     plan.add_argument("--config", type=Path, required=True)
     for name in ("provision", "migrate", "build", "deploy", "verify", "doctor", "upgrade", "receipt", "pause"):
-        commands.add_parser(name)
+        command = commands.add_parser(name)
+        if name == 'build':
+            command.add_argument('--merchant-inputs', type=Path,
+                                 help='explicitly snapshot corrected merchant inputs while sending is OFF')
     activation = commands.add_parser(
         "activate", help="explicitly authorize the fixed no-backfill fence and test delivery"
     )
@@ -2119,6 +2219,10 @@ def main():
                     result = installation.rollback(args.release)
                 elif args.command == "upgrade":
                     result = installation.upgrade()
+                elif args.command == 'build':
+                    if args.merchant_inputs:
+                        installation.update_merchant_inputs(args.merchant_inputs)
+                    result = installation.build()
                 elif args.command == "request":
                     result = installation.private(
                         "REVIEWS",

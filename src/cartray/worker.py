@@ -12,6 +12,7 @@ from urllib.parse import parse_qsl, quote, urlparse
 
 from kinglet import Kinglet, Response
 
+from cartray import order_reviews
 from cartray.catalogue_bundle import build_runtime_catalogue
 from cartray.checkout import CheckoutService
 from cartray.compiled_catalogue import COMPILED_CATALOGUE
@@ -59,6 +60,10 @@ ORDER_ACCESS_PAGE = """<!doctype html><html lang="en"><meta charset="utf-8">
       body:JSON.stringify({token}), credentials:'omit', cache:'no-store'});
     if (!response.ok) throw new Error();
     const data = await response.json(); content.replaceChildren();
+    if (data.reviews) {
+      const link = document.createElement('a'); link.href = data.reviews.url;
+      link.textContent = 'Review your purchased products'; content.append(link);
+    }
     for (const item of data.items) {
       const section = document.createElement('section'), heading = document.createElement('h2');
       heading.textContent = item.title; section.append(heading);
@@ -168,12 +173,15 @@ def create_app(
     async def issue_access(request):
         headers = {"Cache-Control": "no-store"}
         try:
-            if (getattr(request.env, "CARTRAY_ORDER_ACCESS_MODE", "disabled") != "test"
-                    or _test_environment(request.env) != "test"):
+            if (
+                getattr(request.env, "CARTRAY_ORDER_ACCESS_MODE", "disabled") != "test"
+                or _test_environment(request.env) != "test"
+            ):
                 raise ValueError("unavailable")
             secret = issuer_token(_required_env(request.env, "CARTRAY_ORDER_ACCESS_KEY"))
-            if len(secret) < 32 or not hmac.compare_digest(_request_header(request, "authorization") or "",
-                                                           "Bearer " + secret):
+            if len(secret) < 32 or not hmac.compare_digest(
+                _request_header(request, "authorization") or "", "Bearer " + secret
+            ):
                 raise ValueError("unavailable")
             length = _request_header(request, "content-length")
             if length is None or not length.isdigit() or int(length) > 512:
@@ -185,8 +193,11 @@ def create_app(
             if not isinstance(payload, dict) or set(payload) != {"order_id"}:
                 raise ValueError("unavailable")
             token = await issue_order_access(
-                request.env.DB, _required_env(request.env, "CARTRAY_ORDER_ACCESS_KEY"),
-                _required_env(request.env, "CARTRAY_MERCHANT_ID"), "test", payload["order_id"]
+                request.env.DB,
+                _required_env(request.env, "CARTRAY_ORDER_ACCESS_KEY"),
+                _required_env(request.env, "CARTRAY_MERCHANT_ID"),
+                "test",
+                payload["order_id"],
             )
             path = getattr(request.env, "CARTRAY_ORDER_ACCESS_PATH", "/order-access")
             if not isinstance(path, str) or not re.fullmatch(r"/(?:[A-Za-z0-9_-]+/)*order-access", path):
@@ -195,15 +206,50 @@ def create_app(
         except Exception:
             return Response({"error": "order unavailable"}, status=404, headers=headers)
 
+    @app.route("/review-unsubscribe", methods=["GET", "POST"])
+    async def review_unsubscribe(request):
+        headers = {
+            "Cache-Control": "no-store",
+            "Referrer-Policy": "no-referrer",
+            "Content-Type": "text/html; charset=utf-8",
+            "Content-Security-Policy": "default-src 'none'; form-action 'self'; base-uri 'none'",
+        }
+        try:
+            if _test_environment(request.env) != "test":
+                raise ValueError("unavailable")
+            pairs = parse_qsl(request.query_string, max_num_fields=2)
+            if len(pairs) != 1 or pairs[0][0] != "token" or not re.fullmatch("[a-f0-9]{64}", pairs[0][1]):
+                raise ValueError("unavailable")
+            if request.method == "GET":
+                return Response(
+                    "<!doctype html><title>Stop review requests</title><h1>Stop review requests</h1>"
+                    '<form method="post"><button>Unsubscribe</button></form>',
+                    headers=headers,
+                )
+            if not await _client_rate_limit(request, "CHECKOUT_STATUS_RATE_LIMITER", "review-unsubscribe"):
+                return Response("Please try again later.", status=429, headers=headers)
+            await order_reviews.unsubscribe(
+                request.env.DB, request.env.CARTRAY_MERCHANT_ID, "test", pairs[0][1], int(time.time())
+            )
+            return Response("You will no longer receive review requests from this store.", headers=headers)
+        except Exception:
+            return Response("Unsubscribe unavailable. Please contact the merchant.", status=503, headers=headers)
+
     @app.route("/order-access", methods=["GET", "POST"])
     async def order_access(request):
-        headers = {"Cache-Control": "no-store", "Referrer-Policy": "same-origin",
-                   "X-Content-Type-Options": "nosniff",
-                   "Content-Security-Policy": "default-src 'none'; script-src 'unsafe-inline'; "
-                                              "connect-src 'self'; base-uri 'none'"}
+        headers = {
+            "Cache-Control": "no-store",
+            "Referrer-Policy": "same-origin",
+            "X-Content-Type-Options": "nosniff",
+            "Content-Security-Policy": "default-src 'none'; script-src 'unsafe-inline'; "
+            "connect-src 'self'; base-uri 'none'",
+        }
         try:
-            if (getattr(request.env, "CARTRAY_ORDER_ACCESS_MODE", "disabled") != "test"
-                    or _test_environment(request.env) != "test" or request.query_string):
+            if (
+                getattr(request.env, "CARTRAY_ORDER_ACCESS_MODE", "disabled") != "test"
+                or _test_environment(request.env) != "test"
+                or request.query_string
+            ):
                 raise ValueError("unavailable")
             if request.method == "GET":
                 return Response(ORDER_ACCESS_PAGE, headers={**headers, "Content-Type": "text/html; charset=utf-8"})
@@ -250,16 +296,29 @@ def create_app(
                     return Response(status=302, headers={**headers, "Location": result["url"]})
                 if result["status"] == "file":
                     filename, mime = result["filename"], result["mime_type"]
-                    if (not isinstance(filename, str) or len(filename) > 180 or not filename
-                            or any(ord(c) < 32 or ord(c) == 127 or c in "/\\" for c in filename)
-                            or not isinstance(mime, str) or len(mime) > 127
-                            or not re.fullmatch(r"[A-Za-z0-9!#$&^_.+-]+/[A-Za-z0-9!#$&^_.+-]+", mime)):
+                    if (
+                        not isinstance(filename, str)
+                        or len(filename) > 180
+                        or not filename
+                        or any(ord(c) < 32 or ord(c) == 127 or c in "/\\" for c in filename)
+                        or not isinstance(mime, str)
+                        or len(mime) > 127
+                        or not re.fullmatch(r"[A-Za-z0-9!#$&^_.+-]+/[A-Za-z0-9!#$&^_.+-]+", mime)
+                    ):
                         raise ValueError("unavailable")
-                    return Response(result["body"], headers={**headers, "Content-Type": mime,
-                        "Content-Disposition": "attachment; filename*=UTF-8''" + quote(filename, safe="")})
-                message = ("<!doctype html><html lang='en'><meta charset='utf-8'><title>Resource unavailable</title>"
-                           "<h1>Not available yet</h1><p>Please use your browser's Back button to return "
-                           "to your order and try again later.</p></html>")
+                    return Response(
+                        result["body"],
+                        headers={
+                            **headers,
+                            "Content-Type": mime,
+                            "Content-Disposition": "attachment; filename*=UTF-8''" + quote(filename, safe=""),
+                        },
+                    )
+                message = (
+                    "<!doctype html><html lang='en'><meta charset='utf-8'><title>Resource unavailable</title>"
+                    "<h1>Not available yet</h1><p>Please use your browser's Back button to return "
+                    "to your order and try again later.</p></html>"
+                )
                 return Response(message, status=404, headers={**headers, "Content-Type": "text/html; charset=utf-8"})
             names = {source.product_key: source.title for source in COMPILED_CATALOGUE.catalogue_sources}
             output = []
@@ -271,12 +330,42 @@ def create_app(
                     if not isinstance(label, str) or len(label) > 180:
                         label = "Resource"
                     available = isinstance(config, dict)
-                    entries.append({"index": f"{item_index}.{resource_index}",
-                                    "name": label if available else "Resource — not available yet",
-                                    "available": available})
-                output.append({"title": names.get(item["product_key"], item["product_key"]),
-                               "quantity": item["quantity"], "resources": entries})
-            return Response({"items": output}, headers=headers)
+                    entries.append(
+                        {
+                            "index": f"{item_index}.{resource_index}",
+                            "name": label if available else "Resource — not available yet",
+                            "available": available,
+                        }
+                    )
+                output.append(
+                    {
+                        "title": names.get(item["product_key"], item["product_key"]),
+                        "quantity": item["quantity"],
+                        "resources": entries,
+                    }
+                )
+            reviews = None
+            try:
+                import hashlib
+
+                scope = await order_reviews.first(
+                    request.env.DB,
+                    "SELECT order_id FROM order_access WHERE token_digest=? AND merchant=? "
+                    "AND environment='test' AND revoked_at IS NULL",
+                    hashlib.sha256(args["token"].encode()).hexdigest(),
+                    merchant,
+                )
+                message = await order_reviews.first(
+                    request.env.DB,
+                    "SELECT * FROM order_review_messages WHERE merchant_id=? AND environment='test' AND order_id=?",
+                    merchant,
+                    scope["order_id"],
+                )
+                if message:
+                    reviews = await _review_message_links(request.env, message)
+            except Exception:
+                pass
+            return Response({"items": output, **({"reviews": reviews} if reviews else {})}, headers=headers)
         except Exception:
             return Response({"error": "order unavailable"}, status=404, headers=headers)
 
@@ -426,6 +515,7 @@ async def checkout_service_from_environment(env) -> CheckoutService:
         cancel_url,
         review_invitations_enabled=_automatic_invitation_enabled(env),
         review_invitation_default_selected=getattr(env, "CARTRAY_REVIEW_INVITATION_DEFAULT", None) == "checked",
+        review_invitation_request_limit=2 if getattr(env, 'CARTRAY_REVIEW_INVITATION_LIMIT', '1') == '2' else 1,
     )
 
 
@@ -677,7 +767,8 @@ class Default(WorkerEntrypoint):
 
     async def scheduled(self, controller, env, ctx):
         try:
-            await scheduled_reconciliation_from_environment(self.env)
+            if str(getattr(controller, "cron", "")) != "* * * * *":
+                await scheduled_reconciliation_from_environment(self.env)
         finally:
             try:
                 if getattr(self.env, "CARTRAY_REVIEWS_PRODUCER", "disabled") == "test":
@@ -689,7 +780,9 @@ class Default(WorkerEntrypoint):
                     getattr(self.env, "CARTRAY_POST_PURCHASE_MODE", "disabled") == "test"
                     and getattr(self.env, "CARTRAY_ENVIRONMENT", "") == "test"
                 ):
-                    ctx.waitUntil(_drain_post_purchase(self.env))
+                    await _drain_post_purchase(
+                        self.env, priority=('recovery', 'followup', 'receipt')[int(time.time()) // 60 % 3]
+                    )
             except Exception:
                 pass
 
@@ -705,7 +798,14 @@ def _internal_post(url, token, body=None):
     return Request.new(url, to_js(options, dict_converter=__import__("js").Object.fromEntries))
 
 
-async def _drain_post_purchase(env):
+async def _drain_post_purchase(env, *, priority="receipt"):
+    try:
+        await asyncio.wait_for(_drain_order_notifications(env, priority=priority), timeout=22)
+    except TimeoutError:
+        print("Order notification invocation reached its time budget")
+
+
+async def _drain_order_notifications(env, *, priority="receipt"):
     """Test-only best-effort drain; absent checkpoint or handler fails closed."""
     try:
         if getattr(env, "CARTRAY_POST_PURCHASE_MODE", "disabled") != "test" or _test_environment(env) != "test":
@@ -722,18 +822,20 @@ async def _drain_post_purchase(env):
 
         async def receipt_handler(purchase):
             names = {source.product_key: source.title for source in COMPILED_CATALOGUE.catalogue_sources}
+
             def receipt_title(key):
                 title = names.get(key, key)
                 if not isinstance(title, str):
                     return key
                 title = " ".join("".join(c if c.isprintable() else " " for c in title).split())
                 return title[:100] or key
+
             access_url = None
             if getattr(env, "CARTRAY_ORDER_ACCESS_MODE", "disabled") == "test":
                 try:
-                    capability = await issue_order_access(
+                    capability = await asyncio.wait_for(issue_order_access(
                         env.DB, _required_env(env, "CARTRAY_ORDER_ACCESS_KEY"), merchant, "test", purchase.order_id
-                    )
+                    ), timeout=2)
                     path = getattr(env, "CARTRAY_ORDER_ACCESS_PATH", "/order-access")
                     if not isinstance(path, str) or not re.fullmatch(r"/(?:[A-Za-z0-9_-]+/)*order-access", path):
                         raise ValueError("invalid order path")
@@ -743,13 +845,23 @@ async def _drain_post_purchase(env):
                 except Exception:
                     # A resource outage never prevents the payment receipt.
                     access_url = None
-            body = json.dumps(
-                {"type": "order_confirmation", "merchant": merchant, "environment": "test",
-                 "order_id": purchase.order_id, "session_id": purchase.session_id, "access_url": access_url,
-                 "items": [{"product_key": key, "quantity": quantity, "title": receipt_title(key)}
-                           for key, quantity in purchase.items]},
-                separators=(",", ":"),
-            )
+            envelope = {
+                "type": "order_confirmation",
+                "merchant": merchant,
+                "environment": "test",
+                "order_id": purchase.order_id,
+                "session_id": purchase.session_id,
+                "access_url": access_url,
+                "items": [
+                    {"product_key": key, "quantity": quantity, "title": receipt_title(key)}
+                    for key, quantity in purchase.items
+                ],
+            }
+            try:
+                envelope["reviews"] = await asyncio.wait_for(_receipt_reviews(env, envelope), timeout=4)
+            except Exception as error:
+                print(f"Review inclusion unavailable: {type(error).__name__}")
+            body = json.dumps(envelope, separators=(",", ":"))
             request = _internal_post("https://post-purchase-handler.internal/", token, body)
             response = await asyncio.wait_for(service.fetch(request), timeout=8)
             if response.status != 200:
@@ -761,15 +873,411 @@ async def _drain_post_purchase(env):
                 raise RuntimeError("post-purchase handler outcome uncertain")
             return result.get("provider_reference")
 
+        deadline = time.monotonic() + 21
+        reviews = bool(getattr(env, 'CARTRAY_REVIEW_SUBJECT_MAPS', None))
+
+        async def review_stage(stage):
+            try:
+                await stage(env, service, token, deadline=deadline)
+            except Exception:
+                # Review faults must not suppress an otherwise valid receipt.
+                print("Order review processing deferred; inspect installation health")
+
+        if reviews and priority == 'recovery':
+            await review_stage(_drain_review_recovery)
+        if reviews and priority == 'followup':
+            await review_stage(_drain_review_followups)
         dispatcher = OrderReceiptDispatcher(env.DB, merchant, "test", {"receipt": receipt_handler})
         await asyncio.wait_for(
-            drain_confirmed_d1(dispatcher, (), limit=10, max_new_claims=2, deadline=time.monotonic() + 21),
+            drain_confirmed_d1(dispatcher, (), limit=10, max_new_claims=2, deadline=deadline),
             timeout=22,
         )
+        if reviews and priority != 'followup':
+            await review_stage(_drain_review_followups)
+        if reviews and priority != 'recovery':
+            await review_stage(_drain_review_recovery)
     except Exception as error:
         # Checkout is already committed; cron retries the durable checkpoint.
         print(f"Post-purchase drain failed: {type(error).__name__}")
         return
+
+
+class MailRequestRejected(ValueError):
+    """The private handler definitively refused this request before delivery."""
+
+
+async def _mail_call(service, token, envelope, *, fetch_timeout=8):
+    response = await asyncio.wait_for(
+        service.fetch(
+            _internal_post(
+                "https://post-purchase-handler.internal/", token, json.dumps(envelope, separators=(",", ":"))
+            )
+        ),
+        fetch_timeout,
+    )
+    if response.status == 422:
+        raise MailRequestRejected("mail request rejected")
+    if response.status != 200:
+        raise ValueError("mail service unavailable")
+    value = await asyncio.wait_for(response.json(), 2)
+    return value.to_py() if hasattr(value, "to_py") else value
+
+
+async def _receipt_reviews(env, envelope):
+    message = await _prepare_order_reviews(env, envelope)
+    return await _review_message_links(env, message, receipt=True) if message else None
+
+
+async def _prepare_order_reviews(env, envelope):
+    settings = order_reviews.ReviewSettings.parse(getattr(env, "CARTRAY_REVIEW_SETTINGS", "{}"))
+    mapping = json.loads(getattr(env, "CARTRAY_REVIEW_SUBJECT_MAPS", "{}"))
+    if settings.timing == "off" or not mapping:
+        return None
+    evidence = await _mail_call(
+        env.POST_PURCHASE_HANDLER, env.CARTRAY_POST_PURCHASE_TOKEN, {**envelope, "type": "recipient_evidence"}
+    )
+    return await order_reviews.prepare(
+        env.DB,
+        merchant=envelope["merchant"],
+        environment="test",
+        order=envelope["order_id"],
+        email=evidence["email"],
+        hash_secret=_required_env(env, "CARTRAY_RECIPIENT_HASH_KEY"),
+        key_version=getattr(env, "CARTRAY_RECIPIENT_HASH_KEY_VERSION", "key1"),
+        installation=_required_env(env, "CARTRAY_INSTALLATION_ID"),
+        subject_map=mapping,
+        settings=settings,
+        now=int(time.time()),
+    )
+
+
+async def _review_message_links(env, message, *, receipt=False):
+    if not await order_reviews.permitted(
+        env.DB, message["merchant_id"], "test", message["order_id"], message["recipient_hash"]
+    ):
+        return None
+    invitation = await order_reviews.first(
+        env.DB,
+        "SELECT token_hash FROM acquisition_invitations "
+        "WHERE store_key=? AND environment='test' AND acquisition_id=? AND revoked_at IS NULL",
+        message["merchant_id"],
+        message["order_id"],
+    )
+    import hashlib
+
+    if not invitation or invitation["token_hash"] != hashlib.sha256(message["invitation_token"].encode()).hexdigest():
+        return None
+    settings = order_reviews.ReviewSettings.parse(message["settings_json"])
+    if receipt and settings.timing not in ("receipt", "both"):
+        return None
+    column = "receipt_selection_json" if receipt else "selection_json"
+    selection = message[column] if receipt else None
+    if selection is None:
+        selected = settings.select(
+            await order_reviews.outstanding(env.DB, message["merchant_id"], "test", message["order_id"])
+        )
+        selection = json.dumps(selected)
+        if receipt:
+            await (
+                env.DB.prepare(
+                    f"UPDATE order_review_messages SET {column}=? WHERE merchant_id=? "
+                    f"AND environment='test' AND order_id=? AND {column} IS NULL"
+                )
+                .bind(json.dumps(selected), message["merchant_id"], message["order_id"])
+                .run()
+            )
+            saved = await order_reviews.first(
+                env.DB,
+                f"SELECT {column} FROM order_review_messages WHERE merchant_id=? AND environment='test' AND order_id=?",
+                message["merchant_id"],
+                message["order_id"],
+            )
+            selection = saved[column]
+    subjects = json.loads(selection)
+    if not subjects:
+        return None
+    origin = _origin(_required_env(env, "CARTRAY_STOREFRONT_ORIGIN"))
+    return {
+        "url": origin
+        + "/review/#invitation="
+        + message["invitation_token"]
+        + "&featured="
+        + quote(",".join(subjects), safe=""),
+        "unsubscribe_url": origin
+        + getattr(env, "CARTRAY_SOURCE_API_PATH", "")
+        + "/review-unsubscribe?token="
+        + message["unsubscribe_token"],
+        "subjects": subjects,
+        "names": await _review_subject_names(env.DB, message["merchant_id"], subjects),
+    }
+
+
+async def _review_subject_names(db, merchant, subjects):
+    from cartray.store import _results
+
+    rows = _results(
+        await db.prepare(
+            "SELECT subject_id,public_name FROM review_subject_display_names WHERE store_key=? AND environment='test' "
+            "AND subject_id IN (SELECT value FROM json_each(?))"
+        )
+        .bind(merchant, json.dumps(subjects))
+        .all()
+    )
+    return {row["subject_id"]: row["public_name"] for row in rows}
+
+
+async def _drain_review_followups(env, service, token, *, deadline):
+    # Same cron and provider as the receipt. No separate queue or activation.
+    from cartray.store import _results
+
+    merchant = env.CARTRAY_MERCHANT_ID
+    rows = _results(
+        await env.DB.prepare(
+            "SELECT * FROM order_review_messages WHERE merchant_id=? "
+            "AND environment='test' AND state='pending' AND due_at<=? ORDER BY due_at LIMIT 2"
+        )
+        .bind(merchant, int(time.time()))
+        .all()
+    )
+    for message in rows:
+        if time.monotonic() + 12 >= deadline:
+            return
+        links = None
+        settings = order_reviews.ReviewSettings.parse(getattr(env, "CARTRAY_REVIEW_SETTINGS", "{}"))
+        if settings.timing in ("both", "followup") and await order_reviews.permitted(
+            env.DB, merchant, "test", message["order_id"], message["recipient_hash"]
+        ):
+            links = await _review_message_links(env, message)
+        if not links:
+            await (
+                env.DB.prepare(
+                    "UPDATE order_review_messages SET state='skipped' WHERE merchant_id=? "
+                    "AND environment='test' AND order_id=? AND state='pending' AND invitation_token=?"
+                )
+                .bind(merchant, message["order_id"], message["invitation_token"])
+                .run()
+            )
+            continue
+        if not await order_reviews.claim_followup(env.DB, message, links["subjects"]):
+            continue
+        state, reference = "uncertain", None
+        try:
+            purchase = await order_reviews.first(
+                env.DB,
+                "SELECT external_session_id FROM checkout_sessions WHERE order_id=? AND settlement_state='confirmed'",
+                message["order_id"],
+            )
+            items = _results(
+                await env.DB.prepare("SELECT product_key,quantity FROM order_items WHERE order_id=?")
+                .bind(message["order_id"])
+                .all()
+            )
+            result = await _mail_call(
+                service,
+                token,
+                {
+                    "type": "review_followup",
+                    "merchant": merchant,
+                    "environment": "test",
+                    "order_id": message["order_id"],
+                    "session_id": purchase["external_session_id"],
+                    "access_url": None,
+                    "items": [{**row, "title": row["product_key"]} for row in items],
+                    "reviews": links,
+                },
+            )
+            reference = result.get("provider_reference")
+            if isinstance(reference, str) and 0 < len(reference) <= 256:
+                state = "accepted"
+        except Exception:
+            pass  # Unknown provider outcomes require explicit reconciliation.
+        finally:
+            await (
+                env.DB.prepare(
+                    "UPDATE order_review_messages SET state=?,provider_reference=? WHERE merchant_id=? "
+                    "AND environment='test' AND order_id=? AND state='claimed'"
+                )
+                .bind(state, reference, merchant, message["order_id"])
+                .run()
+            )
+
+
+async def _fail_order_recovery(db, merchant, message):
+    await (
+        db.prepare(
+            "UPDATE review_recovery_requests SET state='failed' WHERE store_key=? "
+            "AND environment='test' AND acquisition_id=? AND request_id=? AND state='pending'"
+        )
+        .bind(merchant, message["order_id"], message["request_id"])
+        .run()
+    )
+
+
+async def _defer_order_recovery(db, merchant, message):
+    # Reuse the native ledger: a temporarily unusable purchase cannot monopolize
+    # recovery turns, and deferral never authorizes a provider retry.
+    await db.prepare(
+        "INSERT INTO review_recovery_deferrals VALUES (?,'test',?,?,?) "
+        "ON CONFLICT(store_key,environment,acquisition_id) DO UPDATE SET "
+        "request_id=excluded.request_id,retry_after=excluded.retry_after"
+    ).bind(merchant,message['order_id'],message['request_id'],int(time.time())+300).run()
+
+
+async def _drain_review_recovery(env, service, token, *, deadline):
+    """Customer-requested replacements reuse native generations and the shared provider."""
+    import secrets
+
+    from cartray_reviews.invitations import claim_delivery, prepare_replacement, record_delivery_outcome
+
+    from cartray.store import _results
+
+    merchant = env.CARTRAY_MERCHANT_ID
+    rows = _results(
+        await env.DB.prepare("""SELECT r.acquisition_id,r.request_id,m.* FROM review_recovery_requests r
+        JOIN order_review_messages m ON m.merchant_id=r.store_key AND m.environment=r.environment
+          AND m.order_id=r.acquisition_id LEFT JOIN review_recovery_deferrals d
+          ON d.store_key=r.store_key AND d.environment=r.environment AND d.acquisition_id=r.acquisition_id
+          AND d.request_id=r.request_id
+        WHERE r.store_key=? AND r.environment='test' AND r.state='pending'
+          AND (d.retry_after IS NULL OR d.retry_after<=?)
+          AND NOT EXISTS(SELECT 1 FROM invitation_generations g WHERE g.store_key=r.store_key
+            AND g.environment=r.environment AND g.acquisition_id=r.acquisition_id
+            AND g.request_key='recovery-'||r.request_id AND g.state<>'prepared')
+        ORDER BY COALESCE(d.retry_after,r.requested_at),r.requested_at LIMIT 1""")
+        .bind(merchant,int(time.time()))
+        .all()
+    )
+    for message in rows:
+        if time.monotonic() + 18 >= deadline:
+            return
+        if not await order_reviews.permitted(env.DB, merchant, "test", message["order_id"], message["recipient_hash"]):
+            await _fail_order_recovery(env.DB, merchant, message)
+            continue
+        purchase = await order_reviews.first(
+            env.DB,
+            "SELECT external_session_id FROM checkout_sessions WHERE order_id=? AND settlement_state='confirmed'",
+            message["order_id"],
+        )
+        if not purchase or not purchase.get("external_session_id"):
+            await _fail_order_recovery(env.DB, merchant, message)
+            continue
+        items = _results(
+            await env.DB.prepare("SELECT product_key,quantity FROM order_items WHERE order_id=?")
+            .bind(message["order_id"])
+            .all()
+        )
+        envelope = {
+            "type": "recipient_evidence",
+            "merchant": merchant,
+            "environment": "test",
+            "order_id": message["order_id"],
+            "session_id": purchase["external_session_id"],
+            "access_url": None,
+            "items": [{**item, "title": item["product_key"]} for item in items],
+        }
+        try:
+            evidence = await _mail_call(service, token, envelope, fetch_timeout=3)
+        except MailRequestRejected:
+            await _fail_order_recovery(env.DB, merchant, message)
+            continue
+        except Exception:
+            await _defer_order_recovery(env.DB, merchant, message)
+            continue
+
+        recipient = order_reviews.recipient_hash(env.CARTRAY_RECIPIENT_HASH_KEY, merchant, "test", evidence["email"])
+        if not hmac.compare_digest(recipient, message["recipient_hash"]):
+            await _fail_order_recovery(env.DB, merchant, message)
+            continue  # A changed contact is not authority to redirect an issued capability.
+        available = _results(
+            await env.DB.prepare(
+                "SELECT subject_id FROM acquisition_invitation_subjects "
+                "WHERE store_key=? AND environment='test' AND acquisition_id=? AND consumed_at IS NULL"
+            )
+            .bind(merchant, message["order_id"])
+            .all()
+        )
+        selected = [row["subject_id"] for row in available]
+        if not selected:
+            await _fail_order_recovery(env.DB, merchant, message)
+            continue
+        now = int(time.time())
+        try:
+            draft = await prepare_replacement(
+                env.DB,
+                store=merchant,
+                environment="test",
+                acquisition=message["order_id"],
+                request_key="recovery-" + message["request_id"],
+                recovery_request_id=message["request_id"],
+                key_version="v1",
+                secret=env.CARTRAY_REVIEW_INVITATION_KEY.encode(),
+                now=now,
+                random_token=lambda: secrets.token_hex(32),
+            )
+        except ValueError:
+            await _defer_order_recovery(env.DB, merchant, message)
+            continue
+        if draft["state"] != "prepared":
+            continue  # Accepted, dispatching and uncertain deliveries are never resent.
+        # Reserve the final send, result read and durable outcome write before
+        # claiming. A prepared generation can safely resume without sending.
+        if time.monotonic() + 12 >= deadline:
+            return
+        try:
+            await claim_delivery(
+                env.DB,
+                store=merchant,
+                environment="test",
+                acquisition=message["order_id"],
+                generation=draft["generation_id"],
+                delivery=draft["delivery_identity"],
+                now=now,
+            )
+        except ValueError:
+            continue  # Another claimant or a failed guard owns the disposition.
+        # A cancelled/unacknowledged claim stays dispatching for inspection. Do
+        # not overwrite another worker's outcome without a confirmed own claim.
+        outcome, reference = "uncertain", None
+        try:
+            origin = _origin(env.CARTRAY_STOREFRONT_ORIGIN)
+            result = await _mail_call(
+                service,
+                token,
+                {
+                    **envelope,
+                    "type": "review_followup", "delivery_identity":draft['delivery_identity'],
+                    "reviews": {
+                        "url": origin + "/review/#invitation=" + draft["token"],
+                        "subjects": selected,
+                        "unsubscribe_url": origin
+                        + getattr(env, "CARTRAY_SOURCE_API_PATH", "")
+                        + "/review-unsubscribe?token="
+                        + message["unsubscribe_token"],
+                    },
+                },
+            )
+            reference = result.get("provider_reference")
+            if isinstance(reference, str) and 0 < len(reference) <= 256:
+                outcome = "accepted"
+        finally:
+            outcome_time = int(time.time())
+            await record_delivery_outcome(
+                env.DB,
+                store=merchant,
+                environment="test",
+                acquisition=message["order_id"],
+                generation=draft["generation_id"],
+                delivery=draft["delivery_identity"],
+                outcome=outcome,
+                now=outcome_time,
+                accepted_at=outcome_time if outcome == "accepted" else None,
+                lifetime=None,
+                order_message_token=draft["token"] if outcome == "accepted" else None,
+                order_provider_reference=reference if outcome == "accepted" else None,
+                provider_email_id=(
+                    reference if outcome == "accepted" and re.fullmatch(r"[A-Za-z0-9_-]{1,128}", reference) else None
+                ),
+            )
 
 
 async def _wake_reviews_subscriber(env):

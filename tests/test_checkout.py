@@ -284,3 +284,28 @@ def test_stale_manifest_unknown_item_duplicate_and_quantity_are_rejected(checkou
         )
     with pytest.raises(CheckoutValidationError, match="quantity"):
         checkout(service, CheckoutRequest("quantity", service.catalogue.version, (CanonicalItem("TEST-TEMPLATE", 2),)))
+
+
+def test_reopened_sqlite_preserves_old_grants_and_records_new_limits(checkout_service):
+    from cartray.store import SCHEMA, SqliteOrderStore
+
+    service,gateway = checkout_service
+    checkout(service,valid_request(service.catalogue,'legacy-order'))
+    db = service.store.connection
+    db.execute('DROP TABLE review_invitation_checkout_grants')
+    legacy_schema = SCHEMA.replace(',\n  request_limit INTEGER CHECK(request_limit IN (1,2))','')
+    db.executescript(legacy_schema)
+    db.execute("INSERT INTO review_invitation_checkout_grants VALUES (?,?,?,?,?,?)",
+               (gateway.requests[0].order_id,'review-invitation-v1','Original disclosure',100,0,'express_opt_in'))
+    db.commit()
+    service.store = SqliteOrderStore(db)
+    service.review_invitations_enabled = True
+    service.review_invitation_request_limit = 2
+    request = replace(valid_request(service.catalogue,'new-order'),review_invitation_opt_in=True,
+                      review_invitation_wording_version='review-invitation-v2')
+    checkout(service,request)
+    rows = db.execute(
+        'SELECT wording,request_limit FROM review_invitation_checkout_grants ORDER BY granted_at'
+    ).fetchall()
+    assert [tuple(row) for row in rows] == [('Original disclosure',None),
+        ('Include a review request in my order confirmation and send one review follow-up.',2)]

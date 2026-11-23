@@ -13,6 +13,18 @@ from .models import CheckoutOrder, CheckoutRedirect, OrderItem
 REVIEW_INVITATION_WORDING_VERSION = "review-invitation-v1"
 REVIEW_INVITATION_WORDING = "Email me one request to review my purchase."
 
+
+def review_invitation_disclosure(limit=1, *, version=None):
+    if version is not None:
+        if version not in ('review-invitation-v1', 'review-invitation-v2'):
+            raise ValueError('invalid review disclosure version')
+        limit = 2 if version == 'review-invitation-v2' else 1
+    if limit == 2:
+        return ('review-invitation-v2',
+                'Include a review request in my order confirmation and send one review follow-up.')
+    return REVIEW_INVITATION_WORDING_VERSION, REVIEW_INVITATION_WORDING
+
+
 # Public receipt allowlist: never select buyer data, provider IDs or fulfilment resources.
 _CHECKOUT_RECEIPT_SQL = """SELECT i.product_key, i.quantity, i.unit_amount_minor, o.currency
     FROM checkout_sessions AS s
@@ -79,7 +91,8 @@ CREATE TABLE IF NOT EXISTS review_invitation_checkout_grants (
   wording TEXT NOT NULL,
   granted_at INTEGER NOT NULL,
   merchant_default_selected INTEGER NOT NULL CHECK(merchant_default_selected IN (0,1)),
-  selection_basis TEXT NOT NULL CHECK(selection_basis IN ('express_opt_in', 'preselected_acceptance'))
+  selection_basis TEXT NOT NULL CHECK(selection_basis IN ('express_opt_in', 'preselected_acceptance')),
+  request_limit INTEGER CHECK(request_limit IN (1,2))
 );
 CREATE TABLE IF NOT EXISTS review_invitation_checkout_choices (
   order_id TEXT PRIMARY KEY REFERENCES orders(order_id),
@@ -247,6 +260,20 @@ class SqliteOrderStore:
         self.connection.row_factory = sqlite3.Row
         self.lease_seconds = lease_seconds
         self.connection.executescript(SCHEMA)
+        columns = {row["name"] for row in self.connection.execute(
+            "PRAGMA table_info(review_invitation_checkout_grants)"
+        )}
+        if "request_limit" not in columns:
+            try:
+                self.connection.execute(
+                    "ALTER TABLE review_invitation_checkout_grants "
+                    "ADD COLUMN request_limit INTEGER CHECK(request_limit IN (1,2))"
+                )
+            except sqlite3.OperationalError:
+                # Another opener may have completed the same additive upgrade.
+                current = self.connection.execute("PRAGMA table_info(review_invitation_checkout_grants)")
+                if "request_limit" not in {row["name"] for row in current}:
+                    raise
 
     @classmethod
     def in_memory(cls, *, lease_seconds: int = 60) -> SqliteOrderStore:
@@ -320,24 +347,27 @@ class SqliteOrderStore:
                 (order.order_id, nonce, now + self.lease_seconds, now),
             )
             if order.review_invitation_policy_enabled:
+                wording_version, wording = review_invitation_disclosure(
+                    version=order.review_invitation_wording_version
+                )
                 try:
                     self.connection.execute(
                         "INSERT INTO review_invitation_checkout_choices "
                         "(order_id, selected, merchant_default_selected, wording_version, wording, recorded_at) "
                         "VALUES (?, ?, ?, ?, ?, ?)",
                         (order.order_id, int(order.review_invitation_opt_in),
-                         int(order.review_invitation_default_selected), REVIEW_INVITATION_WORDING_VERSION,
-                         REVIEW_INVITATION_WORDING, now),
+                         int(order.review_invitation_default_selected), wording_version,
+                         wording, now),
                     )
                     if order.review_invitation_opt_in:
                         self.connection.execute(
                             "INSERT INTO review_invitation_checkout_grants "
                             "(order_id, wording_version, wording, granted_at, merchant_default_selected, "
-                            "selection_basis) VALUES (?, ?, ?, ?, ?, ?)",
-                            (order.order_id, REVIEW_INVITATION_WORDING_VERSION, REVIEW_INVITATION_WORDING, now,
+                            "selection_basis, request_limit) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                            (order.order_id, wording_version, wording, now,
                              int(order.review_invitation_default_selected),
                              "preselected_acceptance" if order.review_invitation_default_selected
-                             else "express_opt_in"),
+                             else "express_opt_in", order.review_invitation_request_limit),
                         )
                 except sqlite3.DatabaseError:
                     # An unavailable optional Reviews permission store cannot stop checkout.
@@ -938,21 +968,25 @@ class D1OrderStore:
         )
         try:
             if order.review_invitation_policy_enabled:
+                wording_version, wording = review_invitation_disclosure(
+                    version=order.review_invitation_wording_version
+                )
                 choices = [self.database.prepare(
                     "INSERT INTO review_invitation_checkout_choices "
                     "(order_id, selected, merchant_default_selected, wording_version, wording, recorded_at) "
                     "VALUES (?, ?, ?, ?, ?, ?)"
                 ).bind(order.order_id, int(order.review_invitation_opt_in),
-                       int(order.review_invitation_default_selected), REVIEW_INVITATION_WORDING_VERSION,
-                       REVIEW_INVITATION_WORDING, now)]
+                       int(order.review_invitation_default_selected), wording_version,
+                       wording, now)]
                 if order.review_invitation_opt_in:
                     choices.append(self.database.prepare(
                         "INSERT INTO review_invitation_checkout_grants "
                         "(order_id, wording_version, wording, granted_at, merchant_default_selected, "
-                        "selection_basis) VALUES (?, ?, ?, ?, ?, ?)"
-                    ).bind(order.order_id, REVIEW_INVITATION_WORDING_VERSION, REVIEW_INVITATION_WORDING, now,
+                        "selection_basis, request_limit) VALUES (?, ?, ?, ?, ?, ?, ?)"
+                    ).bind(order.order_id, wording_version, wording, now,
                            int(order.review_invitation_default_selected),
-                           "preselected_acceptance" if order.review_invitation_default_selected else "express_opt_in"))
+                           "preselected_acceptance" if order.review_invitation_default_selected else "express_opt_in",
+                           order.review_invitation_request_limit))
                 try:
                     await self.database.batch([*statements, *choices])
                 except Exception:

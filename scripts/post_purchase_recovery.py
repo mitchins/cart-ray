@@ -21,6 +21,8 @@ def main():
     parser.add_argument("--merchant", required=True)
     parser.add_argument("--offset", type=int, default=0, help="inspection page offset (100 records per page)")
     parser.add_argument("--local", action="store_true", help="use the local Wrangler D1 instead of remote")
+    parser.add_argument("--include-review-followups", action="store_true",
+                        help="include the optional Reviews message ledger in this shared database")
     parser.add_argument("--order")
     parser.add_argument("--workflow")
     parser.add_argument("--digest", help="action digest observed during inspection")
@@ -48,6 +50,19 @@ def main():
             "ORDER BY CASE state WHEN 'claimed' THEN 0 ELSE 1 END,updated_at,order_id,workflow_key "
             f"LIMIT 100 OFFSET {args.offset};"
         )
+        if args.include_review_followups:
+            sql += ("SELECT order_id,'review-followup' AS purpose,state,provider_reference,attempted_at,"
+                    "CAST(strftime('%s','now') AS INTEGER)-attempted_at AS age_seconds "
+                    "FROM order_review_messages WHERE merchant_id=" + merchant +
+                    " AND environment='test' AND state IN ('claimed','uncertain') "
+                    f"ORDER BY attempted_at,order_id LIMIT 100 OFFSET {args.offset};")
+            sql += ("SELECT g.acquisition_id AS order_id,'review-recovery' AS purpose,g.state,"
+                    "g.generation_id,g.delivery_identity,g.prepared_at "
+                    "FROM invitation_generations g JOIN order_review_messages m "
+                    "ON m.merchant_id=g.store_key AND m.environment=g.environment AND m.order_id=g.acquisition_id "
+                    "WHERE g.store_key=" + merchant + " AND g.environment='test' "
+                    "AND g.state IN ('dispatching','uncertain') "
+                    f"ORDER BY g.prepared_at,g.generation_id LIMIT 100 OFFSET {args.offset};")
     else:
         if (not args.confirm_worker_paused or not args.order or not IDENTIFIER.fullmatch(args.order)
                 or not args.workflow or not IDENTIFIER.fullmatch(args.workflow)

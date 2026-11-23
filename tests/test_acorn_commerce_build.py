@@ -326,6 +326,15 @@ def test_locked_wheel_integrity_and_vendor_parity(tmp_path, monkeypatch):
     assert build.verify_vendor(tmp_path, lock) == {name: "1.0" for name in build.PACKAGES}
     assert (vendor / "kinglet-1.0.dist-info/RECORD").read_bytes() == b"original wheel metadata\n"
     assert (bundle / "kinglet-1.0.dist-info/RECORD").read_bytes() == b"original wheel metadata\n"
+    native_source = tmp_path / 'modules/reviews/src/cartray_reviews'
+    for directory in (native_source, vendor/'cartray_reviews', bundle/'cartray_reviews'):
+        directory.mkdir(parents=True)
+        (directory/'__init__.py').write_text('# approved native library')
+    assert build.verify_vendor(tmp_path, lock) == {name: '1.0' for name in build.PACKAGES}
+    (vendor/'cartray_reviews/__init__.py').write_text('# changed native library')
+    with pytest.raises(RuntimeError, match='native Reviews library differs'):
+        build.verify_vendor(tmp_path, lock)
+    (vendor/'cartray_reviews/__init__.py').write_text('# approved native library')
     source = vendor / "kinglet/__init__.py"
     source.write_text("tampered")
     with pytest.raises(RuntimeError, match="vendored wheel file mismatch"):
