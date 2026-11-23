@@ -275,8 +275,9 @@ def test_missing_installation_binding_leaves_event_unclaimed():
     assert db.execute("SELECT last_outbox_id FROM post_purchase_checkpoint").fetchone()[0] == 1
 
 
+@pytest.mark.parametrize("legacy", [False, True])
 @pytest.mark.parametrize("response_status,expected_state", [(200, "accepted"), (503, "uncertain")])
-def test_worker_drain_calls_scoped_handler_and_never_replays(monkeypatch, response_status, expected_state):
+def test_worker_drain_calls_scoped_handler_and_never_replays(monkeypatch, response_status, expected_state, legacy):
     import sys
     from types import ModuleType, SimpleNamespace
 
@@ -316,8 +317,15 @@ def test_worker_drain_calls_scoped_handler_and_never_replays(monkeypatch, respon
         POST_PURCHASE_HANDLER=Service(),
         CARTRAY_MERCHANT_ID="store",
     )
+    if legacy:
+        env.CARTRAY_POST_PURCHASE_CONFIG = '{"legacy":true}'
     asyncio.run(worker._drain_post_purchase(env))
     asyncio.run(worker._drain_post_purchase(env))
+    if legacy:
+        assert seen == []
+        assert db.execute('SELECT COUNT(*) FROM post_purchase_executions').fetchone()[0] == 0
+        assert db.execute('SELECT last_outbox_id FROM post_purchase_checkpoint').fetchone()[0] == 1
+        return
     assert len(seen) == 1
     assert seen[0].url == "https://post-purchase-handler.internal/"
     assert seen[0].options["headers"]["authorization"] == "Bearer " + "t" * 32
@@ -380,17 +388,6 @@ def test_worker_handler_timeout_is_held_and_never_resent(monkeypatch):
     assert len(calls) == 1
     assert db.execute("SELECT state FROM post_purchase_executions").fetchone()[0] == "uncertain"
     assert db.execute("SELECT last_outbox_id FROM post_purchase_checkpoint").fetchone()[0] == 2
-
-
-def test_legacy_workflow_binding_does_not_authorize_order_wide_receipts():
-    from types import SimpleNamespace
-
-    from cartray.worker import _drain_post_purchase
-
-    env = SimpleNamespace(
-        CARTRAY_ENVIRONMENT="test", CARTRAY_POST_PURCHASE_MODE="test", CARTRAY_POST_PURCHASE_CONFIG='{"legacy":true}'
-    )
-    asyncio.run(_drain_post_purchase(env))
 
 
 def test_order_receipt_collapses_workflows_and_replay_without_backfill():

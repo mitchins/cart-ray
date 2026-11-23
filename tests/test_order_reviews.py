@@ -131,8 +131,12 @@ def purchase(fixture_catalogue, monkeypatch, request):
     db.conn.close()
 
 
-def test_receipt_and_followup_share_all_entitlements_but_select_outstanding(purchase):
+@pytest.mark.parametrize('priority',['second','TEST-SUPPORT-HOURS'])
+def test_receipt_and_followup_share_all_entitlements_but_select_outstanding(purchase,priority):
     db, env, sent, order = purchase
+    settings = json.loads(env.CARTRAY_REVIEW_SETTINGS)
+    settings['priorities'] = [priority]
+    env.CARTRAY_REVIEW_SETTINGS = json.dumps(settings)
     # Delay the follow-up until a real native subject is consumed.
     env.CARTRAY_REVIEW_SETTINGS = env.CARTRAY_REVIEW_SETTINGS.replace('"delay_days": 0', '"delay_days": 7')
     run(worker._drain_post_purchase(env))

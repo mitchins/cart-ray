@@ -57,7 +57,7 @@ class _ReceiptStore:
 
 
 async def drain_confirmed_d1(
-    dispatcher: _ReceiptStore,
+    dispatcher: OrderReceiptDispatcher,
     *,
     limit: int = 10,
     max_new_claims: int = 2,

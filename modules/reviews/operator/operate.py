@@ -29,7 +29,14 @@ from post_purchase_operator import (
     eligible_offers,
     validate_email_credential,
 )
-from topology import graph, post_purchase_secret_bindings, secret_bindings, validate_post_purchase, wrangler_config
+from topology import (
+    graph,
+    post_purchase_secret_bindings,
+    review_requests_enabled,
+    secret_bindings,
+    validate_post_purchase,
+    wrangler_config,
+)
 
 from cartray.merchant_contract import merchant_path, register_path
 from cartray.order_access import validate_resource_configuration
@@ -240,6 +247,7 @@ class Installation(PostPurchaseOperator):
         self.state = json.loads(self.state_path.read_text())
         self.config = validate_config(self.state["config"])
         if (any(k.startswith('queue:') for k in self.state.get('resources', {}))
+                or any(k.startswith('queue:') for k in self.state.get('pending', {}))
                 or self.state.get('post_purchase_provider_migration')):
             raise ValueError('retained legacy delivery installation: use its pinned release; '
                              'no automatic migration, secret replacement or resend')
@@ -1145,6 +1153,10 @@ class Installation(PostPurchaseOperator):
                 if errors:
                     raise ValueError("; ".join(errors))
             self.record_post_purchase_off(build)
+        else:
+            release = {**build, "versions": dict(progress["versions"]), "record_revision": 0, "sending": False}
+            if not self.state["releases"] or self.state["releases"][-1] != release:
+                self.state["releases"].append(release)
         self.state["deployment"]["complete"] = True
         migration = self.state.pop("post_purchase_provider_migration", None)
         if migration:
@@ -1201,16 +1213,6 @@ class Installation(PostPurchaseOperator):
                 shutil.copytree(site, staging)
                 storefront = javascript_json(site / "storefront-config.js", "window.CARTRAY_STOREFRONT = ")
                 storefront["reviewsEnabled"] = self.config["reviews_enabled"]
-                storefront["reviewInvitationsEnabled"] = (self.config["reviews_enabled"] and
-                    self.config.get("review_requests", {}).get("timing", "receipt") != "off")
-                storefront["reviewInvitationDefaultChecked"] = (
-                    self.config["reviews_enabled"] and self.config["review_invitation_default_checked"]
-                )
-                from cartray.store import review_invitation_disclosure
-                version, wording = review_invitation_disclosure(
-                    2 if self.config.get('review_requests', {}).get('timing') == 'both' else 1)
-                storefront['reviewInvitationWordingVersion'] = version
-                storefront['reviewInvitationWording'] = wording
                 storefront["reviewSubjects"] = self.config["subject_map"] if self.config["reviews_enabled"] else {}
                 theme = javascript_json(site / "site-config.js", "window.CARTRAY_THEME = ")
                 theme["contextPath"] = None
@@ -1249,6 +1251,18 @@ class Installation(PostPurchaseOperator):
                         self.config["preflight_lock"],
                     ],
                 )
+            config_path = staging / 'storefront-config.js'
+            if config_path.is_file():
+                source = config_path.read_text()
+                start = source.index('window.CARTRAY_STOREFRONT = ') + len('window.CARTRAY_STOREFRONT = ')
+                public, end = json.JSONDecoder().raw_decode(source[start:])
+                from cartray.store import review_invitation_disclosure
+                version, wording = review_invitation_disclosure(
+                    2 if self.config.get('review_requests', {}).get('timing') == 'both' else 1)
+                public.update(reviewInvitationsEnabled=review_requests_enabled(self.config),
+                              reviewInvitationDefaultChecked=self.config['review_invitation_default_checked'],
+                              reviewInvitationWordingVersion=version, reviewInvitationWording=wording)
+                config_path.write_text(source[:start] + json.dumps(public, ensure_ascii=True) + source[start+end:])
             (staging / ".operator-build-complete").write_text(build["commit"] + "\n")
             os.replace(staging, output)
             if "merchant_inputs" in self.config:
@@ -1356,6 +1370,22 @@ class Installation(PostPurchaseOperator):
         if (not self.state.get('deployment', {}).get('complete') or
                 self.state.get('build') != self.state['deployment'].get('commit')):
             raise ValueError('deploy the selected build before activation')
+        transition = self.state.get('post_purchase_transition')
+        if transition:
+            if transition['operation'] != 'activate':
+                raise ValueError('finish post-purchase-disable before authorizing test delivery')
+            self.pin_suppression()
+            nodes, _ = graph(self, self.state['deployment']['versions'])
+            errors = []
+            for role, node in nodes.items():
+                if role not in POST_PURCHASE_ROLES:
+                    errors.extend(self.worker_binding_errors(role, node, self.api.version(self.name(role)),
+                                  self.state['deployment']['versions'].get(role)))
+            if errors:
+                raise ValueError('; '.join(errors))
+            # The existing journal validates both transitioning Workers and the
+            # retained fence, including a publish whose acknowledgement was lost.
+            return self.post_purchase_activate(enable_test_delivery)
         self.verify()
         if self.post_purchase_fence()['status'] == 'uninitialised':
             from scripts.post_purchase_installation import remote_import, validate_backend
@@ -1628,7 +1658,7 @@ class Installation(PostPurchaseOperator):
             "commit": release["commit"],
             "versions": dict(versions),
             "complete": True,
-            "sending": release_sending if self.config["reviews_enabled"] else not self.has_post_purchase,
+            "sending": release_sending,
         }
         if self.has_post_purchase:
             self.state["deployment"]["post_purchase_disabled_versions"] = {

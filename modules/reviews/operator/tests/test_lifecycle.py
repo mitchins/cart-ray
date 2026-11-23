@@ -183,6 +183,7 @@ def test_read_only_reviews_install_has_no_sender_or_queue(tmp_path):
     install.deploy()
     assert len(provider.active) == 2
     assert install.queues == ()
+    assert not any(path.startswith("queues/") for path,_ in provider.calls)
     assert install.vault() == original
     assert install.state["activation_authorized"] is False
     with pytest.raises(ValueError, match="shared order-confirmation"):
@@ -196,3 +197,25 @@ def test_commerce_only_deploy_remains_independent(tmp_path):
     assert len(provider.active) == 1
     assert set(install.roles) == {"source"}
     assert not any(path.startswith("queues/") for path, _ in provider.calls)
+
+
+@pytest.mark.parametrize('reviews',[False,True])
+def test_no_mail_upgrade_and_rollback_retain_off_releases(tmp_path,reviews):
+    install,provider,database,_,_ = lifecycle(tmp_path,reviews)
+    build_at(install,'a'*40)
+    install.deploy()
+    install.verify()
+    install.deploy()
+    assert len(install.state['releases']) == 1
+    build_at(install,'b'*40)
+    install.deploy()
+    install.verify()
+    assert len(install.state['releases']) == 2
+    keys = install.vault()
+    connection = database.databases[install.db('commerce')][1]
+    before = list(connection.iterdump())
+    result = install.rollback(-2)
+    assert result['rollback_commit'] == 'a'*40
+    assert install.state['deployment']['sending'] is False
+    assert install.vault() == keys
+    assert list(connection.iterdump()) == before

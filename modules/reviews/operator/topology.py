@@ -45,6 +45,11 @@ def post_purchase_secret_bindings(role, provider="smtp2go"):
     return names
 
 
+def review_requests_enabled(config):
+    return bool(config.get('reviews_enabled') and config.get('post_purchase_config')
+                and config.get('review_requests', {}).get('timing', 'receipt') != 'off')
+
+
 def graph(
     installation, versions=None, sending=False, post_purchase_modes=None, email_provider=None, actions_override=None
 ):
@@ -94,7 +99,7 @@ def graph(
         preferences = config.get("review_requests", {})
         ReviewSettings.parse(json.dumps(preferences))
         nodes["source"]["vars"].update(
-            CARTRAY_REVIEW_INVITATION_MODE="disabled" if preferences.get("timing") == "off" else "automatic",
+            CARTRAY_REVIEW_INVITATION_MODE="automatic" if review_requests_enabled(config) else "disabled",
             CARTRAY_REVIEW_INVITATION_DEFAULT=(
                 "checked" if config.get("review_invitation_default_checked", True) else "unchecked"
             ),

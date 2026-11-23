@@ -3,6 +3,7 @@
 import importlib.util
 import json
 import sqlite3
+import stat
 import subprocess
 from copy import deepcopy
 from pathlib import Path
@@ -75,20 +76,21 @@ def test_ep_test_lane_can_enable_reviews_independently(tmp_path):
 
 
 
-@pytest.mark.parametrize("change", [
-    {"offer_keys": ["EP-UAT-131"]}, {"offer_keys": ["EP-UAT-171", "EP-UAT-131"]},
-    {"workflow_key": "ep:woo:workflow:131"}, {"recipient": "someone@example.test"},
-    {"links": ["https://www.dropbox.com/t/other"]}, {"environment": "live"},
-    {"stripe_account": "acct_Wrong"}, {"sender": "a@example.test\r\nBcc:x@example.test"},
-])
-def test_actions_cannot_exceed_approved_scope(change):
-    with pytest.raises(ValueError):
-        validate_post_purchase({"schema": 1, "actions": [{**ACTION, **change}]},
-                               {"store_key": MERCHANT, "stripe_account_id": ACCOUNT},
-                               {"EP-UAT-131", "EP-UAT-171"})
+@pytest.mark.parametrize('field',['sender','recipient'])
+def test_schema2_rejects_malformed_mailboxes(field):
+    value = {'schema':2,'sender':'sender@example.test','recipient':'recipient@example.test'}
+    value[field] = 'a@example.test\r\nBcc:x@example.test'
+    with pytest.raises(ValueError,match='approved sender and recipient'):
+        validate_post_purchase(value,{},set())
 
 
-
+def test_schema1_handoff_is_rejected_before_inventory_creation(tmp_path):
+    options = handoff(tmp_path)
+    atomic_json(Path(options['post_purchase_config']),{'schema':1,'actions':[ACTION]})
+    target = tmp_path / 'installation'
+    with pytest.raises(ValueError,match='per-workflow email configuration is retired'):
+        Installation.plan(target,options)
+    assert not (target / 'inventory.json').exists()
 
 
 
@@ -360,13 +362,13 @@ def test_activation_resumes_a_published_version_without_reupload(deployed, inter
     api.events.clear()
     api.fail_publish = install.name(interrupted_role)
     with pytest.raises(CloudError, match="reply lost"):
-        install.post_purchase_activate(True)
+        install.activate(True)
     reload = Installation(install.directory, CREDS, api)
     assert reload.doctor()["post_purchase"]["pending"] == "activate"
-    assert reload.post_purchase_activate(True)["modes"] == ON
+    assert reload.activate(True)["modes"] == ON
     assert reload.doctor()["healthy"]
     assert reload.state["activation_authorized"] is False
-    assert reload.post_purchase_activate(True)["post_purchase"] == "already-active"
+    assert reload.activate(True)["post_purchase"] == "already-active"
     assert api.events == [("upload", install.name("post-purchase")), ("publish", install.name("post-purchase")),
                           ("upload", install.name("source")), ("publish", install.name("source"))]
     assert list(db.iterdump()) == before
@@ -535,3 +537,26 @@ def test_legacy_activation_reports_handover_without_deleted_helpers(tmp_path,mon
     monkeypatch.setattr(install,'post_purchase_actions',lambda: ())
     with pytest.raises(ValueError,match='schema-2 order-confirmation handover'):
         install.post_purchase_activate(True)
+
+
+def test_schema2_snapshot_keeps_existing_file_protection(tmp_path):
+    options = handoff(tmp_path)
+    target,input_path = tmp_path / 'installation',Path(options['post_purchase_config'])
+    original = json.loads(input_path.read_text())
+    input_path.chmod(0o644)
+    with pytest.raises(ValueError,match='private regular file'):
+        Installation.plan(target,options)
+    input_path.chmod(0o600)
+    symlink = tmp_path / 'linked.json'
+    symlink.symlink_to(input_path)
+    with pytest.raises(OSError):
+        Installation.plan(target,{**options,'post_purchase_config':str(symlink)})
+    install = Installation.plan(target,options)
+    snapshot = Path(install.config['post_purchase_config'])
+    assert stat.S_IMODE(snapshot.stat().st_mode) == 0o600
+    assert original['recipient'] not in install.state_path.read_text()
+    input_path.unlink()
+    assert Installation(target).post_purchase_actions() == original
+    snapshot.write_bytes(snapshot.read_bytes()+b'\n')
+    with pytest.raises(ValueError,match='input changed'):
+        install.post_purchase_actions()

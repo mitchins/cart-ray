@@ -493,9 +493,13 @@ def test_enabling_fulfilment_adds_key_to_existing_vault_only_before_capabilities
     ]
 
 
-def test_retained_queue_inventory_is_not_silently_upgraded(tmp_path):
+@pytest.mark.parametrize('journal',['resources','pending'])
+def test_retained_queue_inventory_is_not_silently_upgraded(tmp_path,journal):
     install = planned(tmp_path)
-    install.state["resources"]["queue:events"] = {"id": "retained"}
+    if journal == 'pending':
+        install.state['pending'].append('queue:events')
+    else:
+        install.state['resources']['queue:events'] = {'id':'retained'}
     install.state["known_uncertain_claim"] = "preserved"
     install.save()
     original = install.state_path.read_bytes()
