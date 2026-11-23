@@ -260,6 +260,14 @@ class SqliteOrderStore:
         self.connection.row_factory = sqlite3.Row
         self.lease_seconds = lease_seconds
         self.connection.executescript(SCHEMA)
+        columns = {row["name"] for row in self.connection.execute(
+            "PRAGMA table_info(review_invitation_checkout_grants)"
+        )}
+        if "request_limit" not in columns:
+            self.connection.execute(
+                "ALTER TABLE review_invitation_checkout_grants "
+                "ADD COLUMN request_limit INTEGER CHECK(request_limit IN (1,2))"
+            )
 
     @classmethod
     def in_memory(cls, *, lease_seconds: int = 60) -> SqliteOrderStore:
