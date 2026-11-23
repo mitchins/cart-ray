@@ -27,6 +27,10 @@ Delay is in days (0–365); fractional days are useful for sandbox qualification
 Selection affects the featured products, never the purchase entitlement. The
 invitation page retains every eligible product and its submission progress.
 
+The `both` preference uses a versioned checkout disclosure covering receipt
+inclusion and one follow-up. Old clients and existing one-request grants remain
+limited to one solicitation; changing site preferences does not expand them.
+
 The installer provisions Commerce, native Reviews and the private shared email
 handler, sharing the merchant's existing one D1. No intake producer, purchaser
 attestor, Reviews sender or automation queue is provisioned for schema-2 stores.

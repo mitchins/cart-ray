@@ -995,12 +995,13 @@ async def _review_subject_names(db, merchant, subjects):
 
     rows = _results(
         await db.prepare(
-            "SELECT subject_id,public_name FROM review_subject_display_names WHERE store_key=? AND environment='test'"
+            "SELECT subject_id,public_name FROM review_subject_display_names WHERE store_key=? AND environment='test' "
+            "AND subject_id IN (SELECT value FROM json_each(?))"
         )
-        .bind(merchant)
+        .bind(merchant, json.dumps(subjects))
         .all()
     )
-    return {row["subject_id"]: row["public_name"] for row in rows if row["subject_id"] in subjects}
+    return {row["subject_id"]: row["public_name"] for row in rows}
 
 
 async def _drain_review_followups(env, service, token, *, deadline):
