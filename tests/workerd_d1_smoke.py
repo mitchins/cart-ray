@@ -195,9 +195,9 @@ class Default(WorkerEntrypoint):
         budget = await dispatcher.dispatch(order.order_id, max_new_claims=0)
         budget_deferred = budget == {"receipt": "deferred"}
         runs = await asyncio.gather(
-            dispatcher.dispatch(order.order_id, ()), dispatcher.dispatch(order.order_id, ())
+            dispatcher.dispatch(order.order_id), dispatcher.dispatch(order.order_id)
         )
-        replay = await dispatcher.dispatch(order.order_id, ())
+        replay = await dispatcher.dispatch(order.order_id)
         service_calls = []
 
         class TestService:
