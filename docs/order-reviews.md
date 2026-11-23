@@ -29,13 +29,22 @@ invitation page retains every eligible product and its submission progress.
 
 The `both` preference uses a versioned checkout disclosure covering receipt
 inclusion and one follow-up. Old clients and existing one-request grants remain
-limited to one solicitation; changing site preferences does not expand them.
+limited to one solicitation; changing site preferences does not expand them. The immutable grant separately
+records the displayed wording and server-capped request count; additive commerce
+migration 0011 retains the previous meaning of existing grants.
+
+New checkout retries retain their original disclosure version. A pre-upgrade
+ambiguous browser attempt lacks that field and retains the original current-site
+behaviour; changing its disclosure before retry can safely return 409. Do not
+clear an ambiguous attempt to manufacture a new order.
 
 The installer provisions Commerce, native Reviews and the private shared email
 handler, sharing the merchant's existing one D1. No intake producer, purchaser
 attestor, Reviews sender or automation queue is provisioned for schema-2 stores.
 Commerce's minute trigger handles bounded order mail/recovery work; its separate
-hourly trigger retains payment reconciliation. The complete notification drain
+hourly trigger retains payment reconciliation. Minute invocations rotate which
+message purpose gets the first budget slot, so busy receipts cannot permanently
+starve follow-up or recovery. A review-stage fault does not skip the receipt. The complete notification drain
 has a 22-second budget. Claims are committed before provider handoff. Unknown
 outcomes remain held and are never automatically resent.
 

@@ -192,12 +192,12 @@ class Default(WorkerEntrypoint):
             return "test-provider-reference"
 
         dispatcher = OrderReceiptDispatcher(self.env.DB, "smoke-store", "test", {"receipt": receipt_handler})
-        budget = await dispatcher.dispatch(order.order_id, (), max_new_claims=0)
+        budget = await dispatcher.dispatch(order.order_id, max_new_claims=0)
         budget_deferred = budget == {"receipt": "deferred"}
         runs = await asyncio.gather(
-            dispatcher.dispatch(order.order_id, ()), dispatcher.dispatch(order.order_id, ())
+            dispatcher.dispatch(order.order_id), dispatcher.dispatch(order.order_id)
         )
-        replay = await dispatcher.dispatch(order.order_id, ())
+        replay = await dispatcher.dispatch(order.order_id)
         service_calls = []
 
         class TestService:

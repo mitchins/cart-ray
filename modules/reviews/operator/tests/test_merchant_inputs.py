@@ -237,9 +237,6 @@ def test_merchant_reviews_require_correct_subject_pages_and_native_clients(tmp_p
         installation.config['source_api_path'] = '/api'
         installation.config['post_purchase_config'] = 'fixture-config'
         monkeypatch.setattr(installation, 'post_purchase_actions', lambda: {'schema':2})
-    else:
-        installation.state["resources"]["queue:events"] = {"id": "events"}
-        installation.state["resources"]["queue:dlq"] = {"id": "dlq"}
     installation.state["workers_subdomain"] = "workers-test"
     installation.state["pages_subdomain"] = "shop.example.test"
     installation.state["urls"] = {"source": "https://checkout.example.test", "storefront": "https://shop.example.test"}
@@ -248,12 +245,14 @@ def test_merchant_reviews_require_correct_subject_pages_and_native_clients(tmp_p
     installation.seed_subjects()
     nodes, _ = graph(installation)
     assert nodes["source"]["vars"]["CARTRAY_REVIEW_INVITATION_DEFAULT"] == "unchecked"
+    assert nodes["source"]["vars"]["CARTRAY_REVIEW_INVITATION_MODE"] == ("automatic" if shared_mail else "disabled")
     installation.deploy_storefront({"commit": "test-release"})
     output = installation.directory / "releases/test-release/storefront"
     deployed = (output / "storefront-config.js").read_text()
     assert '"storeName": "Merchant"' in deployed
     assert '"MERCHANT-ONE": "product-one"' in deployed
     assert '"reviewInvitationDefaultChecked": false' in deployed
+    assert '"reviewInvitationsEnabled": ' + ("true" if shared_mail else "false") in deployed
     assert '"https://checkout.example.test"' in deployed
     assert '"contextPath": null' in (output / "site-config.js").read_text()
     assert (output / "_worker.js").read_bytes() == (ROOT / "modules/reviews/gateway/worker.mjs").read_bytes()

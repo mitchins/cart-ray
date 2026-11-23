@@ -144,378 +144,78 @@ def build_at(install, commit):
         return install.build()
 
 
-def test_connected_build_deploy_verify_explicit_activation_upgrade_and_rollback(tmp_path):
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+def test_read_only_reviews_install_has_no_sender_or_queue(tmp_path):
     install, provider, database, calls, revision = lifecycle(tmp_path)
-    keys = install.vault()
-    first = build_at(install, "a" * 40)
-    assert build_at(install, "a" * 40) == first
+    original = install.vault()
+    build_at(install, "a" * 40)
     install.deploy()
-    assert len(provider.active) == 7
-    install.verify()
-    assert calls == []
-    assert revision[0] == 0
+    assert len(provider.active) == 2
+    assert install.queues == ()
+    assert not any(path.startswith("queues/") for path,_ in provider.calls)
+    assert install.vault() == original
     assert install.state["activation_authorized"] is False
-    with pytest.raises(ValueError, match="explicit"):
-        install.activate()
-    install.activate(True)
-    fence = install.state["activation_watermark"]
-    writes = database.writes
-    assert install.doctor()["healthy"] is True
-    assert database.writes == writes
-    first_versions = dict(install.state["deployment"]["versions"])
-    install.activate(True)
-    assert install.state["deployment"]["versions"] == first_versions
-    assert revision[0] == 2
-    build_at(install, "b" * 40)
-    install.deploy()
-    install.activate(True)
-    assert install.state["activation_watermark"] == fence
-    assert install.vault() == keys
-    assert len(install.state["releases"]) == 2
-    writes = database.writes
-    result = install.rollback(0)
-    assert result["database_rewind"] is False
-    assert database.writes == writes
-    assert install.state["deployment"]["versions"] == first_versions
-    assert install.doctor()["healthy"] is True
-
-
-def test_tampered_retained_artifact_stops_before_upload(tmp_path):
-    install, provider, _, _, _ = lifecycle(tmp_path)
-    build_at(install, "a" * 40)
-    artifact = install.directory / "releases" / ("a" * 40) / "source/bundle/worker.py"
-    artifact.write_text("different code")
-    before = list(provider.calls)
-    with pytest.raises(ValueError, match="retained artifact changed"):
-        install.deploy()
-    assert [call for call in provider.calls if call[1] != "GET"] == [call for call in before if call[1] != "GET"]
-
-
-def test_wrong_live_binding_is_diagnosed_without_provider_mutation(tmp_path):
-    install, provider, database, _, _ = lifecycle(tmp_path)
-    build_at(install, "a" * 40)
-    install.deploy()
-    install.activate(True)
-    value = provider.versions[provider.active[install.name("producer")]]
-    binding = next(item for item in value["metadata"]["bindings"] if item["name"] == "COMMERCE_DB")
-    binding["id"] = "foreign-db"
-    calls, writes = list(provider.calls), database.writes
-    result = install.doctor()
-    assert result["healthy"] is False
-    assert "producer.bindings.COMMERCE_DB: wrong database" in result["errors"]
-    assert [call for call in provider.calls if call[1] != "GET"] == [call for call in calls if call[1] != "GET"]
-    assert database.writes == writes
-
-
-def test_empty_hosted_receipt_and_upgrade_keep_fence_and_keys(tmp_path):
-    install, provider, _, _, _ = lifecycle(tmp_path)
-    with (
-        patch.object(operations.subprocess, "check_output", return_value="a" * 40 + "\n"),
-        patch.object(operations.subprocess, "run", return_value=SimpleNamespace(returncode=0)),
-    ):
-        staged = install.upgrade()
-        assert staged["phase"] == "verified"
-        assert install.state["activation_authorized"] is False
+    with pytest.raises(ValueError, match="shared order-confirmation"):
         install.activate(True)
-        keys = install.vault()
-        versions = copy.deepcopy(provider.active)
-        assert install.upgrade()["healthy"] is True
-        assert provider.active == versions
-        with patch.object(operations.subprocess, "check_output", return_value="b" * 40 + "\n"):
-            result = install.upgrade()
-        assert result["phase"] == "active"
-        assert install.state["activation_watermark"] == 42
-        assert install.vault() == keys
-    receipt = install.receipt()
-    assert receipt["doctor"]["healthy"] is True
-    assert receipt["checkout_choices"] == []
-    assert receipt["provider_acceptances"] == []
-    assert receipt["recipient_suppression_count"] == 0
-    saved = (install.directory / "receipt.json").read_text()
-    for secret in keys.values():
-        assert secret not in saved
 
 
-def test_interrupted_public_route_configuration_is_reconciled_on_resume(tmp_path):
-    install, provider, _, _, _ = lifecycle(tmp_path)
-    build_at(install, "a" * 40)
-    original = provider.request
-    attempts = []
-
-    def interrupted(path, method="GET", data=None):
-        if path == "workers/scripts/" + install.name("source") + "/subdomain":
-            attempts.append(data)
-            if len(attempts) == 1:
-                raise operations.CloudError("simulated route configuration outage")
-        return original(path, method, data)
-
-    provider.request = interrupted
-    with pytest.raises(operations.CloudError, match="route"):
-        install.deploy()
-    source_version = install.state["deployment"]["versions"]["source"]
-    install.deploy()
-    assert install.state["deployment"]["versions"]["source"] == source_version
-    assert len(attempts) == 2
-    assert attempts[-1] == {"enabled": True, "previews_enabled": False}
-
-
-def test_due_delivery_remains_paused_through_upgrade_until_sender_and_record_are_ready(tmp_path):
-    install, provider, _, _, _ = lifecycle(tmp_path)
-    build_at(install, "a" * 40)
-    install.deploy()
-    due = install.state["resources"]["queue:due"]["id"]
-    assert provider.queue_settings[due]["delivery_paused"] is True
-    for role in ("events", "schedule"):
-        identifier = install.state["resources"]["queue:" + role]["id"]
-        assert provider.queue_settings[identifier]["delivery_paused"] is True
-    install.activate(True)
-    assert provider.queue_settings[due]["delivery_paused"] is False
-    build_at(install, "b" * 40)
-    original = provider.upload
-
-    def observe_sender(name, modules, metadata):
-        if name == install.name("sender"):
-            assert provider.queue_settings[due]["delivery_paused"] is True
-        return original(name, modules, metadata)
-
-    provider.upload = observe_sender
-    install.deploy()
-    assert provider.queue_settings[due]["delivery_paused"] is True
-    # Simulate an operator interruption after deployment: repeated deploy keeps it paused.
-    install.deploy()
-    assert provider.queue_settings[due]["delivery_paused"] is True
-    for role in ("events", "schedule"):
-        identifier = install.state["resources"]["queue:" + role]["id"]
-        assert provider.queue_settings[identifier]["delivery_paused"] is True
-    install.activate(True)
-    assert provider.queue_settings[due]["delivery_paused"] is False
-    install.rollback(0)
-    assert provider.queue_settings[due]["delivery_paused"] is False
-
-
-def test_active_reverification_preserves_phase_and_interrupted_queue_resume_retries(tmp_path):
-    install, provider, _, _, _ = lifecycle(tmp_path)
-    build_at(install, "a" * 40)
-    install.deploy()
-    install.activate(True)
-    assert install.verify()["phase"] == "active"
-    assert install.doctor()["healthy"] is True
-    assert install.activate(True)["already_active"] is True
+def test_commerce_only_deploy_remains_independent(tmp_path):
+    install, provider, database, calls, revision = lifecycle(tmp_path, False)
     build_at(install, "b" * 40)
     install.deploy()
-    original = provider.request
-    due = install.state["resources"]["queue:due"]["id"]
-    failed = []
-
-    def interruption(path, method="GET", data=None):
-        if path == "queues/" + due and method == "PATCH" and not data["settings"]["delivery_paused"] and not failed:
-            failed.append(True)
-            raise operations.CloudError("simulated partial queue resume")
-        return original(path, method, data)
-
-    provider.request = interruption
-    with pytest.raises(operations.CloudError, match="partial queue resume"):
-        install.activate(True)
-    events = install.state["resources"]["queue:events"]["id"]
-    assert provider.queue_settings[events]["delivery_paused"] is False
-    verifier = install.verifier
-
-    def inspect_paused(mode):
-        assert provider.queue_settings[events]["delivery_paused"] is True
-        return verifier(mode)
-
-    install.verifier = inspect_paused
-    assert install.activate(True)["phase"] == "active"
-    assert provider.queue_settings[events]["delivery_paused"] is False
-    assert install.state["activation_watermark"] == 42
-
-
-def test_pause_retains_checkout_unsubscribe_fence_and_queued_work_until_explicit_resume(tmp_path):
-    install, provider, database, _, _ = lifecycle(tmp_path)
-    build_at(install, "a" * 40)
-    install.deploy()
-    install.activate(True)
-    versions, keys = copy.deepcopy(provider.active), install.vault()
-    source_binding = copy.deepcopy(provider.version(install.name("source")))
-    sender_binding = copy.deepcopy(provider.version(install.name("sender")))
-    writes = database.writes
-    assert install.pause()["queued_work_retained"] is True
-    assert install.pause()["phase"] == "paused"
-    assert provider.active == versions
-    assert provider.version(install.name("source")) == source_binding
-    assert provider.version(install.name("sender")) == sender_binding
-    assert database.writes == writes
-    assert install.vault() == keys
-    assert install.state["activation_watermark"] == 42
-    for role in ("events", "schedule", "due"):
-        identifier = install.state["resources"]["queue:" + role]["id"]
-        assert provider.queue_settings[identifier]["delivery_paused"] is True
-    assert install.doctor()["healthy"] is True
-    with pytest.raises(ValueError, match="explicit"):
-        install.activate()
-    assert install.activate(True)["phase"] == "active"
-    assert install.state["activation_watermark"] == 42
-    assert install.vault() == keys
-    for role in ("events", "schedule", "due"):
-        identifier = install.state["resources"]["queue:" + role]["id"]
-        assert provider.queue_settings[identifier]["delivery_paused"] is False
-
-
-def test_paused_intent_survives_upgrade_and_worker_rollback_without_implicit_delivery(tmp_path):
-    install, provider, _, _, _ = lifecycle(tmp_path)
-    build_at(install, "a" * 40)
-    install.deploy()
-    install.activate(True)
-    install.pause()
-    with (
-        patch.object(operations.subprocess, "check_output", return_value="b" * 40 + "\n"),
-        patch.object(operations.subprocess, "run", return_value=SimpleNamespace(returncode=0)),
-    ):
-        assert install.upgrade()["phase"] == "paused"
-        assert install.doctor()["healthy"] is True
-        assert install.upgrade()["healthy"] is True
-    assert install.rollback(0)["phase"] == "paused"
-    assert install.doctor()["healthy"] is True
-    for role in ("events", "schedule", "due"):
-        identifier = install.state["resources"]["queue:" + role]["id"]
-        assert provider.queue_settings[identifier]["delivery_paused"] is True
-    assert install.state["activation_watermark"] == 42
-    assert install.activate(True)["phase"] == "active"
-
-
-def test_explicit_activation_requirement_keeps_off_rollback_paused(tmp_path):
-    import json
-
-    install, provider, _, _, _ = lifecycle(tmp_path)
-    build_at(install, "a" * 40)
-    install.deploy()
-    install.activate(True)
-    install.state["reviews_explicit_activation_required"] = True
-    build_at(install, "b" * 40)
-    install.deploy()
-    build = json.loads((install.directory / "releases" / ("b" * 40) / "build.json").read_text())
-    install.state["releases"].append({**build, "versions": dict(install.state["deployment"]["versions"]),
-                                      "sending": False, "record_revision": 0})
-    watermark = install.state["activation_watermark"]
-    result = install.rollback(-1)
-    assert result["phase"] == "paused"
-    assert install.state["deployment"]["sending"] is False
-    assert install.state["activation_watermark"] == watermark
-    for role in ("events", "schedule", "due"):
-        identifier = install.state["resources"]["queue:" + role]["id"]
-        assert provider.queue_settings[identifier]["delivery_paused"] is True
-
-
-def test_assigned_pages_origin_is_hydrated_before_rendering_existing_inventory(tmp_path):
-    install, provider, _, _, _ = lifecycle(tmp_path)
-    original = provider.request
-
-    def assigned(path, method="GET", data=None):
-        if path == "pages/projects/" + install.name("store"):
-            return {"subdomain": "actual-assigned-suffix.pages.dev"}
-        return original(path, method, data)
-
-    provider.request = assigned
-    nodes = install.render()
-    assert install.state["pages_subdomain"] == "actual-assigned-suffix.pages.dev"
-    assert install.state["urls"]["storefront"] == "https://actual-assigned-suffix.pages.dev"
-    assert nodes["sender"]["vars"]["REVIEWS_LANDING_URL"].startswith("https://actual-assigned-suffix.pages.dev/")
-    install.provision_pages()
-    assert install.state["pages_subdomain"] == "actual-assigned-suffix.pages.dev"
-
-
-@pytest.mark.parametrize("role", ["source", "reviews"])
-def test_incomplete_retained_python_build_restarts_without_manual_cleanup(tmp_path, role):
-    install, _, _, _, _ = lifecycle(tmp_path)
-    partial = install.directory / "releases" / ("a" * 40) / role
-    partial.mkdir(parents=True)
-    (partial / "incomplete").write_text("interrupted output")
-    build_at(install, "a" * 40)
-    assert not (partial / "incomplete").exists()
-    assert (partial / "receipt.json").exists()
-
-
-def test_interrupted_storefront_build_is_never_published_and_can_resume(tmp_path):
-    install, provider, _, _, _ = lifecycle(tmp_path)
-    build_at(install, "a" * 40)
-    original = install.run
-    failed = []
-
-    def interrupted(step, command, environment=None):
-        if step == "build-storefront" and not failed:
-            failed.append(True)
-            output = Path(command[command.index("--output") + 1])
-            output.mkdir(parents=True)
-            (output / "incomplete").write_text("partial")
-            raise operations.CloudError("interrupted storefront build")
-        return original(step, command, environment)
-
-    install.run = interrupted
-    with pytest.raises(operations.CloudError, match="storefront"):
-        install.deploy()
-    output = install.directory / "releases" / ("a" * 40) / "storefront"
-    assert not output.exists()
-    assert not any(path.endswith(install.name("store")) and method == "PATCH" for path, method in provider.calls)
-    install.deploy()
-    assert (output / "index.html").exists()
-    assert not (output / "incomplete").exists()
-    assert (output / ".operator-build-complete").exists()
-
-
-def test_storefront_builder_receives_configured_theme_and_brand_inputs(tmp_path):
-    install, _, _, _, _ = lifecycle(tmp_path)
-    install.config.update({"theme": "classic", "gel": "/brand/gel.json", "gel_assets": "/brand",
-                           "theme_content": "/brand/content.json"})
-    build_at(install, "a" * 40)
-    original = install.run
-    observed = []
-
-    def record(step, command, environment=None):
-        if step == "build-storefront":
-            observed.append(command)
-        return original(step, command, environment)
-
-    install.run = record
-    install.deploy()
-    command = observed[0]
-    for name, expected in (("--theme", "classic"), ("--gel", "/brand/gel.json"),
-                           ("--gel-assets", "/brand"), ("--theme-content", "/brand/content.json")):
-        assert command[command.index(name) + 1] == expected
-    assert "--reviews" in command
-
-
-def test_incomplete_deployment_cannot_activate_even_if_inspection_would_pass(tmp_path):
-    install, provider, _, _, _ = lifecycle(tmp_path)
-    build_at(install, "a" * 40)
-    install.deploy()
-    install.state["deployment"]["complete"] = False
-    before = list(provider.calls)
-    with patch.object(install, "verifier") as verifier:
-        with pytest.raises(ValueError, match="interrupted deploy"):
-            install.activate(True)
-    verifier.assert_not_called()
-    assert provider.calls == before
-
-
-def test_commerce_only_connected_lifecycle_has_no_review_runtime_dependency(tmp_path):
-    install, provider, database, calls, _ = lifecycle(tmp_path, reviews_enabled=False)
-    # Exercise the real commerce verifier rather than the Reviews test bridge.
-    install.verifier = operations.Installation.verifier.__get__(install)
-    build_at(install, "a" * 40)
-    install.deploy()
-    assert set(provider.active) == {install.name("source")}
-    install.verify()
-    install.activate()
-    assert install.doctor()["healthy"] is True
-    install.pause()
-    keys = install.vault()
-    with (
-        patch.object(operations.subprocess, "check_output", return_value="b" * 40 + "\n"),
-        patch.object(operations.subprocess, "run", return_value=SimpleNamespace(returncode=0)),
-    ):
-        assert install.upgrade()["phase"] == "paused"
-    assert install.rollback(0)["phase"] == "paused"
-    assert install.vault() == keys
-    assert calls == []
-    assert install.receipt()["doctor"]["healthy"] is True
+    assert len(provider.active) == 1
+    assert set(install.roles) == {"source"}
     assert not any(path.startswith("queues/") for path, _ in provider.calls)
+
+
+@pytest.mark.parametrize('reviews',[False,True])
+def test_no_mail_upgrade_and_rollback_retain_off_releases(tmp_path,reviews):
+    install,provider,database,_,_ = lifecycle(tmp_path,reviews)
+    build_at(install,'a'*40)
+    install.deploy()
+    install.verify()
+    install.deploy()
+    assert len(install.state['releases']) == 1
+    build_at(install,'b'*40)
+    install.deploy()
+    install.verify()
+    assert len(install.state['releases']) == 2
+    keys = install.vault()
+    connection = database.databases[install.db('commerce')][1]
+    before = list(connection.iterdump())
+    result = install.rollback(-2)
+    assert result['rollback_commit'] == 'a'*40
+    assert install.state['deployment']['sending'] is False
+    assert install.vault() == keys
+    assert list(connection.iterdump()) == before

@@ -1,587 +1,109 @@
-# CartRay test installation operator
+# Merchant test installation and operations
 
-This workflow installs **one** isolated test store. Its default configuration
-installs Squirrel/Acorn; the merchant package option below supplies another
-store's catalogue, connected storefront and review subjects. It uses the
-current automatic checkout invitation permission and `reviews_gateway.mjs`.
-It does not deploy the older `/review-consent/` bridge, import historical data,
-rotate suppression keys, or support production. Upgrades and
-compatible Worker rollbacks keep the same merchant database and installation
-identity. A fresh namespace is for a new installation, not a second version of
-an existing store.
+The supported deployment is Commerce, optional native Reviews and one private transactional
+email handler, one merchant D1 and no queues. Pages supplies the storefront gateway when
+the merchant does not own an external origin. A merchant-owned origin uses the existing
+same-origin gateway contract. Core without Reviews remains independently deployable.
+All operator activation is test-only; production release remains gated in issue #77.
 
-## Documented handoff
+## Prerequisites and inputs
 
-Start from a reviewed clean Git checkout. Install Node **24** (the repository's
-`.nvmrc`), `uv`, and Python supported by `uv.lock`, then run:
+Use the checked-in Node version, `uv sync --locked --all-groups` and
+`npm ci --ignore-scripts`. Start with the checked-in merchant configuration example,
+a verified Stripe **test** catalogue/Price lock and a generic merchant input package.
+The build snapshots those inputs; builds do not infer prices, entitlements or subject IDs.
 
-```sh
-uv sync --locked --all-groups
-npm ci --ignore-scripts
-node --version
-```
-
-The operator supplies two files outside Git. No other private fixture, SQL
-snippet, temporary Worker, public activation API, or prior sandbox is required.
-
-1. A private JSON credential file, owned by the invoking user with mode `0600`:
+Supply one private JSON credential file outside Git, permissions `0600`:
 
 ```json
 {
-  "cloudflare_api_token": "OPERATOR_TOKEN_WITH_ACCOUNT_READ_WORKERS_D1_QUEUES_AND_PAGES_EDIT",
+  "cloudflare_api_token": "OPERATOR_CREDENTIAL",
   "stripe_test_key": "sk_test_REPLACE",
   "smtp2go_api_key": "api-REPLACE",
-  "approved_test_email": "approved-test-mailbox@example.test",
-  "test_sender": "verified-test-sender@example.test"
+  "approved_test_email": "approved@example.test",
+  "test_sender": "verified@example.test"
 }
 ```
 
-The Cloudflare token must be scoped to the supplied test account and support
-Workers scripts/version deployments and authenticated remote service bindings,
-D1, Queues and Pages. The Stripe key must be a **test** key for the stated
-account, with read access to the existing Acorn catalogue and paid test sessions
-and permission to create a test webhook endpoint. The SMTP2GO credential and
-sender must be authorized for the single approved mailbox. The operator must
-also have access to that mailbox to follow the real invitation. Never paste
-credential values into commands, logs, PRs or the non-secret inventory.
+The operator Cloudflare credential needs the selected account's Workers deployment,
+D1, Pages and remote service-binding operations; no Queues permission is required.
+Use R2 permission only when provisioning configured private object resources.
+Management credentials stay on the operator computer, never in public Workers or Pages.
+Stripe credentials must match the configured sandbox account and permit Checkout, Price
+verification and a signed webhook. The email credential authorizes the verified sender
+and one approved test recipient. For `post_purchase_email_provider: "cloudflare"`, supply
+`cloudflare_email_api_token` instead of `smtp2go_api_key`. There is one selected provider
+for receipts, optional review follow-ups and customer-requested recovery.
 
-2. A non-secret install JSON file and the reviewed Acorn Stripe **test preflight
-lock** named by `preflight_lock`:
+Use schema 2 for the protected `post_purchase_config` file:
 
 ```json
-{
-  "namespace": "squirrel-ops-test",
-  "account_id": "REPLACE_32_CHARACTER_CLOUDFLARE_ACCOUNT_ID",
-  "stripe_account_id": "acct_REPLACE",
-  "preflight_lock": "/absolute/path/to/stripe-test-preflight.lock.json",
-  "merchant_name": "Squirrel test store",
-  "merchant_contact": "Squirrel test operations",
-  "theme": "minimal",
-  "delay_seconds": 0,
-  "max_lateness": 86400
-}
+{"schema":2,"sender":"verified@example.test","recipient":"approved@example.test"}
 ```
 
-Set `theme` to `minimal`, `studio`, or `classic`. The default is the supplied
-Squirrel GEL. For a different brand, provide `gel` as an absolute path to its
-manifest, and optionally `gel_assets` as the asset-root directory and
-`theme_content` as an absolute path to its product presentation JSON. When
-omitted, the asset root is the manifest's grandparent and the supplied Squirrel
-content is used. Planning copies custom GEL inputs into the private installation
-directory so subsequent builds do not depend on the original handoff. Keep this
-directory with the installation inventory. The connected build uses CartRay's
-real checkout and Reviews APIs; the theme preview's simulated adapter is not
-deployed.
+`review_requests` accepts `timing` (`off`, `receipt`, `followup`, `both`), `selection`
+(`all`, `priority`), `delay_days` and an ordered `priorities` list. Defaults encourage
+Reviews with the receipt and the highest-priority outstanding product. Both mode uses
+the truthful two-request checkout disclosure; old one-request grants cannot authorize a
+second request. Reviews suppression never removes the receipt. Private resource locators
+belong in the protected `fulfilment_resources` credential value, not the public catalogue.
 
-### Other test merchants
+## One resumable workflow
 
-Merchant storefront files are trusted operator input; validation checks the
-supported connected runtime and declared purchase/review wiring, but is not a
-sandbox for arbitrary HTML or JavaScript.
-
-Provide `merchant_inputs` as an absolute path to an operator-owned package:
-
-```text
-merchant-inputs/
-  commerce/catalogue.csv
-  commerce/fulfilment-expansions.json
-  commerce/presentation.csv
-  commerce/product-assets/
-  storefront/                 # already-built connected GEL storefront
-```
-
-The commerce directory must contain exactly these inputs. Generate the
-storefront from the merchant's approved public content and selected GEL theme;
-it must contain the shared connected CartRay cart, return and browse code, not
-the preview adapter. For Effective Policy's test lane, the existing
-`examples/ep-uat/build.py` is the source adapter; its audit catalogue includes
-source-hidden listings and is not approved for public production publication.
-Keep test prices and dummy fulfilment separate from the source handoff. Never
-put credentials, customer records or paid fulfilment files in this package.
-
-Add the following fields to the install JSON, using the actual merchant values:
-
-```json
-{
-  "merchant_inputs": "/absolute/path/to/merchant-inputs",
-  "merchant_name": "Example merchant",
-  "store_key": "example-merchant",
-  "theme": "minimal",
-  "reviews_enabled": true,
-  "review_invitation_default_checked": false,
-  "subject_map": {"PRODUCT-ONE": "product-one"},
-  "subject_details": [["product-one", "/products/product-one/", "Product one"]]
-}
-```
-
-`subject_map` binds checkout-authorised product keys to review subjects;
-`subject_details` supplies canonical storefront routes and labels. Additional
-display-only subjects may be listed without a checkout mapping. To omit
-Reviews, set `reviews_enabled` to `false`; the maps may be empty. Planning
-copies and fingerprints the package and preflight lock. The installer verifies
-the checkout identity set, shared runtime bytes, connected pages, selected
-theme and review wiring before build/deploy. Never modify a saved snapshot in
-place. This test workflow does not yet offer an in-place merchant catalogue
-update; use a new isolated test installation until that operation is supported.
-Ordinary Worker rollback does not rewind D1 or Pages data. The test-only EP
-package and hosted integration still require qualification; this option is not
-production activation.
-
-### Existing external storefront and private source
-
-Fresh merchant-input installations may opt into an existing site rather than
-provisioning/deploying a Pages project. Defaults are unchanged when omitted:
-
-```json
-{
-  "storefront_origin": "https://shop.example.test",
-  "success_path": "/purchase-return/",
-  "cancel_path": "/purchase-return/",
-  "source_mode": "private",
-  "source_api_path": "/api/commerce",
-  "webhook_url": "https://shop.example.test/api/commerce/stripe/webhook"
-}
-```
-
-The origin must be HTTPS without a path, port, credentials, query or fragment.
-Return paths are local paths without queries; the operator appends the existing
-checkout status query. Defaults remain `/purchase-return/` for merchant packages
-and `/` for the original example. Private source mode requires all three explicit
-origin/API-prefix/webhook fields; the webhook must use the storefront origin.
-Public source mode remains the default and can also specify an external webhook.
-
-External mode requires `merchant_inputs`. It skips Pages creation and upload,
-retains the complete storefront in the release directory, and records its hash
-and `external-operator-required` status in `inventory.json.external_storefront`.
-Display-only HTML remains copied unchanged; checkout identities are still the
-separate authorised commerce set. No browse schema or checkout validation changes.
-
-The existing site's operator must install the retained assets and a narrowly
-routed private service binding to the inventory's source Worker. Strip the API
-prefix when forwarding (`/api/commerce/catalogue` to `/catalogue`, and the explicit
-webhook to `/stripe/webhook`), preserve request bodies/signatures and the browser
-Origin header. Forward Cloudflare's `CF-Connecting-IP` on checkout POST and
-checkout-status GET, and preserve `Content-Length` on checkout POST. Forward
-only the required headers; do not forward browser credentials. The Stripe webhook
-remains a separate signed HTTPS route. This installer does not mutate that site's
-routes, DNS or bindings.
-Source `workers.dev` and preview URLs remain disabled across deployment resume in
-private mode. The exported client uses the configured external API base, while
-the source receives the external storefront origin and checkout return URLs.
-Doctor verifies backend inventory/bindings, not external-site deployment or hosted
-acceptance; qualify those separately. Do not edit a retained inventory to change
-topology. Use a fresh reviewed plan and keep rollback of the external site separate.
-
-### Independent EP UAT post-purchase delivery
-
-For the approved `effective-policy-uat` installation only, set
-`post_purchase_config` in the plan to an absolute, operator-owned `0600` JSON
-file outside Git and outside the merchant package. This requires the private
-external source and Stripe test account
-`acct_1Ud2XZBKRMfYblCU`. The operator snapshots and fingerprints this file at
-plan time. Keep the snapshot and vault with the private installation backup.
-
-The file shape is `{"schema": 1, "actions": [...]}`, containing one action with
-these fields:
-
-| Field | Required value |
-| --- | --- |
-| `environment`, `merchant` | `test`, `effective-policy-uat` |
-| `workflow_key`, `offer_keys` | `ep:woo:workflow:8681`, `["EP-UAT-171"]` (active and paid in the test lock) |
-| `links` | `["https://www.dropbox.com/t/N86okpWEWSXWDx9X"]` |
-| `stripe_account`, `recipient` | `acct_1Ud2XZBKRMfYblCU`, `test@mitchellcurrie.com` |
-| `config_ref`, `subject`, `sender` | Reviewed workflow reference, dummy test subject, and preflighted test sender |
-
-Offer 131 has no email action. The protected credential handoff must supply
-the EP test Stripe key, SMTP2GO key, `approved_test_email` and `test_sender`; the
-mailboxes must match the action. The operator pins those values in the vault
-and binds the existing private transactional-email Worker to the source via a
-shared, independent token. Only the routing fields and action digest go into
-source vars. Set `reviews_enabled` to `true` with explicit approved test subject
-mappings to install Reviews alongside this delivery lane, or to `false` for
-commerce alone. The initial deployment records both post-purchase modes OFF;
-Reviews and post-purchase delivery each require their own explicit activation.
-Disabling one does not authorize the other. Source-version changes pause and
-reverify active Reviews before resuming its queues; checkpoints and activation
-watermarks are retained.
-
-The external site must route only the permitted public Reviews subject lookup,
-summary and contributions GETs to the private Reviews service binding, passing
-`Accept` and Cloudflare's `CF-Connecting-IP` without cookies or authorization
-headers. Checkout admission uses a per-client budget and a larger installation
-backstop; status and Reviews reads have separate per-client budgets. Cloudflare
-enforces these approximately per location, not as a globally strict quota.
-Public catalogue data is compiled with the release and costs no Stripe or D1
-requests to read. Checkout independently resolves Stripe prices. In the
-four-source synthetic fixture, a new checkout used four Price GETs and two
-Session POSTs, plus one PaymentIntent POST when present; a completed retry
-used four Price GETs and no POSTs. A merchant's count depends on its catalogue.
-
-After deployment and before activation, inspect the independent scope:
+In the following commands, `$INSTALL`, `$CREDS` and `$CONFIG` are operator-selected paths
+outside the checkout. Inventory, release artifacts, migration checksums and the `0600`
+secret vault persist there across terminal sessions and worktree removal.
 
 ```sh
-uv run --locked python scripts/post_purchase_installation.py \
-  --directory /private/merchant-install --credentials /private/credentials.json
+uv run python modules/reviews/operator/operate.py --directory "$INSTALL" plan --config "$CONFIG"
+uv run python modules/reviews/operator/operate.py --directory "$INSTALL" --credentials "$CREDS" provision
+uv run python modules/reviews/operator/operate.py --directory "$INSTALL" --credentials "$CREDS" migrate
+uv run python modules/reviews/operator/operate.py --directory "$INSTALL" --credentials "$CREDS" build
+uv run python modules/reviews/operator/operate.py --directory "$INSTALL" --credentials "$CREDS" deploy
+uv run python modules/reviews/operator/operate.py --directory "$INSTALL" --credentials "$CREDS" verify
+uv run python modules/reviews/operator/operate.py --directory "$INSTALL" --credentials "$CREDS" activate --enable-test-delivery
 ```
 
-This defaults to read-only dry-run. It uses `store_key`, account and D1 identity
-from the retained test inventory and the existing protected Cloudflare credential.
-It checks the deployed source version, test environment, DB binding and disabled
-post-purchase mode. Node 24 and locked Wrangler dependencies are required, as for
-the installer. The transient workstation proxy is not a deployed admin endpoint.
+Inspect the planned account, environment and resource names before provisioning.
+Repeat an interrupted command against the **same** inventory; do not create another namespace
+as an upgrade. Unknown resource creation outcomes stop for reconciliation rather than claiming
+similarly named resources. Migration errors retain `0600` logs and actionable retry diagnostics.
+A verified new installation initializes its suppression key once. Missing or inconsistent
+identity/key state in an existing installation stops sending and requires recovery.
 
-With source webhook and scheduled post-purchase drains both OFF, explicitly
-initialise the no-backfill fence:
+Activation initializes the existing confirmed-order checkpoint at the current outbox maximum
+once. No historical backfill occurs. Deploy and verification do not send. Pause leaves checkout,
+order access and unsubscribe functional:
 
 ```sh
-uv run --locked python scripts/post_purchase_installation.py \
-  --directory /private/merchant-install --credentials /private/credentials.json \
-  --apply --confirm-processing-disabled
+uv run python modules/reviews/operator/operate.py --directory "$INSTALL" --credentials "$CREDS" pause
+uv run python modules/reviews/operator/operate.py --directory "$INSTALL" --credentials "$CREDS" doctor
+uv run python modules/reviews/operator/operate.py --directory "$INSTALL" --credentials "$CREDS" receipt
 ```
 
-One D1 `batch()` transaction guards scope, inserts the immutable merchant/test
-binding and sets both cursor fields to the database's current `MAX(outbox.id)`
-(zero when empty). It never trusts a client-supplied fence. Existing matching
-records, including an advanced cursor, remain unchanged. Partial pairs, changed
-scope, invalid cursors and orphan executions fail without repair or rewind.
-An unknown transport outcome must be inspected and the same operation retried,
-not repaired with SQL. No delivery is enabled and no claims are retried or removed.
+## Upgrade, rollback and diagnosis
 
-After reviewing `doctor` and confirming the fence is retained, use the independent
-delivery commands (with Node 24 and locked dependencies):
+Pause first. Run `upgrade` from the reviewed new checkout; keys, orders, suppression and the
+activation fence remain. Explicitly activate again after verification. `rollback --release N`
+selects a recorded compatible **OFF** application release. It never rewinds D1 or runs destructive
+down-migrations. An incompatible schema/key contract requires a forward fix or separate recovery.
+Corrected merchant packages can be snapshotted with `build --merchant-inputs PATH` while OFF.
 
-```sh
-uv run --locked python modules/reviews/operator/operate.py \
-  --directory /private/merchant-install --credentials /private/credentials.json \
-  post-purchase-activate --enable-test-delivery
-uv run --locked python modules/reviews/operator/operate.py \
-  --directory /private/merchant-install --credentials /private/credentials.json \
-  post-purchase-disable
-```
+`doctor` verifies actual deployed versions, bindings, schema checksums, visibility and the retained
+checkpoint. Resolve its specific diagnostic before activation. Provider uncertainty is inspected
+and reconciled through `scripts/post_purchase_recovery.py`; inspect receipt/follow-up identity,
+claim age and authoritative evidence. Never reset an ambiguous claim or blindly resend it.
 
-Activation checks the Stripe account and retained test fence, then enables the
-handler before the source. Disable restores the recorded OFF source version
-first (checkout and ordinary reconciliation stay on), waits 30 seconds for
-started drains to settle, then restores the OFF handler. Rerun the same command
-after an interruption; disable can also finish a partial activation. No operation
-rewinds the cursor, resets claims or asserts provider cancellation. While OFF,
-new confirmations remain eligible from the existing checkpoint on reactivation.
-Disable before upgrading, deploying or rolling back; rollback accepts only a
-compatible recorded OFF pair and never changes D1 or the external storefront.
+Queue-era inventories and incomplete historical provider handovers are deliberately rejected by
+this release without modification. Use their pinned release for exceptional retained operations.
+This is not a migration of the retained EP UAT environment. Old handoff identities, credentials,
+SQL history, issued capabilities and uncertain claims remain unchanged. There is no ordinary
+separate Reviews sender activation, provider migration ceremony, OTP or queue recovery procedure.
 
-A namespace must end in `-test`. For a merchant package, generate a separate
-test-mode lock with its own catalogue and fulfilment expansions:
+## Evidence and limits
 
-```sh
-uv run --locked python scripts/preflight_catalogue.py \
-  --catalogue /absolute/path/to/merchant-inputs/commerce/catalogue.csv \
-  --fulfilment-expansions /absolute/path/to/merchant-inputs/commerce/fulfilment-expansions.json \
-  --output-lock /private/path/merchant-preflight.lock.json
-```
-
-Supply the Stripe test credential securely as `STRIPE_API_KEY`, review the
-resulting account, test-mode prices and catalogue version, and set
-`preflight_lock` to that private file. Its lookup keys must exactly match the
-merchant catalogue; the Acorn lock is not interchangeable.
-
-For Acorn, the lock is produced by the existing
-`scripts/preflight_catalogue.py` for `examples/acorn-store/catalogue.csv` and
-`fulfilment-expansions.json`; it is not a request to create or alter Stripe
-products. The installation copies it into its inputs so subsequent commands do
-not depend on the handoff file's original location.
-
-The chosen account needs capacity for **one D1 database, four queues, seven
-Workers, two cron triggers and one Pages project**. A quota error is a failed provider operation,
-not permission to delete other applications. Resume after capacity is supplied.
-
-Use a scoped durable Cloudflare operator API token for sustained qualification.
-A short-lived Wrangler OAuth access-token snapshot expires independently of the
-installation: HTTP 401/code 10000 means stop, refresh the authorized operator
-session or supply a valid scoped operator token in the protected credential
-handoff, then repeat the same command. Never recreate resources or keys to
-resolve an expired operator credential.
-Existing resources with the same names but without this inventory's creation
-journal are rejected.
-
-## Fresh install and resume
-
-Choose an empty private directory outside the repository. Replace the paths in
-these commands; keep the same directory for every subsequent command:
-
-```sh
-uv run --locked python modules/reviews/operator/operate.py --directory /private/acorn-install plan --config /private/install.json
-uv run --locked python modules/reviews/operator/operate.py --directory /private/acorn-install --credentials /private/credentials.json provision
-uv run --locked python modules/reviews/operator/operate.py --directory /private/acorn-install --credentials /private/credentials.json migrate
-uv run --locked python modules/reviews/operator/operate.py --directory /private/acorn-install --credentials /private/credentials.json build
-uv run --locked python modules/reviews/operator/operate.py --directory /private/acorn-install --credentials /private/credentials.json deploy
-uv run --locked python modules/reviews/operator/operate.py --directory /private/acorn-install --credentials /private/credentials.json verify
-uv run --locked python modules/reviews/operator/operate.py --directory /private/acorn-install --credentials /private/credentials.json doctor
-```
-
-`plan` creates no cloud resources or keys. `provision` journals each name before
-creating it and saves the returned ID immediately. It generates installation
-keys once in `secrets.json`; a repeat/resume never regenerates them. The Stripe
-webhook uses a stable idempotency key. If its unknown creation outcome exceeds
-Stripe's idempotency window, the operator stops rather than creating another
-endpoint. `migrate` installs checksum-ledgered commerce, Reviews and context
-schemas and pins the initial suppression identity. It never rewinds a database
-or silently adopts a changed/unknown migration. Failed commands retain their
-inventory; rerun the same command after resolving the reported failure.
-
-`build` retains clean-commit, locked source and Reviews artifacts and hashes.
-`deploy` uploads those artifacts and wires only the inventory's databases,
-queues and services. The Pages output uses the current public Reviews gateway;
-customer cookies and staff credentials cannot reach public reads. Checkout goes
-directly to the separately bound test source origin.
-
-Changing a test post-purchase email provider is an OFF-only operator action.
-To replace a credential for an already-pinned provider, place the replacement
-in the protected credentials handoff and explicitly run:
-
-```sh
-uv run --locked python modules/reviews/operator/operate.py \
-  --directory /private/merchant-install --credentials /private/credentials.json \
-  post-purchase-reconfigure-provider --provider cloudflare --allow-credential-change
-```
-
-Confirm the source and handler are OFF before starting; this action journals
-the replacement and changes neither D1 nor an uncertain execution. Resume an
-interrupted action with the same handoff and flag. The private migration
-bundle contains both credential versions and must remain protected. This does
-not verify provider permission or authorize resending any uncertain email.
-
-For a combined EP test installation with an unpinned Reviews handoff, the
-operator may attest the retained original protected handoff before replacement:
-
-```sh
-uv run --locked python modules/reviews/operator/operate.py \
-  --directory /private/merchant-install --credentials /private/credentials.json \
-  attest-reviews-handoff --original-handoff /private/original-credentials.json \
-  --expected-sender-version <first-sender-version-uuid> --attest-original-handoff
-```
-
-Only attest when the operator knows that file was used for the first deployment.
-The command checks the retained first and live sender version, disabled modes,
-bindings and paused processing queues, and records keyed fingerprints of the
-Reviews SMTP key, sender and recipient. The receipt is an operator attestation;
-Cloudflare does not reveal the historical secret bytes for comparison. Future
-replacement, deployment and Reviews activation refuse a changed handoff. An
-identical repeat is a no-op while the original sender remains deployed and the
-other attestation checks still pass. After an OFF redeployment changes that
-version, the existing pin remains valid and re-attestation is unnecessary.
-Conflicting evidence cannot overwrite the pin.
-After `post-purchase-reconfigure-provider`, build from a different reviewed
-commit and deploy the new release with delivery OFF: retained builds are keyed
-by commit and cannot be overwritten with different provider inputs. A sender
-change is refused when Reviews shares the sender handoff, or when an execution
-has not yet been passed by the post-purchase checkpoint. Reconcile and advance
-the checkpoint first; never resend an uncertain execution to clear it.
-
-**Verification does not activate the store.** There is no verified runtime
-record before explicit activation, so a source wakeup cannot create the
-activation fence or backfill earlier purchases. The initial sender is disabled and its processing queues are paused until activation;
-the verifier explicitly checks the staged pause.
-The `doctor` output distinguishes the staged phase from an activated record.
-Private calls use Wrangler's operator-side authenticated remote bindings; no
-control Worker or public activation route is deployed.
-
-## Explicit activation
-
-After reviewing the planned resource IDs, approved mailbox and test-only modes:
-
-```sh
-uv run --locked python modules/reviews/operator/operate.py --directory /private/acorn-install --credentials /private/credentials.json activate --enable-test-delivery
-uv run --locked python modules/reviews/operator/operate.py --directory /private/acorn-install --credentials /private/credentials.json doctor
-```
-
-This invokes the existing private activation service, fixes its no-backfill
-watermark, records the PR A operator verification, enables only the approved
-test sender and bounded producer reconciliation, then relays post-fence events.
-A purchase confirmed before this command must remain fenced. Repeating the
-command preserves the installation and activation identity. It does not reset
-checkpoints, consent, suppression, delivery claims or provider receipts.
-
-`inventory.json` contains names, resource IDs, migration checksums and release
-versions; it contains no secret values. Back up the **entire directory**, keeping
-`secrets.json` and the credential handoff protected. Losing the original vault
-requires restoring its backup. The CLI refuses to generate replacement keys
-for retained data or to overwrite a different server-side suppression identity.
-
-## Pause invitation automation after qualification
-
-Stop further automation queue delivery when the approved test is complete:
-
-```sh
-uv run --locked python modules/reviews/operator/operate.py --directory /private/acorn-install --credentials /private/credentials.json pause
-uv run --locked python modules/reviews/operator/operate.py --directory /private/acorn-install --credentials /private/credentials.json doctor
-```
-
-This pauses this installation's events, schedule and due queues. An already
-in-flight provider submission may complete; wait for its acceptance receipt
-before concluding the test. Checkout and the public unsubscribe route remain
-available. Pausing neither cancels an accepted message nor deletes queued hints,
-permission/suppression data, provider receipts, keys or the activation fence.
-Repeating `pause` is safe. Upgrades and compatible rollbacks retain the paused
-intent; only explicit activation resumes it. Keep the installation paused after
-qualification.
-
-To intentionally resume, repeat the documented explicit
-`activate --enable-test-delivery` command. It verifies the retained installation
-before resuming queues and preserves the original no-backfill fence. Retained
-post-fence work, including eligible purchases made while paused, can then be
-processed; resume only when further test delivery is intended.
-
-Queue messages are expirable hints, not the durable purchase record. The source
-relay may continue advancing its checkpoint while queues are paused. The CLI
-sets a one-day queue retention period, but pausing may last longer than that:
-before any explicit resume it reconstructs signed post-fence event hints from
-the durable commerce outbox up to a checkpoint snapshot. Existing subscriber,
-scheduler and provider-claim idempotency reconstruct missing schedule/due hints
-without resending accepted or uncertain deliveries. Permission, suppression and
-maximum-lateness rules still apply; pausing does not extend a customer's policy
-window or authorize old pre-fence purchases.
-
-Recovery never rewinds a checkpoint or resets a permission/delivery claim. Each
-attempt handles at most twenty pages of twenty hints; if it reaches that budget,
-repeat explicit activation within five minutes. Progress is journalled. An old
-partial replay is restarted from the original immutable fence, so expired replay
-messages cannot authorize resume. Queues remain paused until the whole bounded
-snapshot is freshly reconstructed. This also protects interrupted deployments
-and rollbacks that outlast queue retention. Preserve the source databases and
-private operator inventory for this recovery; deleting them is retirement, not
-pause. The operator Queue batch format follows the
-[Cloudflare Queue API](https://developers.cloudflare.com/api/resources/queues/subresources/messages/methods/bulk_push/).
-
-## Diagnose, upgrade and application-only rollback
-
-`doctor` reads live bindings, the migration ledgers, suppression identity and
-operator record. A wrong binding is reported as, for example,
-`producer.bindings.COMMERCE_DB: wrong database`; it is not repaired or marked
-healthy. Fix the reviewed configuration/deployment, then verify again. No
-migrations, permission grants or delivery operations are performed by doctor.
-
-After checking out a reviewed compatible application commit, run:
-
-```sh
-uv run --locked python modules/reviews/operator/operate.py --directory /private/acorn-install --credentials /private/credentials.json upgrade
-uv run --locked python modules/reviews/operator/operate.py --directory /private/acorn-install --credentials /private/credentials.json doctor
-```
-
-An already activated installation retains its recorded activation authorization
-and watermark. Upgrade retains its original keys and databases, validates the
-migration prefix, deploys a complete release and refreshes operator verification.
-An unactivated installation stays unactivated. Re-run an interrupted operation
-from the recorded commit; do not replace its inventory or key vault. The events, schedule and due
-queues remain paused across deployment interruptions so an unavailable sender
-cannot exhaust delivery retries. Activation or a compatible rollback restores
-the sender and verified record before resuming those queues.
-
-```sh
-uv run --locked python modules/reviews/operator/operate.py --directory /private/acorn-install --credentials /private/credentials.json rollback --release 0
-```
-
-Release indices are the ordered entries in `inventory.json.releases`. Rollback
-selects only versions recorded for **this** installation and requires matching
-live schema and suppression-key contracts. It changes Worker deployments and
-refreshes verification. There is no database restore/down migration, key
-replacement or replay of accepted deliveries. An incompatible rollback stops.
-
-## Customer and operator acceptance
-
-Use the canonical storefront URL printed by `doctor`, not a Pages preview URL.
-The paid products are the Acorn growing kit and Woodland planter; the free guide
-is not reviewable. In the cart, accept the permission checkbox for one purchase,
-and explicitly untick it for a second purchase. Pay only through Stripe test
-checkout with the approved test email. Verify each stored choice independently:
-a preselected acceptance and a declined choice must not be conflated.
-
-For the accepted order, buy **both** paid products in one checkout. Wait for the
-single real invitation in the approved mailbox, open its `/review/` link and
-submit a review for one offered product. A browser cannot supply payment or
-recipient authority. The declined purchase must not receive an invitation.
-
-The operator can inspect pending reviews using the existing private service:
-
-```sh
-uv run --locked python modules/reviews/operator/operate.py --directory /private/acorn-install --credentials /private/credentials.json request --path /reviews-admin/v1/pending --admin
-```
-
-Save `{"revision_id":"RETURNED_REVISION_ID"}` in `/private/moderation.json`, then
-run the same command with `--path /reviews-admin/v1/contributions/RETURNED_REVIEW_ID/approve
---method POST --body /private/moderation.json --admin`. Use the exact returned
-revision ID; stale revisions must fail. For rejection/withdrawal replace the final
-action with `reject`/`withdraw`. The current staff protocol is also described in
-`modules/reviews/console/README.md`; it does not publish a staff route on the storefront.
-After approval, reload the mapped product page and its public summary and
-contribution list; the other product must not inherit the review.
-
-Follow the invitation email's unsubscribe link: GET/HEAD only show confirmation;
-POST records suppression. Make another accepted test purchase using the same
-approved mailbox. It must not produce another invitation. Retry/replay must not
-resend the earlier accepted delivery. Keep provider acceptance evidence and
-assert the single delivery identity, rather than inferring delivery from UI
-state alone.
-
-Run the same operator command with `receipt` to save non-secret `receipt.json` in the installation directory. It reads actual paid item counts, accepted/declined checkout choices, the checkpoint, provider acceptance identities, generation states, public counters and suppression counts; it contains no mailbox or invitation capability. Record the clean source commit, deployed versions,
-migration/key identity, resource inventory, activation fence, accepted/declined
-choice evidence, provider receipt counts, moderation/public presentation,
-unsubscribe/later-purchase result, repeat/resume and compatible rollback. Test
-checkout independently during a failed Reviews dependency; Reviews unavailability
-must not change its successful test checkout response.
-
-The [recorded independent qualification](qualification/2026-11-10.json) distinguishes
-the deployed source head from subsequent operator fixes and records the remaining
-validation limitations. Detailed resource/provider receipts stay private.
-
-## Shared merchant D1 and optional Reviews
-
-Fresh format-2 installations provision one physical D1 named `<namespace>-commerce`.
-The existing `DB`, `CARTRAY_DB`, `COMMERCE_DB`, `REVIEWS_DB` and `CONTEXT_DB`
-binding names all reference that database. The deterministic migration order is
-commerce, subscriber, Reviews, then purchaser context. The ledger keys each
-checksum and position by namespace; paths remain globally unique. A changed,
-unknown, missing or reordered ledger fails closed. Repeat `migrate` to resume;
-never edit the ledger to bypass a failure. Failed Wrangler migration output is
-retained in `migration-error.log` with mode 0600 in the private installation
-directory; the error identifies that file and the retry command.
-
-Set `"reviews_enabled": false` in the initial installation JSON for commerce
-only. This provisions one source Worker, one D1 and one Pages project, applies
-only commerce migrations, and omits Reviews services, queues, builds, storefront
-gateways and mail credentials. The default remains Reviews enabled. This choice
-is fixed by the retained inventory; create a fresh installation to change it.
-Commerce activation requires a completed deployment but no delivery opt-in.
-Pause and resume retain checkout availability; there are no delivery queues.
-
-D1 bindings grant access to the whole database: separate binding names are not
-table-level isolation. Reviews and purchaser-authority Workers therefore have
-wider database access in this topology. Service authentication, independent
-installation identity, signed attestation scope, pinned versions, activation
-fences and suppression key checks remain mandatory. A D1 outage affects both
-checkout and Reviews; neither is an independent database failover boundary.
-
-This installer accepts only new format-2 inventories. It does not move or merge
-existing three-database installations, rewrite their schema history, or offer an
-automatic upgrade of old operator inventories. Preserve existing inventories,
-keys and databases and use a fresh namespace for this topology.
-
-The [independent INFRA-01 hosted qualification](qualification/infra-01-2026-11-10.json)
-used clean, frozen runtime source `4fd56d7a3a79de2b9c2b82ccd95c3e23ade2e8aa`
-with no implementation or credential intervention during installation. Physical
-D1 count fell from three to one; seven Workers, four queues and one Pages project
-were unchanged. Live inspection confirmed all seven D1 binding aliases targeted
-the same physical database. The final installation was healthy and paused after
-checkout, delivery, browser submission, moderation, suppression, Reviews outage,
-drift diagnosis, recovery and compatible same-source rollback checks.
-
-Measured doctor time was 47.293 seconds on the prior topology and 15.942 seconds
-on the shared topology. Median public summary time was 1.133 versus 0.223 seconds
-and storefront time was 0.171 versus 0.168 seconds (three samples each). These
-are observations with network, cache and warm-state differences, not evidence
-that D1 consolidation alone caused the change. Commerce-only mode was qualified
-locally, not hosted; the evidence records the remaining scope limitations.
-
-GEL planning copies only image paths referenced by the manifest and product
-presentation content into the private inventory. Unrelated files are excluded;
-missing paths, traversal and symlink components are rejected before inputs are
-written. Asset selection does not authorize reading other operator files.
+See `docs/order-reviews.md` and the checked-in qualification receipts for the exact tested build.
+The test adapter remains recipient-restricted. Native staff moderation and capability APIs remain
+private; the storefront gateway cannot expose administrative APIs. Shared D1 means Workers with a
+binding have database-wide access, not physical table isolation. A complete D1 outage affects
+Commerce and Reviews; an unavailable optional Reviews service does not block checkout or receipt.

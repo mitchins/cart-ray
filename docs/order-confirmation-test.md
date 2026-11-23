@@ -3,7 +3,8 @@
 This development slice sends one confirmation for a confirmed order through the
 existing private test email handler. It is disabled until the existing
 post-purchase test activation is explicitly performed. It is not a production
-mail configuration and does not yet include review invitations.
+mail configuration. The consolidated Reviews preferences and shared provider are
+documented in `order-reviews.md`.
 
 For a new test merchant, the existing `post_purchase_config` input can contain
 the following protected JSON, supplied outside the worktree. The addresses must
@@ -31,5 +32,6 @@ The migration prevents a new receipt claim and a legacy workflow claim from
 being inserted for the same order, including during a rollback. It does not
 cancel a provider request that was already in flight before migration.
 
-Review invitation composition, unified merchant activation, real provider
-delivery, and hosted purchase qualification are not established by this slice.
+This file describes the #94 receipt foundation. For the integrated implementation,
+retired runtime topology and scoped hosted evidence, see
+`product-shape-qualification.md`.

@@ -1,6 +1,6 @@
 /** Preserve the existing private HTTP contract through Wrangler's remote proxy. */
 export function privateRequest(input){
- if(!['REVIEWS','PRODUCER','CONSUMER','EVIDENCE'].includes(input.service)||
+ if(!['REVIEWS'].includes(input.service)||
     !['GET','POST'].includes(input.method||'GET')||typeof input.path!=='string'||
     !input.path.startsWith('/')||input.path.startsWith('//'))throw new Error('invalid private service request');
  const body=input.body===undefined?undefined:JSON.stringify(input.body);

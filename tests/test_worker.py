@@ -720,85 +720,11 @@ def test_stripe_webhook_treats_missing_server_secret_as_unavailable():
     assert json.loads(response_body) == {"error": "Stripe webhook unavailable"}
 
 
-def test_source_identity_uses_deployed_credentials_and_is_fail_closed(monkeypatch):
-    from types import SimpleNamespace
-
-    calls = []
-
-    class Transport:
-        async def request(self, method, path, *, headers, body=None):
-            calls.append((method, path))
-            return 200, {"id": "acct_test123"}
-
-    monkeypatch.setattr(worker_module, "WorkersFetchTransport", Transport)
-    monkeypatch.setattr(worker_module, "COMPILED_CATALOGUE", SimpleNamespace(expected_catalogue_version="sha256:abc"))
-    env = {
-        "CARTRAY_ENVIRONMENT": "test",
-        "CARTRAY_REVIEWS_SOURCE": "test",
-        "CARTRAY_REVIEWS_IDENTITY_TOKEN": "i" * 32,
-        "STRIPE_API_KEY": "sk_test_synthetic",
-        "CF_VERSION_METADATA": SimpleNamespace(id="version-1"),
-    }
-    client = TestClient(create_app(), env=env)
-    for headers in ({}, {"authorization": "Bearer wrong"}):
-        assert client.request("GET", "/internal/reviews-source-identity", headers=headers)[0] == 503
-    assert not calls
-    status, headers, body = client.request(
-        "GET", "/internal/reviews-source-identity", headers={"authorization": "Bearer " + "i" * 32}
-    )
-    assert status == 200 and json.loads(body) == {
-        "version_id": "version-1",
-        "stripe_account": "acct_test123",
-        "catalogue_version": "sha256:abc",
-    }
-    assert calls == [("GET", "/v1/account")]
-    assert headers.get("Cache-Control") == "no-store"
-    for update in (
-        {"CARTRAY_ENVIRONMENT": "live"},
-        {"CARTRAY_REVIEWS_SOURCE": "disabled"},
-        {"STRIPE_API_KEY": "sk_live_never"},
-        {"CF_VERSION_METADATA": None},
-    ):
-        assert (
-            TestClient(create_app(), env=env | update).request(
-                "GET", "/internal/reviews-source-identity", headers={"authorization": "Bearer " + "i" * 32}
-            )[0]
-            == 503
-        )
 
 
-def test_runtime_reviews_identity_is_authenticated_and_does_not_call_stripe(monkeypatch):
-    from types import SimpleNamespace
-
-    class NoTransport:
-        def __init__(self):
-            raise AssertionError("runtime identity must not call Stripe")
-
-    monkeypatch.setattr(worker_module, "WorkersFetchTransport", NoTransport)
-    monkeypatch.setattr(worker_module, "COMPILED_CATALOGUE", SimpleNamespace(expected_catalogue_version="sha256:abc"))
-    env = {
-        "CARTRAY_ENVIRONMENT": "test",
-        "CARTRAY_REVIEWS_SOURCE": "test",
-        "CARTRAY_REVIEWS_IDENTITY_TOKEN": "i" * 32,
-        "CF_VERSION_METADATA": SimpleNamespace(id="version-1"),
-    }
-    path = "/internal/reviews-runtime-identity"
-    assert TestClient(create_app(), env=env).request("GET", path)[0] == 503
-    status, headers, body = TestClient(create_app(), env=env).request(
-        "GET", path, headers={"authorization": "Bearer " + "i" * 32}
-    )
-    assert status == 200
-    assert json.loads(body) == {"version_id": "version-1", "catalogue_version": "sha256:abc"}
-    assert headers.get("Cache-Control") == "no-store"
-    assert (
-        TestClient(create_app(), env=env | {"CF_VERSION_METADATA": None}).request(
-            "GET", path, headers={"authorization": "Bearer " + "i" * 32}
-        )[0]
-        == 503
-    )
 
 
-def test_webhook_subscriber_wakeup_does_not_change_checkout_response(monkeypatch):
+def test_retired_subscriber_configuration_does_not_start_background_work(monkeypatch):
     from types import SimpleNamespace
 
     captured = []
@@ -817,8 +743,7 @@ def test_webhook_subscriber_wakeup_does_not_change_checkout_response(monkeypatch
     entry.env = SimpleNamespace(CARTRAY_REVIEWS_PRODUCER="test", CARTRAY_ENVIRONMENT="test")
     entry.ctx = Context()
     result = asyncio.run(entry.fetch(SimpleNamespace(method="POST", url="https://store.test/stripe/webhook")))
-    assert result is response and len(captured) == 1
-    asyncio.run(captured.pop())
+    assert result is response and len(captured) == 0
     entry.ctx = None
     assert asyncio.run(entry.fetch(SimpleNamespace(method="POST", url="https://store.test/stripe/webhook"))) is response
 
@@ -908,3 +833,12 @@ def test_rate_limit_uses_native_worker_headers_when_wrapper_does_not_capture_cli
     )
     assert asyncio.run(worker_module._client_rate_limit(request, "CHECKOUT_STATUS_RATE_LIMITER", "order-access"))
     assert limiter.calls == 1
+
+
+@pytest.mark.parametrize("path", ["/internal/reviews-source-identity", "/internal/reviews-runtime-identity"])
+def test_retired_subscriber_identity_routes_have_no_runtime_cost(monkeypatch, path):
+    class NoTransport:
+        def __init__(self):
+            raise AssertionError("retired identity route must not call a provider")
+    monkeypatch.setattr(worker_module, "WorkersFetchTransport", NoTransport)
+    assert TestClient(create_app()).request("GET", path)[0] == 404

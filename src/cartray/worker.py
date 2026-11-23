@@ -121,54 +121,6 @@ def create_app(
         # Public liveness is deliberately independent of D1 readiness.
         return {"service": "cartray", "mode": "test-only", "status": "ok"}
 
-    @app.get("/internal/reviews-runtime-identity")
-    async def reviews_runtime_identity(request):
-        """Identify the running source version without a control-plane or Stripe call."""
-        try:
-            env = request.env
-            if _test_environment(env) != "test" or getattr(env, "CARTRAY_REVIEWS_SOURCE", None) != "test":
-                raise RuntimeError("disabled")
-            token = _required_env(env, "CARTRAY_REVIEWS_IDENTITY_TOKEN")
-            if len(token) < 32 or not hmac.compare_digest(request.header("authorization") or "", f"Bearer {token}"):
-                raise RuntimeError("unauthorized")
-            version = getattr(getattr(env, "CF_VERSION_METADATA", None), "id", None)
-            catalogue = COMPILED_CATALOGUE.expected_catalogue_version
-            if not isinstance(version, str) or not version or not isinstance(catalogue, str) or not catalogue:
-                raise RuntimeError("unbound version")
-            return Response(
-                {"version_id": version, "catalogue_version": catalogue}, headers={"Cache-Control": "no-store"}
-            )
-        except Exception:
-            return Response({"error": "source identity unavailable"}, status=503, headers={"Cache-Control": "no-store"})
-
-    @app.get("/internal/reviews-source-identity")
-    async def reviews_source_identity(request):
-        # Disabled unless explicitly provisioned. This endpoint never returns
-        # credentials or purchaser data and is not part of checkout.
-        try:
-            env = request.env
-            if _test_environment(env) != "test" or getattr(env, "CARTRAY_REVIEWS_SOURCE", None) != "test":
-                raise RuntimeError("disabled")
-            token = _required_env(env, "CARTRAY_REVIEWS_IDENTITY_TOKEN")
-            provided = request.header("authorization") or ""
-            if len(token) < 32 or not hmac.compare_digest(provided, f"Bearer {token}"):
-                raise RuntimeError("unauthorized")
-            version = getattr(getattr(env, "CF_VERSION_METADATA", None), "id", None)
-            catalogue = COMPILED_CATALOGUE.expected_catalogue_version
-            if not isinstance(version, str) or not version or not isinstance(catalogue, str) or not catalogue:
-                raise RuntimeError("unbound version")
-            client = StripeApiClient(_required_env(env, "STRIPE_API_KEY"), WorkersFetchTransport())
-            account = await client.get("/v1/account", {})
-            account_id = account.get("id")
-            if not isinstance(account_id, str) or not re.fullmatch(r"acct_[A-Za-z0-9]+", account_id):
-                raise RuntimeError("unavailable")
-            return Response(
-                {"version_id": version, "stripe_account": account_id, "catalogue_version": catalogue},
-                headers={"Cache-Control": "no-store"},
-            )
-        except Exception:
-            return Response({"error": "source identity unavailable"}, status=503, headers={"Cache-Control": "no-store"})
-
     @app.post("/internal/order-access")
     async def issue_access(request):
         headers = {"Cache-Control": "no-store"}
@@ -739,19 +691,6 @@ except ImportError:
 class Default(WorkerEntrypoint):
     async def fetch(self, request):
         response = await app(request, self.env)
-        # A committed confirmation can wake the independent subscriber, but a
-        # missing or broken subscriber must not change the webhook response.
-        try:
-            if (
-                getattr(self.env, "CARTRAY_REVIEWS_PRODUCER", "disabled") == "test"
-                and getattr(self.env, "CARTRAY_ENVIRONMENT", "") == "test"
-                and request.method == "POST"
-                and urlparse(str(request.url)).path == "/stripe/webhook"
-                and response.status == 200
-            ):
-                self.ctx.waitUntil(_wake_reviews_subscriber(self.env))
-        except Exception:
-            pass
         try:
             if (
                 getattr(self.env, "CARTRAY_POST_PURCHASE_MODE", "disabled") == "test"
@@ -770,11 +709,6 @@ class Default(WorkerEntrypoint):
             if str(getattr(controller, "cron", "")) != "* * * * *":
                 await scheduled_reconciliation_from_environment(self.env)
         finally:
-            try:
-                if getattr(self.env, "CARTRAY_REVIEWS_PRODUCER", "disabled") == "test":
-                    ctx.waitUntil(_wake_reviews_subscriber(self.env))
-            except Exception:
-                pass
             try:
                 if (
                     getattr(self.env, "CARTRAY_POST_PURCHASE_MODE", "disabled") == "test"
@@ -889,7 +823,7 @@ async def _drain_order_notifications(env, *, priority="receipt"):
             await review_stage(_drain_review_followups)
         dispatcher = OrderReceiptDispatcher(env.DB, merchant, "test", {"receipt": receipt_handler})
         await asyncio.wait_for(
-            drain_confirmed_d1(dispatcher, (), limit=10, max_new_claims=2, deadline=deadline),
+            drain_confirmed_d1(dispatcher, limit=10, max_new_claims=2, deadline=deadline),
             timeout=22,
         )
         if reviews and priority != 'followup':
@@ -1278,18 +1212,3 @@ async def _drain_review_recovery(env, service, token, *, deadline):
                     reference if outcome == "accepted" and re.fullmatch(r"[A-Za-z0-9_-]{1,128}", reference) else None
                 ),
             )
-
-
-async def _wake_reviews_subscriber(env):
-    """Best-effort wakeup; durable source cursor and queue own retry semantics."""
-    if getattr(env, "CARTRAY_REVIEWS_PRODUCER", "disabled") != "test":
-        return
-    try:
-        token = _required_env(env, "CARTRAY_REVIEWS_TRIGGER_TOKEN")
-        if _test_environment(env) != "test" or len(token) < 32:
-            return
-        request = _internal_post("https://reviews-producer.internal/", token)
-        await env.REVIEWS_SOURCE_TRIGGER.fetch(request)
-    except Exception:
-        # Never fail an already committed settlement because a subscriber is down.
-        return
