@@ -1492,7 +1492,8 @@ class Installation(PostPurchaseOperator):
             self.db("commerce"),
             "SELECT order_id,'order_confirmation' AS purpose,state,provider_reference,"
             "created_at AS attempted_at FROM post_purchase_executions "
-            "WHERE merchant_id=? AND environment='test' ORDER BY created_at,order_id", [merchant])
+            "WHERE merchant_id=? AND environment='test' AND workflow_key='order-receipt' "
+            "ORDER BY created_at,order_id", [merchant])
         if self.config['reviews_enabled']:
             messages += self.api.query(
                 self.db("commerce"),

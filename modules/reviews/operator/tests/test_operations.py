@@ -524,6 +524,8 @@ def test_receipt_reports_active_order_messages_not_retired_subscriber(tmp_path, 
         connection.execute('PRAGMA foreign_keys=OFF')
         connection.execute("INSERT INTO post_purchase_executions VALUES (?,?,?,'order-receipt',?,'accepted',?,1,1)",
                            (merchant,'test','test-order','a'*64,'receipt-provider'))
+        connection.execute("INSERT INTO post_purchase_executions VALUES (?,?,?,'old-workflow',?,'accepted',?,1,1)",
+                           (merchant,'test','historical-order','f'*64,'historical-provider'))
         connection.execute("INSERT INTO order_review_messages "
                            "(merchant_id,environment,order_id,recipient_hash,invitation_token,unsubscribe_token,"
                            "settings_json,due_at,state,attempted_at,provider_reference,created_at) "
@@ -538,3 +540,4 @@ def test_receipt_reports_active_order_messages_not_retired_subscriber(tmp_path, 
     assert not result['legacy_generation_provider_acceptances']
     serialized = json.dumps(result)
     assert 'test-order' not in serialized and 'c'*64 not in serialized and 'd'*64 not in serialized
+    assert 'historical-provider' not in serialized
