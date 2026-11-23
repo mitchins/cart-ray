@@ -843,17 +843,20 @@ def test_order_resources_survive_review_outage_then_permission_checked_access_re
     headers = {'content-type':'application/json','content-length':str(len(json.dumps(body).encode())),
                'cf-connecting-ip':'192.0.2.1'}
     status,_,payload = client.request('POST','/order-access',json_data=body,headers=headers)
-    assert status == 200 and len(json.loads(payload)['items']) == 2
+    assert status == 200
+    assert len(json.loads(payload)['items']) == 2
     assert 'reviews' not in json.loads(payload)
     assert sent == []
     env.POST_PURCHASE_HANDLER = original
     client = TestClient(worker.create_app(),env=vars(env))
     status,_,payload = client.request('POST','/order-access',json_data=body,headers=headers)
-    assert status == 200 and json.loads(payload)['reviews']['subjects']
+    assert status == 200
+    assert json.loads(payload)['reviews']['subjects']
     message = run(order_reviews.first(db,'SELECT * FROM order_review_messages'))
     run(order_reviews.unsubscribe(db,'merchant','test',message['unsubscribe_token'],1000))
     status,_,payload = client.request('POST','/order-access',json_data=body,headers=headers)
-    assert status == 200 and 'reviews' not in json.loads(payload)
+    assert status == 200
+    assert 'reviews' not in json.loads(payload)
     assert sent == []
 
 
