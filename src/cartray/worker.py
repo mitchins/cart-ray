@@ -875,19 +875,27 @@ async def _drain_order_notifications(env, *, priority="receipt"):
 
         deadline = time.monotonic() + 21
         reviews = bool(getattr(env, 'CARTRAY_REVIEW_SUBJECT_MAPS', None))
+
+        async def review_stage(stage):
+            try:
+                await stage(env, service, token, deadline=deadline)
+            except Exception:
+                # Review faults must not suppress an otherwise valid receipt.
+                print("Order review processing deferred; inspect installation health")
+
         if reviews and priority == 'recovery':
-            await _drain_review_recovery(env, service, token, deadline=deadline)
+            await review_stage(_drain_review_recovery)
         if reviews and priority == 'followup':
-            await _drain_review_followups(env, service, token, deadline=deadline)
+            await review_stage(_drain_review_followups)
         dispatcher = OrderReceiptDispatcher(env.DB, merchant, "test", {"receipt": receipt_handler})
         await asyncio.wait_for(
             drain_confirmed_d1(dispatcher, (), limit=10, max_new_claims=2, deadline=deadline),
             timeout=22,
         )
         if reviews and priority != 'followup':
-            await _drain_review_followups(env, service, token, deadline=deadline)
+            await review_stage(_drain_review_followups)
         if reviews and priority != 'recovery':
-            await _drain_review_recovery(env, service, token, deadline=deadline)
+            await review_stage(_drain_review_recovery)
     except Exception as error:
         # Checkout is already committed; cron retries the durable checkpoint.
         print(f"Post-purchase drain failed: {type(error).__name__}")
@@ -1105,6 +1113,16 @@ async def _fail_order_recovery(db, merchant, message):
     )
 
 
+async def _defer_order_recovery(db, merchant, message):
+    # Reuse the native ledger: a temporarily unusable purchase cannot monopolize
+    # recovery turns, and deferral never authorizes a provider retry.
+    await db.prepare(
+        "INSERT INTO review_recovery_deferrals VALUES (?,'test',?,?,?) "
+        "ON CONFLICT(store_key,environment,acquisition_id) DO UPDATE SET "
+        "request_id=excluded.request_id,retry_after=excluded.retry_after"
+    ).bind(merchant,message['order_id'],message['request_id'],int(time.time())+300).run()
+
+
 async def _drain_review_recovery(env, service, token, *, deadline):
     """Customer-requested replacements reuse native generations and the shared provider."""
     import secrets
@@ -1163,13 +1181,7 @@ async def _drain_review_recovery(env, service, token, *, deadline):
             await _fail_order_recovery(env.DB, merchant, message)
             continue
         except Exception:
-            # Reuse the native request deferral ledger. A temporary failure for
-            # one purchase must not monopolize this merchant's recovery turns.
-            await env.DB.prepare(
-                "INSERT INTO review_recovery_deferrals VALUES (?,'test',?,?,?) "
-                "ON CONFLICT(store_key,environment,acquisition_id) DO UPDATE SET "
-                "request_id=excluded.request_id,retry_after=excluded.retry_after"
-            ).bind(merchant,message['order_id'],message['request_id'],int(time.time())+300).run()
+            await _defer_order_recovery(env.DB, merchant, message)
             continue
 
         recipient = order_reviews.recipient_hash(env.CARTRAY_RECIPIENT_HASH_KEY, merchant, "test", evidence["email"])
@@ -1189,18 +1201,22 @@ async def _drain_review_recovery(env, service, token, *, deadline):
             await _fail_order_recovery(env.DB, merchant, message)
             continue
         now = int(time.time())
-        draft = await prepare_replacement(
-            env.DB,
-            store=merchant,
-            environment="test",
-            acquisition=message["order_id"],
-            request_key="recovery-" + message["request_id"],
-            recovery_request_id=message["request_id"],
-            key_version="v1",
-            secret=env.CARTRAY_REVIEW_INVITATION_KEY.encode(),
-            now=now,
-            random_token=lambda: secrets.token_hex(32),
-        )
+        try:
+            draft = await prepare_replacement(
+                env.DB,
+                store=merchant,
+                environment="test",
+                acquisition=message["order_id"],
+                request_key="recovery-" + message["request_id"],
+                recovery_request_id=message["request_id"],
+                key_version="v1",
+                secret=env.CARTRAY_REVIEW_INVITATION_KEY.encode(),
+                now=now,
+                random_token=lambda: secrets.token_hex(32),
+            )
+        except ValueError:
+            await _defer_order_recovery(env.DB, merchant, message)
+            continue
         if draft["state"] != "prepared":
             continue  # Accepted, dispatching and uncertain deliveries are never resent.
         # Reserve the final send, result read and durable outcome write before

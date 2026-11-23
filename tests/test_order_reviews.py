@@ -739,3 +739,35 @@ def test_scheduled_priority_rotates_without_additional_infrastructure(purchase,m
         monkeypatch.setattr(worker,'time',SimpleNamespace(time=lambda:minute*60,monotonic=time.monotonic))
         run(entry.scheduled(SimpleNamespace(cron='* * * * *'),env,object()))
     assert observed == ['recovery','followup','receipt']
+
+
+@pytest.mark.parametrize('priority',['recovery','followup'])
+def test_priority_review_failure_does_not_skip_receipt(purchase,monkeypatch,priority):
+    _,env,sent,_ = purchase
+
+    async def broken_stage(*args,**kwargs):
+        raise ValueError('unavailable review state')
+
+    monkeypatch.setattr(worker,'_drain_review_'+('recovery' if priority=='recovery' else 'followups'),broken_stage)
+    run(worker._drain_post_purchase(env,priority=priority))
+    assert sum(message['type'] == 'order_confirmation' for message in sent) == 1
+
+
+def test_unusable_prepared_recovery_is_deferred_without_sending(purchase,monkeypatch):
+    db,env,sent,order = purchase
+    env.CARTRAY_REVIEW_INVITATION_KEY = 'i'*32
+    env.CARTRAY_REVIEW_SETTINGS = json.dumps({'timing':'receipt'})
+    run(worker._drain_post_purchase(env))
+    db.conn.execute("INSERT INTO review_recovery_requests VALUES ('merchant','test',?,?,100,'pending')",(order,'5'*64))
+    db.conn.commit()
+
+    async def unavailable_draft(*args,**kwargs):
+        raise ValueError('existing prepared generation cannot be verified')
+
+    from cartray_reviews import invitations
+
+    monkeypatch.setattr(invitations,'prepare_replacement',unavailable_draft)
+    run(worker._drain_post_purchase(env,priority='recovery'))
+    assert len(sent) == 1
+    assert db.conn.execute('SELECT state FROM review_recovery_requests').fetchone()[0] == 'pending'
+    assert db.conn.execute('SELECT retry_after FROM review_recovery_deferrals').fetchone()[0] > 0
