@@ -762,7 +762,8 @@ def test_policy_update_deploys_off_with_existing_resources(deployed):
 
 
 def test_policy_binding_size_is_checked_before_inventory_changes(deployed):
-    from topology import test_recipient_delivery_config as encode_policy, validate_test_recipient_allowlist
+    from topology import test_recipient_delivery_config as encode_policy
+    from topology import validate_test_recipient_allowlist
     def address(length, index):
         local = ('u' + str(index)).ljust(64, 'a')
         return local + '@' + 'd' * (length - 70) + '.test'

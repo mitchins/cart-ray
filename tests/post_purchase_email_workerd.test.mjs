@@ -62,6 +62,10 @@ test(`private registered email handler runs in Workerd with synthetic ${provider
         headers:{Authorization:'Bearer '+'x'.repeat(40)},
         body:JSON.stringify({...body,recipient:expected})});
       assert.equal(rejected.status,422); assert.equal(calls.length,7);
+      purchaser='Kate@effectivepolicy.com.au';
+      const lookalike=await mf.dispatchFetch('https://private.invalid/',{method:'POST',
+        headers:{Authorization:'Bearer '+'x'.repeat(40)},body:JSON.stringify(body)});
+      assert.equal(lookalike.status,422); assert.equal(calls.length,9);
     }
   } finally { await mf.dispose(); }
 });
