@@ -9,6 +9,14 @@ from cartray.order_access import resource_config_bindings
 SUBJECTS = {"ACORN-KIT": "acorn-growing-kit", "ACORN-PLANTER": "woodland-planter"}
 
 
+def test_recipient_delivery_config(policy):
+    encoded = json.dumps({"test_recipient_allowlist": policy} if policy is not None else {},
+                         separators=(",", ":"))
+    if len(encoded.encode()) > 4096:
+        raise ValueError("test recipient allowlist exceeds the 4096-byte delivery binding limit")
+    return encoded
+
+
 def validate_test_recipient_allowlist(value):
     """Finite exact test destinations; domains never include their subdomains."""
     if not isinstance(value, dict) or set(value) != {"addresses", "domains"}:
@@ -38,6 +46,7 @@ def validate_test_recipient_allowlist(value):
         result[key] = sorted(normal)
     if not result['addresses'] and not result['domains']:
         raise ValueError("test recipient allowlist cannot be empty")
+    test_recipient_delivery_config(result)
     return result
 
 
@@ -294,8 +303,7 @@ def secret_bindings(installation, role):
     if role == "post-purchase":
         policy = installation.post_purchase_actions().get("test_recipient_allowlist")
         result.update(
-            DELIVERY_CONFIG=json.dumps({"test_recipient_allowlist": policy} if policy is not None else {},
-                                       separators=(",", ":")),
+            DELIVERY_CONFIG=test_recipient_delivery_config(policy),
             APPROVED_TEST_RECIPIENT=vault["post_purchase_approved_test_email"],
             APPROVED_TEST_SENDER=vault["post_purchase_test_sender"],
             STRIPE_API_KEY=vault["post_purchase_stripe_test_key"],

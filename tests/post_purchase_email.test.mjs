@@ -249,3 +249,19 @@ test('live delivery ignores the sandbox allowlist; test OFF cannot send to newly
  assert.equal((await handle(request(),{...testSettings(allowedTest),DELIVERY_MODE:'disabled'},off.fetch)).status,403);
  assert.equal(off.calls.length,0);
 });
+
+test('non-ASCII purchaser lookalikes cannot fold into exact address or domain permissions',async()=>{
+ for(const [address,policy] of [
+   ['Kate@example.test',{addresses:['kate@example.test'],domains:[]}],
+   ['buyer@Kate.test',{addresses:[],domains:['kate.test']}],
+   ['Kate@mitchellcurrie.com',allowedTest]]) {
+   const p=provider({email:address});
+   assert.equal((await handle(request(),testSettings(policy),p.fetch)).status,422);
+   assert.equal(p.calls.length,2);
+ }
+});
+test('oversized runtime delivery policy fails before any provider call',async()=>{
+ const p=provider();
+ assert.notEqual((await handle(request(),{...env,DELIVERY_CONFIG:' '.repeat(4097)+'{}'},p.fetch)).status,200);
+ assert.equal(p.calls.length,0);
+});

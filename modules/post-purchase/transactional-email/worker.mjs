@@ -2,36 +2,47 @@
 const fail = status => Response.json({error: 'delivery unavailable'}, {status, headers: {'Cache-Control': 'no-store'}});
 const identifier = /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$/;
 
+const testDomain = /^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/;
+function normalizedTestAddress(value) {
+  // Check ASCII before case conversion: e.g. U+212A otherwise folds to ASCII k.
+  if (typeof value !== 'string' || !/^[\x21-\x7e]{1,254}$/.test(value)) return null;
+  const parts = value.toLowerCase().split('@');
+  if (parts.length !== 2 || !/^[a-z0-9.!#$%&'*+/=?^_`{|}~-]{1,64}$/.test(parts[0]) ||
+      parts[0].startsWith('.') || parts[0].endsWith('.') || parts[0].includes('..') || !testDomain.test(parts[1])) return null;
+  return parts.join('@');
+}
 function testRecipientPolicy(env) {
-  const config = JSON.parse(env.DELIVERY_CONFIG ?? '{}');
+  const raw = env.DELIVERY_CONFIG ?? '{}';
+  if (typeof raw !== 'string' || new TextEncoder().encode(raw).byteLength > 4096) throw new Error('oversized test policy');
+  const config = JSON.parse(raw);
   if (!config || typeof config !== 'object' || Array.isArray(config) ||
       Object.keys(config).some(key => key !== 'test_recipient_allowlist')) throw new Error('invalid test policy');
   const policy = config.test_recipient_allowlist;
-  if (policy === undefined) return recipient => recipient.toLowerCase() === env.APPROVED_TEST_RECIPIENT.toLowerCase();
+  if (policy === undefined) return recipient => {
+    const normalized = normalizedTestAddress(recipient);
+    return normalized !== null && normalized === env.APPROVED_TEST_RECIPIENT.toLowerCase();
+  };
   if (!policy || Object.keys(policy).sort().join(',') !== 'addresses,domains') throw new Error('invalid test policy');
-  const domain = /^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/;
   const lists = {};
   for (const key of ['addresses','domains']) {
     if (!Array.isArray(policy[key]) || policy[key].length > 32) throw new Error('invalid test policy');
     lists[key] = policy[key].map(value => {
       if (typeof value !== 'string' || !/^[\x21-\x7e]{1,254}$/.test(value)) throw new Error('invalid test policy');
-      value = value.toLowerCase();
-      if (key === 'domains') {
-        if (value.length > 253 || !domain.test(value)) throw new Error('invalid test domain');
-      } else {
-        const parts = value.split('@');
-        if (parts.length !== 2 || !/^[a-z0-9.!#$%&'*+/=?^_`{|}~-]{1,64}$/.test(parts[0]) ||
-            parts[0].startsWith('.') || parts[0].endsWith('.') || parts[0].includes('..') || !domain.test(parts[1]))
-          throw new Error('invalid test address');
+      if (key === 'addresses') {
+        const address = normalizedTestAddress(value);
+        if (!address) throw new Error('invalid test address');
+        return address;
       }
+      value = value.toLowerCase();
+      if (value.length > 253 || !testDomain.test(value)) throw new Error('invalid test domain');
       return value;
     });
     if (new Set(lists[key]).size !== lists[key].length) throw new Error('duplicate test destination');
   }
   if (!lists.addresses.length && !lists.domains.length) throw new Error('empty test policy');
   return recipient => {
-    const normalized = recipient.toLowerCase();
-    return lists.addresses.includes(normalized) || lists.domains.includes(normalized.split('@')[1]);
+    const normalized = normalizedTestAddress(recipient);
+    return normalized !== null && (lists.addresses.includes(normalized) || lists.domains.includes(normalized.split('@')[1]));
   };
 }
 

@@ -60,7 +60,10 @@ protected schema-2 file:
 ```
 
 Both arrays are required, at most 32 entries each, with at least one entry overall.
-Entries are ASCII, validated and case-normalized; duplicates, wildcards, URL syntax,
+The complete serialized delivery binding must also fit 4096 bytes; oversize lists
+are rejected before configuration changes. Purchaser addresses are checked as ASCII
+before case normalization, so Unicode lookalikes cannot fold into an approved address.
+Entries are validated and case-normalized; duplicates, wildcards, URL syntax,
 whitespace and unknown fields are rejected. Domains match exactly: `merchant.test`
 does **not** allow `sub.merchant.test`, `evilmerchant.test` or `merchant.test.evil.test`.
 An exact address does not allow plus aliases or other mailboxes at that domain.

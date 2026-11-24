@@ -759,3 +759,20 @@ def test_policy_update_deploys_off_with_existing_resources(deployed):
     assert install.state['post_purchase_modes'] == OFF
     assert install.post_purchase_fence()['activation_watermark'] == 7
     assert install.state['deployment']['complete'] is True
+
+
+def test_policy_binding_size_is_checked_before_inventory_changes(deployed):
+    from topology import test_recipient_delivery_config as encode_policy, validate_test_recipient_allowlist
+    def address(length, index):
+        local = ('u' + str(index)).ljust(64, 'a')
+        return local + '@' + 'd' * (length - 70) + '.test'
+    policy = {'addresses': [address(128, i) for i in range(30)], 'domains': []}
+    last_length = 4096 - len(encode_policy(policy).encode()) - 3
+    policy['addresses'].append(address(last_length, 30))
+    assert len(encode_policy(validate_test_recipient_allowlist(policy)).encode()) == 4096
+    install, _, _ = deployed
+    before = install.state_path.read_bytes()
+    policy['addresses'][-1] = address(last_length + 1, 30)
+    with pytest.raises(ValueError, match='4096-byte'):
+        install.reconfigure_test_recipients(policy)
+    assert install.state_path.read_bytes() == before
