@@ -39,7 +39,7 @@ from topology import (
     wrangler_config,
 )
 
-from cartray.merchant_contract import merchant_path, register_path
+from cartray.merchant_contract import merchant_path, product_route_groups, register_path
 from cartray.order_access import validate_resource_configuration
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -810,6 +810,7 @@ class Installation(PostPurchaseOperator):
         cart.feed((site / "cart/index.html").read_text())
         if "theme-" + self.config["theme"] not in cart.body.get("class", "").split():
             raise ValueError("merchant storefront theme differs from installation")
+        product_route_groups(storefront["productPaths"], self.config["subject_map"])
         if not set(self.config["subject_map"]).issubset(storefront["productPaths"]):
             raise ValueError("review subject mapping refers to an unauthorised commerce product")
         prefixes = {}

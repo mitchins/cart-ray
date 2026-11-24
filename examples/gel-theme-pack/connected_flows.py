@@ -8,7 +8,7 @@ import shutil
 from pathlib import Path
 from urllib.parse import urlsplit
 
-from cartray.merchant_contract import merchant_path, register_path
+from cartray.merchant_contract import merchant_path, product_route_groups, register_path
 
 from .src import templates
 
@@ -28,6 +28,7 @@ def install(
     reviews_enabled: bool = False,
     category_links: list[tuple[str, str]] | None = None,
     catalogue_path: str = "/shop/",
+    review_subjects: dict[str, str] | None = None,
 ):
     """Install shared cart/return UI; offers are presentation only, never checkout authority."""
     if not offers or len({offer["product_key"] for offer in offers}) != len(offers):
@@ -54,7 +55,6 @@ def install(
         if (
             not re.fullmatch(r"[A-Z0-9-]{1,64}", offer["product_key"])
             or not merchant_path(offer["path"], product=True)
-            or offer["path"].casefold() in paths
             or not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", str(offer["source_id"]))
             or str(offer["source_id"]) in source_ids
             or not re.fullmatch(r"/[A-Za-z0-9_./-]+", offer["image"])
@@ -67,6 +67,7 @@ def install(
         source_ids.add(str(offer["source_id"]))
         paths.add(offer["path"].casefold())
         register_path(offer["path"], prefixes)
+    product_route_groups({offer["product_key"]: offer["path"] for offer in offers}, review_subjects)
     merchant_path(catalogue_path, product=catalogue_path != "/shop/")
     register_path(catalogue_path, prefixes)
     if catalogue_path.casefold() in paths:
@@ -124,7 +125,7 @@ def install(
         "checkoutEnabled": True,
         "previewCatalogue": None,
         "productPaths": paths,
-        "reviewSubjects": {},
+        "reviewSubjects": review_subjects or {},
         "reviewsEnabled": reviews_enabled,
         "reviewInvitationsEnabled": False,
     }

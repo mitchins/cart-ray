@@ -493,3 +493,34 @@ def test_connected_flow_uses_explicit_merchant_path(tmp_path, monkeypatch):
         flows.install(tmp_path, ROOT, {"identity": {"name": "Merchant"}}, "minimal", [offer],
                       category_links=[("/product/approved-route/", "Conflict")])
     assert (tmp_path / "site-config.js").read_text() == previous
+
+
+def test_connected_flow_shared_parent_requires_explicit_subjects(tmp_path, monkeypatch):
+    import importlib
+    import sys
+
+    pack = ROOT / 'examples/gel-theme-pack'
+    if 'cartray_gel' not in sys.modules:
+        spec = importlib.util.spec_from_file_location(
+            'cartray_gel', pack / '__init__.py', submodule_search_locations=[str(pack)])
+        package = importlib.util.module_from_spec(spec)
+        sys.modules[spec.name] = package
+        spec.loader.exec_module(package)
+    flows = importlib.import_module('cartray_gel.connected_flows')
+    (tmp_path / 'theme').mkdir()
+    monkeypatch.setattr(flows.templates, 'simple_page', lambda *args: 'content')
+    monkeypatch.setattr(flows.templates, 'page_shell', lambda *args, **kwargs:
+                        '<body class="test"><script src="/site-config.js" defer></script>'
+                        '<script type="module" src="/theme/app.mjs"></script></body>')
+    offers = [{'product_key': key, 'source_id': key, 'path': '/product/consulting/',
+               'image': '/media/product.png', 'image_alt': 'Consulting', 'category': 'Services'}
+              for key in ('OFFER-15', 'OFFER-30')]
+    with pytest.raises(ValueError, match='identical review subject'):
+        flows.install(tmp_path, ROOT, {'identity': {'name': 'Merchant'}}, 'minimal', offers)
+    subjects = {'OFFER-15': 'consulting', 'OFFER-30': 'consulting'}
+    flows.install(tmp_path, ROOT, {'identity': {'name': 'Merchant'}}, 'minimal', offers,
+                  review_subjects=subjects)
+    raw = (tmp_path / 'storefront-config.js').read_text()
+    assert '"OFFER-15": "/product/consulting/"' in raw
+    assert '"OFFER-30": "/product/consulting/"' in raw
+    assert '"reviewSubjects": {"OFFER-15": "consulting", "OFFER-30": "consulting"}' in raw

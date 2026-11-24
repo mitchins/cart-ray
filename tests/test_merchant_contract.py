@@ -53,3 +53,29 @@ def test_source_length_and_absent_description_are_preserved():
     assert 'name="description" content=""' in seo_head({**seo, "description": ""})
     with pytest.raises(ValueError):
         page_seo({**seo, "description": "x" * 16385})
+
+
+def test_variations_share_one_explicit_subject_and_parent_path():
+    from cartray.merchant_contract import product_route_groups
+
+    paths = {'OFFER-15': '/product/consulting/', 'OFFER-30': '/product/consulting/'}
+    assert product_route_groups(paths, {'OFFER-15': 'consulting', 'OFFER-30': 'consulting'}) == {
+        '/product/consulting/': ['OFFER-15', 'OFFER-30']}
+
+
+@pytest.mark.parametrize('subjects', [None, {}, {'OFFER-15': 'consulting'},
+                                      {'OFFER-15': 'consulting', 'OFFER-30': 'different'}, []])
+def test_unrelated_or_undeclared_products_cannot_share_a_route(subjects):
+    from cartray.merchant_contract import product_route_groups
+
+    with pytest.raises(ValueError):
+        product_route_groups({'OFFER-15': '/product/consulting/', 'OFFER-30': '/product/consulting/'}, subjects)
+
+
+def test_shared_subject_does_not_allow_case_or_reserved_route_collisions():
+    from cartray.merchant_contract import product_route_groups
+
+    subjects = {'OFFER-15': 'consulting', 'OFFER-30': 'consulting'}
+    for path in ('/Product/consulting/', '/cart/', '/product/../cart/'):
+        with pytest.raises(ValueError):
+            product_route_groups({'OFFER-15': '/product/consulting/', 'OFFER-30': path}, subjects)

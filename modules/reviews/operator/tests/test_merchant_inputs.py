@@ -582,3 +582,31 @@ def test_catalogue_bindings_keep_prior_order_manifest_mappings(tmp_path):
                                                         'subject_map': values['subject_map']}})
     with pytest.raises(ValueError, match='one catalogue version'):
         catalogue_subject_maps(install)
+
+
+def test_shared_parent_page_preserves_each_offer_action_and_subject_identity(tmp_path):
+    values = catalogue_revision(tmp_path / 'package')
+    source = Path(values['merchant_inputs'])
+    site = source / 'storefront'
+    config_path = site / 'storefront-config.js'
+    config = javascript_json(config_path, 'window.CARTRAY_STOREFRONT = ')
+    config['productPaths']['MERCHANT-TWO'] = '/products/one/'
+    config['reviewSubjects'] = {'MERCHANT-ONE': 'product-one', 'MERCHANT-TWO': 'product-one'}
+    config_path.write_text('window.CARTRAY_STOREFRONT = ' + json.dumps(config) + ';')
+    theme_path = site / 'site-config.js'
+    theme = javascript_json(theme_path, 'window.CARTRAY_THEME = ')
+    theme['catalogue']['products'][1]['path'] = '/products/one/'
+    theme_path.write_text('window.CARTRAY_THEME = ' + json.dumps(theme) + ';')
+    page = site / 'products/one/index.html'
+    page.write_text(page.read_text() + '<button data-cartray-add="MERCHANT-TWO"></button>')
+    assert validate(source, ROOT)
+    install = plan_merchant(tmp_path, source)
+    install.config.update(subject_map=config['reviewSubjects'],
+                          subject_details=[['product-one', '/products/one/', 'Product']])
+    install.verify_merchant_inputs()
+    install.config['subject_map'] = {'MERCHANT-ONE': 'product-one', 'MERCHANT-TWO': 'different'}
+    with pytest.raises(ValueError, match='identical review subject'):
+        install.verify_merchant_inputs()
+    page.write_text(page.read_text().replace('<button data-cartray-add="MERCHANT-TWO"></button>', ''))
+    with pytest.raises(ValueError, match='purchase action'):
+        validate(source, ROOT)

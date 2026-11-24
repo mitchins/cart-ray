@@ -132,12 +132,22 @@ and assets before changing inventory. Failures retain a protected compiler log.
 This operation does not create Prices, approve fulfilment resources or modify
 credentials, merchant identity, account, origins, provider, D1, keys or the activation
 fence. Existing product-to-subject assignments and subject paths/labels cannot be
-reinterpreted through this command. New mappings are explicit. Retired subject rows
+reinterpreted through this command. New mappings are explicit. Multiple offer keys may use one exact parent product
+path only when `storefront-config.js` declares the same `reviewSubjects` identity
+for each and the installer subject map agrees. `connected_flows.install` accepts
+`review_subjects=subject_map` for this declaration. Each offer must retain a real
+connected purchase action on that parent page; aliases do not authorise pricing
+or erase variant identity. Different subjects, case conflicts and reserved routes
+remain rejected. Retired subject rows
 and purchased-item history are retained.
 
 Package and lock snapshots are retained by content hash. Repeating the command is
 idempotent; different inputs at the same source commit produce separate retained
-release artifacts. Build invalidation requires deployment and verification before
+release artifacts. Prior catalogue-version subject maps remain available to orders
+created before an update. A catalogue version cannot reinterpret its mapping;
+changed mapping content requires its corresponding explicit compiled revision.
+Archived rollback uses recorded fingerprints and storefront integrity, not the
+current checkout's client bytes. Build invalidation requires deployment and verification before
 explicit test activation. Old Worker versions are checked against their recorded
 OFF configuration while the replacement is being installed.
 

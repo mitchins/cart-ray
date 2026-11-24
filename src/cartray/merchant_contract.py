@@ -33,6 +33,25 @@ def register_path(value, prefixes):
         prefixes[folded] = prefix
 
 
+def product_route_groups(paths, subjects=None):
+    """Allow a shared canonical product page only for one explicit native subject."""
+    subjects = {} if subjects is None else subjects
+    if not isinstance(subjects, dict):
+        raise ValueError('review subject mappings must be an object')
+    groups, prefixes = {}, {}
+    for key, path in paths.items():
+        merchant_path(path, product=True)
+        register_path(path, prefixes)
+        groups.setdefault(path, []).append(key)
+    for keys in groups.values():
+        if len(keys) > 1:
+            identities = [subjects.get(key) for key in keys]
+            if (not all(isinstance(value, str) and re.fullmatch(r'[a-z0-9-]{1,128}', value)
+                        for value in identities) or len(set(identities)) != 1):
+                raise ValueError('shared product paths require one explicit identical review subject')
+    return groups
+
+
 def page_seo(value):
     """Validate a small allowlist; return a safe JSON-LD string separately."""
     required = {"title", "canonical_url", "robots"}
