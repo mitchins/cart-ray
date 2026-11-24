@@ -165,7 +165,10 @@ jobs:
       - name: Clear reference evidence before qualification
         run: rm -f examples/gel-theme-pack/evidence/connected-browser-*.json examples/gel-theme-pack/evidence/gallery-browser-*.json
       - name: Install pinned Playwright engines
-        run: uv run --with playwright==1.57.0 python -m playwright install --with-deps chromium firefox webkit
+        run: |
+          # Avoid the hosted runner's regional mirror, observed stalling before tests.
+          printf '%s\n' 'https://archive.ubuntu.com/ubuntu/' | sudo tee /etc/apt/apt-mirrors.txt > /dev/null
+          uv run --with playwright==1.57.0 python -m playwright install --with-deps chromium firefox webkit
       - name: Build connected themes and Northline contract fixture
         run: |
           port=4174

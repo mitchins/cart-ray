@@ -4,6 +4,8 @@ import hashlib
 import json
 import re
 
+from cartray.order_access import resource_config_bindings
+
 SUBJECTS = {"ACORN-KIT": "acorn-growing-kit", "ACORN-PLANTER": "woodland-planter"}
 
 
@@ -50,6 +52,32 @@ def review_requests_enabled(config):
                 and config.get('review_requests', {}).get('timing', 'receipt') != 'off')
 
 
+def catalogue_subject_maps(installation, versions=None, *, extra_snapshots=()):
+    """Retain the manifest mappings purchased orders use, including retired catalogues."""
+    config, state = installation.config, installation.state
+    releases = state.get('releases', [])
+    snapshots = [release.get('catalogue_config') for release in releases]
+    current = config
+    source_version = (versions or {}).get('source')
+    if source_version:
+        for index in range(len(releases)):
+            if releases[index].get('versions', {}).get('source') == source_version:
+                snapshots = snapshots[:index + 1]
+                current = releases[index].get('catalogue_config') or config
+                break
+    mappings = {}
+    for snapshot in [*snapshots, *extra_snapshots, current]:
+        if not snapshot:
+            continue
+        path = installation.directory / snapshot['preflight_lock']
+        version = json.loads(path.read_text())['catalogue_version']
+        subjects = snapshot.get('subject_map', SUBJECTS)
+        if version in mappings and mappings[version] != subjects:
+            raise ValueError('one catalogue version cannot reinterpret its review subject mapping')
+        mappings[version] = subjects
+    return dict(sorted(mappings.items()))
+
+
 def graph(
     installation, versions=None, sending=False, post_purchase_modes=None, email_provider=None, actions_override=None
 ):
@@ -66,9 +94,8 @@ def graph(
     if private_source:
         source_origin = storefront + config["source_api_path"]
     return_path = "/purchase-return/" if "merchant_inputs" in config else "/"
-    catalogue = json.loads(open(config["preflight_lock"]).read())["catalogue_version"]
     store = config.get("store_key", "acorn-store")
-    mapping = json.dumps({catalogue: config.get("subject_map", SUBJECTS)}, separators=(",", ":"))
+    mapping = json.dumps(catalogue_subject_maps(installation, versions), separators=(",", ":"))
     nodes = {
         "source": {
             "main": "src/cartray/worker.py",
@@ -220,7 +247,7 @@ def secret_bindings(installation, role):
         if "order_access" not in vault:
             raise ValueError("order access key missing; restore the original installation key")
         result["CARTRAY_ORDER_ACCESS_KEY"] = vault["order_access"]
-        result["CARTRAY_RESOURCE_CONFIG"] = credentials["fulfilment_resources"]
+        result.update(resource_config_bindings(credentials["fulfilment_resources"]))
     if role == "source":
         result.update(
             STRIPE_API_KEY=credentials["stripe_test_key"],

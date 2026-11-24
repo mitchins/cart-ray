@@ -8,7 +8,7 @@ from html.parser import HTMLParser
 from pathlib import Path
 
 from cartray.fingerprints import fingerprint_entries
-from cartray.merchant_contract import merchant_path, register_path
+from cartray.merchant_contract import merchant_path, product_route_groups, register_path
 
 
 class ConnectedShell(HTMLParser):
@@ -114,11 +114,11 @@ def validate(root, repo):
     if (config.get("previewCatalogue") is not None or config.get("checkoutEnabled") is not True
             or not isinstance(config.get("productPaths"), dict) or set(config["productPaths"]) != set(keys)
             or not all(isinstance(value, str) for value in config["productPaths"].values())
-            or len({value.casefold() for value in config["productPaths"].values()}) != len(keys)
             or theme.get("schemaVersion") != 1 or theme.get("base") != "/"
             or theme.get("preview") is not False or theme.get("adapter") != "/theme/cartray-adapter.mjs"
             or theme.get("gel", {}).get("identity", {}).get("name") != config.get("storeName")):
         raise ValueError("merchant storefront must match authorised catalogue identities and connected adapter")
+    product_route_groups(config["productPaths"], config.get("reviewSubjects"))
     catalogue = theme.get("catalogue")
     products = catalogue.get("products") if isinstance(catalogue, dict) else None
     if (not isinstance(products, list) or len(products) != len(keys)

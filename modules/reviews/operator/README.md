@@ -101,6 +101,78 @@ This is not a migration of the retained EP UAT environment. Old handoff identiti
 SQL history, issued capabilities and uncertain claims remain unchanged. There is no ordinary
 separate Reviews sender activation, provider migration ceremony, OTP or queue recovery procedure.
 
+## Updating the catalogue in an existing test installation
+
+Keep the same installation directory, namespace, credentials and resources. Pause
+sending first (or leave a never-activated installation OFF). Prepare an operator-selected
+JSON file with exactly these four fields, using absolute local paths:
+
+```json
+{
+  "merchant_inputs": "/private/merchant/full-package",
+  "preflight_lock": "/private/merchant/full-stripe-test-lock.json",
+  "subject_map": {"PRODUCT-ONE": "product-one", "PRODUCT-TWO": "product-two"},
+  "subject_details": [
+    ["product-one", "/product/one/", "Product one"],
+    ["product-two", "/product/two/", "Product two"]
+  ]
+}
+```
+
+```sh
+uv run python modules/reviews/operator/operate.py --directory "$INSTALL" --credentials "$CREDS" reconfigure-catalogue --config /private/merchant/catalogue-update.json
+uv run python modules/reviews/operator/operate.py --directory "$INSTALL" --credentials "$CREDS" build
+uv run python modules/reviews/operator/operate.py --directory "$INSTALL" --credentials "$CREDS" deploy
+uv run python modules/reviews/operator/operate.py --directory "$INSTALL" --credentials "$CREDS" verify
+uv run python modules/reviews/operator/operate.py --directory "$INSTALL" --credentials "$CREDS" doctor
+```
+
+The normal compiler validates exact test lookup keys, catalogue digest, presentation
+and assets before changing inventory. Failures retain a protected compiler log.
+This operation does not create Prices, approve fulfilment resources or modify
+credentials, merchant identity, account, origins, provider, D1, keys or the activation
+fence. Existing product-to-subject assignments and subject paths/labels cannot be
+reinterpreted through this command. New mappings are explicit. Multiple offer keys may use one exact parent product
+path only when `storefront-config.js` declares the same `reviewSubjects` identity
+for each and the installer subject map agrees. `connected_flows.install` accepts
+`review_subjects=subject_map` for this declaration. Each offer must retain a real
+connected purchase action on that parent page; aliases do not authorise pricing
+or erase variant identity. Different subjects, case conflicts and reserved routes
+remain rejected. Retired subject rows
+and purchased-item history are retained.
+
+Package and lock snapshots are retained by content hash. Repeating the command is
+idempotent; different inputs at the same source commit produce separate retained
+release artifacts. Prior catalogue-version subject maps remain available to orders
+created before an update. A catalogue version cannot reinterpret its mapping;
+changed mapping content requires its corresponding explicit compiled revision.
+Archived rollback uses recorded fingerprints and storefront integrity, not the
+current checkout's client bytes. Build invalidation requires deployment and verification before
+explicit test activation. Old Worker versions are checked against their recorded
+OFF configuration while the replacement is being installed.
+
+Compatible rollback restores the retained catalogue snapshot and application versions,
+and republishes the corresponding storefront for operator-managed Pages. For an
+externally owned site, it emits the retained artifact handoff; that site's operator
+must coordinate its publication. Rollback does not rewind D1 or alter delivery claims,
+suppression or the original no-backfill checkpoint.
+
+## Private resource configuration size
+
+The same protected `fulfilment_resources` JSON remains the only resource input.
+Small values retain the original single secret binding. Larger values are encoded
+into numbered secret bindings, each at most 4096 bytes, with a small count/hash
+manifest. The Worker requires a complete, contiguous, matching set and retains the
+existing 65536-byte decoded limit. These are private bindings in the existing
+Commerce Worker, not public assets or a new storage service. Encoding is not encryption.
+No credential or order-access key is replaced.
+
+Deploy and rollback reject a source release that predates multipart support while
+large configuration is selected. A compatible rollback retains the new backend
+and its current resource bindings; do not downgrade to an earlier small-catalogue
+runtime and claim it supports the enlarged resource set. Ordinary rollback never
+rewinds purchased-item or suppression records.
+
 ## Evidence and limits
 
 See `docs/order-reviews.md` and the checked-in qualification receipts for the exact tested build.

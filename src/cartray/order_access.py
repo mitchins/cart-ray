@@ -19,6 +19,76 @@ _IDENTIFIER = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}\Z")
 _TOKEN = re.compile(r"[A-Za-z0-9_-]{43}\Z")
 
 
+_RESOURCE_CONFIG_LIMIT = 65536
+_RESOURCE_PART_SIZE = 4096
+_RESOURCE_PARTS_MAX = 22
+_RESOURCE_CONFIG = 'CARTRAY_RESOURCE_CONFIG'
+
+
+def resource_config_binding_names(names):
+    """Validate an installed binding shape without needing to read secret values."""
+    names = set(names)
+    if names == {_RESOURCE_CONFIG}:
+        return tuple(names)
+    count = len(names) - 1
+    expected = {_RESOURCE_CONFIG + '_META', *(_RESOURCE_CONFIG + '_' + str(i) for i in range(max(count, 0)))}
+    if not 1 <= count <= _RESOURCE_PARTS_MAX or names != expected:
+        raise ValueError('resource secret bindings are incomplete or ambiguous')
+    return tuple(sorted(names))
+
+
+def resource_config_bindings(raw):
+    """Pack the existing private JSON into bounded Cloudflare secret bindings."""
+    if not isinstance(raw, str) or not raw or len(raw.encode()) > _RESOURCE_CONFIG_LIMIT:
+        raise ValueError('private resource configuration exceeds its supported limit')
+    data = raw.encode()
+    if len(data) <= _RESOURCE_PART_SIZE:
+        return {_RESOURCE_CONFIG: raw}
+    encoded = base64.b64encode(data).decode('ascii')
+    parts = [encoded[offset:offset + _RESOURCE_PART_SIZE] for offset in range(0, len(encoded), _RESOURCE_PART_SIZE)]
+    return {_RESOURCE_CONFIG + '_META': json.dumps({'parts': len(parts), 'sha256': hashlib.sha256(data).hexdigest()}),
+            **{_RESOURCE_CONFIG + '_' + str(index): part for index, part in enumerate(parts)}}
+
+
+def _resource_config_parts(env, count):
+    parts = []
+    for index in range(_RESOURCE_PARTS_MAX + 1):
+        value = getattr(env, _RESOURCE_CONFIG + '_' + str(index), None)
+        if index >= count:
+            if value is not None:
+                raise ValueError('unexpected private resource configuration part')
+        elif not isinstance(value, str) or not value or len(value.encode()) > _RESOURCE_PART_SIZE:
+            raise ValueError('missing or oversized private resource configuration part')
+        else:
+            parts.append(value)
+    return parts
+
+
+def resource_config_from_environment(env):
+    """Decode one complete private binding set; never combine partial revisions."""
+    direct = getattr(env, _RESOURCE_CONFIG, None)
+    metadata = getattr(env, _RESOURCE_CONFIG + '_META', None)
+    if direct is not None:
+        if metadata is not None or any(getattr(env, _RESOURCE_CONFIG + '_' + str(i), None) is not None
+                                       for i in range(_RESOURCE_PARTS_MAX + 1)):
+            raise ValueError('ambiguous private resource configuration')
+        if not isinstance(direct, str) or not direct or len(direct.encode()) > _RESOURCE_CONFIG_LIMIT:
+            raise ValueError('invalid private resource configuration')
+        return direct
+    if not isinstance(metadata, str) or len(metadata.encode()) > _RESOURCE_PART_SIZE:
+        raise ValueError('missing private resource configuration')
+    manifest = json.loads(metadata)
+    if (not isinstance(manifest, dict) or set(manifest) != {'parts', 'sha256'}
+            or type(manifest['parts']) is not int or not 1 <= manifest['parts'] <= _RESOURCE_PARTS_MAX
+            or not isinstance(manifest['sha256'], str) or not re.fullmatch(r'[a-f0-9]{64}', manifest['sha256'])):
+        raise ValueError('invalid private resource configuration manifest')
+    parts = _resource_config_parts(env, manifest['parts'])
+    data = base64.b64decode(''.join(parts), validate=True)
+    if len(data) > _RESOURCE_CONFIG_LIMIT or hashlib.sha256(data).hexdigest() != manifest['sha256']:
+        raise ValueError('private resource configuration integrity mismatch')
+    return data.decode('utf-8')
+
+
 def _capability(secret: str, merchant: str, environment: str, order_id: str) -> str:
     if not isinstance(secret, str) or len(secret.encode()) < 32:
         raise ValueError("order access key is unavailable")
