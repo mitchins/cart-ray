@@ -463,7 +463,8 @@ def test_catalogue_refresh_rejects_bad_revision_without_inventory_changes(tmp_pa
         assert log.read_text()
 
 
-def test_same_source_rebuild_retains_both_catalogues_and_rollback_storefront(tmp_path, monkeypatch):
+@pytest.mark.parametrize("private_resources", [False, True])
+def test_same_source_rebuild_retains_both_catalogues_and_rollback_storefront(tmp_path, monkeypatch, private_resources):
     from types import SimpleNamespace
 
     install = plan_merchant(tmp_path, merchant(tmp_path / 'original'), mapped=True)
@@ -492,7 +493,19 @@ def test_same_source_rebuild_retains_both_catalogues_and_rollback_storefront(tmp
             'source_commit': 'a' * 40, 'catalogue_lock_sha256': hashlib.sha256(lock).hexdigest(),
             'merchant_input_sha256': commerce_build_hash(Path(install.config['merchant_inputs']) / 'commerce', lock)}))
     monkeypatch.setattr(install, 'run', tools)
+    if private_resources:
+        install.config['fulfilment'] = {'buckets': {}}
+        install.state['config']['fulfilment'] = {'buckets': {}}
+        install.credentials = {'fulfilment_resources': '{}'}
     first = install.build()
+    if private_resources:
+        install.credentials['fulfilment_resources'] = json.dumps({
+            'extra': {'provider': 'external', 'url': 'https://example.test/private'}})
+        changed_private = install.build()
+        assert changed_private['commit'] == first['commit']
+        assert changed_private['release_id'] != first['release_id']
+        assert changed_private['resource_config_sha256'] != first['resource_config_sha256']
+        install.credentials['fulfilment_resources'] = '{}'
     first_path = install.directory / 'releases' / first['release_id'] / 'build.json'
     first_bytes = first_path.read_bytes()
     # A completed release retains its actually published storefront bytes.

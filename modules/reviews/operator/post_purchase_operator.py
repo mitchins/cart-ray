@@ -154,7 +154,8 @@ class PostPurchaseOperator:
                                     allow_legacy_admission=False):
         nodes, _ = graph(self, {role: version}, post_purchase_modes={role: mode}, email_provider=email_provider,
                          actions_override=actions_override)
-        errors = self.worker_binding_errors(role, nodes[role], actual, version)
+        errors = self.worker_binding_errors(role, nodes[role], actual, version,
+                                            recorded_resource_shape=allow_legacy_admission)
         if allow_legacy_admission:
             present = {item["name"] for item in actual["resources"]["bindings"]}
             legacy_names = (("CHECKOUT_STORE_RATE_LIMITER", "CHECKOUT_STATUS_RATE_LIMITER", "CARTRAY_MERCHANT_ID")
@@ -253,6 +254,7 @@ class PostPurchaseOperator:
         if not isinstance(self.post_purchase_actions(), dict):
             raise ValueError("legacy workflow delivery needs an explicit schema-2 order-confirmation handover")
         deployment, disabled, build = self.post_purchase_runtime()
+        self.check_resource_config_compatibility(build)
         transition = self.state.get("post_purchase_transition")
         if transition and transition["operation"] != "activate":
             raise ValueError("finish post-purchase-disable before authorizing test delivery")

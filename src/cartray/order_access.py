@@ -25,6 +25,18 @@ _RESOURCE_PARTS_MAX = 22
 _RESOURCE_CONFIG = 'CARTRAY_RESOURCE_CONFIG'
 
 
+def resource_config_binding_names(names):
+    """Validate an installed binding shape without needing to read secret values."""
+    names = set(names)
+    if names == {_RESOURCE_CONFIG}:
+        return tuple(names)
+    count = len(names) - 1
+    expected = {_RESOURCE_CONFIG + '_META', *(_RESOURCE_CONFIG + '_' + str(i) for i in range(max(count, 0)))}
+    if not 1 <= count <= _RESOURCE_PARTS_MAX or names != expected:
+        raise ValueError('resource secret bindings are incomplete or ambiguous')
+    return tuple(sorted(names))
+
+
 def resource_config_bindings(raw):
     """Pack the existing private JSON into bounded Cloudflare secret bindings."""
     if not isinstance(raw, str) or not raw or len(raw.encode()) > _RESOURCE_CONFIG_LIMIT:

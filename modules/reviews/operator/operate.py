@@ -40,7 +40,11 @@ from topology import (
 )
 
 from cartray.merchant_contract import merchant_path, product_route_groups, register_path
-from cartray.order_access import resource_config_bindings, validate_resource_configuration
+from cartray.order_access import (
+    resource_config_binding_names,
+    resource_config_bindings,
+    validate_resource_configuration,
+)
 
 ROOT = Path(__file__).resolve().parents[3]
 DATABASES = ("commerce",)
@@ -1040,6 +1044,9 @@ class Installation(PostPurchaseOperator):
         if not self.credentials or 'fulfilment_resources' not in self.credentials:
             raise ValueError('resource compatibility requires the protected credential handoff')
         bindings = resource_config_bindings(self.credentials['fulfilment_resources'])
+        if (release.get('resource_config_sha256') is not None
+                and release['resource_config_sha256'] != digest(self.credentials['fulfilment_resources'].encode())):
+            raise ValueError('retained release uses a different private resource configuration; build current inputs')
         if ('CARTRAY_RESOURCE_CONFIG_META' in bindings
                 and release.get('resource_config_encoding') != 'bounded-secrets-v1'):
             raise ValueError('retained source cannot decode multipart resource secrets; choose a compatible release')
@@ -1055,12 +1062,16 @@ class Installation(PostPurchaseOperator):
         merchant_lock_hash = (digest(Path(self.config["preflight_lock"]).read_bytes())
                               if "merchant_inputs" in self.config else None)
         merchant_config_hash = self.merchant_config_hash()
+        if "fulfilment" in self.config and not self.credentials:
+            raise ValueError("fulfilment build requires the protected credential handoff")
+        resource_hash = (digest(self.credentials["fulfilment_resources"].encode())
+                         if "fulfilment" in self.config else None)
         commit = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip()
         subprocess.run(["git", "diff", "--quiet", "HEAD"], cwd=ROOT, check=True)
         release_id = commit
         if 'merchant_inputs' in self.config:
             signature = digest(json.dumps([self.config['merchant_inputs_sha256'], merchant_lock_hash,
-                                           merchant_config_hash]).encode())
+                                           merchant_config_hash, resource_hash]).encode())
             release_id += '-' + signature
         release = self.directory / "releases" / release_id
         if (release / "build.json").exists():
@@ -1160,6 +1171,7 @@ class Installation(PostPurchaseOperator):
             "commit": commit,
             "release_id": release_id,
             "resource_config_encoding": "bounded-secrets-v1",
+            "resource_config_sha256": resource_hash,
             "catalogue_config": self.catalogue_config() if "merchant_inputs" in self.config else None,
             "merchant_inputs_sha256": self.config.get("merchant_inputs_sha256"),
             "merchant_lock_sha256": merchant_lock_hash,
@@ -1564,7 +1576,7 @@ class Installation(PostPurchaseOperator):
                 errors.append(f"{role}.visibility.{field}: must be explicitly disabled in private mode")
         return errors
 
-    def worker_binding_errors(self, role, expected, actual, version):
+    def worker_binding_errors(self, role, expected, actual, version, *, recorded_resource_shape=False):
         errors = []
         if actual["id"] != version:
             errors.append(f"{role}: active version differs from inventory")
@@ -1593,6 +1605,14 @@ class Installation(PostPurchaseOperator):
                 errors.append(f"{role}.vars.{name}: differs from inventory")
         if role == "source" and "fulfilment" in self.config:
             names = resource_config_bindings(self.credentials["fulfilment_resources"])
+            actual_names = {name for name in observed if name.startswith('CARTRAY_RESOURCE_CONFIG')}
+            if recorded_resource_shape:
+                try:
+                    names = resource_config_binding_names(actual_names)
+                except ValueError:
+                    errors.append('source: recorded resource secret bindings are incomplete or ambiguous')
+            elif actual_names != set(names):
+                errors.append('source: resource secret binding shape differs from incoming configuration')
             for name in ("CARTRAY_ORDER_ACCESS_KEY", *names):
                 if observed.get(name, {}).get("type") != "secret_text":
                     errors.append(f"{role}.bindings.{name}: missing/wrong secret type")
@@ -1620,6 +1640,7 @@ class Installation(PostPurchaseOperator):
                 errors.extend(self.post_purchase_visibility_errors('source'))
             try:
                 deployment, disabled, build = self.post_purchase_runtime()
+                self.check_resource_config_compatibility(build)
                 for role in POST_PURCHASE_ROLES:
                     self.artifact_modules(role, build)
                 modes = self.state.get("post_purchase_modes", OFF)

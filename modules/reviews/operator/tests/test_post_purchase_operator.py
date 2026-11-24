@@ -172,6 +172,10 @@ def deployed(tmp_path, monkeypatch, request):
         options['source_mode']='public'
         for field in ('source_api_path','webhook_url'):
             options.pop(field,None)
+    credentials = deepcopy(CREDS)
+    if getattr(request, 'param', None) == 'resources':
+        options['fulfilment'] = {'buckets': {}}
+        credentials['fulfilment_resources'] = '{}'
     path = Installation.plan(tmp_path / "installation", options).directory
     db = sqlite3.connect(":memory:")
     db.row_factory = sqlite3.Row
@@ -184,7 +188,7 @@ def deployed(tmp_path, monkeypatch, request):
     api = Backend(db)
     if options.get('source_mode')=='public':
         api.public_source = options['namespace']+'-source'
-    install = Installation(path, deepcopy(CREDS), api)
+    install = Installation(path, credentials, api)
     install.vault(create=True)
     install.state.update(workers_subdomain="account", phase="migrated", migration_ledgers={
         "commerce": [{"position": 1, "path": "fixture", "checksum": "hash"}]})
@@ -600,3 +604,53 @@ def test_catalogue_rollback_resumes_after_publish_ack_loss(deployed, monkeypatch
     assert install.state['deployment']['versions'] == first_versions
     assert install.config['subject_map'] == {}
     assert list(db.iterdump()) == before
+
+
+@pytest.mark.parametrize('deployed', ['resources'], indirect=True)
+def test_off_resource_binding_upgrade_uses_recorded_shape_then_incoming_shape(deployed, tmp_path):
+    from test_merchant_inputs import catalogue_revision
+
+    install, api, db = deployed
+    key = install.vault()['order_access']
+    before = list(db.iterdump())
+    initial = api.version(install.name('source'))
+    assert 'CARTRAY_RESOURCE_CONFIG' in {binding['name'] for binding in initial['resources']['bindings']}
+    values = catalogue_revision(tmp_path / 'expanded')
+    for index, size in enumerate((35, 125)):
+        install.credentials['fulfilment_resources'] = json.dumps({
+            f'resource-{i}': {'provider': 'external', 'url': f'https://example.test/resource/{i}',
+                             'filename': 'Dummy ' + 'x' * 100} for i in range(size)})
+        page = Path(values['merchant_inputs']) / 'storefront/cart/index.html'
+        page.write_text(page.read_text() + f'<!-- revision {index} -->')
+        install.reconfigure_catalogue(values)
+        build = capture_build(install, f'resource-upgrade-{index}')
+        build['resource_config_encoding'] = 'bounded-secrets-v1'
+        atomic_json(install.directory / 'releases' / build['commit'] / 'build.json', build)
+        install.deploy()
+        actual = api.version(install.name('source'))
+        names = {binding['name'] for binding in actual['resources']['bindings']}
+        assert 'CARTRAY_RESOURCE_CONFIG_META' in names
+        assert 'CARTRAY_RESOURCE_CONFIG' not in names
+        assert not install.worker_binding_errors('source', graph(install)[0]['source'], actual, actual['id'])
+    assert install.vault()['order_access'] == key
+    assert list(db.iterdump()) == before
+
+
+@pytest.mark.parametrize('deployed', ['resources'], indirect=True)
+def test_pause_reaches_recorded_off_versions_after_resource_handoff_changes(deployed):
+    install, api, db = deployed
+    initialise(install, db)
+    install.post_purchase_activate(True)
+    disabled = dict(install.state['deployment']['post_purchase_disabled_versions'])
+    before = list(db.iterdump())
+    install.credentials['fulfilment_resources'] = json.dumps({
+        f'resource-{i}': {'provider': 'external', 'url': f'https://example.test/dummy/{i}',
+                         'filename': 'Dummy ' + 'x' * 100} for i in range(100)})
+    api.events.clear()
+    install.pause()
+    assert install.state['post_purchase_modes'] == OFF
+    assert install.state['deployment']['versions'] == disabled
+    assert not any(event[0] == 'upload' for event in api.events)
+    assert list(db.iterdump()) == before
+    with pytest.raises(ValueError, match='cannot decode multipart'):
+        install.post_purchase_activate(True)
