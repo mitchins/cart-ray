@@ -75,7 +75,8 @@ def test_confirmed_order_has_one_reusable_access_for_mixed_resources(db):
         run(issue_order_access(db, key, "merchant", "test", "order-1"))
 
 
-def test_order_page_and_download_reject_unpurchased_items(db):
+@pytest.mark.parametrize("packed", [False, True])
+def test_order_page_and_download_reject_unpurchased_items(db, packed):
     from kinglet import TestClient
 
     from cartray.worker import create_app
@@ -106,6 +107,13 @@ def test_order_page_and_download_reject_unpurchased_items(db):
            "CARTRAY_RESOURCE_CONFIG": json.dumps(resources), "DB": db,
            "CHECKOUT_STATUS_RATE_LIMITER": SimpleNamespace(limit=allow),
            "FILES": SimpleNamespace(get=get_object)}
+    if packed:
+        from cartray.order_access import resource_config_bindings
+        resources.update({f'unpurchased-{i}': {'provider': 'external',
+                          'url': f'https://example.test/private/{i}', 'filename': 'Dummy ' + 'x' * 100}
+                          for i in range(180)})
+        env.pop('CARTRAY_RESOURCE_CONFIG')
+        env.update(resource_config_bindings(json.dumps(resources)))
     client = TestClient(create_app(), env=env)
     payload = {"order_id": "order-1"}
     internal_headers = {"content-length": str(len(json.dumps(payload).encode())),
@@ -210,3 +218,51 @@ def test_order_access_rejects_short_keys_and_malformed_tokens(db):
         run(issue_order_access(db, "x" * 32, "invalid merchant", "test", "order-1"))
     with pytest.raises(ValueError, match="capability"):
         run(purchased_resources(db, "invalid", "merchant", "test"))
+
+
+@pytest.mark.parametrize('size', [2, 4096, 4097, 36367, 65536])
+def test_private_resource_bindings_roundtrip_with_bounded_parts(size):
+    from cartray.order_access import resource_config_bindings, resource_config_from_environment
+
+    raw = 'x' * size
+    bindings = resource_config_bindings(raw)
+    assert all(len(value.encode()) <= 4096 for value in bindings.values())
+    assert resource_config_from_environment(SimpleNamespace(**bindings)) == raw
+    if size > 4096:
+        assert 'CARTRAY_RESOURCE_CONFIG' not in bindings
+        assert len(bindings) <= 23
+    else:
+        assert bindings == {'CARTRAY_RESOURCE_CONFIG': raw}
+
+
+def test_private_resource_parts_preserve_unicode_and_cap_total_bytes():
+    from cartray.order_access import resource_config_bindings, resource_config_from_environment
+
+    raw = json.dumps({'filename': 'Résumé.pdf', 'private': 'é' * 5000}, ensure_ascii=False)
+    assert resource_config_from_environment(SimpleNamespace(**resource_config_bindings(raw))) == raw
+    with pytest.raises(ValueError):
+        resource_config_bindings('é' * 32769)
+
+
+@pytest.mark.parametrize('broken', ['missing', 'extra', 'corrupt', 'mixed', 'count', 'hash', 'oversize'])
+def test_private_resource_bindings_reject_partial_or_mixed_configuration(broken):
+    from cartray.order_access import resource_config_bindings, resource_config_from_environment
+
+    parts = resource_config_bindings('x' * 36367)
+    metadata = json.loads(parts['CARTRAY_RESOURCE_CONFIG_META'])
+    if broken == 'missing':
+        del parts['CARTRAY_RESOURCE_CONFIG_1']
+    elif broken == 'extra':
+        parts['CARTRAY_RESOURCE_CONFIG_' + str(metadata['parts'])] = 'AAAA'
+    elif broken == 'corrupt':
+        parts['CARTRAY_RESOURCE_CONFIG_0'] = 'AAAA'
+    elif broken == 'mixed':
+        parts['CARTRAY_RESOURCE_CONFIG'] = '{}'
+    elif broken == 'count':
+        parts['CARTRAY_RESOURCE_CONFIG_META'] = json.dumps({**metadata, 'parts': 23})
+    elif broken == 'hash':
+        parts['CARTRAY_RESOURCE_CONFIG_META'] = json.dumps({**metadata, 'sha256': '0' * 64})
+    else:
+        parts['CARTRAY_RESOURCE_CONFIG_0'] = 'A' * 4097
+    with pytest.raises(ValueError):
+        resource_config_from_environment(SimpleNamespace(**parts))

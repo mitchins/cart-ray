@@ -40,7 +40,7 @@ from topology import (
 )
 
 from cartray.merchant_contract import merchant_path, product_route_groups, register_path
-from cartray.order_access import validate_resource_configuration
+from cartray.order_access import resource_config_bindings, validate_resource_configuration
 
 ROOT = Path(__file__).resolve().parents[3]
 DATABASES = ("commerce",)
@@ -1034,6 +1034,16 @@ class Installation(PostPurchaseOperator):
         encoded = json.dumps(identity, sort_keys=True, separators=(",", ":"))
         return digest(encoded.encode())
 
+    def check_resource_config_compatibility(self, release):
+        if 'fulfilment' not in self.config:
+            return
+        if not self.credentials or 'fulfilment_resources' not in self.credentials:
+            raise ValueError('resource compatibility requires the protected credential handoff')
+        bindings = resource_config_bindings(self.credentials['fulfilment_resources'])
+        if ('CARTRAY_RESOURCE_CONFIG_META' in bindings
+                and release.get('resource_config_encoding') != 'bounded-secrets-v1'):
+            raise ValueError('retained source cannot decode multipart resource secrets; choose a compatible release')
+
     def build(self):
         if self.state.get("post_purchase_provider_migration", {}).get("status") == "staging":
             raise ValueError("resume credential reconfiguration before building")
@@ -1149,6 +1159,7 @@ class Installation(PostPurchaseOperator):
         result = {
             "commit": commit,
             "release_id": release_id,
+            "resource_config_encoding": "bounded-secrets-v1",
             "catalogue_config": self.catalogue_config() if "merchant_inputs" in self.config else None,
             "merchant_inputs_sha256": self.config.get("merchant_inputs_sha256"),
             "merchant_lock_sha256": merchant_lock_hash,
@@ -1216,6 +1227,7 @@ class Installation(PostPurchaseOperator):
         if "build" not in self.state:
             raise ValueError("build the clean commit before deployment")
         build = json.loads((self.directory / "releases" / self.state["build"] / "build.json").read_text())
+        self.check_resource_config_compatibility(build)
         if build.get("merchant_inputs_sha256") != self.config.get("merchant_inputs_sha256"):
             raise ValueError("release merchant inputs differ; rebuild before deploying")
         if build.get("merchant_config_sha256") != self.merchant_config_hash():
@@ -1580,7 +1592,8 @@ class Installation(PostPurchaseOperator):
             ):
                 errors.append(f"{role}.vars.{name}: differs from inventory")
         if role == "source" and "fulfilment" in self.config:
-            for name in ("CARTRAY_ORDER_ACCESS_KEY", "CARTRAY_RESOURCE_CONFIG"):
+            names = resource_config_bindings(self.credentials["fulfilment_resources"])
+            for name in ("CARTRAY_ORDER_ACCESS_KEY", *names):
                 if observed.get(name, {}).get("type") != "secret_text":
                     errors.append(f"{role}.bindings.{name}: missing/wrong secret type")
         if self.has_post_purchase and role in POST_PURCHASE_ROLES:
@@ -1750,6 +1763,7 @@ class Installation(PostPurchaseOperator):
         if not self.state["releases"] or not -len(self.state["releases"]) <= index < len(self.state["releases"]):
             raise ValueError("requested compatible release is not in this installation inventory")
         release = self.state["releases"][index]
+        self.check_resource_config_compatibility(release)
         if (
             release["schema"] != self.state.get("migration_ledgers")
             or release["suppression_key_fingerprint"] != self.state["secret_fingerprints"]["recipient_hash"]

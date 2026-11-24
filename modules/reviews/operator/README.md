@@ -157,6 +157,22 @@ externally owned site, it emits the retained artifact handoff; that site's opera
 must coordinate its publication. Rollback does not rewind D1 or alter delivery claims,
 suppression or the original no-backfill checkpoint.
 
+## Private resource configuration size
+
+The same protected `fulfilment_resources` JSON remains the only resource input.
+Small values retain the original single secret binding. Larger values are encoded
+into numbered secret bindings, each at most 4096 bytes, with a small count/hash
+manifest. The Worker requires a complete, contiguous, matching set and retains the
+existing 65536-byte decoded limit. These are private bindings in the existing
+Commerce Worker, not public assets or a new storage service. Encoding is not encryption.
+No credential or order-access key is replaced.
+
+Deploy and rollback reject a source release that predates multipart support while
+large configuration is selected. A compatible rollback retains the new backend
+and its current resource bindings; do not downgrade to an earlier small-catalogue
+runtime and claim it supports the enlarged resource set. Ordinary rollback never
+rewinds purchased-item or suppression records.
+
 ## Evidence and limits
 
 See `docs/order-reviews.md` and the checked-in qualification receipts for the exact tested build.

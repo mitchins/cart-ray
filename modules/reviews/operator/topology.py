@@ -4,6 +4,8 @@ import hashlib
 import json
 import re
 
+from cartray.order_access import resource_config_bindings
+
 SUBJECTS = {"ACORN-KIT": "acorn-growing-kit", "ACORN-PLANTER": "woodland-planter"}
 
 
@@ -245,7 +247,7 @@ def secret_bindings(installation, role):
         if "order_access" not in vault:
             raise ValueError("order access key missing; restore the original installation key")
         result["CARTRAY_ORDER_ACCESS_KEY"] = vault["order_access"]
-        result["CARTRAY_RESOURCE_CONFIG"] = credentials["fulfilment_resources"]
+        result.update(resource_config_bindings(credentials["fulfilment_resources"]))
     if role == "source":
         result.update(
             STRIPE_API_KEY=credentials["stripe_test_key"],

@@ -141,7 +141,7 @@ class Default(WorkerEntrypoint):
         async def allow(_value):
             return {"success": True}
 
-        return SimpleNamespace(
+        env = SimpleNamespace(
             CARTRAY_ORDER_ACCESS_MODE="test", CARTRAY_ENVIRONMENT="test",
             CARTRAY_MERCHANT_ID="smoke-store", CARTRAY_SIGNING_KEY_ID="smoke-install", DB=self.env.DB,
             CARTRAY_RESOURCE_CONFIG=json.dumps({
@@ -152,6 +152,14 @@ class Default(WorkerEntrypoint):
             }),
             CHECKOUT_STATUS_RATE_LIMITER=SimpleNamespace(limit=allow), FILES=SimpleNamespace(get=get_file),
         )
+        from cartray.order_access import resource_config_bindings
+        resources = json.loads(env.CARTRAY_RESOURCE_CONFIG)
+        resources.update({f'not-purchased-{index}': {'provider': 'external',
+                          'url': f'https://example.test/dummy/{index}', 'filename': 'Dummy ' + 'x' * 100}
+                          for index in range(180)})
+        del env.CARTRAY_RESOURCE_CONFIG
+        vars(env).update(resource_config_bindings(json.dumps(resources)))
+        return env
 
     async def fetch(self, _request):
         if "/order-access" in str(_request.url):

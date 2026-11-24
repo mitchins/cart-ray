@@ -24,7 +24,13 @@ from cartray.errors import (
     WebhookValidationError,
 )
 from cartray.models import CheckoutRequest
-from cartray.order_access import issue_order_access, issuer_token, purchased_resources, resolve_configured_resource
+from cartray.order_access import (
+    issue_order_access,
+    issuer_token,
+    purchased_resources,
+    resolve_configured_resource,
+    resource_config_from_environment,
+)
 from cartray.post_purchase import OrderReceiptDispatcher, drain_confirmed_d1
 from cartray.reconciliation import StripeReconciliationService
 from cartray.settlement import StripeSettlementService
@@ -228,9 +234,7 @@ def create_app(
             if not await _client_rate_limit(request, "CHECKOUT_STATUS_RATE_LIMITER", "order-access"):
                 return Response({"error": "order unavailable"}, status=429, headers=headers)
             merchant = _required_env(request.env, "CARTRAY_MERCHANT_ID")
-            raw = _required_env(request.env, "CARTRAY_RESOURCE_CONFIG")
-            if len(raw.encode()) > 65536:
-                raise ValueError("unavailable")
+            raw = resource_config_from_environment(request.env)
             resources = json.loads(raw)
             if not isinstance(resources, dict):
                 raise ValueError("unavailable")

@@ -545,3 +545,33 @@ def test_receipt_reports_active_order_messages_not_retired_subscriber(tmp_path, 
     serialized = json.dumps(result)
     assert 'test-order' not in serialized and 'c'*64 not in serialized and 'd'*64 not in serialized
     assert 'historical-provider' not in serialized
+
+
+def test_large_resource_configuration_uses_only_bounded_secret_bindings(tmp_path):
+    from types import SimpleNamespace
+
+    from cartray.order_access import resource_config_from_environment
+
+    install, _ = migrated(tmp_path)
+    install.config.update(reviews_enabled=False, fulfilment={'buckets': {}})
+    raw = json.dumps({f'resource-{i}': {'provider': 'external', 'url': f'https://example.test/dummy/{i}',
+                                     'filename': 'Dummy ' + 'x' * 100} for i in range(180)})
+    install.credentials = {'stripe_test_key': 'sk_test_fixture', 'fulfilment_resources': raw}
+    install.vault = lambda: {'order_access': 'a' * 64, 'webhook_secret': 'webhook',
+                            'signing_private': 'private', 'signing_public': 'public'}
+    secrets = operations.secret_bindings(install, 'source')
+    packed = {item['name']: item['text'] for item in secrets if item['name'].startswith('CARTRAY_RESOURCE_CONFIG')}
+    assert all(len(value.encode()) <= 4096 for value in packed.values())
+    assert 'CARTRAY_RESOURCE_CONFIG_META' in packed
+    assert resource_config_from_environment(SimpleNamespace(**packed)) == raw
+
+
+def test_multipart_resource_config_rejects_an_older_runtime_release(tmp_path):
+    install, _ = migrated(tmp_path)
+    install.config['fulfilment'] = {'buckets': {}}
+    install.credentials = {'fulfilment_resources': json.dumps({'private': 'x' * 5000})}
+    with pytest.raises(ValueError, match='cannot decode multipart'):
+        install.check_resource_config_compatibility({})
+    install.check_resource_config_compatibility({'resource_config_encoding': 'bounded-secrets-v1'})
+    install.credentials['fulfilment_resources'] = '{}'
+    install.check_resource_config_compatibility({})
