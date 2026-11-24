@@ -560,3 +560,35 @@ def test_schema2_snapshot_keeps_existing_file_protection(tmp_path):
     snapshot.write_bytes(snapshot.read_bytes()+b'\n')
     with pytest.raises(ValueError,match='input changed'):
         install.post_purchase_actions()
+
+
+def test_catalogue_rollback_resumes_after_publish_ack_loss(deployed, monkeypatch):
+    install, api, db = deployed
+    first = install.state['releases'][0]
+    first['catalogue_config'] = install.catalogue_config()
+    first_versions = dict(first['versions'])
+    replacement = {**install.catalogue_config(), 'subject_map': {'EP-UAT-171': 'subject-one'},
+                   'subject_details': [['subject-one', '/products/one/', 'Product']]}
+    install.use_catalogue_config(replacement)
+    capture_build(install, 'second')
+    install.deploy()
+    install.state['deployment']['catalogue_config'] = replacement
+    second_versions = dict(install.state['deployment']['versions'])
+    before = list(db.iterdump())
+    check = install.check_post_purchase_version
+
+    def expected_catalogue(role, mode, actual, version, **kwargs):
+        expected = {} if version == first_versions[role] else {'EP-UAT-171': 'subject-one'}
+        assert version in (first_versions[role], second_versions[role])
+        assert install.config['subject_map'] == expected
+        return check(role, mode, actual, version, **kwargs)
+
+    monkeypatch.setattr(install, 'check_post_purchase_version', expected_catalogue)
+    api.fail_publish = install.name('source')
+    with pytest.raises(CloudError, match='publish reply lost'):
+        install.rollback(0)
+    assert install.state['phase'] == 'rolling-back'
+    assert install.rollback(0)['database_rewind'] is False
+    assert install.state['deployment']['versions'] == first_versions
+    assert install.config['subject_map'] == {}
+    assert list(db.iterdump()) == before

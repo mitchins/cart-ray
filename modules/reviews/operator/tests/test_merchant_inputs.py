@@ -13,7 +13,7 @@ import pytest
 MODULE = Path(__file__).resolve().parents[1]
 ROOT = MODULE.parents[2]
 sys.path.insert(0, str(MODULE))
-from merchant_inputs import commerce_build_hash, snapshot, validate  # noqa: E402
+from merchant_inputs import commerce_build_hash, javascript_json, snapshot, validate  # noqa: E402
 from operate import Installation  # noqa: E402
 from topology import graph  # noqa: E402
 
@@ -187,8 +187,10 @@ def test_cached_build_and_deploy_reject_changed_merchant_configuration(tmp_path)
         "merchant_config_sha256": "old-configuration",
     }))
     with patch("operate.subprocess.check_output", return_value="test-commit\n"), patch("operate.subprocess.run"):
-        with pytest.raises(ValueError, match="cached release uses different merchant inputs"):
-            p.build()
+        with patch.object(p, 'render', side_effect=ValueError('new input-specific build')):
+            with pytest.raises(ValueError, match="new input-specific build"):
+                p.build()
+    assert json.loads((release / 'build.json').read_text())['merchant_config_sha256'] == 'old-configuration'
     with pytest.raises(ValueError, match="release merchant configuration differs"):
         p.deploy()
 
@@ -342,3 +344,175 @@ def test_explicit_corrected_build_inputs_preserve_installation_state(tmp_path):
     resumed = Installation(install.directory)
     resumed.verify_merchant_inputs()
     assert resumed.config["merchant_inputs_sha256"] == install.config["merchant_inputs_sha256"]
+
+
+def catalogue_revision(root, *, second=True):
+    """Real compiler inputs, with no payment/provider calls or fabricated runtime authority."""
+    import asyncio
+
+    from cartray.catalogue import CsvCatalogueSourceAdapter, FixturePriceResolver, build_catalogue_from_source
+    from cartray.models import ResolvedPrice
+    from cartray.preflight import preflight_lock_output
+
+    package = merchant(root)
+    commerce = package / 'commerce'
+    products = ['ONE', 'TWO'] if second else ['ONE']
+    (commerce / 'catalogue.csv').write_text(
+        'product_key,title,stripe_lookup_key,fulfilment_type,fulfilment_version,max_quantity,active\n' +
+        ''.join(f'MERCHANT-{key},Product {key},lookup_{key.lower()},download,dummy-v1,10,true\n' for key in products))
+    (commerce / 'presentation.csv').write_text('product_key,short_description,image_key\n' +
+        ''.join(f'MERCHANT-{key},Dummy product,cover.webp\n' for key in products))
+    shutil.copyfile(ROOT / 'storefront/assets/products/test-template-cover-v1.webp',
+                    commerce / 'product-assets/cover.webp')
+    (commerce / 'fulfilment-expansions.json').write_text('{"dummy-v1":["dummy-file"]}')
+    prices = FixturePriceResolver({f'lookup_{key.lower()}': ResolvedPrice('price_' + key, 100, 'aud')
+                                   for key in products})
+    catalogue = asyncio.run(build_catalogue_from_source(
+        CsvCatalogueSourceAdapter(commerce / 'catalogue.csv'), prices, {'dummy-v1': ('dummy-file',)}))
+    lock = root.parent / 'revised-lock.json'
+    lock.write_text(json.dumps(preflight_lock_output(catalogue)))
+    if second:
+        site = package / 'storefront'
+        path = site / 'storefront-config.js'
+        config = javascript_json(path, 'window.CARTRAY_STOREFRONT = ')
+        config['productPaths']['MERCHANT-TWO'] = '/products/two/'
+        path.write_text('window.CARTRAY_STOREFRONT = ' + json.dumps(config) + ';')
+        path = site / 'site-config.js'
+        theme = javascript_json(path, 'window.CARTRAY_THEME = ')
+        theme['catalogue']['products'].append({**theme['catalogue']['products'][0],
+                                              'product_key': 'MERCHANT-TWO', 'slug': 'two'})
+        theme['browseOffers'].append({'sourceId': 'two', 'productKey': 'MERCHANT-TWO'})
+        path.write_text('window.CARTRAY_THEME = ' + json.dumps(theme) + ';')
+        (site / 'products/two').mkdir()
+        (site / 'products/two/index.html').write_text(
+            (site / 'products/one/index.html').read_text().replace('MERCHANT-ONE', 'MERCHANT-TWO'))
+    return {'merchant_inputs': str(package), 'preflight_lock': str(lock),
+            'subject_map': {f'MERCHANT-{key}': 'product-' + key.lower() for key in products},
+            'subject_details': [['product-' + key.lower(), '/products/' + key.lower() + '/',
+                                 'Product' if key == 'ONE' else key]
+                                for key in products]}
+
+
+def test_catalogue_refresh_compiles_resumes_and_preserves_installation(tmp_path):
+    source = merchant(tmp_path / 'original')
+    install = plan_merchant(tmp_path, source, mapped=True)
+    install.state.update(resources={'database:commerce': {'id': 'existing-d1'}},
+                         secret_fingerprints={'recipient_hash': 'original-key'},
+                         post_purchase_watermark=17, activation_watermark=17,
+                         phase='paused', automation_paused=True, activation_authorized=True)
+    original = install.catalogue_config()
+    install.state['deployment'] = {'commit': 'old', 'complete': True}
+    install.state['releases'] = [{'commit': 'old', 'merchant_inputs_sha256': original['merchant_inputs_sha256'],
+                                  'merchant_config_sha256': install.merchant_config_hash(),
+                                  'merchant_lock_sha256': hashlib.sha256(
+                                      Path(install.config['preflight_lock']).read_bytes()).hexdigest()}]
+    install.save()
+    before = json.loads(install.state_path.read_text())
+    values = catalogue_revision(tmp_path / 'replacement')
+    result = install.reconfigure_catalogue(values)
+    resumed = Installation(install.directory)
+    resumed.verify_merchant_inputs()
+    first = json.loads(install.state_path.read_text())
+    assert first['resources'] == before['resources']
+    assert first['secret_fingerprints'] == before['secret_fingerprints']
+    assert first['post_purchase_watermark'] == 17
+    assert first['activation_watermark'] == 17
+    assert first['activation_authorized'] is True
+    assert first['automation_paused'] is True
+    assert first['deployment']['catalogue_config'] == original
+    assert first['releases'][0]['catalogue_config'] == original
+    assert Path(install.directory / original['preflight_lock']).is_file()
+    assert result['resources_changed'] is False
+    assert result['sending'] == 'disabled'
+    assert 'MERCHANT-TWO' in resumed.config['subject_map']
+    resumed.reconfigure_catalogue(values)
+    assert json.loads(install.state_path.read_text()) == first
+
+
+@pytest.mark.parametrize('failure', ['live', 'digest', 'keys', 'identity', 'remap', 'active'])
+def test_catalogue_refresh_rejects_bad_revision_without_inventory_changes(tmp_path, failure):
+    from cloud import CloudError
+
+    install = plan_merchant(tmp_path, merchant(tmp_path / 'original'), mapped=True)
+    values = catalogue_revision(tmp_path / 'replacement')
+    lock = Path(values['preflight_lock'])
+    data = json.loads(lock.read_text())
+    if failure == 'live':
+        data['stripe_mode'] = 'live'
+    elif failure == 'digest':
+        data['catalogue_version'] = 'sha256:' + '0' * 64
+    elif failure == 'keys':
+        data['prices'].pop()
+    elif failure == 'identity':
+        values['account_id'] = 'b' * 32
+    elif failure == 'remap':
+        values['subject_map']['MERCHANT-ONE'] = 'product-two'
+    elif failure == 'active':
+        install.state.update(activation_authorized=True, automation_paused=False)
+        install.save()
+    lock.write_text(json.dumps(data))
+    before = install.state_path.read_bytes()
+    with pytest.raises((ValueError, CloudError)):
+        install.reconfigure_catalogue(values)
+    assert install.state_path.read_bytes() == before
+    assert Installation(install.directory).config['subject_map'] == {'MERCHANT-ONE': 'product-one'}
+    if failure in ('live', 'digest', 'keys'):
+        log = install.directory / 'logs/catalogue-preflight.log'
+        assert log.is_file()
+        assert log.stat().st_mode & 0o777 == 0o600
+        assert log.read_text()
+
+
+def test_same_source_rebuild_retains_both_catalogues_and_rollback_storefront(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    install = plan_merchant(tmp_path, merchant(tmp_path / 'original'), mapped=True)
+    install.state.update(workers_subdomain='fixture', pages_subdomain='merchant-test.pages.dev',
+                         secret_fingerprints={'recipient_hash': 'key'},
+                         migration_ledgers={}, resources={'database:commerce': {'id': 'existing'}})
+    monkeypatch.setattr(install, 'vault', lambda: {})
+    monkeypatch.setattr(install, 'check_schema', lambda: None)
+    monkeypatch.setattr(install, 'pin_suppression', lambda: None)
+    monkeypatch.setattr('operate.subprocess.check_output', lambda *args, **kwargs: 'a' * 40)
+    import subprocess
+    real_subprocess = subprocess.run
+    monkeypatch.setattr('operate.subprocess.run', lambda args, **kwargs:
+                        SimpleNamespace(returncode=0) if args == ['git', 'diff', '--quiet', 'HEAD']
+                        else real_subprocess(args, **kwargs))
+    original_run = install.run
+
+    def tools(step, command, environment=None):
+        if step != 'build-source':
+            return original_run(step, command, environment)
+        output = Path(command[command.index('--output') + 1])
+        (output / 'bundle').mkdir(parents=True)
+        (output / 'bundle/worker.py').write_text('# test artifact')
+        lock = Path(install.config['preflight_lock']).read_bytes()
+        (output / 'receipt.json').write_text(json.dumps({
+            'source_commit': 'a' * 40, 'catalogue_lock_sha256': hashlib.sha256(lock).hexdigest(),
+            'merchant_input_sha256': commerce_build_hash(Path(install.config['merchant_inputs']) / 'commerce', lock)}))
+    monkeypatch.setattr(install, 'run', tools)
+    first = install.build()
+    first_path = install.directory / 'releases' / first['release_id'] / 'build.json'
+    first_bytes = first_path.read_bytes()
+    values = catalogue_revision(tmp_path / 'replacement')
+    install.reconfigure_catalogue(values)
+    second = install.build()
+    assert first['commit'] == second['commit']
+    assert first['release_id'] != second['release_id']
+    assert first_path.read_bytes() == first_bytes
+    assert install.build() == second
+    install.state['releases'] = [{**first, 'versions': {'source': 'v1'}, 'sending': False},
+                                 {**second, 'versions': {'source': 'v2'}, 'sending': False}]
+    published = []
+    install.api = SimpleNamespace(publish=lambda name, version: published.append(version))
+    monkeypatch.setattr(install, 'verifier', lambda mode: {'revision': 0})
+    storefront = []
+    monkeypatch.setattr(install, 'deploy_storefront', lambda release: storefront.append(
+        (release['release_id'], dict(install.config['subject_map']))))
+    install.rollback(0)
+    assert published == ['v1']
+    assert storefront == [(first['release_id'], {'MERCHANT-ONE': 'product-one'})]
+    assert install.state['build'] == first['release_id']
+    assert install.state['deployment']['release_id'] == first['release_id']
+    assert install.state['resources'] == {'database:commerce': {'id': 'existing'}}

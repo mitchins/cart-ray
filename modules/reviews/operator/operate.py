@@ -764,7 +764,8 @@ class Installation(PostPurchaseOperator):
         if self.state.get("post_purchase_provider_migration"):
             raise ValueError("finish credential reconfiguration and OFF deployment before upgrade")
         current = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip()
-        if self.state["phase"] in ("active", "paused") and self.state["deployment"]["commit"] == current:
+        if (self.state["phase"] in ("active", "paused") and self.state["deployment"]["commit"] == current
+                and self.state.get("build") == self.state["deployment"].get("release_id", current)):
             return self.doctor()
         self.require_post_purchase_off()
         was_active = self.state["activation_authorized"]
@@ -904,6 +905,101 @@ class Installation(PostPurchaseOperator):
                                     merchant_inputs_sha256=checksum)
         self.save()
 
+    def catalogue_config(self):
+        return {key: self.state['config'][key] for key in
+                ('merchant_inputs', 'merchant_inputs_sha256', 'preflight_lock', 'subject_map', 'subject_details')}
+
+    def use_catalogue_config(self, values):
+        self.state['config'].update(values)
+        self.config.update(values)
+        for key in ('merchant_inputs', 'preflight_lock'):
+            self.config[key] = str(self.directory / self.config[key])
+
+    def reconfigure_catalogue(self, values):
+        """Snapshot one explicit catalogue revision; never changes installation authority."""
+        self.require_post_purchase_off()
+        if (self.state.get('activation_authorized') and not self.state.get('automation_paused')
+                or self.state.get('phase') in ('deploying', 'rolling-back')
+                or 'merchant_inputs' not in self.config):
+            raise ValueError('finish deployment and pause before reconfiguring the catalogue')
+        fields = {'merchant_inputs', 'preflight_lock', 'subject_map', 'subject_details'}
+        if not isinstance(values, dict) or set(values) != fields:
+            raise ValueError('catalogue configuration requires only merchant_inputs, preflight_lock, '
+                             'subject_map, subject_details')
+        candidate = validate_config({**self.config, **values})
+        for key in self.config['subject_map'].keys() & candidate['subject_map'].keys():
+            if self.config['subject_map'][key] != candidate['subject_map'][key]:
+                raise ValueError('an existing product cannot be reassigned to another review subject')
+        old_paths = {row[0]: row[1:] for row in self.config['subject_details']}
+        if any(subject in old_paths and old_paths[subject] != [path, label]
+               for subject, path, label in candidate['subject_details']):
+            raise ValueError('an existing review subject cannot change its canonical path or label')
+        source = Path(candidate['merchant_inputs']).resolve(strict=True)
+        if source.is_relative_to(self.directory) or self.directory.is_relative_to(source):
+            raise ValueError('replacement package and installation must not overlap')
+        checksum = validate_merchant_inputs(source, ROOT)
+        lock_path = Path(candidate['preflight_lock']).resolve(strict=True)
+        lock_bytes = lock_path.read_bytes()
+        # Reuse the normal compiler: exact lookup keys, test prices, catalogue
+        # digest, presentation and local assets must all agree before inventory changes.
+        with tempfile.TemporaryDirectory(prefix='catalogue-check-') as temporary:
+            self.run('catalogue-preflight', [
+                'uv', 'run', '--locked', 'python', str(ROOT / 'scripts/compile_catalogue.py'),
+                '--catalogue', str(source / 'commerce/catalogue.csv'),
+                '--preflight-lock', str(lock_path),
+                '--fulfilment-expansions', str(source / 'commerce/fulfilment-expansions.json'),
+                '--presentation', str(source / 'commerce/presentation.csv'),
+                '--product-assets', str(source / 'commerce/product-assets'),
+                '--output', str(Path(temporary) / 'catalogue.py'),
+            ])
+        if lock_path.read_bytes() != lock_bytes:
+            raise ValueError('preflight lock changed during validation')
+        if self.has_post_purchase:
+            self.provider_ready()
+            self.check_current_post_purchase_off()
+        previous = self.catalogue_config()
+        previous_config_hash = self.merchant_config_hash()
+        previous_lock_hash = digest(Path(self.config['preflight_lock']).read_bytes())
+        destination = self.directory / 'inputs' / ('merchant-' + checksum)
+        if not destination.exists():
+            with tempfile.TemporaryDirectory(prefix='catalogue-copy-', dir=destination.parent) as temporary:
+                copied = Path(temporary) / 'merchant'
+                if snapshot_merchant_inputs(source, copied, ROOT) != checksum:
+                    raise ValueError('merchant source changed during snapshot')
+                os.replace(copied, destination)
+        if validate_merchant_inputs(destination, ROOT) != checksum:
+            raise ValueError('retained merchant snapshot differs')
+        lock_bytes = (json.dumps(json.loads(lock_bytes), indent=2) + '\n').encode()
+        lock_target = self.directory / 'inputs' / ('preflight-' + digest(lock_bytes) + '.json')
+        if lock_target.exists() and lock_target.read_bytes() != lock_bytes:
+            raise ValueError('retained preflight snapshot differs')
+        if not lock_target.exists():
+            atomic_json(lock_target, json.loads(lock_bytes))
+        replacement = {**values, 'merchant_inputs': str(destination.relative_to(self.directory)),
+                       'merchant_inputs_sha256': checksum,
+                       'preflight_lock': str(lock_target.relative_to(self.directory))}
+        self.use_catalogue_config(replacement)
+        try:
+            self.verify_merchant_inputs()
+            if self.has_post_purchase:
+                self.post_purchase_actions()
+        except Exception:
+            self.use_catalogue_config(previous)
+            raise
+        # Keep prior OFF releases and their input snapshots for application rollback.
+        deployment = self.state.get('deployment', {})
+        if deployment:
+            deployment.setdefault('catalogue_config', previous)
+        for release in self.state['releases']:
+            if (release.get('merchant_inputs_sha256') == previous['merchant_inputs_sha256']
+                    and release.get('merchant_config_sha256') == previous_config_hash
+                    and release.get('merchant_lock_sha256') == previous_lock_hash):
+                release.setdefault('catalogue_config', previous)
+        self.state.pop('build', None)
+        self.save()
+        return {'catalogue_version': json.loads(lock_bytes)['catalogue_version'],
+                'merchant_inputs_sha256': checksum, 'sending': 'disabled', 'resources_changed': False}
+
     def merchant_config_hash(self):
         if "merchant_inputs" not in self.config:
             return None
@@ -932,7 +1028,12 @@ class Installation(PostPurchaseOperator):
         merchant_config_hash = self.merchant_config_hash()
         commit = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip()
         subprocess.run(["git", "diff", "--quiet", "HEAD"], cwd=ROOT, check=True)
-        release = self.directory / "releases" / commit
+        release_id = commit
+        if 'merchant_inputs' in self.config:
+            signature = digest(json.dumps([self.config['merchant_inputs_sha256'], merchant_lock_hash,
+                                           merchant_config_hash]).encode())
+            release_id += '-' + signature
+        release = self.directory / "releases" / release_id
         if (release / "build.json").exists():
             recorded = json.loads((release / "build.json").read_text())
             if (recorded.get("merchant_inputs_sha256") != self.config.get("merchant_inputs_sha256")
@@ -941,7 +1042,7 @@ class Installation(PostPurchaseOperator):
                 raise ValueError("cached release uses different merchant inputs; build a new release")
             if self.has_post_purchase:
                 self.check_post_purchase_release(recorded)
-            self.state["build"] = commit
+            self.state["build"] = release_id
             self.save()
             return recorded
         release.mkdir(parents=True, exist_ok=True)
@@ -1028,6 +1129,8 @@ class Installation(PostPurchaseOperator):
             artifacts[role] = files
         result = {
             "commit": commit,
+            "release_id": release_id,
+            "catalogue_config": self.catalogue_config() if "merchant_inputs" in self.config else None,
             "merchant_inputs_sha256": self.config.get("merchant_inputs_sha256"),
             "merchant_lock_sha256": merchant_lock_hash,
             "merchant_config_sha256": merchant_config_hash,
@@ -1043,12 +1146,12 @@ class Installation(PostPurchaseOperator):
                 },
             )
         atomic_json(release / "build.json", result)
-        self.state["build"] = commit
+        self.state["build"] = release_id
         self.save()
         return result
 
     def artifact_modules(self, role, build):
-        release = self.directory / "releases" / build["commit"]
+        release = self.directory / "releases" / build.get("release_id", build["commit"])
         folder = release / role / "bundle" if role in ("source", "reviews") else release
         modules = []
         for name, expected in build["artifacts"][role].items():
@@ -1109,12 +1212,15 @@ class Installation(PostPurchaseOperator):
             self.check_post_purchase_handoff()
             self.provider_ready()
             self.check_current_post_purchase_off()
-        progress = self.state.setdefault("deployment", {"commit": build["commit"], "versions": {}, "complete": False})
-        if progress["commit"] != build["commit"]:
+        release_id = build.get("release_id", build["commit"])
+        progress = self.state.setdefault("deployment", {
+            "commit": build["commit"], "release_id": release_id, "versions": {}, "complete": False})
+        if progress.get("release_id", progress["commit"]) != release_id:
             if not progress.get("complete"):
                 raise ValueError("finish or roll back the interrupted deployment before another release")
-            progress = {"commit": build["commit"], "versions": {}, "complete": False}
+            progress = {"commit": build["commit"], "release_id": release_id, "versions": {}, "complete": False}
             self.state["deployment"] = progress
+        progress["catalogue_config"] = build.get("catalogue_config")
         # Validate every retained artifact before any runtime mutation.
         for role in self.roles:
             self.artifact_modules(role, build)
@@ -1195,7 +1301,7 @@ class Installation(PostPurchaseOperator):
             )
 
     def deploy_storefront(self, build):
-        output = self.directory / "releases" / build["commit"] / "storefront"
+        output = self.directory / "releases" / build.get("release_id", build["commit"]) / "storefront"
         integrity = output.parent / "storefront-integrity.json"
         if output.is_symlink() or integrity.is_symlink():
             raise ValueError("refusing symlinked generated storefront or integrity record")
@@ -1367,7 +1473,8 @@ class Installation(PostPurchaseOperator):
         if self.state.get('post_purchase_provider_migration'):
             raise ValueError('finish credential reconfiguration and OFF deployment before activation')
         if (not self.state.get('deployment', {}).get('complete') or
-                self.state.get('build') != self.state['deployment'].get('commit')):
+                self.state.get('build') != self.state['deployment'].get(
+                    'release_id', self.state['deployment'].get('commit'))):
             raise ValueError('deploy the selected build before activation')
         transition = self.state.get('post_purchase_transition')
         if transition:
@@ -1615,6 +1722,9 @@ class Installation(PostPurchaseOperator):
             or release["suppression_key_fingerprint"] != self.state["secret_fingerprints"]["recipient_hash"]
         ):
             raise ValueError("rollback schema/key contract is incompatible; databases are never rewound")
+        if release.get('catalogue_config'):
+            self.use_catalogue_config(release['catalogue_config'])
+            self.verify_merchant_inputs()
         versions = release["versions"]
         release_sending = release.get("sending", bool(release.get("record_revision", 0)))
         reviews_authorized = (self.state.get("activation_authorized")
@@ -1652,9 +1762,12 @@ class Installation(PostPurchaseOperator):
                 self.check_post_purchase_version(role, "disabled", self.api.version(self.name(role)), versions[role])
         if visibility_errors:
             raise ValueError("; ".join(visibility_errors))
-        self.state["build"] = release["commit"]
+        self.deploy_storefront(release)
+        self.state["build"] = release.get("release_id", release["commit"])
         self.state["deployment"] = {
             "commit": release["commit"],
+            "release_id": release.get("release_id", release["commit"]),
+            "catalogue_config": release.get("catalogue_config"),
             "versions": dict(versions),
             "complete": True,
             "sending": release_sending,
@@ -1860,6 +1973,8 @@ def main():
         if name == 'build':
             command.add_argument('--merchant-inputs', type=Path,
                                  help='explicitly snapshot corrected merchant inputs while sending is OFF')
+    refresh = commands.add_parser('reconfigure-catalogue', help='snapshot explicit catalogue/lock/subjects while OFF')
+    refresh.add_argument('--config', type=Path, required=True)
     activation = commands.add_parser(
         "activate", help="explicitly authorize the fixed no-backfill fence and test delivery"
     )
@@ -1893,7 +2008,9 @@ def main():
             else:
                 credentials = read_private(args.credentials) if args.credentials else None
                 installation = Installation(args.directory, credentials)
-                if args.command == "activate":
+                if args.command == 'reconfigure-catalogue':
+                    result = installation.reconfigure_catalogue(json.loads(args.config.read_text()))
+                elif args.command == "activate":
                     result = installation.activate(args.enable_test_delivery)
                 elif args.command == "rollback":
                     result = installation.rollback(args.release)

@@ -101,6 +101,52 @@ This is not a migration of the retained EP UAT environment. Old handoff identiti
 SQL history, issued capabilities and uncertain claims remain unchanged. There is no ordinary
 separate Reviews sender activation, provider migration ceremony, OTP or queue recovery procedure.
 
+## Updating the catalogue in an existing test installation
+
+Keep the same installation directory, namespace, credentials and resources. Pause
+sending first (or leave a never-activated installation OFF). Prepare an operator-selected
+JSON file with exactly these four fields, using absolute local paths:
+
+```json
+{
+  "merchant_inputs": "/private/merchant/full-package",
+  "preflight_lock": "/private/merchant/full-stripe-test-lock.json",
+  "subject_map": {"PRODUCT-ONE": "product-one", "PRODUCT-TWO": "product-two"},
+  "subject_details": [
+    ["product-one", "/product/one/", "Product one"],
+    ["product-two", "/product/two/", "Product two"]
+  ]
+}
+```
+
+```sh
+uv run python modules/reviews/operator/operate.py --directory "$INSTALL" --credentials "$CREDS" reconfigure-catalogue --config /private/merchant/catalogue-update.json
+uv run python modules/reviews/operator/operate.py --directory "$INSTALL" --credentials "$CREDS" build
+uv run python modules/reviews/operator/operate.py --directory "$INSTALL" --credentials "$CREDS" deploy
+uv run python modules/reviews/operator/operate.py --directory "$INSTALL" --credentials "$CREDS" verify
+uv run python modules/reviews/operator/operate.py --directory "$INSTALL" --credentials "$CREDS" doctor
+```
+
+The normal compiler validates exact test lookup keys, catalogue digest, presentation
+and assets before changing inventory. Failures retain a protected compiler log.
+This operation does not create Prices, approve fulfilment resources or modify
+credentials, merchant identity, account, origins, provider, D1, keys or the activation
+fence. Existing product-to-subject assignments and subject paths/labels cannot be
+reinterpreted through this command. New mappings are explicit. Retired subject rows
+and purchased-item history are retained.
+
+Package and lock snapshots are retained by content hash. Repeating the command is
+idempotent; different inputs at the same source commit produce separate retained
+release artifacts. Build invalidation requires deployment and verification before
+explicit test activation. Old Worker versions are checked against their recorded
+OFF configuration while the replacement is being installed.
+
+Compatible rollback restores the retained catalogue snapshot and application versions,
+and republishes the corresponding storefront for operator-managed Pages. For an
+externally owned site, it emits the retained artifact handoff; that site's operator
+must coordinate its publication. Rollback does not rewind D1 or alter delivery claims,
+suppression or the original no-backfill checkpoint.
+
 ## Evidence and limits
 
 See `docs/order-reviews.md` and the checked-in qualification receipts for the exact tested build.

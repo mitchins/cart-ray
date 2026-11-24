@@ -186,7 +186,10 @@ def test_rollback_enforces_private_flags_before_and_after_publish_only_when_opte
 
     p.api.request = request
     p.api.publish = lambda name, version: calls.append(("publish", version))
+    storefront = []
+    p.deploy_storefront = lambda release: storefront.append(release["commit"])
     p.rollback(0)
+    assert storefront == ["old-commit"]
     off = {"enabled": False, "previews_enabled": False}
     assert calls == ([("POST", off), ("publish", "v0"), ("POST", off), ("GET", None)]
                      if private else [("publish", "v0")])

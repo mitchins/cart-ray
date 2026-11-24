@@ -145,7 +145,8 @@ class PostPurchaseOperator:
             raise ValueError("finish the retained OFF deployment before changing post-purchase delivery")
         self.assert_resources()
         self.vault()
-        build = json.loads((self.directory / "releases" / deployment["commit"] / "build.json").read_text())
+        build = json.loads((self.directory / "releases" /
+                            deployment.get("release_id", deployment["commit"]) / "build.json").read_text())
         self.check_post_purchase_release(build)
         return deployment, disabled, build
 
@@ -175,8 +176,16 @@ class PostPurchaseOperator:
             recovering = (rollback_targets or {}).get(role)
             if actual["id"] not in {known, recovering}:
                 raise ValueError(f"{role}: not running a recorded OFF version; resolve drift before release changes")
-            self.check_post_purchase_version(role, "disabled", actual, actual["id"],
-                                             allow_legacy_admission=True)
+            current = self.catalogue_config() if 'merchant_inputs' in self.config else None
+            installed = deployment.get('catalogue_config')
+            try:
+                if installed and actual['id'] != recovering:
+                    self.use_catalogue_config(installed)
+                self.check_post_purchase_version(role, "disabled", actual, actual["id"],
+                                                 allow_legacy_admission=True)
+            finally:
+                if current:
+                    self.use_catalogue_config(current)
 
     def post_purchase_live_version(self, role, deployment, transition):
         actual = self.api.version(self.name(role))
@@ -221,7 +230,8 @@ class PostPurchaseOperator:
         self.save()
         revision = 0
         if modes == OFF:
-            build = json.loads((self.directory / "releases" / deployment["commit"] / "build.json").read_text())
+            build = json.loads((self.directory / "releases" /
+                            deployment.get("release_id", deployment["commit"]) / "build.json").read_text())
             release = {**build, "versions": dict(deployment["versions"]), "record_revision": revision,
                        "sending": deployment.get("sending", False), "post_purchase_modes": dict(OFF)}
             if not self.state["releases"] or self.state["releases"][-1] != release:
