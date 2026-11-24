@@ -929,6 +929,24 @@ class Installation(PostPurchaseOperator):
                    for subject, path, label in candidate['subject_details']):
                 raise ValueError('an existing review subject cannot change its canonical path or label')
 
+    def snapshot_catalogue_inputs(self, source, checksum, lock_bytes):
+        destination = self.directory / 'inputs' / ('merchant-' + checksum)
+        if not destination.exists():
+            with tempfile.TemporaryDirectory(prefix='catalogue-copy-', dir=destination.parent) as temporary:
+                copied = Path(temporary) / 'merchant'
+                if snapshot_merchant_inputs(source, copied, ROOT) != checksum:
+                    raise ValueError('merchant source changed during snapshot')
+                os.replace(copied, destination)
+        if validate_merchant_inputs(destination, ROOT) != checksum:
+            raise ValueError('retained merchant snapshot differs')
+        lock_bytes = (json.dumps(json.loads(lock_bytes), indent=2) + '\n').encode()
+        lock_target = self.directory / 'inputs' / ('preflight-' + digest(lock_bytes) + '.json')
+        if lock_target.exists() and lock_target.read_bytes() != lock_bytes:
+            raise ValueError('retained preflight snapshot differs')
+        if not lock_target.exists():
+            atomic_json(lock_target, json.loads(lock_bytes))
+        return destination, lock_target
+
     def reconfigure_catalogue(self, values):
         """Snapshot one explicit catalogue revision; never changes installation authority."""
         self.require_post_purchase_off()
@@ -968,21 +986,7 @@ class Installation(PostPurchaseOperator):
         previous = self.catalogue_config()
         previous_config_hash = self.merchant_config_hash()
         previous_lock_hash = digest(Path(self.config['preflight_lock']).read_bytes())
-        destination = self.directory / 'inputs' / ('merchant-' + checksum)
-        if not destination.exists():
-            with tempfile.TemporaryDirectory(prefix='catalogue-copy-', dir=destination.parent) as temporary:
-                copied = Path(temporary) / 'merchant'
-                if snapshot_merchant_inputs(source, copied, ROOT) != checksum:
-                    raise ValueError('merchant source changed during snapshot')
-                os.replace(copied, destination)
-        if validate_merchant_inputs(destination, ROOT) != checksum:
-            raise ValueError('retained merchant snapshot differs')
-        lock_bytes = (json.dumps(json.loads(lock_bytes), indent=2) + '\n').encode()
-        lock_target = self.directory / 'inputs' / ('preflight-' + digest(lock_bytes) + '.json')
-        if lock_target.exists() and lock_target.read_bytes() != lock_bytes:
-            raise ValueError('retained preflight snapshot differs')
-        if not lock_target.exists():
-            atomic_json(lock_target, json.loads(lock_bytes))
+        destination, lock_target = self.snapshot_catalogue_inputs(source, checksum, lock_bytes)
         replacement = {**values, 'merchant_inputs': str(destination.relative_to(self.directory)),
                        'merchant_inputs_sha256': checksum,
                        'preflight_lock': str(lock_target.relative_to(self.directory))}
@@ -996,8 +1000,8 @@ class Installation(PostPurchaseOperator):
             raise
         # Keep prior OFF releases and their input snapshots for application rollback.
         deployment = self.state.get('deployment', {})
-        if deployment:
-            deployment.setdefault('catalogue_config', previous)
+        if deployment and not deployment.get('catalogue_config'):
+            deployment['catalogue_config'] = previous
         for release in self.state['releases']:
             if (release.get('merchant_inputs_sha256') == previous['merchant_inputs_sha256']
                     and release.get('merchant_config_sha256') == previous_config_hash
@@ -1733,6 +1737,11 @@ class Installation(PostPurchaseOperator):
         if release.get('catalogue_config'):
             self.use_catalogue_config(release['catalogue_config'])
             self.verify_merchant_inputs()
+        elif 'merchant_inputs' in self.config:
+            if (release.get('merchant_inputs_sha256') != self.config['merchant_inputs_sha256']
+                    or release.get('merchant_config_sha256') != self.merchant_config_hash()
+                    or release.get('merchant_lock_sha256') != digest(Path(self.config['preflight_lock']).read_bytes())):
+                raise ValueError('rollback catalogue snapshot is unavailable or incompatible; retain current inputs')
         versions = release["versions"]
         release_sending = release.get("sending", bool(release.get("record_revision", 0)))
         reviews_authorized = (self.state.get("activation_authorized")
@@ -1775,7 +1784,7 @@ class Installation(PostPurchaseOperator):
         self.state["deployment"] = {
             "commit": release["commit"],
             "release_id": release.get("release_id", release["commit"]),
-            "catalogue_config": release.get("catalogue_config"),
+            "catalogue_config": (self.catalogue_config() if "merchant_inputs" in self.config else None),
             "versions": dict(versions),
             "complete": True,
             "sending": release_sending,

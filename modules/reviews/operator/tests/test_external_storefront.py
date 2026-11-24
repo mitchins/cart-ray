@@ -1,5 +1,6 @@
 """Existing-site/private-source opt-in must not alter default Pages installs."""
 
+import hashlib
 import json
 import sys
 from pathlib import Path
@@ -165,6 +166,13 @@ def test_doctor_accepts_private_visibility_and_pages_default_is_unchanged(tmp_pa
     assert p.private_source_visibility_errors() == []
 
 
+def pin_rollback_inputs(installation):
+    installation.state['releases'][0].update(
+        merchant_inputs_sha256=installation.config['merchant_inputs_sha256'],
+        merchant_config_sha256=installation.merchant_config_hash(),
+        merchant_lock_sha256=hashlib.sha256(Path(installation.config['preflight_lock']).read_bytes()).hexdigest())
+
+
 @pytest.mark.parametrize("private", [False, True])
 def test_rollback_enforces_private_flags_before_and_after_publish_only_when_opted_in(tmp_path, private):
     p = external(tmp_path)
@@ -185,6 +193,7 @@ def test_rollback_enforces_private_flags_before_and_after_publish_only_when_opte
         return {"enabled": False, "previews_enabled": False}
 
     p.api.request = request
+    pin_rollback_inputs(p)
     p.api.publish = lambda name, version: calls.append(("publish", version))
     storefront = []
     p.deploy_storefront = lambda release: storefront.append(release["commit"])
@@ -203,6 +212,7 @@ def test_rollback_fails_closed_if_provider_keeps_private_source_public(tmp_path)
                               "versions": {"source": "v0"}, "commit": "old-commit"}])
     p.prepare_queue_transition = lambda: None
     p.api.publish = lambda *args: None
+    pin_rollback_inputs(p)
     p.verifier = lambda mode: pytest.fail("visibility must be checked before verification")
     with pytest.raises(ValueError, match="source.visibility"):
         p.rollback(0)

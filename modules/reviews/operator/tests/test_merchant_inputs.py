@@ -401,7 +401,7 @@ def test_catalogue_refresh_compiles_resumes_and_preserves_installation(tmp_path)
                          post_purchase_watermark=17, activation_watermark=17,
                          phase='paused', automation_paused=True, activation_authorized=True)
     original = install.catalogue_config()
-    install.state['deployment'] = {'commit': 'old', 'complete': True}
+    install.state['deployment'] = {'commit': 'old', 'complete': True, 'catalogue_config': None}
     install.state['releases'] = [{'commit': 'old', 'merchant_inputs_sha256': original['merchant_inputs_sha256'],
                                   'merchant_config_sha256': install.merchant_config_hash(),
                                   'merchant_lock_sha256': hashlib.sha256(
@@ -510,6 +510,11 @@ def test_same_source_rebuild_retains_both_catalogues_and_rollback_storefront(tmp
     storefront = []
     monkeypatch.setattr(install, 'deploy_storefront', lambda release: storefront.append(
         (release['release_id'], dict(install.config['subject_map']))))
+    target_config = install.state['releases'][0].pop('catalogue_config')
+    with pytest.raises(ValueError, match='rollback catalogue snapshot'):
+        install.rollback(0)
+    assert published == []
+    install.state['releases'][0]['catalogue_config'] = target_config
     install.rollback(0)
     assert published == ['v1']
     assert storefront == [(first['release_id'], {'MERCHANT-ONE': 'product-one'})]
