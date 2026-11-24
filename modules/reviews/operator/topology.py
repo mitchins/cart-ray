@@ -9,10 +9,43 @@ from cartray.order_access import resource_config_bindings
 SUBJECTS = {"ACORN-KIT": "acorn-growing-kit", "ACORN-PLANTER": "woodland-planter"}
 
 
+def validate_test_recipient_allowlist(value):
+    """Finite exact test destinations; domains never include their subdomains."""
+    if not isinstance(value, dict) or set(value) != {"addresses", "domains"}:
+        raise ValueError("invalid test recipient allowlist")
+    domain = r"(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}"
+    result = {}
+    for key in ("addresses", "domains"):
+        entries = value[key]
+        if not isinstance(entries, list) or len(entries) > 32:
+            raise ValueError("test recipient allowlist requires bounded lists")
+        normal = []
+        for entry in entries:
+            if not isinstance(entry, str) or not entry.isascii() or len(entry) > 254:
+                raise ValueError("invalid test recipient allowlist entry")
+            entry = entry.lower()
+            if key == "addresses":
+                parts = entry.split("@")
+                valid = (len(parts) == 2 and 0 < len(parts[0]) <= 64
+                         and re.fullmatch(r"[a-z0-9.!#$%&'*+/=?^_`{|}~-]+", parts[0])
+                         and not parts[0].startswith('.') and not parts[0].endswith('.')
+                         and '..' not in parts[0] and re.fullmatch(domain, parts[1]))
+            else:
+                valid = len(entry) <= 253 and re.fullmatch(domain, entry)
+            if not valid or entry in normal:
+                raise ValueError("invalid or duplicate test recipient allowlist entry")
+            normal.append(entry)
+        result[key] = sorted(normal)
+    if not result['addresses'] and not result['domains']:
+        raise ValueError("test recipient allowlist cannot be empty")
+    return result
+
+
 def validate_post_purchase(value, config, commerce_keys):
     """Validate explicit operator-approved test actions, never infer workflows from copy."""
     if isinstance(value, dict) and value.get("schema") == 2:
-        if set(value) != {"schema", "sender", "recipient"}:
+        if set(value) not in ({"schema", "sender", "recipient"},
+                             {"schema", "sender", "recipient", "test_recipient_allowlist"}):
             raise ValueError("invalid test confirmation configuration")
         for key in ("sender", "recipient"):
             address = value[key]
@@ -23,6 +56,9 @@ def validate_post_purchase(value, config, commerce_keys):
                 or not re.fullmatch(r"[^\s@<>]+@[^\s@<>]+\.[A-Za-z]{2,}", address)
             ):
                 raise ValueError("test confirmation requires one approved sender and recipient")
+        if "test_recipient_allowlist" in value:
+            value = {**value, "test_recipient_allowlist":
+                     validate_test_recipient_allowlist(value["test_recipient_allowlist"])}
         return value
     raise ValueError("per-workflow email configuration is retired; use schema 2 order confirmation")
 
@@ -256,8 +292,10 @@ def secret_bindings(installation, role):
             CARTRAY_PROJECTION_PUBLIC_KEYS_JSON=json.dumps({installation.config["namespace"]: vault["signing_public"]}),
         )
     if role == "post-purchase":
+        policy = installation.post_purchase_actions().get("test_recipient_allowlist")
         result.update(
-            DELIVERY_CONFIG="{}",
+            DELIVERY_CONFIG=json.dumps({"test_recipient_allowlist": policy} if policy is not None else {},
+                                       separators=(",", ":")),
             APPROVED_TEST_RECIPIENT=vault["post_purchase_approved_test_email"],
             APPROVED_TEST_SENDER=vault["post_purchase_test_sender"],
             STRIPE_API_KEY=vault["post_purchase_stripe_test_key"],

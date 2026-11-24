@@ -68,7 +68,7 @@ test('sender selection is environment-scoped and test delivery uses the approved
   assert.equal((await handle(request(),settings,p.fetch)).status,200);
   const message=JSON.parse(p.calls.at(-1).init.body);
   assert.equal(message.sender,env.APPROVED_TEST_SENDER);
-  assert.deepEqual(message.to,['Recipient@example.test']);
+  assert.deepEqual(message.to,['recipient@example.test']);
   p=provider({live:true,session:'cs_live_123'});
   const live={...env,ENVIRONMENT:'live',DELIVERY_MODE:'live',STRIPE_API_KEY:'sk_live_synthetic'};
   assert.notEqual((await handle(request({...body,environment:'live',session_id:'cs_live_123'}),live,p.fetch)).status,200);
@@ -200,4 +200,52 @@ test('paused provider verifies a purchase recipient without admitting delivery',
   assert.equal(p.calls.length,2);
   assert.equal((await handle(request({...body,type:'recipient_evidence'},'wrong'),paused,p.fetch)).status,403);
   assert.equal(p.calls.length,2);
+});
+
+const allowedTest = {addresses:['specific@another.test'],domains:['effectivepolicy.com.au','mitchellcurrie.com']};
+const testSettings = policy => ({...env,DELIVERY_CONFIG:JSON.stringify({test_recipient_allowlist:policy})});
+const reviewContent={url:'https://shop.example/review/#invitation='+'a'.repeat(64),
+  unsubscribe_url:'https://shop.example/review-unsubscribe?token='+'b'.repeat(64),subjects:['one']};
+for (const address of ['qualityandcompliance@effectivepolicy.com.au','test@mitchellcurrie.com',
+  'QualityAndCompliance@EffectivePolicy.COM.AU','specific@another.test']) {
+  test(`test allowlist uses authoritative purchaser for all message purposes: ${address}`,async()=>{
+    for(const purpose of ['recipient_evidence','order_confirmation','review_followup','recovery']) {
+      const type=purpose==='recovery'?'review_followup':purpose;
+      const p=provider({email:address});
+      const result=await handle(request({...body,type,reviews:reviewContent,recipient:'attacker@outside.test',
+        ...(purpose==='recovery'?{delivery_identity:'d'.repeat(64)}:{})}),
+        {...testSettings(allowedTest),MERCHANT_CONTACT:'help@example.test'},p.fetch);
+      assert.equal(result.status,200);
+      if(type==='recipient_evidence') {
+        assert.deepEqual(await result.json(),{email:address.toLowerCase()});assert.equal(p.calls.length,2);
+      } else assert.deepEqual(JSON.parse(p.calls.at(-1).init.body).to,[address.toLowerCase()]);
+    }
+  });
+}
+for (const address of ['buyer@outside.test','buyer@evilmitchellcurrie.com','buyer@sub.mitchellcurrie.com',
+  'buyer@mitchellcurrie.com.evil.test','buyer@effectivеpolicy.com.au','buyer@effectivepolicy.com.au.',
+  'specific+extra@another.test']) {
+  test(`outside, subdomain, suffix and lookalike recipients rejected: ${address}`,async()=>{
+    const p=provider({email:address});
+    const result=await handle(request({...body,recipient:'test@mitchellcurrie.com'}),testSettings(allowedTest),p.fetch);
+    assert.equal(result.status,422);assert.equal(p.calls.length,2);
+  });
+}
+for (const policy of [null,{},[],{addresses:[],domains:[]},{addresses:[],domains:['*.example.test']},
+  {addresses:[],domains:['https://example.test']},{addresses:[],domains:['example.test','EXAMPLE.TEST']},
+  {addresses:['bad\r\n@example.test'],domains:[]},{addresses:[],domains:['еxample.test']},
+  {addresses:[],domains:Array.from({length:33},(_,i)=>`d${i}.test`)},
+  {addresses:[],domains:['example.test'],extra:true}]) {
+  test(`malformed test allowlist fails before Stripe: ${JSON.stringify(policy)}`,async()=>{
+    const p=provider(); assert.notEqual((await handle(request(),testSettings(policy),p.fetch)).status,200);
+    assert.equal(p.calls.length,0);
+  });
+}
+test('live delivery ignores the sandbox allowlist; test OFF cannot send to newly approved purchasers',async()=>{
+ const p=provider({email:'buyer@outside.test',live:true,session:'cs_live_123'});
+ const live={...testSettings(null),ENVIRONMENT:'live',DELIVERY_MODE:'live',STRIPE_API_KEY:'sk_live_synthetic',MERCHANT_SENDER:'orders@example.test'};
+ assert.equal((await handle(request({...body,environment:'live',session_id:'cs_live_123'}),live,p.fetch)).status,200);
+ const off=provider({email:'test@mitchellcurrie.com'});
+ assert.equal((await handle(request(),{...testSettings(allowedTest),DELIVERY_MODE:'disabled'},off.fetch)).status,403);
+ assert.equal(off.calls.length,0);
 });

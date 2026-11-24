@@ -31,7 +31,7 @@ Use R2 permission only when provisioning configured private object resources.
 Management credentials stay on the operator computer, never in public Workers or Pages.
 Stripe credentials must match the configured sandbox account and permit Checkout, Price
 verification and a signed webhook. The email credential authorizes the verified sender
-and one approved test recipient. For `post_purchase_email_provider: "cloudflare"`, supply
+and the approved test destinations below. For `post_purchase_email_provider: "cloudflare"`, supply
 `cloudflare_email_api_token` instead of `smtp2go_api_key`. There is one selected provider
 for receipts, optional review follow-ups and customer-requested recovery.
 
@@ -40,6 +40,61 @@ Use schema 2 for the protected `post_purchase_config` file:
 ```json
 {"schema":2,"sender":"verified@example.test","recipient":"approved@example.test"}
 ```
+
+### Optional test-recipient allowlist
+
+Without an allowlist, schema 2 retains the single `recipient` restriction above.
+For a bounded UAT audience, optionally add `test_recipient_allowlist` to that same
+protected schema-2 file:
+
+```json
+{
+  "schema": 2,
+  "sender": "verified@example.test",
+  "recipient": "approved@example.test",
+  "test_recipient_allowlist": {
+    "addresses": ["specific@another.test"],
+    "domains": ["merchant.test", "developer.test"]
+  }
+}
+```
+
+Both arrays are required, at most 32 entries each, with at least one entry overall.
+Entries are ASCII, validated and case-normalized; duplicates, wildcards, URL syntax,
+whitespace and unknown fields are rejected. Domains match exactly: `merchant.test`
+does **not** allow `sub.merchant.test`, `evilmerchant.test` or `merchant.test.evil.test`.
+An exact address does not allow plus aliases or other mailboxes at that domain.
+
+This policy applies only in test mode. The shared private handler independently
+retrieves the paid purchase and recipient from the configured Stripe account for
+confirmation, Reviews evidence, follow-up and recovery. It never substitutes the
+configured test mailbox for another purchaser or accepts a caller's recipient.
+The existing `recipient` and credential handoff remain the legacy fallback; when an
+explicit allowlist exists, that list alone determines permitted test destinations.
+It does not grant Reviews permission, bypass suppression or change live delivery.
+
+To change an **existing paused** installation, supply only the two arrays in a
+private `0600` JSON file outside Git:
+
+```sh
+uv run python modules/reviews/operator/operate.py --directory "$INSTALL" --credentials "$CREDS" pause
+uv run python modules/reviews/operator/operate.py --directory "$INSTALL" --credentials "$CREDS" \
+  reconfigure-test-recipients --config "$TEST_RECIPIENTS"
+uv run python modules/reviews/operator/operate.py --directory "$INSTALL" --credentials "$CREDS" build
+uv run python modules/reviews/operator/operate.py --directory "$INSTALL" --credentials "$CREDS" deploy
+uv run python modules/reviews/operator/operate.py --directory "$INSTALL" --credentials "$CREDS" verify
+uv run python modules/reviews/operator/operate.py --directory "$INSTALL" --credentials "$CREDS" doctor
+```
+
+The command verifies installed sending is OFF and the existing credential handoff
+matches, then retains a content-addressed protected snapshot. Repeats are no-ops.
+It creates no resource or key, performs no database mutation, and preserves sender,
+provider, credentials, activation fence, checkpoint and every delivery claim.
+Build/deploy remain OFF; enabling test delivery is a separate existing deliberate
+activation action. Old releases with a different notification-policy fingerprint
+are incompatible with activation/rollback until configuration is deliberately reconciled;
+no database rewind or historical resend is performed. There is no EP deployment or
+sending authorization implicit in using this command.
 
 `review_requests` accepts `timing` (`off`, `receipt`, `followup`, `both`), `selection`
 (`all`, `priority`), `delay_days` and an ordered `priorities` list. Defaults encourage

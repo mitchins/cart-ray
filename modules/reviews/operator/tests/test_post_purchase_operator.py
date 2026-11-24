@@ -679,3 +679,83 @@ def test_pause_stops_unacknowledged_activation_after_resource_handoff_changes(de
     assert install.state['deployment']['versions'] == disabled
     assert not any(event[0] == 'upload' for event in api.events)
     assert list(db.iterdump()) == before
+
+
+def test_recipient_policy_reconfiguration_preserves_installation_and_is_repeatable(deployed):
+    install, api, db = deployed
+    initialise(install, db)
+    before_vault = install.vault_path.read_bytes()
+    resources = deepcopy(install.state['resources'])
+    fence = db.execute('SELECT * FROM post_purchase_checkpoint').fetchall()
+    original = Path(install.config['post_purchase_config']).read_bytes()
+    policy = {'addresses': ['Specific@another.test'], 'domains': ['EffectivePolicy.COM.AU', 'mitchellcurrie.com']}
+    queries = []
+    db.set_trace_callback(queries.append)
+    result = install.reconfigure_test_recipients(policy)
+    assert not any(q.lstrip().upper().startswith(('UPDATE', 'DELETE', 'INSERT', 'REPLACE')) for q in queries)
+    assert result['changed'] is True
+    assert install.vault_path.read_bytes() == before_vault
+    assert install.state['resources'] == resources
+    assert db.execute('SELECT * FROM post_purchase_checkpoint').fetchall() == fence
+    assert (install.directory / 'inputs/post-purchase.json').read_bytes() == original
+    assert 'build' not in install.state
+    assert install.state['post_purchase_modes'] == OFF
+    assert install.post_purchase_actions()['recipient'] == CREDS['approved_test_email']
+    bindings = {b['name']: b['text'] for b in secret_bindings(install, 'post-purchase')}
+    assert json.loads(bindings['DELIVERY_CONFIG'])['test_recipient_allowlist'] == {
+        'addresses': ['specific@another.test'], 'domains': ['effectivepolicy.com.au', 'mitchellcurrie.com']}
+    assert bindings['APPROVED_TEST_RECIPIENT'] == CREDS['approved_test_email']
+    reloaded = Installation(install.directory, install.credentials, api)
+    inventory = reloaded.state_path.read_bytes()
+    assert reloaded.reconfigure_test_recipients(policy)['changed'] is False
+    assert reloaded.state_path.read_bytes() == inventory
+    with pytest.raises(ValueError, match='input|configuration'):
+        install.check_post_purchase_release(install.state['releases'][-1])
+
+
+def test_recipient_policy_cannot_change_while_sending(deployed):
+    install, _, _ = deployed
+    install.state['post_purchase_modes'] = ON
+    before = install.state_path.read_bytes()
+    with pytest.raises(ValueError, match='disable'):
+        install.reconfigure_test_recipients({'addresses': [], 'domains': ['example.test']})
+    assert install.state_path.read_bytes() == before
+
+
+@pytest.mark.parametrize('policy', [None, {}, [], {'addresses': [], 'domains': []},
+    {'addresses': [], 'domains': ['*.example.test']},
+    {'addresses': [], 'domains': ['example.test', 'EXAMPLE.TEST']},
+    {'addresses': [], 'domains': ['еxample.test']},
+    {'addresses': ['a..b@example.test'], 'domains': []},
+    {'addresses': [], 'domains': ['sub..example.test']},
+    {'addresses': [], 'domains': ['x.test'] * 33},
+    {'addresses': [], 'domains': ['example.test'], 'extra': True}])
+def test_bad_recipient_policy_cannot_change_inventory(deployed, policy):
+    install, _, _ = deployed
+    before = install.state_path.read_bytes()
+    with pytest.raises(ValueError, match='allowlist'):
+        install.reconfigure_test_recipients(policy)
+    assert install.state_path.read_bytes() == before
+
+
+def test_schema2_policy_is_normalized_and_sender_handoff_unchanged(tmp_path):
+    options = handoff(tmp_path)
+    snapshot = {'schema': 2, 'sender': CREDS['test_sender'], 'recipient': CREDS['approved_test_email'],
+                'test_recipient_allowlist': {'addresses': ['Specific@another.test'], 'domains': ['Example.TEST']}}
+    atomic_json(Path(options['post_purchase_config']), snapshot)
+    install = Installation.plan(tmp_path / 'installation', options)
+    install.credentials = deepcopy(CREDS)
+    secrets = install.initial_post_purchase_secrets()
+    assert secrets['post_purchase_approved_test_email'] == CREDS['approved_test_email']
+    assert install.post_purchase_actions()['test_recipient_allowlist']['addresses'] == ['specific@another.test']
+
+
+def test_policy_update_deploys_off_with_existing_resources(deployed):
+    install, api, db = deployed
+    initialise(install, db)
+    install.reconfigure_test_recipients({'addresses': [], 'domains': ['example.test']})
+    capture_build(install, 'updated')
+    install.deploy()
+    assert install.state['post_purchase_modes'] == OFF
+    assert install.post_purchase_fence()['activation_watermark'] == 7
+    assert install.state['deployment']['complete'] is True
