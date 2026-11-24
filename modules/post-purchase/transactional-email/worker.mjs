@@ -22,7 +22,8 @@ function testRecipientPolicy(env) {
     const normalized = normalizedTestAddress(recipient);
     return normalized !== null && normalized === env.APPROVED_TEST_RECIPIENT.toLowerCase();
   };
-  if (!policy || Object.keys(policy).sort().join(',') !== 'addresses,domains') throw new Error('invalid test policy');
+  if (!policy || Array.isArray(policy) || Object.keys(policy).length !== 2 ||
+      !Object.hasOwn(policy,'addresses') || !Object.hasOwn(policy,'domains')) throw new Error('invalid test policy');
   const lists = {};
   for (const key of ['addresses','domains']) {
     if (!Array.isArray(policy[key]) || policy[key].length > 32) throw new Error('invalid test policy');
@@ -189,7 +190,10 @@ export async function handle(request, env, fetcher = fetch) {
         typeof session.customer_details?.email !== 'string' || !email.test(session.customer_details.email) ||
         (mode === 'test' &&
          !permittedRecipient(session.customer_details.email))) return fail(422);
-    const recipient = mode === 'test' ? session.customer_details.email.toLowerCase() : session.customer_details.email;
+    // Preserve the legacy evidence identity (including local-part case) for existing grants/suppressions.
+    const actualRecipient = session.customer_details.email;
+    const recipient = mode === 'test' && actualRecipient.toLowerCase() === env.APPROVED_TEST_RECIPIENT.toLowerCase()
+      ? env.APPROVED_TEST_RECIPIENT : actualRecipient;
 
     if (body.type === 'recipient_evidence') return Response.json({email:recipient}, {headers:{'Cache-Control':'no-store'}});
 

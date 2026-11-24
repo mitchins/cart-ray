@@ -10,7 +10,7 @@ test(`private registered email handler runs in Workerd with synthetic ${provider
     session_id:'cs_test_123', access_url:null, items:[{product_key:'product-one',title:'Product one',quantity:1}]};
   const calls=[];
   let purchaser=allowlist?'QualityAndCompliance@EffectivePolicy.COM.AU':'recipient@example.test';
-  const expected=purchaser.toLowerCase();
+  const expected=purchaser;
   const outboundService={type:'fetcher',handler:async request => {
     const url=new URL(request.url); calls.push(url.hostname + url.pathname);
     if (url.pathname === '/v1/account') return Response.json({id:'acct_test'});

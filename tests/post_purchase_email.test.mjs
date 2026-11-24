@@ -68,7 +68,7 @@ test('sender selection is environment-scoped and test delivery uses the approved
   assert.equal((await handle(request(),settings,p.fetch)).status,200);
   const message=JSON.parse(p.calls.at(-1).init.body);
   assert.equal(message.sender,env.APPROVED_TEST_SENDER);
-  assert.deepEqual(message.to,['recipient@example.test']);
+  assert.deepEqual(message.to,['Recipient@example.test']);
   p=provider({live:true,session:'cs_live_123'});
   const live={...env,ENVIRONMENT:'live',DELIVERY_MODE:'live',STRIPE_API_KEY:'sk_live_synthetic'};
   assert.notEqual((await handle(request({...body,environment:'live',session_id:'cs_live_123'}),live,p.fetch)).status,200);
@@ -217,8 +217,8 @@ for (const address of ['qualityandcompliance@effectivepolicy.com.au','test@mitch
         {...testSettings(allowedTest),MERCHANT_CONTACT:'help@example.test'},p.fetch);
       assert.equal(result.status,200);
       if(type==='recipient_evidence') {
-        assert.deepEqual(await result.json(),{email:address.toLowerCase()});assert.equal(p.calls.length,2);
-      } else assert.deepEqual(JSON.parse(p.calls.at(-1).init.body).to,[address.toLowerCase()]);
+        assert.deepEqual(await result.json(),{email:address});assert.equal(p.calls.length,2);
+      } else assert.deepEqual(JSON.parse(p.calls.at(-1).init.body).to,[address]);
     }
   });
 }
@@ -264,4 +264,19 @@ test('oversized runtime delivery policy fails before any provider call',async()=
  const p=provider();
  assert.notEqual((await handle(request(),{...env,DELIVERY_CONFIG:' '.repeat(4097)+'{}'},p.fetch)).status,200);
  assert.equal(p.calls.length,0);
+});
+
+
+test('legacy mixed-case recipient evidence is retained with and without an allowlist',async()=>{
+ for(const policy of [undefined,{addresses:[],domains:['example.test']}]) {
+   const settings={...env,APPROVED_TEST_RECIPIENT:'Mitch@example.test',
+     ...(policy?{DELIVERY_CONFIG:JSON.stringify({test_recipient_allowlist:policy})}:{})};
+   for(const type of ['recipient_evidence','order_confirmation']) {
+     const p=provider({email:'mitch@EXAMPLE.TEST'});
+     const response=await handle(request({...body,type}),settings,p.fetch);
+     assert.equal(response.status,200);
+     if(type==='recipient_evidence')assert.deepEqual(await response.json(),{email:'Mitch@example.test'});
+     else assert.deepEqual(JSON.parse(p.calls.at(-1).init.body).to,['Mitch@example.test']);
+   }
+ }
 });

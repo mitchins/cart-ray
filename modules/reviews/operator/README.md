@@ -72,6 +72,10 @@ This policy applies only in test mode. The shared private handler independently
 retrieves the paid purchase and recipient from the configured Stripe account for
 confirmation, Reviews evidence, follow-up and recovery. It never substitutes the
 configured test mailbox for another purchaser or accepts a caller's recipient.
+The existing `recipient` retains its original evidence spelling, including local-part
+case, when Stripe identifies that same address. Existing consent, recovery and suppression
+hashes therefore remain valid, with or without the new list. Other purchasers retain their
+authoritative Stripe address; policy matching is case-insensitive, not a recipient rewrite.
 The existing `recipient` and credential handoff remain the legacy fallback; when an
 explicit allowlist exists, that list alone determines permitted test destinations.
 It does not grant Reviews permission, bypass suppression or change live delivery.
