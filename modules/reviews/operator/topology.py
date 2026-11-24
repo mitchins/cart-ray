@@ -52,7 +52,7 @@ def review_requests_enabled(config):
                 and config.get('review_requests', {}).get('timing', 'receipt') != 'off')
 
 
-def catalogue_subject_maps(installation, versions=None):
+def catalogue_subject_maps(installation, versions=None, *, extra_snapshots=()):
     """Retain the manifest mappings purchased orders use, including retired catalogues."""
     config, state = installation.config, installation.state
     releases = state.get('releases', [])
@@ -66,7 +66,7 @@ def catalogue_subject_maps(installation, versions=None):
                 current = releases[index].get('catalogue_config') or config
                 break
     mappings = {}
-    for snapshot in [*snapshots, current]:
+    for snapshot in [*snapshots, *extra_snapshots, current]:
         if not snapshot:
             continue
         path = installation.directory / snapshot['preflight_lock']

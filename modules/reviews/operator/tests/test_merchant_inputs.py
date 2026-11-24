@@ -617,6 +617,9 @@ def test_shared_parent_page_preserves_each_offer_action_and_subject_identity(tmp
     install.config.update(subject_map=config['reviewSubjects'],
                           subject_details=[['product-one', '/products/one/', 'Product']])
     install.verify_merchant_inputs()
+    install.config['subject_map'] = {'MERCHANT-ONE': 'different', 'MERCHANT-TWO': 'different'}
+    with pytest.raises(ValueError, match='declaration differs'):
+        install.verify_merchant_inputs()
     install.config['subject_map'] = {'MERCHANT-ONE': 'product-one', 'MERCHANT-TWO': 'different'}
     with pytest.raises(ValueError, match='identical review subject'):
         install.verify_merchant_inputs()
@@ -640,3 +643,41 @@ def test_recorded_again_old_source_keeps_its_original_manifest_binding(tmp_path)
     original_version = 'sha256:' + 'b' * 64
     assert catalogue_subject_maps(install, {'source': 'v1'}) == {original_version: first['subject_map']}
     assert len(catalogue_subject_maps(install, {'source': 'v2'})) == 2
+
+
+def test_compiler_uses_retained_snapshot_if_external_source_changes(tmp_path, monkeypatch):
+    install = plan_merchant(tmp_path, merchant(tmp_path / 'original'))
+    values = catalogue_revision(tmp_path / 'replacement')
+    source = Path(values['merchant_inputs'])
+    checksum = validate(source, ROOT)
+    cached = install.directory / 'inputs' / ('merchant-' + checksum)
+    snapshot(source, cached, ROOT)
+    original = install.snapshot_catalogue_inputs
+
+    def snapshot_then_external_changes(*args):
+        result = original(*args)
+        path = source / 'commerce/catalogue.csv'
+        path.write_text(path.read_text().replace('Product ONE', 'Changed externally'))
+        return result
+
+    monkeypatch.setattr(install, 'snapshot_catalogue_inputs', snapshot_then_external_changes)
+    install.reconfigure_catalogue(values)
+    assert install.config['merchant_inputs_sha256'] == checksum
+    assert 'Product ONE' in (Path(install.config['merchant_inputs']) / 'commerce/catalogue.csv').read_text()
+    assert validate(Path(install.config['merchant_inputs']), ROOT) == checksum
+
+
+def test_legacy_mapping_conflict_is_rejected_before_inventory_save(tmp_path):
+    values = catalogue_revision(tmp_path / 'package')
+    install = plan_merchant(tmp_path, Path(values['merchant_inputs']), mapped=True)
+    Path(install.config['preflight_lock']).write_bytes(Path(values['preflight_lock']).read_bytes())
+    install.state['releases'] = [{
+        'commit': 'legacy', 'merchant_inputs_sha256': install.config['merchant_inputs_sha256'],
+        'merchant_config_sha256': install.merchant_config_hash(),
+        'merchant_lock_sha256': hashlib.sha256(Path(install.config['preflight_lock']).read_bytes()).hexdigest()}]
+    install.save()
+    before = install.state_path.read_bytes()
+    with pytest.raises(ValueError, match='one catalogue version'):
+        install.reconfigure_catalogue(values)
+    assert install.state_path.read_bytes() == before
+    assert 'catalogue_config' not in install.state['releases'][0]

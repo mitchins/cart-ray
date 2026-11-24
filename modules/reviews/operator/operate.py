@@ -814,7 +814,11 @@ class Installation(PostPurchaseOperator):
         cart.feed((site / "cart/index.html").read_text())
         if "theme-" + self.config["theme"] not in cart.body.get("class", "").split():
             raise ValueError("merchant storefront theme differs from installation")
-        product_route_groups(storefront["productPaths"], self.config["subject_map"])
+        groups = product_route_groups(storefront["productPaths"], self.config["subject_map"])
+        for keys in groups.values():
+            if len(keys) > 1 and any(storefront.get('reviewSubjects', {}).get(key) != self.config['subject_map'][key]
+                                     for key in keys):
+                raise ValueError('shared-route subject declaration differs from the approved installer mapping')
         if not set(self.config["subject_map"]).issubset(storefront["productPaths"]):
             raise ValueError("review subject mapping refers to an unauthorised commerce product")
         prefixes = {}
@@ -976,20 +980,6 @@ class Installation(PostPurchaseOperator):
         checksum = validate_merchant_inputs(source, ROOT)
         lock_path = Path(candidate['preflight_lock']).resolve(strict=True)
         lock_bytes = lock_path.read_bytes()
-        # Reuse the normal compiler: exact lookup keys, test prices, catalogue
-        # digest, presentation and local assets must all agree before inventory changes.
-        with tempfile.TemporaryDirectory(prefix='catalogue-check-') as temporary:
-            self.run('catalogue-preflight', [
-                'uv', 'run', '--locked', 'python', str(ROOT / 'scripts/compile_catalogue.py'),
-                '--catalogue', str(source / 'commerce/catalogue.csv'),
-                '--preflight-lock', str(lock_path),
-                '--fulfilment-expansions', str(source / 'commerce/fulfilment-expansions.json'),
-                '--presentation', str(source / 'commerce/presentation.csv'),
-                '--product-assets', str(source / 'commerce/product-assets'),
-                '--output', str(Path(temporary) / 'catalogue.py'),
-            ])
-        if lock_path.read_bytes() != lock_bytes:
-            raise ValueError('preflight lock changed during validation')
         if self.has_post_purchase:
             self.provider_ready()
             self.check_current_post_purchase_off()
@@ -997,13 +987,27 @@ class Installation(PostPurchaseOperator):
         previous_config_hash = self.merchant_config_hash()
         previous_lock_hash = digest(Path(self.config['preflight_lock']).read_bytes())
         destination, lock_target = self.snapshot_catalogue_inputs(source, checksum, lock_bytes)
+        # Compile the exact retained package and captured raw lock. Normalising
+        # the stored JSON must not hide duplicate keys from the strict lock parser.
+        with tempfile.TemporaryDirectory(prefix='catalogue-check-') as temporary:
+            captured_lock = Path(temporary) / 'preflight-lock.json'
+            captured_lock.write_bytes(lock_bytes)
+            self.run('catalogue-preflight', [
+                'uv', 'run', '--locked', 'python', str(ROOT / 'scripts/compile_catalogue.py'),
+                '--catalogue', str(destination / 'commerce/catalogue.csv'),
+                '--preflight-lock', str(captured_lock),
+                '--fulfilment-expansions', str(destination / 'commerce/fulfilment-expansions.json'),
+                '--presentation', str(destination / 'commerce/presentation.csv'),
+                '--product-assets', str(destination / 'commerce/product-assets'),
+                '--output', str(Path(temporary) / 'catalogue.py'),
+            ])
         replacement = {**values, 'merchant_inputs': str(destination.relative_to(self.directory)),
                        'merchant_inputs_sha256': checksum,
                        'preflight_lock': str(lock_target.relative_to(self.directory))}
         self.use_catalogue_config(replacement)
         try:
             self.verify_merchant_inputs()
-            catalogue_subject_maps(self)
+            catalogue_subject_maps(self, extra_snapshots=[previous])
             if self.has_post_purchase:
                 self.post_purchase_actions()
         except Exception:
@@ -1044,8 +1048,8 @@ class Installation(PostPurchaseOperator):
         if not self.credentials or 'fulfilment_resources' not in self.credentials:
             raise ValueError('resource compatibility requires the protected credential handoff')
         bindings = resource_config_bindings(self.credentials['fulfilment_resources'])
-        if (release.get('resource_config_sha256') is not None
-                and release['resource_config_sha256'] != digest(self.credentials['fulfilment_resources'].encode())):
+        if (release.get('resource_config_encoding') == 'bounded-secrets-v1'
+                and release.get('resource_config_sha256') != digest(self.credentials['fulfilment_resources'].encode())):
             raise ValueError('retained release uses a different private resource configuration; build current inputs')
         if ('CARTRAY_RESOURCE_CONFIG_META' in bindings
                 and release.get('resource_config_encoding') != 'bounded-secrets-v1'):

@@ -628,6 +628,7 @@ def test_off_resource_binding_upgrade_uses_recorded_shape_then_incoming_shape(de
         assert install.pause()['post_purchase'] == 'already-disabled'
         build = capture_build(install, f'resource-upgrade-{index}')
         build['resource_config_encoding'] = 'bounded-secrets-v1'
+        build['resource_config_sha256'] = digest(install.credentials['fulfilment_resources'].encode())
         atomic_json(install.directory / 'releases' / build['commit'] / 'build.json', build)
         install.deploy()
         actual = api.version(install.name('source'))

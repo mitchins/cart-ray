@@ -572,6 +572,10 @@ def test_multipart_resource_config_rejects_an_older_runtime_release(tmp_path):
     install.credentials = {'fulfilment_resources': json.dumps({'private': 'x' * 5000})}
     with pytest.raises(ValueError, match='cannot decode multipart'):
         install.check_resource_config_compatibility({})
-    install.check_resource_config_compatibility({'resource_config_encoding': 'bounded-secrets-v1'})
+    install.check_resource_config_compatibility({'resource_config_encoding': 'bounded-secrets-v1',
+        'resource_config_sha256': operations.digest(install.credentials['fulfilment_resources'].encode())})
+    with pytest.raises(ValueError, match='different private resource configuration'):
+        install.check_resource_config_compatibility({'resource_config_encoding': 'bounded-secrets-v1',
+                                                    'resource_config_sha256': '0' * 64})
     install.credentials['fulfilment_resources'] = '{}'
     install.check_resource_config_compatibility({})
