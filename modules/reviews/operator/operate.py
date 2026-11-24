@@ -915,6 +915,20 @@ class Installation(PostPurchaseOperator):
         for key in ('merchant_inputs', 'preflight_lock'):
             self.config[key] = str(self.directory / self.config[key])
 
+    def check_catalogue_subjects(self, candidate):
+        retained = [self.catalogue_config(), self.state.get('deployment', {}).get('catalogue_config')]
+        retained.extend(release.get('catalogue_config') for release in self.state['releases'])
+        for previous in retained:
+            if not previous:
+                continue
+            for key in previous['subject_map'].keys() & candidate['subject_map'].keys():
+                if previous['subject_map'][key] != candidate['subject_map'][key]:
+                    raise ValueError('an existing product cannot be reassigned to another review subject')
+            old_details = {row[0]: row[1:] for row in previous['subject_details']}
+            if any(subject in old_details and old_details[subject] != [path, label]
+                   for subject, path, label in candidate['subject_details']):
+                raise ValueError('an existing review subject cannot change its canonical path or label')
+
     def reconfigure_catalogue(self, values):
         """Snapshot one explicit catalogue revision; never changes installation authority."""
         self.require_post_purchase_off()
@@ -927,13 +941,7 @@ class Installation(PostPurchaseOperator):
             raise ValueError('catalogue configuration requires only merchant_inputs, preflight_lock, '
                              'subject_map, subject_details')
         candidate = validate_config({**self.config, **values})
-        for key in self.config['subject_map'].keys() & candidate['subject_map'].keys():
-            if self.config['subject_map'][key] != candidate['subject_map'][key]:
-                raise ValueError('an existing product cannot be reassigned to another review subject')
-        old_paths = {row[0]: row[1:] for row in self.config['subject_details']}
-        if any(subject in old_paths and old_paths[subject] != [path, label]
-               for subject, path, label in candidate['subject_details']):
-            raise ValueError('an existing review subject cannot change its canonical path or label')
+        self.check_catalogue_subjects(candidate)
         source = Path(candidate['merchant_inputs']).resolve(strict=True)
         if source.is_relative_to(self.directory) or self.directory.is_relative_to(source):
             raise ValueError('replacement package and installation must not overlap')

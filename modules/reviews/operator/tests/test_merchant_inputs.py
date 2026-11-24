@@ -516,3 +516,23 @@ def test_same_source_rebuild_retains_both_catalogues_and_rollback_storefront(tmp
     assert install.state['build'] == first['release_id']
     assert install.state['deployment']['release_id'] == first['release_id']
     assert install.state['resources'] == {'database:commerce': {'id': 'existing'}}
+
+
+@pytest.mark.parametrize('change', ['path', 'label', 'mapping'])
+def test_removed_subject_identity_cannot_be_reinterpreted_when_reintroduced(tmp_path, change):
+    install = plan_merchant(tmp_path, merchant(tmp_path / 'original'), mapped=True)
+    original = install.catalogue_config()
+    install.state['releases'] = [{'commit': 'retained', 'catalogue_config': original}]
+    install.use_catalogue_config({**original, 'subject_map': {}, 'subject_details': []})
+    install.save()
+    values = catalogue_revision(tmp_path / 'replacement')
+    if change == 'mapping':
+        values['subject_map']['MERCHANT-ONE'] = 'product-two'
+    elif change == 'path':
+        values['subject_details'][0][1] = '/products/moved/'
+    else:
+        values['subject_details'][0][2] = 'Changed name'
+    before = install.state_path.read_bytes()
+    with pytest.raises(ValueError, match='existing'):
+        install.reconfigure_catalogue(values)
+    assert install.state_path.read_bytes() == before
