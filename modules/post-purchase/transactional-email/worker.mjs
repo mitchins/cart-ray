@@ -2,6 +2,50 @@
 const fail = status => Response.json({error: 'delivery unavailable'}, {status, headers: {'Cache-Control': 'no-store'}});
 const identifier = /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$/;
 
+const testDomain = /^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/;
+function normalizedTestAddress(value) {
+  // Check ASCII before case conversion: e.g. U+212A otherwise folds to ASCII k.
+  if (typeof value !== 'string' || !/^[\x21-\x7e]{1,254}$/.test(value)) return null;
+  const parts = value.toLowerCase().split('@');
+  if (parts.length !== 2 || !/^[a-z0-9.!#$%&'*+/=?^_`{|}~-]{1,64}$/.test(parts[0]) ||
+      parts[0].startsWith('.') || parts[0].endsWith('.') || parts[0].includes('..') || !testDomain.test(parts[1])) return null;
+  return parts.join('@');
+}
+function testRecipientPolicy(env) {
+  const raw = env.DELIVERY_CONFIG ?? '{}';
+  if (typeof raw !== 'string' || new TextEncoder().encode(raw).byteLength > 4096) throw new Error('oversized test policy');
+  const config = JSON.parse(raw);
+  if (!config || typeof config !== 'object' || Array.isArray(config) ||
+      Object.keys(config).some(key => key !== 'test_recipient_allowlist')) throw new Error('invalid test policy');
+  const policy = config.test_recipient_allowlist;
+  if (policy === undefined) return recipient =>
+    typeof recipient === 'string' && /^[\x21-\x7e]{1,254}$/.test(recipient) &&
+    recipient.toLowerCase() === env.APPROVED_TEST_RECIPIENT.toLowerCase();
+  if (!policy || Array.isArray(policy) || Object.keys(policy).length !== 2 ||
+      !Object.hasOwn(policy,'addresses') || !Object.hasOwn(policy,'domains')) throw new Error('invalid test policy');
+  const lists = {};
+  for (const key of ['addresses','domains']) {
+    if (!Array.isArray(policy[key]) || policy[key].length > 32) throw new Error('invalid test policy');
+    lists[key] = policy[key].map(value => {
+      if (typeof value !== 'string' || !/^[\x21-\x7e]{1,254}$/.test(value)) throw new Error('invalid test policy');
+      if (key === 'addresses') {
+        const address = normalizedTestAddress(value);
+        if (!address) throw new Error('invalid test address');
+        return address;
+      }
+      value = value.toLowerCase();
+      if (value.length > 253 || !testDomain.test(value)) throw new Error('invalid test domain');
+      return value;
+    });
+    if (new Set(lists[key]).size !== lists[key].length) throw new Error('duplicate test destination');
+  }
+  if (!lists.addresses.length && !lists.domains.length) throw new Error('empty test policy');
+  return recipient => {
+    const normalized = normalizedTestAddress(recipient);
+    return normalized !== null && (lists.addresses.includes(normalized) || lists.domains.includes(normalized.split('@')[1]));
+  };
+}
+
 function sendingProvider(env) {
   const provider = env.EMAIL_PROVIDER ?? 'smtp2go';
   if (provider === 'smtp2go' && env.SMTP2GO_API_KEY?.startsWith('api-')) return provider;
@@ -111,6 +155,7 @@ export async function handle(request, env, fetcher = fetch) {
     const sender = env.ENVIRONMENT === 'test' ? env.APPROVED_TEST_SENDER : env.MERCHANT_SENDER;
     const email = /^[^\s@<>]+@[^\s@<>]+\.[A-Za-z]{2,}$/;
     const mode = env.ENVIRONMENT;
+    const permittedRecipient = mode === 'test' ? testRecipientPolicy(env) : null;
     if (!body || !['order_confirmation','review_followup','recipient_evidence'].includes(body.type) || body.environment !== mode ||
         !identifier.test(body.merchant || '') || body.merchant !== env.MERCHANT_ID ||
         !identifier.test(body.order_id || '') ||
@@ -143,8 +188,11 @@ export async function handle(request, env, fetcher = fetch) {
         session.metadata?.cr_order_id !== body.order_id ||
         typeof session.customer_details?.email !== 'string' || !email.test(session.customer_details.email) ||
         (mode === 'test' &&
-         session.customer_details.email.toLowerCase() !== env.APPROVED_TEST_RECIPIENT.toLowerCase())) return fail(422);
-    const recipient = mode === 'test' ? env.APPROVED_TEST_RECIPIENT : session.customer_details.email;
+         !permittedRecipient(session.customer_details.email))) return fail(422);
+    // Preserve the legacy evidence identity (including local-part case) for existing grants/suppressions.
+    const actualRecipient = session.customer_details.email;
+    const recipient = mode === 'test' && actualRecipient.toLowerCase() === env.APPROVED_TEST_RECIPIENT.toLowerCase()
+      ? env.APPROVED_TEST_RECIPIENT : actualRecipient;
 
     if (body.type === 'recipient_evidence') return Response.json({email:recipient}, {headers:{'Cache-Control':'no-store'}});
 

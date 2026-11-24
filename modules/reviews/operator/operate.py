@@ -36,6 +36,7 @@ from topology import (
     review_requests_enabled,
     secret_bindings,
     validate_post_purchase,
+    validate_test_recipient_allowlist,
     wrangler_config,
 )
 
@@ -263,7 +264,7 @@ class Installation(PostPurchaseOperator):
         ):
             raise ValueError("inventory scope/format mismatch; no resource operation is permitted")
         if self.has_post_purchase:
-            if (self.config["post_purchase_config"] != "inputs/post-purchase.json"
+            if (not re.fullmatch(r"inputs/post-purchase(?:-[a-f0-9]{64})?\.json", self.config["post_purchase_config"])
                     or "post_purchase_config_sha256" not in self.config):
                 raise ValueError("post-purchase inventory requires a fingerprinted installation snapshot")
             self.config["post_purchase_config"] = str(self.directory / self.config["post_purchase_config"])
@@ -1026,6 +1027,38 @@ class Installation(PostPurchaseOperator):
         self.save()
         return {'catalogue_version': json.loads(lock_bytes)['catalogue_version'],
                 'merchant_inputs_sha256': checksum, 'sending': 'disabled', 'resources_changed': False}
+
+    def reconfigure_test_recipients(self, policy):
+        """Change only sandbox destinations while the installed sender is verified OFF."""
+        if not self.has_post_purchase:
+            raise ValueError('test recipient configuration requires order confirmations')
+        self.require_post_purchase_off()
+        if (self.state.get('activation_authorized') and not self.state.get('automation_paused')
+                or self.state.get('phase') in ('deploying', 'rolling-back')):
+            raise ValueError('finish deployment and pause before changing test recipients')
+        policy = validate_test_recipient_allowlist(policy)
+        current = self.post_purchase_actions()
+        self.check_post_purchase_handoff()
+        self.provider_ready()
+        self.check_current_post_purchase_off()
+        if current.get('test_recipient_allowlist') == policy:
+            return {'changed': False, 'sending': 'disabled'}
+        updated = {**current, 'test_recipient_allowlist': policy}
+        # Retain the original sender/recipient credential handoff and every old snapshot.
+        encoded = (json.dumps(updated, indent=2) + '\n').encode()
+        fingerprint = digest(encoded)
+        relative = 'inputs/post-purchase-' + fingerprint + '.json'
+        target = self.directory / relative
+        if target.exists() and read_private(target, raw=True) != encoded:
+            raise ValueError('retained test recipient snapshot differs')
+        if not target.exists():
+            atomic_json(target, updated)
+        self.state['config'].update(post_purchase_config=relative,
+                                    post_purchase_config_sha256=fingerprint)
+        self.config.update(post_purchase_config=str(target), post_purchase_config_sha256=fingerprint)
+        self.state.pop('build', None)
+        self.save()
+        return {'changed': True, 'sending': 'disabled', 'post_purchase_config_sha256': fingerprint}
 
     def merchant_config_hash(self):
         if "merchant_inputs" not in self.config:
@@ -2055,6 +2088,9 @@ def main():
                                  help='explicitly snapshot corrected merchant inputs while sending is OFF')
     refresh = commands.add_parser('reconfigure-catalogue', help='snapshot explicit catalogue/lock/subjects while OFF')
     refresh.add_argument('--config', type=Path, required=True)
+    recipients = commands.add_parser(
+        "reconfigure-test-recipients", help="change bounded sandbox destinations while OFF")
+    recipients.add_argument("--config", type=Path, required=True)
     activation = commands.add_parser(
         "activate", help="explicitly authorize the fixed no-backfill fence and test delivery"
     )
@@ -2088,7 +2124,9 @@ def main():
             else:
                 credentials = read_private(args.credentials) if args.credentials else None
                 installation = Installation(args.directory, credentials)
-                if args.command == 'reconfigure-catalogue':
+                if args.command == 'reconfigure-test-recipients':
+                    result = installation.reconfigure_test_recipients(read_private(args.config))
+                elif args.command == 'reconfigure-catalogue':
                     result = installation.reconfigure_catalogue(json.loads(args.config.read_text()))
                 elif args.command == "activate":
                     result = installation.activate(args.enable_test_delivery)
