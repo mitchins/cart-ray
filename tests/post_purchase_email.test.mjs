@@ -280,3 +280,19 @@ test('legacy mixed-case recipient evidence is retained with and without an allow
    }
  }
 });
+
+
+test('legacy quoted mailbox remains supported without widening explicit allowlists',async()=>{
+ const address='"Buyer"@example.test';
+ const settings={...env,APPROVED_TEST_RECIPIENT:address};
+ const p=provider({email:'"buyer"@EXAMPLE.TEST'});
+ const response=await handle(request({...body,type:'recipient_evidence'}),settings,p.fetch);
+ assert.equal(response.status,200);assert.deepEqual(await response.json(),{email:address});
+ const strict=provider({email:address});
+ assert.equal((await handle(request(),{...settings,...testSettings({addresses:[],domains:['example.test']})},strict.fetch)).status,422);
+});
+test('legacy fallback rejects Unicode before case conversion',async()=>{
+ const p=provider({email:'Kate@example.test'});
+ assert.equal((await handle(request(),{...env,APPROVED_TEST_RECIPIENT:'kate@example.test'},p.fetch)).status,422);
+ assert.equal(p.calls.length,2);
+});

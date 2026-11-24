@@ -18,10 +18,9 @@ function testRecipientPolicy(env) {
   if (!config || typeof config !== 'object' || Array.isArray(config) ||
       Object.keys(config).some(key => key !== 'test_recipient_allowlist')) throw new Error('invalid test policy');
   const policy = config.test_recipient_allowlist;
-  if (policy === undefined) return recipient => {
-    const normalized = normalizedTestAddress(recipient);
-    return normalized !== null && normalized === env.APPROVED_TEST_RECIPIENT.toLowerCase();
-  };
+  if (policy === undefined) return recipient =>
+    typeof recipient === 'string' && /^[\x21-\x7e]{1,254}$/.test(recipient) &&
+    recipient.toLowerCase() === env.APPROVED_TEST_RECIPIENT.toLowerCase();
   if (!policy || Array.isArray(policy) || Object.keys(policy).length !== 2 ||
       !Object.hasOwn(policy,'addresses') || !Object.hasOwn(policy,'domains')) throw new Error('invalid test policy');
   const lists = {};
