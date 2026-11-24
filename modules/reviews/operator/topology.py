@@ -60,7 +60,7 @@ def catalogue_subject_maps(installation, versions=None):
     current = config
     source_version = (versions or {}).get('source')
     if source_version:
-        for index in range(len(releases) - 1, -1, -1):
+        for index in range(len(releases)):
             if releases[index].get('versions', {}).get('source') == source_version:
                 snapshots = snapshots[:index + 1]
                 current = releases[index].get('catalogue_config') or config

@@ -603,6 +603,8 @@ def test_catalogue_rollback_resumes_after_publish_ack_loss(deployed, monkeypatch
     assert install.rollback(0)['database_rewind'] is False
     assert install.state['deployment']['versions'] == first_versions
     assert install.config['subject_map'] == {}
+    install.deploy()
+    assert install.pause()['post_purchase'] == 'already-disabled'
     assert list(db.iterdump()) == before
 
 
@@ -623,6 +625,7 @@ def test_off_resource_binding_upgrade_uses_recorded_shape_then_incoming_shape(de
         page = Path(values['merchant_inputs']) / 'storefront/cart/index.html'
         page.write_text(page.read_text() + f'<!-- revision {index} -->')
         install.reconfigure_catalogue(values)
+        assert install.pause()['post_purchase'] == 'already-disabled'
         build = capture_build(install, f'resource-upgrade-{index}')
         build['resource_config_encoding'] = 'bounded-secrets-v1'
         atomic_json(install.directory / 'releases' / build['commit'] / 'build.json', build)
@@ -654,3 +657,24 @@ def test_pause_reaches_recorded_off_versions_after_resource_handoff_changes(depl
     assert list(db.iterdump()) == before
     with pytest.raises(ValueError, match='cannot decode multipart'):
         install.post_purchase_activate(True)
+
+
+@pytest.mark.parametrize('deployed', ['resources'], indirect=True)
+def test_pause_stops_unacknowledged_activation_after_resource_handoff_changes(deployed):
+    install, api, db = deployed
+    initialise(install, db)
+    before = list(db.iterdump())
+    disabled = dict(install.state['deployment']['post_purchase_disabled_versions'])
+    api.fail_publish = install.name('source')
+    with pytest.raises(CloudError, match='reply lost'):
+        install.post_purchase_activate(True)
+    assert api.version(install.name('source'))['id'] != disabled['source']
+    install.credentials['fulfilment_resources'] = json.dumps({
+        f'resource-{i}': {'provider': 'external', 'url': f'https://example.test/dummy/{i}',
+                         'filename': 'Dummy ' + 'x' * 100} for i in range(100)})
+    api.events.clear()
+    install.pause()
+    assert install.state['post_purchase_modes'] == OFF
+    assert install.state['deployment']['versions'] == disabled
+    assert not any(event[0] == 'upload' for event in api.events)
+    assert list(db.iterdump()) == before

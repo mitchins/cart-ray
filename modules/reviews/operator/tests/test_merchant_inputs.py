@@ -623,3 +623,20 @@ def test_shared_parent_page_preserves_each_offer_action_and_subject_identity(tmp
     page.write_text(page.read_text().replace('<button data-cartray-add="MERCHANT-TWO"></button>', ''))
     with pytest.raises(ValueError, match='purchase action'):
         validate(source, ROOT)
+
+
+def test_recorded_again_old_source_keeps_its_original_manifest_binding(tmp_path):
+    from topology import catalogue_subject_maps
+
+    install = plan_merchant(tmp_path, merchant(tmp_path / 'original'), mapped=True)
+    first = install.catalogue_config()
+    install.state['releases'] = [{'versions': {'source': 'v1'}, 'catalogue_config': first}]
+    values = catalogue_revision(tmp_path / 'replacement')
+    install.reconfigure_catalogue(values)
+    second = install.catalogue_config()
+    install.state['releases'].extend([
+        {'versions': {'source': 'v2'}, 'catalogue_config': second},
+        {'versions': {'source': 'v1'}, 'catalogue_config': first}])
+    original_version = 'sha256:' + 'b' * 64
+    assert catalogue_subject_maps(install, {'source': 'v1'}) == {original_version: first['subject_map']}
+    assert len(catalogue_subject_maps(install, {'source': 'v2'})) == 2

@@ -1640,6 +1640,7 @@ class Installation(PostPurchaseOperator):
                 errors.extend(self.post_purchase_visibility_errors('source'))
             try:
                 deployment, disabled, build = self.post_purchase_runtime()
+                self.check_post_purchase_release(build)
                 self.check_resource_config_compatibility(build)
                 for role in POST_PURCHASE_ROLES:
                     self.artifact_modules(role, build)

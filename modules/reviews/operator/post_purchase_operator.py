@@ -147,7 +147,14 @@ class PostPurchaseOperator:
         self.vault()
         build = json.loads((self.directory / "releases" /
                             deployment.get("release_id", deployment["commit"]) / "build.json").read_text())
-        self.check_post_purchase_release(build)
+        current = self.catalogue_config() if 'merchant_inputs' in self.config else None
+        try:
+            if deployment.get('catalogue_config'):
+                self.use_catalogue_config(deployment['catalogue_config'])
+            self.check_post_purchase_release(build)
+        finally:
+            if current:
+                self.use_catalogue_config(current)
         return deployment, disabled, build
 
     def check_post_purchase_version(self, role, mode, actual, version, email_provider=None, actions_override=None,
@@ -197,7 +204,8 @@ class PostPurchaseOperator:
             raise ValueError(f"{role}: active version is not part of the retained post-purchase transition")
         mode = "disabled" if actual["id"] == disabled else "test"
         self.check_post_purchase_version(role, mode, actual, actual["id"],
-                                         allow_legacy_admission=actual["id"] in {disabled, recorded})
+                                         allow_legacy_admission=(actual["id"] in {disabled, recorded}
+                                                                 or transition["operation"] == "disable"))
         return actual["id"]
 
     def post_purchase_visibility_errors(self, role):
@@ -254,6 +262,7 @@ class PostPurchaseOperator:
         if not isinstance(self.post_purchase_actions(), dict):
             raise ValueError("legacy workflow delivery needs an explicit schema-2 order-confirmation handover")
         deployment, disabled, build = self.post_purchase_runtime()
+        self.check_post_purchase_release(build)
         self.check_resource_config_compatibility(build)
         transition = self.state.get("post_purchase_transition")
         if transition and transition["operation"] != "activate":
