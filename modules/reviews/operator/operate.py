@@ -30,6 +30,7 @@ from post_purchase_operator import (
     validate_email_credential,
 )
 from topology import (
+    catalogue_subject_maps,
     graph,
     post_purchase_secret_bindings,
     review_requests_enabled,
@@ -925,6 +926,10 @@ class Installation(PostPurchaseOperator):
                 if previous['subject_map'][key] != candidate['subject_map'][key]:
                     raise ValueError('an existing product cannot be reassigned to another review subject')
             old_details = {row[0]: row[1:] for row in previous['subject_details']}
+            owners = {row[1].casefold(): row[0] for row in previous['subject_details']}
+            if any(path.casefold() in owners and owners[path.casefold()] != subject
+                   for subject, path, _label in candidate['subject_details']):
+                raise ValueError('a retained canonical path belongs to another review subject')
             if any(subject in old_details and old_details[subject] != [path, label]
                    for subject, path, label in candidate['subject_details']):
                 raise ValueError('an existing review subject cannot change its canonical path or label')
@@ -993,6 +998,7 @@ class Installation(PostPurchaseOperator):
         self.use_catalogue_config(replacement)
         try:
             self.verify_merchant_inputs()
+            catalogue_subject_maps(self)
             if self.has_post_purchase:
                 self.post_purchase_actions()
         except Exception:
@@ -1311,6 +1317,20 @@ class Installation(PostPurchaseOperator):
                 "VALUES (?,'test',?,0,0,0,0) ON CONFLICT DO NOTHING",
                 [store, subject],
             )
+
+    def check_retained_storefront(self, build):
+        output = self.directory / 'releases' / build.get('release_id', build['commit']) / 'storefront'
+        record = output.parent / 'storefront-integrity.json'
+        if (not (output / '.operator-build-complete').is_file() or not record.is_file()
+                or json.loads(record.read_text()).get('sha256') != tree_hash(output)):
+            raise ValueError('retained storefront is missing or changed; rollback cannot regenerate it')
+
+    def check_archived_catalogue(self, release):
+        if (tree_hash(Path(self.config['merchant_inputs'])) != release.get('merchant_inputs_sha256')
+                or self.merchant_config_hash() != release.get('merchant_config_sha256')
+                or digest(Path(self.config['preflight_lock']).read_bytes()) != release.get('merchant_lock_sha256')):
+            raise ValueError('retained catalogue snapshot differs from its release fingerprints')
+        self.check_retained_storefront(release)
 
     def deploy_storefront(self, build):
         output = self.directory / "releases" / build.get("release_id", build["commit"]) / "storefront"
@@ -1736,12 +1756,13 @@ class Installation(PostPurchaseOperator):
             raise ValueError("rollback schema/key contract is incompatible; databases are never rewound")
         if release.get('catalogue_config'):
             self.use_catalogue_config(release['catalogue_config'])
-            self.verify_merchant_inputs()
         elif 'merchant_inputs' in self.config:
             if (release.get('merchant_inputs_sha256') != self.config['merchant_inputs_sha256']
                     or release.get('merchant_config_sha256') != self.merchant_config_hash()
                     or release.get('merchant_lock_sha256') != digest(Path(self.config['preflight_lock']).read_bytes())):
                 raise ValueError('rollback catalogue snapshot is unavailable or incompatible; retain current inputs')
+        if "merchant_inputs" in self.config:
+            self.check_archived_catalogue(release)
         versions = release["versions"]
         release_sending = release.get("sending", bool(release.get("record_revision", 0)))
         reviews_authorized = (self.state.get("activation_authorized")
@@ -1750,14 +1771,14 @@ class Installation(PostPurchaseOperator):
             raise ValueError("rollback release is incompatible with the current Reviews activation state")
         if self.has_post_purchase:
             self.vault()
-            self.verify_merchant_inputs()
             self.check_post_purchase_release(release)
             if release.get("post_purchase_modes") != OFF or set(versions) != set(self.roles):
                 raise ValueError("post-purchase rollback requires a recorded compatible OFF release")
             for role in POST_PURCHASE_ROLES:
                 self.artifact_modules(role, release)
                 actual = self.api.request(f"workers/scripts/{self.name(role)}/versions/{versions[role]}")
-                self.check_post_purchase_version(role, "disabled", actual, versions[role])
+                self.check_post_purchase_version(role, "disabled", actual, versions[role],
+                                                 allow_legacy_admission=True)
             self.check_current_post_purchase_off(
                 versions if self.state["phase"] == "rolling-back" else None)
         self.state["phase"] = "rolling-back"
@@ -1776,7 +1797,8 @@ class Installation(PostPurchaseOperator):
         if self.has_post_purchase:
             visibility_errors.extend(self.worker_visibility_errors("post-purchase"))
             for role in POST_PURCHASE_ROLES:
-                self.check_post_purchase_version(role, "disabled", self.api.version(self.name(role)), versions[role])
+                self.check_post_purchase_version(role, "disabled", self.api.version(self.name(role)), versions[role],
+                                                 allow_legacy_admission=True)
         if visibility_errors:
             raise ValueError("; ".join(visibility_errors))
         self.deploy_storefront(release)

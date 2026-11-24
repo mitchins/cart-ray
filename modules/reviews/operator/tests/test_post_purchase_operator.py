@@ -566,9 +566,17 @@ def test_catalogue_rollback_resumes_after_publish_ack_loss(deployed, monkeypatch
     install, api, db = deployed
     first = install.state['releases'][0]
     first['catalogue_config'] = install.catalogue_config()
+    original_lock = Path(install.config['preflight_lock']).read_bytes()
+    retained = install.directory / 'inputs/retained-first-lock.json'
+    retained.write_bytes(original_lock)
+    first['catalogue_config']['preflight_lock'] = 'inputs/retained-first-lock.json'
     first_versions = dict(first['versions'])
     replacement = {**install.catalogue_config(), 'subject_map': {'EP-UAT-171': 'subject-one'},
                    'subject_details': [['subject-one', '/products/one/', 'Product']]}
+    revised_lock = json.loads(original_lock)
+    revised_lock['catalogue_version'] = 'sha256:' + 'c' * 64
+    atomic_json(install.directory / 'inputs/second-lock.json', revised_lock)
+    replacement['preflight_lock'] = 'inputs/second-lock.json'
     install.use_catalogue_config(replacement)
     capture_build(install, 'second')
     install.deploy()

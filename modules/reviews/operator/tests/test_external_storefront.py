@@ -167,6 +167,7 @@ def test_doctor_accepts_private_visibility_and_pages_default_is_unchanged(tmp_pa
 
 
 def pin_rollback_inputs(installation):
+    installation.check_retained_storefront = lambda release: None
     installation.state['releases'][0].update(
         merchant_inputs_sha256=installation.config['merchant_inputs_sha256'],
         merchant_config_sha256=installation.merchant_config_hash(),

@@ -152,7 +152,7 @@ class PostPurchaseOperator:
 
     def check_post_purchase_version(self, role, mode, actual, version, email_provider=None, actions_override=None,
                                     allow_legacy_admission=False):
-        nodes, _ = graph(self, post_purchase_modes={role: mode}, email_provider=email_provider,
+        nodes, _ = graph(self, {role: version}, post_purchase_modes={role: mode}, email_provider=email_provider,
                          actions_override=actions_override)
         errors = self.worker_binding_errors(role, nodes[role], actual, version)
         if allow_legacy_admission:

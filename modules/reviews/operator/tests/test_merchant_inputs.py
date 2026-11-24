@@ -13,7 +13,7 @@ import pytest
 MODULE = Path(__file__).resolve().parents[1]
 ROOT = MODULE.parents[2]
 sys.path.insert(0, str(MODULE))
-from merchant_inputs import commerce_build_hash, javascript_json, snapshot, validate  # noqa: E402
+from merchant_inputs import commerce_build_hash, javascript_json, snapshot, tree_hash, validate  # noqa: E402
 from operate import Installation  # noqa: E402
 from topology import graph  # noqa: E402
 
@@ -495,6 +495,13 @@ def test_same_source_rebuild_retains_both_catalogues_and_rollback_storefront(tmp
     first = install.build()
     first_path = install.directory / 'releases' / first['release_id'] / 'build.json'
     first_bytes = first_path.read_bytes()
+    # A completed release retains its actually published storefront bytes.
+    for_build = install.directory / 'releases' / first['release_id']
+    (for_build / 'storefront').mkdir()
+    (for_build / 'storefront/.operator-build-complete').write_text(first['commit'])
+    (for_build / 'storefront/index.html').write_text('retained catalogue ONE')
+    (for_build / 'storefront-integrity.json').write_text(json.dumps({
+        'sha256': tree_hash(for_build / 'storefront')}))
     values = catalogue_revision(tmp_path / 'replacement')
     install.reconfigure_catalogue(values)
     second = install.build()
@@ -515,6 +522,8 @@ def test_same_source_rebuild_retains_both_catalogues_and_rollback_storefront(tmp
         install.rollback(0)
     assert published == []
     install.state['releases'][0]['catalogue_config'] = target_config
+    monkeypatch.setattr('operate.validate_merchant_inputs', lambda *args: pytest.fail(
+        'archived rollback must not validate clients against the current checkout'))
     install.rollback(0)
     assert published == ['v1']
     assert storefront == [(first['release_id'], {'MERCHANT-ONE': 'product-one'})]
@@ -541,3 +550,35 @@ def test_removed_subject_identity_cannot_be_reinterpreted_when_reintroduced(tmp_
     with pytest.raises(ValueError, match='existing'):
         install.reconfigure_catalogue(values)
     assert install.state_path.read_bytes() == before
+
+
+def test_retired_subject_path_cannot_be_claimed_by_a_new_subject(tmp_path):
+    install = plan_merchant(tmp_path, merchant(tmp_path / 'original'), mapped=True)
+    previous = install.catalogue_config()
+    install.state['releases'] = [{'commit': 'old', 'catalogue_config': previous}]
+    install.use_catalogue_config({**previous, 'subject_map': {}, 'subject_details': []})
+    candidate = {**install.config, 'subject_map': {'MERCHANT-TWO': 'product-two'},
+                 'subject_details': [['product-two', '/products/one/', 'New product']]}
+    with pytest.raises(ValueError, match='retained canonical path'):
+        install.check_catalogue_subjects(candidate)
+
+
+def test_catalogue_bindings_keep_prior_order_manifest_mappings(tmp_path):
+    from topology import catalogue_subject_maps
+
+    install = plan_merchant(tmp_path, merchant(tmp_path / 'original'), mapped=True)
+    original = install.catalogue_config()
+    install.state['releases'] = [{'commit': 'old', 'versions': {'source': 'v1'}, 'catalogue_config': original}]
+    values = catalogue_revision(tmp_path / 'replacement')
+    install.reconfigure_catalogue(values)
+    mappings = catalogue_subject_maps(install)
+    original_version = 'sha256:' + 'b' * 64
+    new_version = json.loads(Path(install.config['preflight_lock']).read_text())['catalogue_version']
+    assert mappings[original_version] == {'MERCHANT-ONE': 'product-one'}
+    assert mappings[new_version] == values['subject_map']
+    assert catalogue_subject_maps(install, {'source': 'v1'}) == {original_version: original['subject_map']}
+    install.use_catalogue_config({**install.catalogue_config(), 'subject_map': {}, 'subject_details': []})
+    install.state['releases'].append({'catalogue_config': {**install.catalogue_config(),
+                                                        'subject_map': values['subject_map']}})
+    with pytest.raises(ValueError, match='one catalogue version'):
+        catalogue_subject_maps(install)
