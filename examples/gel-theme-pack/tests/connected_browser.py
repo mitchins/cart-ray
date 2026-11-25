@@ -262,9 +262,12 @@ def main():
                 page.screenshot(path=str(shots / f"connected-{prefix}{engine}-withdraw-result-mobile.png"))
                 for action, width in [("edit", 390), ("edit", 320), ("edit", 1440), ("withdraw", 320)]:
                     page.set_viewport_size({"width": width, "height": 844})
+                    reads_before = sum(url.endswith('/read') for url in requests)
+                    page.goto('about:blank')  # One fresh document; do not interrupt a second load with reload().
                     page.goto(args.origin + "/review/manage.html#review=" + token + "&token=" + "b" * 64)
-                    page.reload()  # The same fragment URL otherwise keeps the previous terminal document.
                     page.wait_for_selector('input[name="rating-stars"]')
+                    check(engine + " one management read per fixture " + action + str(width),
+                          sum(url.endswith('/read') for url in requests) == reads_before + 1)
                     long_management_page()
                     if action == "edit":
                         page.locator('[data-cr-action=edit]').click()
@@ -348,7 +351,9 @@ def main():
                     pending[2].fulfill(json=value)
                     page.wait_for_selector("#content textarea")
                     page.locator("#content textarea").fill("Keep this new draft")
-                    pending[1].fulfill(status=503, json={"error": "late failure"})
+                    with page.expect_response(lambda response: response.status == 503) as late:
+                        pending[1].fulfill(status=503, json={"error": "late failure"})
+                    late.value.finished()
                     page.evaluate("document.readyState")
                     check(
                         engine + " late retry cannot erase edited form " + mode,
