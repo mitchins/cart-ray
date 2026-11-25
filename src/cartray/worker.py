@@ -31,6 +31,7 @@ from cartray.order_access import (
     resolve_configured_resource,
     resource_config_from_environment,
 )
+from cartray.order_access_presentation import render_order_access_page
 from cartray.post_purchase import OrderReceiptDispatcher, drain_confirmed_d1
 from cartray.reconciliation import StripeReconciliationService
 from cartray.settlement import StripeSettlementService
@@ -52,43 +53,7 @@ MAX_CHECKOUT_BODY_BYTES = 16_384
 _BROWSER_ROUTES = {"/catalogue": "GET", "/checkout": "POST", "/checkout-status": "GET"}
 _CHECKOUT_SESSION_ID_RE = re.compile(r"^cs_[A-Za-z0-9_]+$")
 _STATUS_UNAVAILABLE = "checkout status unavailable"
-ORDER_ACCESS_PAGE = """<!doctype html><html lang="en"><meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1"><title>Your order</title>
-<h1>Your order</h1><main id="content" aria-live="polite">Loading your order…</main>
-<noscript>JavaScript is required to view your order.</noscript>
-<script>
-(async () => {
-  const content = document.getElementById('content');
-  const token = new URLSearchParams(location.hash.slice(1)).get('token');
-  if (!token || !/^[A-Za-z0-9_-]{43}$/.test(token)) { content.textContent = 'This order link is unavailable.'; return; }
-  try {
-    const response = await fetch(location.pathname, {method:'POST', headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({token}), credentials:'omit', cache:'no-store'});
-    if (!response.ok) throw new Error();
-    const data = await response.json(); content.replaceChildren();
-    if (data.reviews) {
-      const link = document.createElement('a'); link.href = data.reviews.url;
-      link.textContent = 'Review your purchased products'; content.append(link);
-    }
-    for (const item of data.items) {
-      const section = document.createElement('section'), heading = document.createElement('h2');
-      heading.textContent = item.title; section.append(heading);
-      const quantity = document.createElement('p'); quantity.textContent = `Quantity: ${item.quantity}`;
-      section.append(quantity);
-      for (const resource of item.resources) {
-        const form = document.createElement('form'); form.method = 'post'; form.action = location.pathname;
-        for (const [name, value] of [['token', token], ['resource', resource.index]]) {
-          const input = document.createElement('input'); input.type = 'hidden'; input.name = name; input.value = value;
-          form.append(input);
-        }
-        const button = document.createElement('button'); button.textContent = resource.name;
-        button.disabled = !resource.available; form.append(button); section.append(form);
-      }
-      content.append(section);
-    }
-  } catch { content.textContent = 'Your order is temporarily unavailable. Please try again later.'; }
-})();
-</script></html>"""
+
 
 
 class CorsRejected(Exception):
@@ -210,7 +175,9 @@ def create_app(
             ):
                 raise ValueError("unavailable")
             if request.method == "GET":
-                return Response(ORDER_ACCESS_PAGE, headers={**headers, "Content-Type": "text/html; charset=utf-8"})
+                page, policy = render_order_access_page(request.env)
+                return Response(page, headers={**headers, "Content-Security-Policy": policy,
+                                               "Content-Type": "text/html; charset=utf-8"})
             content_type = (_request_header(request, "content-type") or "").split(";", 1)[0].lower()
             length = _request_header(request, "content-length")
             if length is None or not length.isdigit() or int(length) > 1024:

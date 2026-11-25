@@ -29,6 +29,7 @@ def install(
     category_links: list[tuple[str, str]] | None = None,
     catalogue_path: str = "/shop/",
     review_subjects: dict[str, str] | None = None,
+    order_access_presentation: dict | None = None,
 ):
     """Install shared cart/return UI; offers are presentation only, never checkout authority."""
     if not offers or len({offer["product_key"] for offer in offers}) != len(offers):
@@ -130,6 +131,9 @@ def install(
         "reviewInvitationsEnabled": False,
     }
     api = json.dumps(api_origin, ensure_ascii=True) if api_origin else "location.origin"
+    if order_access_presentation is not None:
+        from cartray.order_access_presentation import validate_order_presentation
+        storefront['orderAccessPresentation'] = validate_order_presentation(order_access_presentation)
     (output / "storefront-config.js").write_text(
         "window.CARTRAY_STOREFRONT = "
         + json.dumps(storefront, ensure_ascii=True)

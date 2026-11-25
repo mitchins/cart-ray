@@ -3,8 +3,12 @@
 import hashlib
 import json
 import re
+from pathlib import Path
+
+from merchant_inputs import javascript_json
 
 from cartray.order_access import resource_config_bindings
+from cartray.order_access_presentation import order_presentation_binding
 
 SUBJECTS = {"ACORN-KIT": "acorn-growing-kit", "ACORN-PLANTER": "woodland-planter"}
 
@@ -221,6 +225,11 @@ def graph(
                 EMAIL_PROVIDER="cloudflare", CLOUDFLARE_EMAIL_ACCOUNT_ID=config["account_id"]
             )
     if "fulfilment" in config:
+        if 'merchant_inputs' in config:
+            site = Path(config['merchant_inputs']) / 'storefront/storefront-config.js'
+            presentation = javascript_json(site, 'window.CARTRAY_STOREFRONT = ').get('orderAccessPresentation')
+            if presentation is not None:
+                nodes['source']['vars']['CARTRAY_ORDER_ACCESS_PRESENTATION'] = order_presentation_binding(presentation)
         nodes["source"]["vars"].update(
             CARTRAY_ORDER_ACCESS_MODE="test",
             CARTRAY_ORDER_ACCESS_PATH=config.get("source_api_path", "") + "/order-access",

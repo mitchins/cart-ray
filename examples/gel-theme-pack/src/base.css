@@ -19,3 +19,10 @@
 
 /* Shared product gallery retains a stable stage across every theme and viewport. */
 .product-detail>.detail-art{min-width:0;align-self:start}.gallery-stage{position:relative;aspect-ratio:10/9;background:var(--color-panel);display:grid;place-items:center;overflow:hidden;border-radius:var(--card-radius)}.detail-art .gallery-stage>img{width:100%;height:100%;max-height:none;object-fit:contain;position:absolute;inset:0}.gallery-stage>p{padding:24px;text-align:center;color:var(--color-subtle)}.gallery-thumbnails{display:flex;flex-wrap:wrap;gap:10px;padding:12px 4px 4px}.gallery-thumbnail{width:72px;height:66px;min-height:44px;padding:3px;border:2px solid transparent;background:var(--color-panel);color:var(--color-ink);border-radius:var(--gel-radius);overflow:hidden}.gallery-thumbnail[aria-pressed=true]{border-color:var(--color-action)}.detail-art .gallery-thumbnail img{width:100%;height:100%;max-height:none;object-fit:contain}.gallery-thumbnail:focus-visible{outline:3px solid var(--color-focus);outline-offset:2px}
+/* Stable native-client presentation hooks, shared across merchant themes. */
+.cr-actions{display:flex;flex-wrap:wrap;gap:12px;margin-top:20px}.cr-actions>.cr-button{margin:0}
+.cr-button--secondary{background:transparent;color:var(--color-action)}
+.cr-button--danger{background:var(--color-error);border-color:var(--color-error);color:#fff}
+.cr-feedback{overflow-wrap:anywhere}.cr-field{min-width:0}.cr-field input,.cr-field textarea{max-width:100%}
+.cr-review{padding-block:24px;border-bottom:1px solid var(--color-rule)}
+.cr-review-reply{margin:16px 0 0 16px;padding:12px 16px;border-left:3px solid var(--color-rule)}
