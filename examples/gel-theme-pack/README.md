@@ -174,7 +174,8 @@ commerce catalogue, through a separate approved update.
 A changed cap reconciles only an editable cart. Frozen uncertain checkout attempts
 retain the exact original items, permission and retry identity. After a definitive
 400 releases that attempt, the editable cart is reconciled before a new request.
-Confirmed-return snapshots are compared before any new presentation cap is applied.
+Return polling applies no presentation caps and performs only the existing
+authoritative matching-cart clear. The next editable cart visit applies its cap.
 Neither the pending snapshot nor the authoritative receipt is rewritten.
 
 Confirmation labels show friendly catalogue titles without internal product keys;

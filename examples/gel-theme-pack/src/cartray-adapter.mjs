@@ -112,15 +112,8 @@ export async function createAdapter(config) {
       const view=result.state==='confirmed'?confirmedCheckoutView(result.cleared,result.receipt,products):result.state==='expired'?expiredCheckoutView():unconfirmedCheckoutView(result.state);
       this.checkoutLocked=view.checkoutLocked;
       if(result.cleared)revision=0;
-      if(!this.checkoutLocked && !this.attemptPending){
-        // Polling may outlive another tab's cart edits. Start from the state core just checked.
-        if(storage){
-          const latest=loadPersistedCart(storage,catalogue);
-          cart.clear();for(const [key,quantity] of latest.cart)cart.set(key,quantity);
-          revision=latest.revision;
-        }
-        reconcileEditableCart();
-      }
+      // Return polling never reapplies cart preferences: another tab may own newer/frozen state.
+      // The next editable cart load applies its presentation cap before showing controls.
       if(result.state==='confirmed'||result.state==='expired')history.replaceState(null,'',location.pathname);
       returnResult={state:result.state||'unavailable',...view};return returnResult;
     },

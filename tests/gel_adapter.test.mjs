@@ -185,7 +185,7 @@ test('legacy theme preview maximum does not silently narrow connected commerce',
  adapter.add('ACORN-KIT');adapter.quantity('ACORN-KIT',3);assert.equal(adapter.count(),3);
 });
 
-test('return cap reconciliation preserves a newer tab cart and avoids unchanged writes',async()=>{
+test('return polling preserves newer tab cart until its next editable visit',async()=>{
  for(const quantity of [1,2]){
   const {storage}=setup('?checkout=complete&session_id=cs_test_match');
   const initial={catalogueVersion:catalogue.version,revision:7,items:[['ACORN-KIT',2]]};
@@ -199,11 +199,38 @@ test('return cap reconciliation preserves a newer tab cart and avoids unchanged 
    storage.setItem('cartray.cart.v1',newer);
    return {state:'confirmed'};
   }});
-  const adapter=await createAdapter(limited);await adapter.returnState();
+  let adapter=await createAdapter(limited);await adapter.returnState();
+  assert.equal(storage.getItem('cartray.cart.v1'),newer);
+  globalThis.location={search:'',pathname:'/cart/'};
+  adapter=await createAdapter(limited);
   assert.deepEqual(adapter.getCart().map(p=>[p.product_key,p.quantity]),[['ACORN-KIT',1],['SECOND',1]]);
   const saved=JSON.parse(storage.getItem('cartray.cart.v1'));
   assert.deepEqual(saved.items,[['ACORN-KIT',1],['SECOND',1]]);
   assert.equal(saved.revision,quantity===1?9:10);
   if(quantity===1)assert.equal(storage.getItem('cartray.cart.v1'),newer);
  }
+});
+
+test('return polling cannot rewrite another tab frozen checkout attempt',async()=>{
+ const {storage}=setup('?checkout=complete&session_id=cs_test_match');
+ const initial={catalogueVersion:catalogue.version,revision:7,items:[['ACORN-KIT',2]]};
+ storage.setItem('cartray.cart.v1',JSON.stringify(initial));
+ storage.setItem('cartray.pending-checkout.v1',JSON.stringify({...initial,sessionId:'cs_test_match'}));
+ const withOther={...catalogue,products:[...catalogue.products,{...catalogue.products[0],product_key:'SECOND'}]};
+ const newer={catalogueVersion:catalogue.version,revision:9,items:[['ACORN-KIT',2],['SECOND',1]]};
+ const frozen=JSON.stringify({...newer,requestId:'checkout_'+ 'b'.repeat(32),permission:false,wordingVersion:'review-invitation-v3'},null,2);
+ const cartBytes=JSON.stringify(newer,null,2);
+ globalThis.fetch=async url=>({ok:true,json:async()=>{
+  if(String(url).endsWith('/catalogue'))return withOther;
+  storage.setItem('cartray.cart.v1',cartBytes);storage.setItem('cartray.checkout-attempt.v1',frozen);
+  return {state:'confirmed'};
+ }});
+ let adapter=await createAdapter(limited);await adapter.returnState();
+ assert.equal(storage.getItem('cartray.cart.v1'),cartBytes);
+ assert.equal(storage.getItem('cartray.checkout-attempt.v1'),frozen);
+ globalThis.location={search:'',pathname:'/cart/'};adapter=await createAdapter(limited);
+ assert.equal(adapter.attemptPending,true);assert.equal(adapter.state.permission,false);
+ assert.equal(adapter.quantity('ACORN-KIT',1),false);assert.equal(adapter.add('SECOND'),false);
+ assert.equal(storage.getItem('cartray.cart.v1'),cartBytes);
+ assert.equal(storage.getItem('cartray.checkout-attempt.v1'),frozen);
 });
