@@ -30,7 +30,7 @@ export async function createAdapter(config) {
   // Theme content contributes presentation only, never a price, product identity or review entitlement.
   const products=catalogue.products.map(p=>{
     const presentation=local.get(p.product_key) || {};
-    const cap=presentation.max_quantity;
+    const cap=presentation.cart_quantity_limit;
     if(cap!==undefined && (!Number.isSafeInteger(cap) || cap<1 || cap>100))
       throw new Error('Invalid product presentation quantity limit.');
     return {...presentation,...p,max_quantity:Math.min(p.max_quantity,cap ?? p.max_quantity),images:Array.isArray(p.images)?p.images:[],image:p.image_url || presentation.image,image_alt:p.image_alt || presentation.image_alt || '',

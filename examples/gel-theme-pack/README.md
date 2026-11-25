@@ -159,11 +159,12 @@ host owns any independently sourced structured-data graph outside that contract.
 
 ## Per-product cart presentation limits
 
-An optional `max_quantity` on a product in `window.CARTRAY_THEME.catalogue.products`
+An optional `cart_quantity_limit` on a product in `window.CARTRAY_THEME.catalogue.products`
 (and on each `connected_flows.install()` offer) is a **client presentation cap**.
 Values are integers 1–100. Omit it to retain the authoritative catalogue maximum;
-the effective client limit is always the smaller of the two. The existing full
-theme catalogue format already requires this field. A value 1 renders a read-only
+the effective client limit is always the smaller of the two. Existing full-theme
+`max_quantity` preview metadata retains its original meaning and never silently
+narrows a connected merchant. A value 1 renders a read-only
 quantity instead of a stepper and repeated add stays at one. Configure only the
 merchant's classified download offers; consulting quantities are independent.
 This does not change the server maximum or prevent a direct API request that the

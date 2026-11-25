@@ -368,8 +368,8 @@ def main():
                     route.fulfill(response=response, body=response.text() +
                         "\n{const keys=" + json.dumps(keys) + ";"
                         "for(const p of window.CARTRAY_THEME.catalogue.products){"
-                        "if(p.product_key===keys[0])p.max_quantity=1;"
-                        "if(p.product_key===keys[1])delete p.max_quantity;}}")
+                        "if(p.product_key===keys[0])p.cart_quantity_limit=1;"
+                        "if(p.product_key===keys[1])delete p.cart_quantity_limit;}}")
 
                 page.route("**/storefront-config.js", policy_source)
                 page.route("**/site-config.js", policy_theme)

@@ -127,15 +127,15 @@ test('pre-upgrade attempt retains the original configured v2 request on retry',a
   await adapter.checkout();assert.equal(adapter.attemptPending,false);
 });
 
-const limited={...presentation,catalogue:{products:[{...presentation.catalogue.products[0],max_quantity:1}]}};
+const limited={...presentation,catalogue:{products:[{...presentation.catalogue.products[0],cart_quantity_limit:1}]}};
 test('per-product presentation cap narrows quantity without raising server authority',async()=>{
  setup();let adapter=await createAdapter(limited);
  adapter.add('ACORN-KIT');adapter.add('ACORN-KIT');adapter.quantity('ACORN-KIT',99);
  assert.equal(adapter.count(),1);assert.equal(adapter.products[0].max_quantity,1);
- adapter=await createAdapter({...presentation,catalogue:{products:[{...limited.catalogue.products[0],max_quantity:10}]}});
+ adapter=await createAdapter({...presentation,catalogue:{products:[{...limited.catalogue.products[0],cart_quantity_limit:10}]}});
  adapter.quantity('ACORN-KIT',99);assert.equal(adapter.count(),3);
- for(const max_quantity of [0,-1,1.5,true,101,null])
-  await assert.rejects(createAdapter({...presentation,catalogue:{products:[{...limited.catalogue.products[0],max_quantity}]}}));
+ for(const cart_quantity_limit of [0,-1,1.5,true,101,null])
+  await assert.rejects(createAdapter({...presentation,catalogue:{products:[{...limited.catalogue.products[0],cart_quantity_limit}]}}));
 });
 test('new cap reconciles editable restored cart but does not rewrite a pending snapshot',async()=>{
  const {storage}=setup();
@@ -178,4 +178,9 @@ test('definitive rejection releases old cap only after preserving the frozen att
  assert.equal(requests[0].items[0].quantity,2);assert.equal(adapter.count(),1);assert.equal(adapter.attemptPending,false);
  await adapter.checkout();assert.equal(requests[1].items[0].quantity,1);
  assert.notEqual(requests[0].checkout_request_id,requests[1].checkout_request_id);
+});
+
+test('legacy theme preview maximum does not silently narrow connected commerce',async()=>{
+ setup();const adapter=await createAdapter({...presentation,catalogue:{products:[{...presentation.catalogue.products[0],max_quantity:1}]}});
+ adapter.add('ACORN-KIT');adapter.quantity('ACORN-KIT',3);assert.equal(adapter.count(),3);
 });

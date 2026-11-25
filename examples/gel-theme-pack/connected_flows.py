@@ -63,8 +63,8 @@ def install(
             or any(part in (".", "..") for part in offer["image"].split("/"))
             or not isinstance(offer["image_alt"], str)
             or not isinstance(offer["category"], str)
-            or ("max_quantity" in offer and (type(offer["max_quantity"]) is not int
-                                             or not 1 <= offer["max_quantity"] <= 100))
+            or ("cart_quantity_limit" in offer and (type(offer["cart_quantity_limit"]) is not int
+                                             or not 1 <= offer["cart_quantity_limit"] <= 100))
         ):
             raise ValueError("invalid connected offer presentation")
         source_ids.add(str(offer["source_id"]))
@@ -107,7 +107,7 @@ def install(
             "image": offer["image"],
             "image_alt": offer["image_alt"],
             "category": offer["category"],
-            **({"max_quantity": offer["max_quantity"]} if "max_quantity" in offer else {}),
+            **({"cart_quantity_limit": offer["cart_quantity_limit"]} if "cart_quantity_limit" in offer else {}),
         }
         for offer in offers
     ]
