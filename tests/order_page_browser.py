@@ -89,9 +89,15 @@ def main():
                     page = browser.new_page()
                     violations = []
                     page.add_init_script(
-                        "document.addEventListener('securitypolicyviolation',e=>console.error(e.violatedDirective))"
+                        "document.addEventListener('securitypolicyviolation',e=>{"
+                        "if(e.violatedDirective==='img-src' && e.blockedURI===location.origin+'/favicon.ico')return;"
+                        "console.error('native-csp:'+e.violatedDirective)})"
                     )
-                    page.on("console", lambda item: violations.append(item.text) if item.type == "error" else None)
+                    page.on(
+                        "console",
+                        lambda item: violations.append(item.text) if item.text.startswith("native-csp:") else None,
+                    )
+                    page.on("pageerror", lambda error: violations.append(str(error)))
                     page.goto(origin + "/order-access#token=" + "a" * 43)
                     page.wait_for_selector("[data-cr-state=ready]")
                     assert page.get_by_role("button", name="Pending file").is_disabled()

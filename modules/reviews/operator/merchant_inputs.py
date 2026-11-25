@@ -11,6 +11,8 @@ from cartray.fingerprints import fingerprint_entries
 from cartray.merchant_contract import merchant_path, product_route_groups, register_path
 from cartray.order_access_presentation import validate_order_presentation
 
+STOREFRONT_CONFIG_PREFIX = 'window.CARTRAY_STOREFRONT = '
+
 CORE_CLIENT_FILES = {
         "theme/core-storefront.js": "storefront/app.js",
         "theme/cartray-adapter.mjs": "examples/gel-theme-pack/src/cartray-adapter.mjs",
@@ -140,7 +142,7 @@ def validate(root, repo):
     if (not keys or len(set(keys)) != len(keys)
             or any(not re.fullmatch(r"[A-Z0-9][A-Z0-9_-]{0,63}", x or "") for x in keys)):
         raise ValueError("invalid merchant commerce product identities")
-    config = javascript_json(site / "storefront-config.js", "window.CARTRAY_STOREFRONT = ")
+    config = javascript_json(site / "storefront-config.js", STOREFRONT_CONFIG_PREFIX)
     theme = javascript_json(site / "site-config.js", "window.CARTRAY_THEME = ")
     if (config.get("previewCatalogue") is not None or config.get("checkoutEnabled") is not True
             or not isinstance(config.get("productPaths"), dict) or set(config["productPaths"]) != set(keys)

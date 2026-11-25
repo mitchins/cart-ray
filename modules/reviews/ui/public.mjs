@@ -83,7 +83,10 @@ export function createSummaryReader({fetchImpl = fetch, maxAgeMs = 30000, now = 
   }
   function invalidate(subject) {
     for (const [key,job] of entries) if (subject===undefined || subject===key) {
-      entries.delete(key); const index=queue.indexOf(job);if(index>=0)queue.splice(index,1); if (!job.settled) { job.controller.abort(); job.reject(new Error('Reviews invalidated')); }
+      entries.delete(key);
+      const index=queue.indexOf(job);
+      if(index>=0){queue.splice(index,1);}
+      if (!job.settled) { job.controller.abort(); job.reject(new Error('Reviews invalidated')); }
     }
   }
   return {
@@ -107,7 +110,8 @@ export function createSummaryReader({fetchImpl = fetch, maxAgeMs = 30000, now = 
       return new Promise((resolve,reject)=>{
         let finished=false;
         const finish=()=>{
-          if(finished)return; finished=true;job.users--;signal?.removeEventListener('abort',abort);
+          if(finished){return;}
+          finished=true;job.users--;signal?.removeEventListener('abort',abort);
           if(!job.users && !job.settled && entries.get(subject)===job){
             entries.delete(subject);const index=queue.indexOf(job);if(index>=0)queue.splice(index,1);
             job.controller.abort();job.reject(new DOMException('Aborted','AbortError'));
@@ -173,8 +177,9 @@ export function reviewSummaryText(summary) {
   validatedSummary(summary,summary?.subject_id);
   const count=summary.contribution_count, rating=summary.rating;
   const contributions=`${count} ${count===1?'contribution':'contributions'}`;
-  return rating.rated_count ? `${rating.average} out of 5 · ${rating.rated_count} ${rating.rated_count===1?'rating':'ratings'} · ${contributions}`
-    : `No ratings yet · ${contributions}`;
+  const label=rating.rated_count===1?'rating':'ratings';
+  if (!rating.rated_count)return `No ratings yet · ${contributions}`;
+  return `${rating.average} out of 5 · ${rating.rated_count} ${label} · ${contributions}`;
 }
 
 function line(doc, tag, text, parent, className="") { const node = doc.createElement(tag); node.className=className; node.textContent = text; parent.append(node); return node; }
@@ -189,7 +194,8 @@ export function renderContribution(item, parent, doc, budget) {
     node.className = next.root ? 'cr-review' : 'cr-review-reply';
     if (next.root) {
       if (typeof value.title === 'string' && value.title) line(doc, 'h3', value.title, node);
-      line(doc, 'p', `${value.author || 'Anonymous'}${Number.isInteger(value.rating) && value.rating >= 1 && value.rating <= 5 ? ` · ${value.rating} of 5 stars` : ''}`, node, 'cr-review-author');
+      const stars=Number.isInteger(value.rating) && value.rating>=1 && value.rating<=5 ? ` · ${value.rating} of 5 stars` : '';
+      line(doc, 'p', (value.author || 'Anonymous') + stars, node, 'cr-review-author');
       if (value.verification === 'cartray_verified_acquisition') line(doc, 'p', 'Verified purchase', node, 'cr-review-verification');
       line(doc, 'p', value.body, node, 'cr-review-body');
     } else {
@@ -220,7 +226,8 @@ export function attachReviews(config, doc = document) {
     if(cursor===null)announce('loading');
     try {
       const result = await reviewsPage(subject, cursor, snapshot, fetch, {signal:requestController.signal});
-      if(selected!==generation)return;lastRead=Date.now();
+      if(selected!==generation){return;}
+      lastRead=Date.now();
       const fragment = doc.createDocumentFragment();
       const budget = { remaining: 220 }; // 200 historical + 10 native reviews + their replies.
       for (const item of result.page.contributions) renderContribution(item, fragment, doc, budget);

@@ -20,6 +20,7 @@ from cloud import API, CloudError, stripe
 from merchant_inputs import (
     CORE_CLIENT_FILES,
     REVIEW_CLIENT_FILES,
+    STOREFRONT_CONFIG_PREFIX,
     ConnectedShell,
     commerce_build_hash,
     javascript_json,
@@ -817,7 +818,7 @@ class Installation(PostPurchaseOperator):
         if validate_merchant_inputs(source, ROOT) != self.config.get("merchant_inputs_sha256"):
             raise ValueError("merchant inputs changed; restore the recorded snapshot before building or deploying")
         site = source / "storefront"
-        storefront = javascript_json(site / "storefront-config.js", "window.CARTRAY_STOREFRONT = ")
+        storefront = javascript_json(site / "storefront-config.js", STOREFRONT_CONFIG_PREFIX)
         if storefront.get("storeName") != self.config["merchant_name"]:
             raise ValueError("merchant storefront identity differs from installation")
         cart = ConnectedShell()
@@ -944,9 +945,9 @@ class Installation(PostPurchaseOperator):
                 shutil.copyfile(ROOT / original, candidate / 'storefront' / target)
             if branding is not None:
                 path = candidate / 'storefront/storefront-config.js'
-                config = javascript_json(path, 'window.CARTRAY_STOREFRONT = ')
+                config = javascript_json(path, STOREFRONT_CONFIG_PREFIX)
                 config['orderAccessPresentation'] = branding
-                replace_javascript_json(path, 'window.CARTRAY_STOREFRONT = ', config)
+                replace_javascript_json(path, STOREFRONT_CONFIG_PREFIX, config)
             if tree_hash(candidate / 'commerce') != tree_hash(source / 'commerce') or tree_hash(source) != expected:
                 raise ValueError('merchant commerce data changed during client refresh')
             self.update_merchant_inputs(candidate)
@@ -1446,14 +1447,14 @@ class Installation(PostPurchaseOperator):
             if "merchant_inputs" in self.config:
                 site = Path(self.config["merchant_inputs"]) / "storefront"
                 shutil.copytree(site, staging)
-                storefront = javascript_json(site / "storefront-config.js", "window.CARTRAY_STOREFRONT = ")
+                storefront = javascript_json(site / "storefront-config.js", STOREFRONT_CONFIG_PREFIX)
                 storefront["reviewsEnabled"] = self.config["reviews_enabled"]
                 storefront["reviewSubjects"] = self.config["subject_map"] if self.config["reviews_enabled"] else {}
                 theme = javascript_json(site / "site-config.js", "window.CARTRAY_THEME = ")
                 theme["contextPath"] = None
                 theme["returnExtension"] = None
                 (staging / "storefront-config.js").write_text(
-                    "window.CARTRAY_STOREFRONT = " + json.dumps(storefront, ensure_ascii=True)
+                    STOREFRONT_CONFIG_PREFIX + json.dumps(storefront, ensure_ascii=True)
                     + "; window.CARTRAY_STOREFRONT.apiBaseUrl = "
                     + json.dumps(self.state["urls"]["source"]) + "; window.CARTRAY_CONNECTED_CATALOGUE = true;\n"
                 )
@@ -1489,7 +1490,7 @@ class Installation(PostPurchaseOperator):
             config_path = staging / 'storefront-config.js'
             if config_path.is_file():
                 source = config_path.read_text()
-                start = source.index('window.CARTRAY_STOREFRONT = ') + len('window.CARTRAY_STOREFRONT = ')
+                start = source.index(STOREFRONT_CONFIG_PREFIX) + len(STOREFRONT_CONFIG_PREFIX)
                 public, end = json.JSONDecoder().raw_decode(source[start:])
                 from cartray.store import review_invitation_disclosure
                 version, wording = review_invitation_disclosure()
