@@ -12,6 +12,13 @@ _RESERVED = {"cart", "purchase-return", "review", "reviews", "unsubscribe", "che
              "_headers", "_redirects", "_worker"}
 
 
+def cart_quantity_limit(value):
+    """Validate an explicit client-only cap; absence is handled by the caller."""
+    if type(value) is not int or not 1 <= value <= 100:
+        raise ValueError('cart_quantity_limit must be an integer from 1 to 100')
+    return value
+
+
 def merchant_path(value, *, product=False):
     """Accept explicit, canonical local paths without encoded or ambiguous segments."""
     if (not isinstance(value, str) or len(value) > 512 or not _PATH.fullmatch(value)

@@ -455,7 +455,7 @@ def test_generic_connected_flow_rejects_protocol_relative_context_and_images(tmp
     with pytest.raises(ValueError, match="HTTPS origin"):
         flows.install(tmp_path, ROOT, {}, "minimal", [offer], api_origin="https://example.test@attacker.test/path")
     for cap in (0, True, 1.5, 101, None):
-        with pytest.raises(ValueError, match="offer presentation"):
+        with pytest.raises(ValueError, match="cart_quantity_limit"):
             flows.install(tmp_path, ROOT, {}, "minimal", [{**offer, "cart_quantity_limit": cap}])
     (tmp_path / "theme").mkdir()
     monkeypatch.setattr(flows.templates, "simple_page", lambda *args: "content")

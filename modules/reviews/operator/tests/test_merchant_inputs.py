@@ -690,7 +690,7 @@ def test_merchant_rejects_invalid_presentation_quantity_cap(tmp_path, cap):
     theme = javascript_json(path, 'window.CARTRAY_THEME = ')
     theme['catalogue']['products'][0]['cart_quantity_limit'] = cap
     path.write_text('window.CARTRAY_THEME = ' + json.dumps(theme) + ';')
-    with pytest.raises(ValueError, match='maximum quantity'):
+    with pytest.raises(ValueError, match='cart_quantity_limit'):
         validate(source, ROOT)
 
 

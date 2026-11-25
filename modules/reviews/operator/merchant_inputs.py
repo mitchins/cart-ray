@@ -8,7 +8,7 @@ from html.parser import HTMLParser
 from pathlib import Path
 
 from cartray.fingerprints import fingerprint_entries
-from cartray.merchant_contract import merchant_path, product_route_groups, register_path
+from cartray.merchant_contract import cart_quantity_limit, merchant_path, product_route_groups, register_path
 from cartray.order_access_presentation import validate_order_presentation
 
 STOREFRONT_CONFIG_PREFIX = 'window.CARTRAY_STOREFRONT = '
@@ -162,9 +162,8 @@ def validate(root, repo):
             or {p["product_key"] for p in products} != set(keys)):
         raise ValueError("merchant storefront catalogue presentation is incomplete")
     for product in products:
-        if "cart_quantity_limit" in product and (type(product["cart_quantity_limit"]) is not int
-                                          or not 1 <= product["cart_quantity_limit"] <= 100):
-            raise ValueError("invalid presentation maximum quantity")
+        if "cart_quantity_limit" in product:
+            cart_quantity_limit(product["cart_quantity_limit"])
         image = product["image"]
         relative = Path(image.lstrip("/"))
         if (not image.startswith("/") or image.startswith("//") or ".." in relative.parts

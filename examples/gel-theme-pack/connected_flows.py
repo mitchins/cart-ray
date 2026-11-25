@@ -8,7 +8,7 @@ import shutil
 from pathlib import Path
 from urllib.parse import urlsplit
 
-from cartray.merchant_contract import merchant_path, product_route_groups, register_path
+from cartray.merchant_contract import cart_quantity_limit, merchant_path, product_route_groups, register_path
 
 from .src import templates
 
@@ -53,6 +53,8 @@ def install(
         api_origin = api_origin.rstrip("/")
     source_ids, paths, prefixes = set(), set(), {}
     for offer in offers:
+        if "cart_quantity_limit" in offer:
+            cart_quantity_limit(offer["cart_quantity_limit"])
         if (
             not re.fullmatch(r"[A-Z0-9-]{1,64}", offer["product_key"])
             or not merchant_path(offer["path"], product=True)
@@ -63,8 +65,6 @@ def install(
             or any(part in (".", "..") for part in offer["image"].split("/"))
             or not isinstance(offer["image_alt"], str)
             or not isinstance(offer["category"], str)
-            or ("cart_quantity_limit" in offer and (type(offer["cart_quantity_limit"]) is not int
-                                             or not 1 <= offer["cart_quantity_limit"] <= 100))
         ):
             raise ValueError("invalid connected offer presentation")
         source_ids.add(str(offer["source_id"]))

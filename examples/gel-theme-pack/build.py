@@ -13,7 +13,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
-from cartray.merchant_contract import merchant_path, page_seo, register_path  # noqa: E402
+from cartray.merchant_contract import cart_quantity_limit, merchant_path, page_seo, register_path  # noqa: E402
 
 if __package__:
     from .src import templates as t
@@ -149,9 +149,8 @@ def load_inputs(gel_path, catalogue_path, assets_root=ROOT):
             raise ValueError("invalid preview amount")
         if type(p["max_quantity"]) is not int or not 1 <= p["max_quantity"] <= 100:
             raise ValueError("invalid maximum quantity")
-        if "cart_quantity_limit" in p and (type(p["cart_quantity_limit"]) is not int
-                                           or not 1 <= p["cart_quantity_limit"] <= 100):
-            raise ValueError("invalid cart presentation quantity limit")
+        if "cart_quantity_limit" in p:
+            cart_quantity_limit(p["cart_quantity_limit"])
         if p["currency"] != gel["identity"]["currency"]:
             raise ValueError("mixed currency is unsupported")
         if p["review_subject"] is not None and not re.fullmatch(r"[a-z0-9-]{1,128}", p["review_subject"]):

@@ -35,7 +35,7 @@ class GelTests(unittest.TestCase):
             for value in (0, 101, True, None, 1.5):
                 catalogue['products'][0]['cart_quantity_limit'] = value
                 source.write_text(json.dumps(catalogue))
-                with self.assertRaisesRegex(ValueError, 'presentation quantity'):
+                with self.assertRaisesRegex(ValueError, 'cart_quantity_limit'):
                     load_inputs(ROOT / 'gel/squirrel.json', source)
 
     def test_shared_styles_do_not_include_reference_merchant_assets(self):
