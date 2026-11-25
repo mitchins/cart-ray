@@ -777,3 +777,80 @@ def test_policy_binding_size_is_checked_before_inventory_changes(deployed):
     with pytest.raises(ValueError, match='4096-byte'):
         install.reconfigure_test_recipients(policy)
     assert install.state_path.read_bytes() == before
+
+
+def test_refresh_native_clients_keeps_commerce_policy_keys_and_checkpoint(deployed, tmp_path):
+    from merchant_inputs import javascript_json, tree_hash
+    install, api, db = deployed
+    initialise(install, db)
+    import shutil
+    source = tmp_path / 'runtime-suffix'
+    shutil.copytree(install.config['merchant_inputs'], source)
+    script = source / 'storefront/storefront-config.js'
+    suffix = b" window.CARTRAY_STOREFRONT.apiBaseUrl='/commerce-api'; window.CARTRAY_CONNECTED_CATALOGUE=true;\r\n"
+    script.write_bytes(script.read_bytes() + suffix)
+    install.update_merchant_inputs(source)
+    original = Path(install.config['merchant_inputs'])
+    commerce_hash = tree_hash(original / 'commerce')
+    old_inputs_hash = tree_hash(original)
+    old_vault = install.vault_path.read_bytes()
+    old_policy = install.config['post_purchase_config_sha256']
+    branding = {'name': 'Example merchant', 'home_path': '/shop/', 'contact_path': '/contact-us/', 'accent': '#001b35'}
+    install.refresh_merchant_clients(branding)
+    updated = Path(install.config['merchant_inputs'])
+    assert (updated / 'storefront/storefront-config.js').read_bytes().endswith(suffix)
+    assert tree_hash(updated / 'commerce') == commerce_hash
+    assert tree_hash(original) == old_inputs_hash
+    assert install.vault_path.read_bytes() == old_vault
+    assert install.config['post_purchase_config_sha256'] == old_policy
+    assert javascript_json(updated / 'storefront/storefront-config.js', 'window.CARTRAY_STOREFRONT = ')[
+        'orderAccessPresentation'] == branding
+    assert install.post_purchase_fence()['activation_watermark'] == 7
+    assert install.state['post_purchase_modes'] == OFF
+    nodes, _ = graph(install)
+    # The fixture has no fulfilment; branding cannot install or authorize resource access.
+    assert 'CARTRAY_ORDER_ACCESS_PRESENTATION' not in nodes['source']['vars']
+
+
+@pytest.mark.parametrize('deployed', ['resources'], indirect=True)
+def test_branding_refresh_uses_recorded_old_bindings_then_deploys_new_presentation(deployed):
+    from types import SimpleNamespace
+
+    from cartray.order_access_presentation import render_order_access_page
+    install, api, db = deployed
+    initialise(install, db)
+    branding = {'name': 'Example merchant', 'home_path': '/catalogue/', 'contact_path': '/contact-us/',
+                'accent': '#001b35'}
+    before_resources = deepcopy(install.state['resources'])
+    before_vault = install.vault_path.read_bytes()
+    install.refresh_merchant_clients(branding)
+    nodes, _ = graph(install)
+    encoded = nodes['source']['vars']['CARTRAY_ORDER_ACCESS_PRESENTATION']
+    assert json.loads(encoded) == branding
+    assert 'Example merchant' in render_order_access_page(
+        SimpleNamespace(CARTRAY_ORDER_ACCESS_PRESENTATION=encoded))[0]
+    # Existing OFF source has no branding binding; verification must use its retained package.
+    install.check_current_post_purchase_off()
+    capture_build(install, 'branded')
+    install.deploy()
+    assert install.state['post_purchase_modes'] == OFF
+    assert install.state['resources'] == before_resources
+    assert install.vault_path.read_bytes() == before_vault
+    assert install.post_purchase_fence()['activation_watermark'] == 7
+
+
+@pytest.mark.parametrize(('phase', 'complete'), [
+    ('deploying', True), ('rolling-back', True), ('migrated', False),
+])
+def test_client_refresh_rejects_deployment_transition_without_mutation(deployed, phase, complete):
+    install, _, db = deployed
+    initialise(install, db)
+    install.state['phase'] = phase
+    install.state['deployment']['complete'] = complete
+    install.save()
+    before = install.state_path.read_bytes()
+    inputs = install.config['merchant_inputs_sha256']
+    with pytest.raises(ValueError, match='finish deployment'):
+        install.refresh_merchant_clients()
+    assert install.state_path.read_bytes() == before
+    assert install.config['merchant_inputs_sha256'] == inputs

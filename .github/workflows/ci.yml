@@ -34,7 +34,7 @@ jobs:
       - name: Test the Acorn reference storefront
         run: |
           uv run --locked pytest examples/acorn-store/tests/test_build.py
-          node --test examples/acorn-store/tests/reviews.test.mjs examples/acorn-store/tests/reviews_gateway.test.mjs
+          node --test examples/acorn-store/tests/reviews.test.mjs examples/acorn-store/tests/reviews_gateway.test.mjs tests/review_summary_reader.test.mjs
       - name: Test the post-purchase test email handler
         run: node --test tests/post_purchase_email.test.mjs tests/post_purchase_email_workerd.test.mjs
       - name: Test provider reconciliation on Workerd and D1
@@ -139,7 +139,7 @@ jobs:
           node --test --experimental-test-coverage --test-reporter=spec --test-reporter-destination=stdout --test-reporter=lcov --test-reporter-destination=coverage/m11a.lcov tests/m11a_projection.test.mjs
           node --test --experimental-test-coverage --test-reporter=spec --test-reporter-destination=stdout --test-reporter=lcov --test-reporter-destination=coverage/post-purchase-email.lcov tests/post_purchase_email.test.mjs
           node --test --experimental-test-coverage --test-reporter=spec --test-reporter-destination=stdout --test-reporter=lcov --test-reporter-destination=coverage/reviews-gateway.lcov examples/acorn-store/tests/reviews_gateway.test.mjs modules/reviews/tests/order_access_gateway.test.mjs
-          node --test --experimental-test-coverage --test-reporter=spec --test-reporter-destination=stdout --test-reporter=lcov --test-reporter-destination=coverage/reviews-public-reader.lcov examples/acorn-store/tests/reviews.test.mjs
+          node --test --experimental-test-coverage --test-reporter=spec --test-reporter-destination=stdout --test-reporter=lcov --test-reporter-destination=coverage/reviews-public-reader.lcov examples/acorn-store/tests/reviews.test.mjs tests/review_summary_reader.test.mjs
           node --test --experimental-test-coverage --test-reporter=spec --test-reporter-destination=stdout --test-reporter=lcov --test-reporter-destination=coverage/reviews-provider.lcov modules/reviews/tests/provider_reconciliation.test.mjs
           node --test --experimental-test-coverage --test-reporter=spec --test-reporter-destination=stdout --test-reporter=lcov --test-reporter-destination=coverage/reviews-publication.lcov modules/reviews/publication/tests/*.test.mjs
           node --test --experimental-test-coverage --test-reporter=spec --test-reporter-destination=stdout --test-reporter=lcov --test-reporter-destination=coverage/reviews-console.lcov modules/reviews/console/tests/*.test.mjs
@@ -194,6 +194,8 @@ jobs:
         run: uv run --with playwright==1.57.0 python examples/gel-theme-pack/tests/gallery_browser.py --engines chromium,firefox,webkit
       - name: Exercise connected merchant catalogue route
         run: uv run --with playwright==1.57.0 python examples/ep-uat/connected_route_regression.py
+      - name: Qualify native order-page CSP and resource controls
+        run: uv run --with playwright==1.57.0 python tests/order_page_browser.py --output /tmp/order-page-browser
       - name: Retain browser evidence
         if: always()
         uses: actions/upload-artifact@v4
@@ -203,5 +205,6 @@ jobs:
             examples/gel-theme-pack/evidence/connected-browser-*.json
             examples/gel-theme-pack/evidence/gallery-browser-*.json
             /tmp/gel-http-*.log
+            /tmp/order-page-browser/*.png
             examples/gel-theme-pack/screenshots/connected-*.png
             examples/gel-theme-pack/screenshots/gallery-*.png

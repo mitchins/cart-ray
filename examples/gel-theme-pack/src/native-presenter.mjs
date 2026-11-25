@@ -7,7 +7,7 @@ export function presentNativeReviews(page, doc=document) {
     observer.disconnect();
     const forms=[...content.querySelectorAll(':scope > form')];
     for(const form of forms) {
-      form.classList.add('review-form');
+      form.classList.add('review-form','cr-form');
       for(const label of form.querySelectorAll(':scope > label'))label.classList.add('field');
       const select=form.querySelector('select[name="rating"]');
       if(select && !select.dataset.starPresenter) {
@@ -15,9 +15,9 @@ export function presentNativeReviews(page, doc=document) {
         // The hidden select remains the native client's source of truth, including
         // restored drafts and its in-flight disabled state.
         select.parentElement.hidden=true;
-        const fieldset=doc.createElement('fieldset');fieldset.className='rating-field';
+        const fieldset=doc.createElement('fieldset');fieldset.className='rating-field cr-rating';
         const legend=doc.createElement('legend');legend.textContent='Your rating (optional with a comment)';fieldset.append(legend);
-        const options=doc.createElement('div');options.className='rating-options';fieldset.append(options);
+        const options=doc.createElement('div');options.className='rating-options cr-rating-options';fieldset.append(options);
         for(const value of ['1','2','3','4','5','']) {
           const label=doc.createElement('label');if(!value)label.className='none';
           const radio=doc.createElement('input');radio.type='radio';radio.name='rating-stars';radio.value=value;
@@ -33,11 +33,13 @@ export function presentNativeReviews(page, doc=document) {
       }
     }
     if(page==='manage')for(const form of forms) {
-      const buttons=[...form.querySelectorAll(':scope > button')];
-      const withdraw=buttons.find(button=>button.textContent==='Withdraw review');
-      const confirm=buttons.find(button=>button.textContent==='Confirm withdrawal');
+      const withdraw=form.querySelector('[data-cr-action=withdraw]');
+      const confirm=form.querySelector('[data-cr-action=confirm-withdraw]');
       const dialog=doc.querySelector('#confirm-dialog');
       if(withdraw && confirm && dialog && !withdraw.dataset.dialogPresenter) {
+        dialog.classList.add('cr-dialog');
+        dialog.querySelector('[data-dialog-cancel]').classList.add('cr-button','cr-button--secondary');
+        dialog.querySelector('[data-dialog-confirm]').classList.add('cr-button','cr-button--danger');
         withdraw.dataset.dialogPresenter='true';
         withdraw.addEventListener('click',()=>{
           confirm.hidden=true;dialog.showModal();dialog.querySelector('[data-dialog-cancel]').focus();
@@ -50,11 +52,11 @@ export function presentNativeReviews(page, doc=document) {
     if(page==='review' && forms.length>1) {
       let chooser=content.querySelector('[data-product-chooser]');
       if(!chooser) {
-        chooser=doc.createElement('div');chooser.dataset.productChooser='';chooser.className='review-tabs';
+        chooser=doc.createElement('div');chooser.dataset.productChooser='';chooser.className='review-tabs cr-subject-selector';
         chooser.setAttribute('role','group');chooser.setAttribute('aria-label','Choose a purchased product to review');
         content.querySelector('p')?.after(chooser);
         forms.forEach((form,index)=>{
-          const button=doc.createElement('button');button.type='button';button.className='review-tab';
+          const button=doc.createElement('button');button.type='button';button.className='review-tab cr-button cr-button--secondary';
           button.textContent=form.querySelector('h2')?.textContent||`Product ${index+1}`;
           button.addEventListener('click',()=>{selected=index;update();});chooser.append(button);
         });

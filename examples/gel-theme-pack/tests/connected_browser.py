@@ -18,14 +18,17 @@ def main():
     parser.add_argument("--origin", default="http://127.0.0.1:4174")
     parser.add_argument("--engines", default="chromium,webkit,firefox")
     parser.add_argument("--label", choices=("minimal", "studio", "classic", "northline-classic"))
+    parser.add_argument("--evidence-dir", type=Path)
     args = parser.parse_args()
     checks = []
     completed_engines = []
     prefix = f"{args.label}-" if args.label else ""
-    results = ROOT / (
+    evidence_root = args.evidence_dir or ROOT
+    (evidence_root / "evidence").mkdir(parents=True, exist_ok=True)
+    results = evidence_root / (
         f"evidence/connected-browser-{args.label}.json" if args.label else "evidence/connected-browser-results.json"
     )
-    shots = ROOT / "screenshots"
+    shots = evidence_root / "screenshots"
     shots.mkdir(exist_ok=True)
 
     def check(name, result):
@@ -38,6 +41,7 @@ def main():
             browser = getattr(p, engine).launch(headless=True, timeout=15000)
             try:
                 context = browser.new_context(viewport={"width": 390, "height": 844}, reduced_motion="reduce")
+                context.add_init_script("window.CARTRAY_REVIEWS_UI={contactPath:'/contact-us/'}")
                 page = context.new_page()
                 errors = []
                 page.on("pageerror", lambda error: errors.append(str(error)))
@@ -99,12 +103,17 @@ def main():
 
                 def enable_review_permission(route):
                     response = route.fetch()
-                    extra = {"checkoutEnabled": True, "reviewInvitationsEnabled": True,
-                             "reviewInvitationDefaultChecked": True,
-                             "reviewInvitationWordingVersion": "review-invitation-v3",
-                             "reviewInvitationWording": wording}
-                    route.fulfill(response=response, body=response.text() +
-                                  "\nObject.assign(window.CARTRAY_STOREFRONT," + json.dumps(extra) + ");")
+                    extra = {
+                        "checkoutEnabled": True,
+                        "reviewInvitationsEnabled": True,
+                        "reviewInvitationDefaultChecked": True,
+                        "reviewInvitationWordingVersion": "review-invitation-v3",
+                        "reviewInvitationWording": wording,
+                    }
+                    route.fulfill(
+                        response=response,
+                        body=response.text() + "\nObject.assign(window.CARTRAY_STOREFRONT," + json.dumps(extra) + ");",
+                    )
 
                 page.route("**/storefront-config.js", enable_review_permission)
                 page.reload()
@@ -113,8 +122,10 @@ def main():
                 check(engine + " general review disclosure defaults checked", choice.is_checked())
                 choice.focus()
                 choice.press("Space")
-                check(engine + " keyboard review opt-out leaves checkout available",
-                      not choice.is_checked() and page.locator("#checkout").is_enabled())
+                check(
+                    engine + " keyboard review opt-out leaves checkout available",
+                    not choice.is_checked() and page.locator("#checkout").is_enabled(),
+                )
                 choice.press("Space")
                 check(engine + " keyboard review permission can be restored", choice.is_checked())
                 page.screenshot(path=str(shots / f"connected-{prefix}{engine}-permission-mobile.png"), full_page=True)
@@ -157,7 +168,21 @@ def main():
                 token = "a" * 64
                 page.goto(args.origin + "/review/#invitation=" + token)
                 page.wait_for_selector("[data-product-chooser]")
-                page.screenshot(path=str(shots / f"connected-{prefix}{engine}-review-mobile.png"), full_page=True)
+                check(
+                    engine + " native ready semantic state",
+                    page.locator("#content").get_attribute("data-cr-state") == "ready",
+                )
+                check(
+                    engine + " native field and action groups",
+                    page.locator(".cr-field").count() >= 4 and page.locator(".cr-actions").count() == 2,
+                )
+                for label, width in [("desktop", 1440), ("mobile", 390), ("narrow", 320)]:
+                    page.set_viewport_size({"width": width, "height": 900})
+                    check(
+                        engine + " native form " + label + " reflow",
+                        page.evaluate("document.documentElement.scrollWidth<=innerWidth+1"),
+                    )
+                    page.screenshot(path=str(shots / f"connected-{prefix}{engine}-review-{label}.png"), full_page=True)
                 check(engine + " two-product native choice", page.locator("[data-product-chooser] button").count() == 2)
                 form = page.locator("#content > form:visible")
                 form.locator('input[name="rating-stars"][value="5"]').check()
@@ -199,6 +224,12 @@ def main():
                 page.wait_for_selector('input[name="rating-stars"]')
                 page.get_by_role("button", name="Withdraw review", exact=True).first.click()
                 check(engine + " native dialog visible", page.locator("dialog").is_visible())
+                check(
+                    engine + " destructive/secondary dialog hooks",
+                    page.locator("[data-dialog-cancel].cr-button--secondary").count() == 1
+                    and page.locator("[data-dialog-confirm].cr-button--danger").count() == 1,
+                )
+                page.screenshot(path=str(shots / f"connected-{prefix}{engine}-withdraw-dialog.png"), full_page=True)
                 page.keyboard.press("Escape")
                 check(
                     engine + " dialog escape restores focus",
@@ -211,6 +242,81 @@ def main():
                 page.goto(args.origin + "/review/#invitation=invalid")
                 page.wait_for_function("document.querySelector('#message').textContent.includes('unavailable')")
                 check(engine + " invalid invitation rejected", page.locator("#content form").count() == 0)
+                for suffix in ["/review/", "/review/manage.html"]:
+                    page.goto(args.origin + suffix)
+                    page.wait_for_function("document.querySelector('#content').dataset.crState==='invalid'")
+                    check(
+                        engine + " terminal loading cleared " + suffix,
+                        "loading" not in page.locator("#content").inner_text().lower(),
+                    )
+                page.goto(args.origin + "/review/#invitation=" + token)
+                page.wait_for_selector("#content form")
+                page.route("**/reviews/v1/invitation", lambda route: route.abort())
+                page.reload()
+                page.wait_for_selector("[data-cr-action=retry]")
+                check(
+                    engine + " network failure settles loading",
+                    page.locator("#content").get_attribute("aria-busy") == "false",
+                )
+                page.unroute("**/reviews/v1/invitation")
+                check(
+                    engine + " safe merchant contact action",
+                    page.get_by_role("link", name="Contact the store").get_attribute("href") == "/contact-us/",
+                )
+                for mode, pattern, suffix, value in [
+                    (
+                        "review",
+                        "**/reviews/v1/invitation",
+                        "/review/#invitation=" + token,
+                        {
+                            "store_name": "Test store",
+                            "draft_scope": "retry-test",
+                            "subjects": [{"subject_id": "kit", "public_name": "Product", "progress": "available"}],
+                        },
+                    ),
+                    (
+                        "manage",
+                        "**/reviews/v1/manage/*/read",
+                        "/review/manage.html#review=" + token + "&token=" + "b" * 64,
+                        {"rating": 4, "body": "Existing text", "author": "Test", "revision_id": "revision-1"},
+                    ),
+                ]:
+                    page.goto('about:blank')
+                    pending = []
+                    page.route(pattern, lambda route: pending.append(route))
+                    page.goto(args.origin + suffix)
+                    page.wait_for_function("document.querySelector('#content').dataset.crState==='loading'")
+                    page.evaluate("document.readyState")
+                    assert len(pending) == 1
+                    pending[0].fulfill(status=503, json={"error": "unavailable"})
+                    page.wait_for_selector("[data-cr-action=retry]")
+                    with page.expect_request(
+                        lambda request: request.url.endswith("/invitation") or request.url.endswith("/read")
+                    ):
+                        page.evaluate("let b=document.querySelector('[data-cr-action=retry]');b.click();b.click()")
+                    check(
+                        engine + " retry synchronously disabled " + mode,
+                        page.locator("[data-cr-action=retry]").is_disabled(),
+                    )
+                    assert len(pending) == 2
+                    with page.expect_request(
+                        lambda request: request.url.endswith("/invitation") or request.url.endswith("/read")
+                    ):
+                        page.evaluate(
+                            "document.querySelector('[data-cr-action=retry]').dispatchEvent(new Event('click'))"
+                        )
+                    page.evaluate("document.readyState")
+                    assert len(pending) == 3
+                    pending[2].fulfill(json=value)
+                    page.wait_for_selector("#content textarea")
+                    page.locator("#content textarea").fill("Keep this new draft")
+                    pending[1].fulfill(status=503, json={"error": "late failure"})
+                    page.evaluate("document.readyState")
+                    check(
+                        engine + " late retry cannot erase edited form " + mode,
+                        page.locator("#content textarea").input_value() == "Keep this new draft",
+                    )
+                    page.unroute(pattern)
                 check(engine + " no script errors", not errors)
                 context.close()
                 completed_engines.append(engine)

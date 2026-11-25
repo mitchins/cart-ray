@@ -242,3 +242,50 @@ The test adapter remains recipient-restricted. Native staff moderation and capab
 private; the storefront gateway cannot expose administrative APIs. Shared D1 means Workers with a
 binding have database-wide access, not physical table isolation. A complete D1 outage affects
 Commerce and Reviews; an unavailable optional Reviews service does not block checkout or receipt.
+
+## Refresh customer presentation without replacing the merchant installation
+
+From the pinned new checkout, pause the existing **schema-2, no-queue** installation.
+Do not select a similarly named queue-era installation. Create a public branding JSON input:
+
+```json
+{"name":"Example merchant","home_path":"/catalogue/","contact_path":"/contact-us/","accent":"#001b35"}
+```
+
+These are the only fields. Paths must be canonical same-origin directory paths; accent is a
+six-digit hex colour. The native order page uses fixed responsive CSS, 48px controls and
+contrast-safe text, without external styles/fonts, arbitrary HTML or a theme engine. Its
+inline script/style are authorized by exact CSP hashes, not `unsafe-inline`. Existing form
+POST/external-resource redirects and purchase authorization remain unchanged.
+
+```sh
+uv run python modules/reviews/operator/operate.py --directory "$INSTALL" --credentials "$CREDS" pause
+uv run python modules/reviews/operator/operate.py --directory "$INSTALL" --credentials "$CREDS" \
+  build --refresh-clients --order-access-presentation "$BRANDING"
+uv run python modules/reviews/operator/operate.py --directory "$INSTALL" --credentials "$CREDS" deploy
+uv run python modules/reviews/operator/operate.py --directory "$INSTALL" --credentials "$CREDS" verify
+uv run python modules/reviews/operator/operate.py --directory "$INSTALL" --credentials "$CREDS" doctor
+uv run python modules/reviews/operator/operate.py --directory "$INSTALL" --credentials "$CREDS" receipt
+```
+
+The build refreshes only shared client files and `orderAccessPresentation` in a temporary copy
+of the hash-pinned current merchant package. It preserves generated JavaScript suffixes,
+commerce bytes, offer/Stripe mappings, native subjects, canonical URLs and the original input
+snapshot. It then uses the existing validated content-addressed input/build workflow.
+`--merchant-inputs PATH` remains available for a separately regenerated merchant package;
+it is mutually exclusive with `--refresh-clients`. Branding is an optional existing
+`storefront-config.js` field, not a new vault, configuration registry or activation lifecycle.
+`connected_flows.install(...,order_access_presentation={...})` supports the same contract.
+
+No migration/provisioning is needed. Keep the existing credentials and protected recipient
+policy. Orders, resources, keys, claims, activation watermark and subscriber cursor are never
+rewound or re-enrolled. Compare pre/post receipts. The existing compatible application rollback
+uses retained merchant snapshots, including their branding; it never restores old D1 data.
+A merchant-owned frontend is composed/deployed independently from the generated artifact.
+
+`pause`/`activate --enable-test-delivery` control the consolidated source/notification TEST
+mode. Preserve the installation's existing Reviews authorization and publication state;
+these are not permission to recreate or reset Reviews activation. Only under separate owner
+authorization, restore the prior permitted TEST mode after verification with the existing
+`activate --enable-test-delivery` command. Do not replace credentials, replay accepted/uncertain
+claims, backfill, or enable production while refreshing presentation.

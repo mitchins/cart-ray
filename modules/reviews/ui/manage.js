@@ -4,36 +4,65 @@
   const review = fragment.get("review"), token = fragment.get("token");
   const message = document.querySelector("#message"), content = document.querySelector("#content");
   const element = (tag, text) => { const node = document.createElement(tag); if (text !== undefined) node.textContent = text; return node; };
+  let loadVersion = 0;
+  const contactPath = globalThis.CARTRAY_REVIEWS_UI?.contactPath;
+  function settle(state, text, retry = false) {
+    message.textContent = text; message.classList.add('cr-feedback');
+    content.dataset.crState = state; content.setAttribute('aria-busy', 'false'); content.replaceChildren();
+    const actions = element('div'); actions.className = 'cr-actions';
+    if (retry) {
+      const button = element('button', 'Try again'); button.type = 'button';
+      button.className = 'cr-button cr-button--secondary'; button.dataset.crAction='retry';
+      button.addEventListener('click', () => { void load(); }); actions.append(button);
+    }
+    if (typeof contactPath === 'string' && /^\/(?:[A-Za-z0-9_-]+\/)*$/.test(contactPath)) {
+      const contact = element('a', 'Contact the store'); contact.href = contactPath;
+      contact.className = 'cr-button cr-button--secondary'; actions.append(contact);
+    }
+    content.append(actions);
+  }
+  function loading() {
+    message.textContent='Loading your review…';
+    for (const button of content.querySelectorAll('[data-cr-action=retry]')) button.disabled=true;
+    content.dataset.crState = 'loading'; content.setAttribute('aria-busy', 'true');
+    message.classList.add('cr-feedback');
+  }
   async function post(action, data, key) {
     const headers = {"Content-Type": "application/json"};
     if (key) headers["Idempotency-Key"] = key;
-    return fetch(`/reviews/v1/manage/${review}/${action}`, {method:"POST", headers, body:JSON.stringify({management_token:token,...data}), cache:"no-store", referrerPolicy:"no-referrer"});
+    return fetch(`/reviews/v1/manage/${review}/${action}`, {method:"POST", headers, body:JSON.stringify({management_token:token,...data}), cache:"no-store", referrerPolicy:"no-referrer", signal:AbortSignal.timeout(10000)});
   }
   async function load() {
+    const version=++loadVersion; loading();
     if (!/^[a-f0-9]{64}$/.test(review || "") || !/^[a-f0-9]{64}$/.test(token || "")) {
-      message.textContent = "This management link is unavailable. Please contact the store for help."; return;
+      settle("invalid", "This management link is unavailable. Please contact the store for help."); return;
     }
     let response;
-    try { response = await post("read", {}); } catch (_) { message.textContent = "We couldn't reach the store. Please try again."; return; }
+    try { response = await post("read", {}); } catch (_) { if(version!==loadVersion)return; settle("unavailable", "We couldn't reach the store. Please try again.", true); return; }
+    if(version!==loadVersion)return;
     if (!response.ok) {
-      message.textContent = response.status === 429
+      const failure = response.status === 429
         ? "Too many attempts. Please wait a little and try again."
         : response.status === 503
           ? "The review service is temporarily unavailable. Please try again shortly."
           : "This management link is unavailable. Your review may already be withdrawn.";
-      return;
+      settle("unavailable", failure, response.status === 429 || response.status === 503); return;
     }
-    const current = await response.json();
+    let current;
+    try { current = await response.json(); if(version!==loadVersion)return; if (!current || (current.body !== null && typeof current.body !== "string")) throw new Error(); }
+    catch (_) { if(version!==loadVersion)return; settle("unavailable", "We couldn't load this review. Please try again.", true); return; }
+    content.dataset.crState="ready"; content.setAttribute("aria-busy","false");
     message.textContent = "Changes are checked before they appear publicly. You can also withdraw this review.";
-    const form = element("form");
+    const form = element("form"); form.className = "cr-form";
     function field(labelText, name, tag, value) {
-      const label = element("label", labelText), input = element(tag); input.name=name;
+      const label = element("label", labelText), input = element(tag); label.className="cr-field"; input.name=name;
       if (tag !== "select") input.value=value || ""; label.append(input); form.append(label); return input;
     }
     const rating = field("Rating (optional if you write a comment)", "rating", "select");
     for (const [value,label] of [["","Select a rating"],["5","5 stars"],["4","4 stars"],["3","3 stars"],["2","2 stars"],["1","1 star"]]) {
       const option=element("option",label); option.value=value; rating.append(option);
     }
+    rating.classList.add("cr-rating");
     rating.value = current.rating == null ? "" : String(current.rating);
     const body=field("Your experience", "body", "textarea", current.body); body.maxLength=5000;
     const title=field("Title (optional)", "title", "input", current.title); title.maxLength=200;
@@ -41,7 +70,11 @@
     const submit=element("button","Save changes"); submit.type="submit";
     const withdraw=element("button","Withdraw review"); withdraw.type="button";
     const confirm=element("button","Confirm withdrawal"); confirm.type="button"; confirm.hidden=true;
-    form.append(submit, withdraw, confirm); content.replaceChildren(form);
+    submit.className="cr-button cr-button--primary"; submit.dataset.crAction="edit";
+    withdraw.className="cr-button cr-button--danger"; withdraw.dataset.crAction="withdraw";
+    confirm.className="cr-button cr-button--danger"; confirm.dataset.crAction="confirm-withdraw";
+    const actions=element("div"); actions.className="cr-actions"; actions.append(submit,withdraw,confirm);
+    form.append(actions); content.replaceChildren(form);
     const fields=[rating,body,title,author], draftKey=`cartray-management-draft:${review}`;
     let saved={}; try { saved=JSON.parse(sessionStorage.getItem(draftKey)||"{}"); } catch (_) { /* optional */ }
     if (saved.revision===current.revision_id && saved.values) for (const input of fields) input.value=saved.values[input.name] || "";
@@ -56,15 +89,19 @@
       const fingerprint=JSON.stringify([action,payload]);
       const key=saved.fingerprint === fingerprint ? saved.requestKey : crypto.randomUUID();
       saved={...saved,revision:current.revision_id,values:value,fingerprint,requestKey:key}; persist();
+      content.dataset.crState="submitting";content.setAttribute("aria-busy","true");
       for (const input of [...fields,submit,withdraw,confirm]) input.disabled=true;
       try {
         const result=await post(action,payload,key);
         if (!result.ok) { message.textContent="We couldn't complete that change. Your draft is still here; please try again or contact the store."; return; }
         try { sessionStorage.removeItem(draftKey); } catch (_) { /* optional */ }
+        document.dispatchEvent(new CustomEvent("cartray:reviews-changed",{detail:{subjectId:current.subject_id || null}}));
+        content.dataset.crState=action === "withdraw" ? "withdrawn" : "submitted";
         if (action === "withdraw") { content.replaceChildren(); message.textContent="Your review has been withdrawn."; }
         else { content.replaceChildren(); message.textContent="Your changes were submitted and are awaiting moderation."; }
       } catch (_) { message.textContent="We couldn't reach the store. Your draft is still here; please try again."; }
-      finally { for (const input of [...fields,submit,withdraw,confirm]) input.disabled=false; }
+      finally { content.setAttribute("aria-busy","false");
+        if(content.dataset.crState==="submitting")content.dataset.crState="error"; for (const input of [...fields,submit,withdraw,confirm]) input.disabled=false; }
     }
     form.addEventListener("submit", event=>{event.preventDefault();void change("edit");});
     withdraw.addEventListener("click",()=>{confirm.hidden=false;message.textContent="Select Confirm withdrawal to remove this review.";});

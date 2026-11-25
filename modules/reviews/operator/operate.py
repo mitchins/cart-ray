@@ -17,7 +17,16 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 from cloud import API, CloudError, stripe
-from merchant_inputs import ConnectedShell, commerce_build_hash, javascript_json, tree_hash
+from merchant_inputs import (
+    CORE_CLIENT_FILES,
+    REVIEW_CLIENT_FILES,
+    STOREFRONT_CONFIG_PREFIX,
+    ConnectedShell,
+    commerce_build_hash,
+    javascript_json,
+    replace_javascript_json,
+    tree_hash,
+)
 from merchant_inputs import snapshot as snapshot_merchant_inputs
 from merchant_inputs import validate as validate_merchant_inputs
 from post_purchase_operator import (
@@ -46,6 +55,7 @@ from cartray.order_access import (
     resource_config_bindings,
     validate_resource_configuration,
 )
+from cartray.order_access_presentation import validate_order_presentation
 
 ROOT = Path(__file__).resolve().parents[3]
 DATABASES = ("commerce",)
@@ -808,7 +818,7 @@ class Installation(PostPurchaseOperator):
         if validate_merchant_inputs(source, ROOT) != self.config.get("merchant_inputs_sha256"):
             raise ValueError("merchant inputs changed; restore the recorded snapshot before building or deploying")
         site = source / "storefront"
-        storefront = javascript_json(site / "storefront-config.js", "window.CARTRAY_STOREFRONT = ")
+        storefront = javascript_json(site / "storefront-config.js", STOREFRONT_CONFIG_PREFIX)
         if storefront.get("storeName") != self.config["merchant_name"]:
             raise ValueError("merchant storefront identity differs from installation")
         cart = ConnectedShell()
@@ -871,12 +881,7 @@ class Installation(PostPurchaseOperator):
                         or (mode == "manage" and not {"data-dialog-cancel", "data-dialog-confirm"}
                             <= shell.dialog_controls)):
                     raise ValueError("merchant review page does not load the supported review client")
-            for dest, source in {"theme/native-reviews.js": "modules/reviews/ui/reviews.js",
-                                 "theme/native-manage.js": "modules/reviews/ui/manage.js",
-                                 "theme/review-presenter.mjs": "examples/gel-theme-pack/src/connected-review.mjs",
-                                 "theme/connected-public-reviews.mjs":
-                                     "examples/gel-theme-pack/src/connected-public-reviews.mjs",
-                                 "theme/reviews.mjs": "modules/reviews/ui/public.mjs"}.items():
+            for dest, source in REVIEW_CLIENT_FILES.items():
                 if (site / dest).read_bytes() != (ROOT / source).read_bytes():
                     raise ValueError("merchant review client differs from the supported Reviews module")
 
@@ -912,9 +917,43 @@ class Installation(PostPurchaseOperator):
         except Exception:
             self.config = old
             raise
+        deployment = self.state.get('deployment')
+        if deployment and not deployment.get('catalogue_config'):
+            deployment['catalogue_config'] = self.catalogue_config()
         self.state['config'].update(merchant_inputs=str(destination.relative_to(self.directory)),
                                     merchant_inputs_sha256=checksum)
         self.save()
+
+    def refresh_merchant_clients(self, presentation=None):
+        """Refresh only supported public clients/branding from the retained merchant snapshot."""
+        self.require_post_purchase_off()
+        deployment = self.state.get('deployment')
+        if (self.state.get('activation_authorized') and not self.state.get('automation_paused')
+                or self.state.get('phase') in ('deploying', 'rolling-back')
+                or deployment is not None and not deployment.get('complete')):
+            raise ValueError('finish deployment and pause before refreshing merchant clients')
+        if 'merchant_inputs' not in self.config:
+            raise ValueError('--refresh-clients requires retained merchant inputs; '
+                             'use normal build for built-in profiles')
+        source = Path(self.config['merchant_inputs'])
+        expected = self.config['merchant_inputs_sha256']
+        if tree_hash(source) != expected:
+            raise ValueError('retained merchant inputs changed; restore their recorded snapshot')
+        branding = validate_order_presentation(presentation) if presentation is not None else None
+        with tempfile.TemporaryDirectory(prefix='merchant-clients-') as temporary:
+            candidate = Path(temporary) / 'merchant'
+            shutil.copytree(source, candidate)
+            files = {**CORE_CLIENT_FILES, **(REVIEW_CLIENT_FILES if self.config['reviews_enabled'] else {})}
+            for target, original in files.items():
+                shutil.copyfile(ROOT / original, candidate / 'storefront' / target)
+            if branding is not None:
+                path = candidate / 'storefront/storefront-config.js'
+                config = javascript_json(path, STOREFRONT_CONFIG_PREFIX)
+                config['orderAccessPresentation'] = branding
+                replace_javascript_json(path, STOREFRONT_CONFIG_PREFIX, config)
+            if tree_hash(candidate / 'commerce') != tree_hash(source / 'commerce') or tree_hash(source) != expected:
+                raise ValueError('merchant commerce data changed during client refresh')
+            self.update_merchant_inputs(candidate)
 
     def catalogue_config(self):
         return {key: self.state['config'][key] for key in
@@ -1411,14 +1450,14 @@ class Installation(PostPurchaseOperator):
             if "merchant_inputs" in self.config:
                 site = Path(self.config["merchant_inputs"]) / "storefront"
                 shutil.copytree(site, staging)
-                storefront = javascript_json(site / "storefront-config.js", "window.CARTRAY_STOREFRONT = ")
+                storefront = javascript_json(site / "storefront-config.js", STOREFRONT_CONFIG_PREFIX)
                 storefront["reviewsEnabled"] = self.config["reviews_enabled"]
                 storefront["reviewSubjects"] = self.config["subject_map"] if self.config["reviews_enabled"] else {}
                 theme = javascript_json(site / "site-config.js", "window.CARTRAY_THEME = ")
                 theme["contextPath"] = None
                 theme["returnExtension"] = None
                 (staging / "storefront-config.js").write_text(
-                    "window.CARTRAY_STOREFRONT = " + json.dumps(storefront, ensure_ascii=True)
+                    STOREFRONT_CONFIG_PREFIX + json.dumps(storefront, ensure_ascii=True)
                     + "; window.CARTRAY_STOREFRONT.apiBaseUrl = "
                     + json.dumps(self.state["urls"]["source"]) + "; window.CARTRAY_CONNECTED_CATALOGUE = true;\n"
                 )
@@ -1454,7 +1493,7 @@ class Installation(PostPurchaseOperator):
             config_path = staging / 'storefront-config.js'
             if config_path.is_file():
                 source = config_path.read_text()
-                start = source.index('window.CARTRAY_STOREFRONT = ') + len('window.CARTRAY_STOREFRONT = ')
+                start = source.index(STOREFRONT_CONFIG_PREFIX) + len(STOREFRONT_CONFIG_PREFIX)
                 public, end = json.JSONDecoder().raw_decode(source[start:])
                 from cartray.store import review_invitation_disclosure
                 version, wording = review_invitation_disclosure()
@@ -2084,7 +2123,12 @@ def main():
     for name in ("provision", "migrate", "build", "deploy", "verify", "doctor", "upgrade", "receipt", "pause"):
         command = commands.add_parser(name)
         if name == 'build':
-            command.add_argument('--merchant-inputs', type=Path,
+            inputs = command.add_mutually_exclusive_group()
+            inputs.add_argument('--refresh-clients', action='store_true',
+                                help='refresh native public clients from the retained merchant snapshot')
+            command.add_argument('--order-access-presentation', type=Path,
+                                 help='public branding JSON; requires --refresh-clients')
+            inputs.add_argument('--merchant-inputs', type=Path,
                                  help='explicitly snapshot corrected merchant inputs while sending is OFF')
     refresh = commands.add_parser('reconfigure-catalogue', help='snapshot explicit catalogue/lock/subjects while OFF')
     refresh.add_argument('--config', type=Path, required=True)
@@ -2135,6 +2179,12 @@ def main():
                 elif args.command == "upgrade":
                     result = installation.upgrade()
                 elif args.command == 'build':
+                    if args.order_access_presentation and not args.refresh_clients:
+                        raise ValueError('--order-access-presentation requires --refresh-clients')
+                    if args.refresh_clients:
+                        installation.refresh_merchant_clients(
+                            json.loads(args.order_access_presentation.read_text())
+                            if args.order_access_presentation else None)
                     if args.merchant_inputs:
                         installation.update_merchant_inputs(args.merchant_inputs)
                     result = installation.build()

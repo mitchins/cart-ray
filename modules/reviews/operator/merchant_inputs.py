@@ -9,6 +9,28 @@ from pathlib import Path
 
 from cartray.fingerprints import fingerprint_entries
 from cartray.merchant_contract import merchant_path, product_route_groups, register_path
+from cartray.order_access_presentation import validate_order_presentation
+
+STOREFRONT_CONFIG_PREFIX = 'window.CARTRAY_STOREFRONT = '
+
+CORE_CLIENT_FILES = {
+        "theme/core-storefront.js": "storefront/app.js",
+        "theme/cartray-adapter.mjs": "examples/gel-theme-pack/src/cartray-adapter.mjs",
+        "theme/connected-browse.mjs": "examples/gel-theme-pack/src/connected-browse.mjs",
+        "theme/connected-start.mjs": "examples/gel-theme-pack/src/connected-start.mjs",
+        "theme/app.mjs": "examples/gel-theme-pack/src/app.mjs",
+        "theme/native-presenter.mjs": "examples/gel-theme-pack/src/native-presenter.mjs",
+        "theme/gallery.mjs": "examples/gel-theme-pack/src/gallery.mjs",
+}
+
+REVIEW_CLIENT_FILES = {
+    "theme/native-reviews.js": "modules/reviews/ui/reviews.js",
+    "theme/native-manage.js": "modules/reviews/ui/manage.js",
+    "theme/review-presenter.mjs": "examples/gel-theme-pack/src/connected-review.mjs",
+    "theme/connected-public-reviews.mjs": "examples/gel-theme-pack/src/connected-public-reviews.mjs",
+    "theme/reviews.mjs": "modules/reviews/ui/public.mjs",
+}
+
 
 
 class ConnectedShell(HTMLParser):
@@ -83,6 +105,17 @@ def javascript_json(path, prefix):
     return value
 
 
+def replace_javascript_json(path, prefix, value):
+    """Change only the JSON object; retain generated runtime assignments verbatim."""
+    text = path.read_bytes().decode('utf-8')
+    if not text.startswith(prefix):
+        raise ValueError('invalid connected storefront configuration')
+    tail = text[len(prefix):]
+    start = len(prefix) + len(tail) - len(tail.lstrip())
+    _, end = json.JSONDecoder().raw_decode(text[start:])
+    path.write_bytes((text[:start] + json.dumps(value, ensure_ascii=True) + text[start + end:]).encode())
+
+
 def validate(root, repo):
     root = Path(root)
     if root.is_symlink() or not root.is_dir():
@@ -109,7 +142,7 @@ def validate(root, repo):
     if (not keys or len(set(keys)) != len(keys)
             or any(not re.fullmatch(r"[A-Z0-9][A-Z0-9_-]{0,63}", x or "") for x in keys)):
         raise ValueError("invalid merchant commerce product identities")
-    config = javascript_json(site / "storefront-config.js", "window.CARTRAY_STOREFRONT = ")
+    config = javascript_json(site / "storefront-config.js", STOREFRONT_CONFIG_PREFIX)
     theme = javascript_json(site / "site-config.js", "window.CARTRAY_THEME = ")
     if (config.get("previewCatalogue") is not None or config.get("checkoutEnabled") is not True
             or not isinstance(config.get("productPaths"), dict) or set(config["productPaths"]) != set(keys)
@@ -118,6 +151,8 @@ def validate(root, repo):
             or theme.get("preview") is not False or theme.get("adapter") != "/theme/cartray-adapter.mjs"
             or theme.get("gel", {}).get("identity", {}).get("name") != config.get("storeName")):
         raise ValueError("merchant storefront must match authorised catalogue identities and connected adapter")
+    if "orderAccessPresentation" in config:
+        validate_order_presentation(config["orderAccessPresentation"])
     product_route_groups(config["productPaths"], config.get("reviewSubjects"))
     catalogue = theme.get("catalogue")
     products = catalogue.get("products") if isinstance(catalogue, dict) else None
@@ -152,15 +187,7 @@ def validate(root, repo):
                 or not {"/storefront-config.js", "/site-config.js"} <= shell.scripts
                 or "/theme/connected-start.mjs" not in shell.module_scripts or "content" not in shell.ids):
             raise ValueError(f"merchant {route} page does not load the connected storefront")
-    for relative, source in {
-        "theme/core-storefront.js": "storefront/app.js",
-        "theme/cartray-adapter.mjs": "examples/gel-theme-pack/src/cartray-adapter.mjs",
-        "theme/connected-browse.mjs": "examples/gel-theme-pack/src/connected-browse.mjs",
-        "theme/connected-start.mjs": "examples/gel-theme-pack/src/connected-start.mjs",
-        "theme/app.mjs": "examples/gel-theme-pack/src/app.mjs",
-        "theme/native-presenter.mjs": "examples/gel-theme-pack/src/native-presenter.mjs",
-        "theme/gallery.mjs": "examples/gel-theme-pack/src/gallery.mjs",
-    }.items():
+    for relative, source in CORE_CLIENT_FILES.items():
         if (site / relative).read_bytes() != (repo / source).read_bytes():
             raise ValueError(f"merchant storefront has unrecognised connected code: {relative}")
     sources = {row["productKey"]: str(row["sourceId"]) for row in browse}
