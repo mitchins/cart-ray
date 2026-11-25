@@ -927,8 +927,9 @@ class Installation(PostPurchaseOperator):
     def refresh_merchant_clients(self, presentation=None):
         """Refresh only supported public clients/branding from the retained merchant snapshot."""
         self.require_post_purchase_off()
-        if self.state.get('activation_authorized') and not self.state.get('automation_paused'):
-            raise ValueError('pause sending before refreshing merchant clients')
+        if (self.state.get('activation_authorized') and not self.state.get('automation_paused')
+                or self.state.get('phase') in ('deploying', 'rolling-back')):
+            raise ValueError('finish deployment and pause before refreshing merchant clients')
         if 'merchant_inputs' not in self.config:
             raise ValueError('--refresh-clients requires retained merchant inputs; '
                              'use normal build for built-in profiles')

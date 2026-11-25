@@ -98,7 +98,7 @@ export function createSummaryReader({fetchImpl = fetch, maxAgeMs = 30000, now = 
       if (!job) {
         if (now()<cooldown) return Promise.reject(unavailable(cooldown));
         if (entries.size>=128) {
-          const old=[...entries].find(([,entry])=>entry.settled);
+          const old=[...entries].find(([,entry])=>entry.settled && !entry.users);
           if (old) entries.delete(old[0]); else return Promise.reject(unavailable(now()+1000));
         }
         job={subject,controller:new AbortController(),settled:false};

@@ -65,3 +65,18 @@ test('rated and unrated summary text has honest independent singular counts',()=
  assert.equal(reviewSummaryText({...summary('one'),rating:{rated_count:0,average:null},contribution_count:1}),
    'No ratings yet · 1 contribution');
 });
+
+
+test('capacity preserves settled entries with active consumers',async()=>{
+ const reader=createSummaryReader({fetchImpl:(url,{signal})=>{
+  const subject=url.split('/').at(-2);
+  if(subject==='settled')return Promise.resolve(Response.json(summary(subject)));
+  return new Promise((resolve,reject)=>signal.addEventListener('abort',()=>reject(signal.reason),{once:true}));
+ }});
+ await reader.read('settled');
+ const pending=Array.from({length:127},(_,i)=>assert.rejects(reader.read('pending'+i)));
+ const cached=reader.read('settled');
+ await assert.rejects(reader.read('overflow'));
+ assert.equal((await cached).subject_id,'settled');
+ reader.dispose();await Promise.all(pending);
+});
