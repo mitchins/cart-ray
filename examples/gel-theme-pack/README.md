@@ -156,3 +156,33 @@ explicit empty string is preserved. Descriptions up to 16,384 characters are
 accepted without truncation. `seo_head` is available to a host that owns the
 HTML head. It validates the same limited schema and can force `noindex`; the
 host owns any independently sourced structured-data graph outside that contract.
+
+## Per-product cart presentation limits
+
+An optional `max_quantity` on a product in `window.CARTRAY_THEME.catalogue.products`
+(and on each `connected_flows.install()` offer) is a **client presentation cap**.
+Values are integers 1–100. Omit it to retain the authoritative catalogue maximum;
+the effective client limit is always the smaller of the two. The existing full
+theme catalogue format already requires this field. A value 1 renders a read-only
+quantity instead of a stepper and repeated add stays at one. Configure only the
+merchant's classified download offers; consulting quantities are independent.
+This does not change the server maximum or prevent a direct API request that the
+server otherwise authorizes. A hard business limit must also be set in the
+commerce catalogue, through a separate approved update.
+
+A changed cap reconciles only an editable cart. Frozen uncertain checkout attempts
+retain the exact original items, permission and retry identity. After a definitive
+400 releases that attempt, the editable cart is reconciled before a new request.
+Confirmed-return snapshots are compared before any new presentation cap is applied.
+Neither the pending snapshot nor the authoritative receipt is rewritten.
+
+Confirmation labels show friendly catalogue titles without internal product keys;
+a removed/untitled product uses the neutral “Purchased item”. Original keys,
+quantities and prices remain in the validated receipt. Shared receipt markup uses
+`.cr-confirmation-items` and `.cr-confirmation-item`; state sections use
+`.cr-checkout-state[data-cr-state]` with `.cr-checkout-heading`,
+`.cr-checkout-message` and `.cr-checkout-actions`. Fixed cart quantities use
+`.cart-quantity[data-quantity-fixed]`. Existing GEL styling and merchant-owned CSS
+can use these hooks. Native order access remains a separate Worker-rendered page
+with its existing `orderAccessPresentation` and `.cr-order*`/`.cr-resource-form`
+hooks; no response rewriting or frontend styling is injected into it here.

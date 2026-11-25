@@ -162,6 +162,9 @@ def validate(root, repo):
             or {p["product_key"] for p in products} != set(keys)):
         raise ValueError("merchant storefront catalogue presentation is incomplete")
     for product in products:
+        if "max_quantity" in product and (type(product["max_quantity"]) is not int
+                                          or not 1 <= product["max_quantity"] <= 100):
+            raise ValueError("invalid presentation maximum quantity")
         image = product["image"]
         relative = Path(image.lstrip("/"))
         if (not image.startswith("/") or image.startswith("//") or ".." in relative.parts
