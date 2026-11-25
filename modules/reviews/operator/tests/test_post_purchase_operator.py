@@ -839,11 +839,14 @@ def test_branding_refresh_uses_recorded_old_bindings_then_deploys_new_presentati
     assert install.post_purchase_fence()['activation_watermark'] == 7
 
 
-@pytest.mark.parametrize('phase', ['deploying', 'rolling-back'])
-def test_client_refresh_rejects_deployment_transition_without_mutation(deployed, phase):
+@pytest.mark.parametrize(('phase', 'complete'), [
+    ('deploying', True), ('rolling-back', True), ('migrated', False),
+])
+def test_client_refresh_rejects_deployment_transition_without_mutation(deployed, phase, complete):
     install, _, db = deployed
     initialise(install, db)
     install.state['phase'] = phase
+    install.state['deployment']['complete'] = complete
     install.save()
     before = install.state_path.read_bytes()
     inputs = install.config['merchant_inputs_sha256']
