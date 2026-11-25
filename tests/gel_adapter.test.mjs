@@ -184,3 +184,26 @@ test('legacy theme preview maximum does not silently narrow connected commerce',
  setup();const adapter=await createAdapter({...presentation,catalogue:{products:[{...presentation.catalogue.products[0],max_quantity:1}]}});
  adapter.add('ACORN-KIT');adapter.quantity('ACORN-KIT',3);assert.equal(adapter.count(),3);
 });
+
+test('return cap reconciliation preserves a newer tab cart and avoids unchanged writes',async()=>{
+ for(const quantity of [1,2]){
+  const {storage}=setup('?checkout=complete&session_id=cs_test_match');
+  const initial={catalogueVersion:catalogue.version,revision:7,items:[['ACORN-KIT',2]]};
+  storage.setItem('cartray.cart.v1',JSON.stringify(initial));
+  storage.setItem('cartray.pending-checkout.v1',JSON.stringify({...initial,sessionId:'cs_test_match'}));
+  const withOther={...catalogue,products:[...catalogue.products,{...catalogue.products[0],product_key:'SECOND',title:'Other product'}]};
+  let newer;
+  globalThis.fetch=async url=>({ok:true,json:async()=>{
+   if(String(url).endsWith('/catalogue'))return withOther;
+   newer=JSON.stringify({catalogueVersion:catalogue.version,revision:9,items:[['ACORN-KIT',quantity],['SECOND',1]]},null,2);
+   storage.setItem('cartray.cart.v1',newer);
+   return {state:'confirmed'};
+  }});
+  const adapter=await createAdapter(limited);await adapter.returnState();
+  assert.deepEqual(adapter.getCart().map(p=>[p.product_key,p.quantity]),[['ACORN-KIT',1],['SECOND',1]]);
+  const saved=JSON.parse(storage.getItem('cartray.cart.v1'));
+  assert.deepEqual(saved.items,[['ACORN-KIT',1],['SECOND',1]]);
+  assert.equal(saved.revision,quantity===1?9:10);
+  if(quantity===1)assert.equal(storage.getItem('cartray.cart.v1'),newer);
+ }
+});
