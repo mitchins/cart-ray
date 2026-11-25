@@ -351,9 +351,8 @@ def main():
                     pending[2].fulfill(json=value)
                     page.wait_for_selector("#content textarea")
                     page.locator("#content textarea").fill("Keep this new draft")
-                    with page.expect_response(lambda response: response.status == 503) as late:
+                    with page.expect_request_finished(lambda request: request == pending[1].request):
                         pending[1].fulfill(status=503, json={"error": "late failure"})
-                    late.value.finished()
                     page.evaluate("document.readyState")
                     check(
                         engine + " late retry cannot erase edited form " + mode,
