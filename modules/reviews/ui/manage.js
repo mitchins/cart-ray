@@ -99,6 +99,10 @@
         content.dataset.crState=action === "withdraw" ? "withdrawn" : "submitted";
         if (action === "withdraw") { content.replaceChildren(); message.textContent="Your review has been withdrawn."; }
         else { content.replaceChildren(); message.textContent="Your changes were submitted and are awaiting moderation."; }
+        // Removing a long form must not strand keyboard focus or the viewport in a merchant footer.
+        message.tabIndex=-1;
+        message.focus({preventScroll:true});
+        message.scrollIntoView({block:"center",behavior:"instant"});
       } catch (_) { message.textContent="We couldn't reach the store. Your draft is still here; please try again."; }
       finally { content.setAttribute("aria-busy","false");
         if(content.dataset.crState==="submitting")content.dataset.crState="error"; for (const input of [...fields,submit,withdraw,confirm]) input.disabled=false; }
