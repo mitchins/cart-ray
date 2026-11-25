@@ -220,8 +220,26 @@ def main():
                     attempts[-1][1]["rating"] is None and attempts[-1][1]["body"] == "Lovely planter",
                 )
                 check(engine + " review independent of catalogue", not any("/catalogue" in url for url in requests))
+                def long_management_page():
+                    # Keep a long footer after the form disappears, reproducing a merchant page.
+                    page.evaluate("""()=>{
+                      const form=document.querySelector('#content > form');
+                      form.style.minHeight='1600px';form.style.display='flex';form.style.flexDirection='column';
+                      form.querySelector('.cr-actions').style.marginTop='auto';
+                      const footer=document.createElement('footer');footer.style.height='1800px';
+                      footer.textContent='Merchant footer';document.body.append(footer);
+                    }""")
+
+                def result_is_visible():
+                    return page.evaluate("""()=>{
+                      const message=document.querySelector('#message'), box=message.getBoundingClientRect();
+                      return document.activeElement===message && box.top>=0 && box.bottom<=innerHeight;
+                    }""")
+
+                page.set_viewport_size({"width": 390, "height": 844})
                 page.goto(args.origin + "/review/manage.html#review=" + token + "&token=" + "b" * 64)
                 page.wait_for_selector('input[name="rating-stars"]')
+                long_management_page()
                 page.get_by_role("button", name="Withdraw review", exact=True).first.click()
                 check(engine + " native dialog visible", page.locator("dialog").is_visible())
                 check(
@@ -239,6 +257,25 @@ def main():
                 page.locator("[data-dialog-confirm]").click()
                 page.wait_for_function("document.querySelector('#message').textContent.includes('has been withdrawn')")
                 check(engine + " native withdrawal", not page.locator("#content > form").count())
+                check(engine + " mobile withdrawal result focused and visible", result_is_visible())
+                page.screenshot(path=str(shots / f"connected-{prefix}{engine}-withdraw-result-mobile.png"))
+                for action, width in [("edit", 390), ("edit", 320), ("edit", 1440), ("withdraw", 320)]:
+                    page.set_viewport_size({"width": width, "height": 844})
+                    page.goto(args.origin + "/review/manage.html#review=" + token + "&token=" + "b" * 64)
+                    page.reload()  # The same fragment URL otherwise keeps the previous terminal document.
+                    page.wait_for_selector('input[name="rating-stars"]')
+                    long_management_page()
+                    if action == "edit":
+                        page.locator('[data-cr-action=edit]').click()
+                    else:
+                        page.locator('[data-cr-action=withdraw]').click()
+                        page.locator('[data-dialog-confirm]').click()
+                    state = "submitted" if action == "edit" else "withdrawn"
+                    page.wait_for_function(
+                        "state=>document.querySelector('#content').dataset.crState===state", arg=state
+                    )
+                    check(engine + " " + action + " result focused and visible " + str(width), result_is_visible())
+                page.set_viewport_size({"width": 390, "height": 844})
                 page.goto(args.origin + "/review/#invitation=invalid")
                 page.wait_for_function("document.querySelector('#message').textContent.includes('unavailable')")
                 check(engine + " invalid invitation rejected", page.locator("#content form").count() == 0)
