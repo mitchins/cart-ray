@@ -977,7 +977,7 @@ class Installation(PostPurchaseOperator):
     def catalogue_config(self):
         return {key: self.state['config'][key] for key in
                 ('merchant_inputs', 'merchant_inputs_sha256', 'preflight_lock', 'subject_map', 'subject_details',
-                 'store_review_subject') if key in self.state['config']}
+                 'store_review_subject', 'review_invitation_default_checked') if key in self.state['config']}
 
     def use_catalogue_config(self, values):
         if 'store_review_subject' not in values:
@@ -1040,9 +1040,15 @@ class Installation(PostPurchaseOperator):
             raise ValueError('finish deployment and pause before reconfiguring the catalogue')
         fields = {'merchant_inputs', 'preflight_lock', 'subject_map', 'subject_details'}
         if (not isinstance(values, dict) or not fields <= values.keys()
-                or values.keys() - fields - {'store_review_subject'}):
+                or values.keys() - fields - {'store_review_subject', 'review_invitation_default_checked'}):
             raise ValueError('catalogue configuration requires merchant_inputs, preflight_lock, '
-                             'subject_map, subject_details and optional store_review_subject')
+                             'subject_map, subject_details and optional store_review_subject/'
+                             'review_invitation_default_checked')
+        if (values.get('store_review_subject') is not None
+                and self.config.get('store_review_subject') is None
+                and 'review_invitation_default_checked' not in values):
+            raise ValueError('first store-review configuration requires an explicit '
+                             'review_invitation_default_checked boolean; legacy defaults are not a choice')
         candidate = validate_config({**self.config, **values})
         self.check_catalogue_subjects(candidate)
         source = Path(candidate['merchant_inputs']).resolve(strict=True)
@@ -1072,7 +1078,8 @@ class Installation(PostPurchaseOperator):
                 '--product-assets', str(destination / 'commerce/product-assets'),
                 '--output', str(Path(temporary) / 'catalogue.py'),
             ])
-        replacement = {**values, **({'store_review_subject': candidate['store_review_subject']}
+        replacement = {**values, 'review_invitation_default_checked': candidate['review_invitation_default_checked'],
+                       **({'store_review_subject': candidate['store_review_subject']}
                                     if 'store_review_subject' in candidate else {}),
                        'merchant_inputs': str(destination.relative_to(self.directory)),
                        'merchant_inputs_sha256': checksum,

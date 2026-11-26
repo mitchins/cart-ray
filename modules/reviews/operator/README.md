@@ -353,7 +353,11 @@ retained releases. The host storefront owns the canonical display page; CartRay 
 require an Astro product/store page generator or a second review application.
 
 For a retained installation, add the input through the existing **OFF**
-`reconfigure-catalogue` workflow, then normal build/deploy/verify. This code change does
+`reconfigure-catalogue` workflow, then normal build/deploy/verify. First-time store
+enablement requires an explicit `review_invitation_default_checked` boolean in that
+request (use `false` for an unchecked disclosure); a persisted legacy default is not
+treated as an explicit merchant choice. The choice is retained through retries and
+compatible rollback. This code change does
 not authorise deployment to an existing UAT installation. No migration, new database,
 Worker, queue, email provider, activation control or historical enrolment is introduced.
 

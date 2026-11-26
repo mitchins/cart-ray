@@ -252,3 +252,41 @@ def test_configured_store_rejects_old_release_even_before_first_checkout(tmp_pat
     install.check_store_review_rollback({'store_review_contract': 1, 'store_review_subject': SUBJECT})
     assert cloud.query(install.db('commerce'),
                        'SELECT COUNT(*) n FROM review_invitation_checkout_choices') == [{'n': 0}]
+
+
+def test_first_store_reconfiguration_rejects_inherited_legacy_default_without_mutation(tmp_path):
+    from test_merchant_inputs import catalogue_revision
+
+    install = plan_merchant(tmp_path, merchant(tmp_path / 'original'), mapped=True)
+    original_hash = install.merchant_config_hash()
+    original_state = json.loads(json.dumps(install.state))
+    values = catalogue_revision(tmp_path / 'replacement') | {'store_review_subject': SUBJECT}
+    assert install.config['review_invitation_default_checked'] is True
+    with pytest.raises(ValueError, match='requires an explicit'):
+        install.reconfigure_catalogue(values)
+    assert install.state == original_state
+    assert install.merchant_config_hash() == original_hash
+    assert 'store_review_subject' not in install.config
+
+
+@pytest.mark.parametrize('checked', [False, True])
+def test_explicit_store_reconfiguration_retains_choice_on_retry_resume_and_snapshot_restore(tmp_path, checked):
+    from test_merchant_inputs import Installation, catalogue_revision
+
+    install = plan_merchant(tmp_path, merchant(tmp_path / 'original'), mapped=True)
+    previous = install.catalogue_config()
+    values = catalogue_revision(tmp_path / 'replacement') | {
+        'store_review_subject': SUBJECT, 'review_invitation_default_checked': checked}
+    install.reconfigure_catalogue(values)
+    assert install.config['review_invitation_default_checked'] is checked
+    current = install.catalogue_config()
+    assert current['review_invitation_default_checked'] is checked
+    install.reconfigure_catalogue(values)
+    resumed = Installation(install.directory)
+    assert resumed.config['review_invitation_default_checked'] is checked
+    assert resumed.catalogue_config() == current
+    # The existing snapshot mechanism restores the matching display preference.
+    resumed.use_catalogue_config(previous)
+    assert resumed.config['review_invitation_default_checked'] is True
+    resumed.use_catalogue_config(current)
+    assert resumed.config['review_invitation_default_checked'] is checked
