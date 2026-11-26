@@ -140,3 +140,56 @@ def test_cli_requires_explicit_acknowledgement(monkeypatch):
     monkeypatch.setattr(sys, "argv", ["installed_snapshot_remote.py"])
     with pytest.raises(SystemExit):
         runner.main([])
+
+
+@pytest.mark.parametrize("schema", [
+    "CREATE VIEW existing_view AS SELECT 1 id",
+    "CREATE TABLE xcf_customer_data (id TEXT)",
+    "CREATE TABLE _cfXcustomer_data (id TEXT)",
+])
+def test_any_user_schema_object_is_rejected_before_first_write(api, tmp_path, schema):
+    api.db.execute(schema)
+    with pytest.raises(ValueError, match="not empty"):
+        runner.qualify(api, DATABASE, NAME, tmp_path / "receipt.json")
+    assert api.writes == 0
+
+
+def test_legitimate_internal_prefix_does_not_hide_unrelated_schema(api):
+    api.db.execute("CREATE TABLE _cf_METADATA (id TEXT)")
+    runner.assert_empty_target(api, DATABASE, NAME)
+    api.db.execute("CREATE VIEW visible_to_operator AS SELECT 1 id")
+    with pytest.raises(ValueError, match="not empty"):
+        runner.assert_empty_target(api, DATABASE, NAME)
+    assert api.writes == 0
+
+
+@pytest.mark.parametrize("scenario,wrong_message", [
+    ("late_publication_failure", "CHECK constraint failed: ok = 1"),
+    ("silent_skip_count_guard", "qualification: late publication failure"),
+    ("conflicting_digest", "qualification: late publication failure"),
+])
+def test_constraint_from_wrong_scenario_is_inconclusive(scenario, wrong_message):
+    api = Mock()
+    api.batch.side_effect = runner.CloudError("SQL rejected", provider_errors=[{"message": wrong_message}])
+    api.query.return_value = []
+    with pytest.raises(ValueError, match="inconclusive rejection"):
+        runner.rejected(api, DATABASE, {"sql": ["synthetic"], "expected": {}}, {}, scenario)
+
+
+def test_swapped_late_failure_error_records_hold(api, tmp_path):
+    original = api.batch
+
+    def swap_late_failure(database, sql):
+        late_snapshot = "CAST(X'7468726565' AS TEXT)"
+        if (any(late_snapshot in statement for statement in sql)
+                and any("review_publications VALUES" in statement for statement in sql)):
+            raise runner.CloudError("SQL rejected", provider_errors=[{"message": "CHECK constraint failed: ok = 1"}])
+        return original(database, sql)
+
+    api.batch = swap_late_failure
+    path = tmp_path / "swapped-error.json"
+    with pytest.raises(ValueError, match="inconclusive rejection"):
+        runner.qualify(api, DATABASE, NAME, path)
+    receipt = json.loads(path.read_text())
+    assert receipt["status"] == "HOLD"
+    assert "late_failure_rollback" not in receipt["results"]

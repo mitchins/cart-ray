@@ -8,7 +8,7 @@ not create, delete, bind or discover databases and never accesses EP content.
 
 On the separately approved target, the operator supplies the exact account, D1 UUID
 and a new name starting `cartray-snapshot-proof-`. Before any migration, the runner
-verifies actual UUID/name and refuses a database containing any non-internal table.
+verifies actual UUID/name and refuses a database containing any non-internal schema object (including views).
 It cannot resume against a nonempty database: retain the receipt and inspect/delete
 the separately approved disposable resource rather than bypassing that safeguard.
 
@@ -31,8 +31,8 @@ identity/revision, predecessor mismatch, a silent skipped contribution caught by
 atomic count guard, and a late publication-trigger abort with unchanged table
 fingerprints followed by successful retry. No caller SQL or snapshot is accepted.
 
-Only an expected, positively classified SQLite guard/qualification constraint can
-satisfy a negative test. Transport failure, generic error 7500, authentication failure
+Only the specific expected SQLite guard constraint for a guard test, or the exact
+late-publication trigger marker for that test, can satisfy a negative test. Transport failure, generic error 7500, authentication failure
 or unclassified failure is **inconclusive**, never rollback evidence.
 
 A protected, non-overwritten receipt records PASS/HOLD, exact target, immutable source

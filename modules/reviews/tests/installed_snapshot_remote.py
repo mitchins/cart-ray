@@ -57,9 +57,9 @@ def assert_empty_target(api, database, database_name):
     actual = api.request("d1/database/" + database)
     if (not isinstance(actual, dict) or actual.get("uuid") != database or actual.get("name") != database_name):
         raise ValueError("actual D1 resource identity differs from the approved disposable target")
-    tables = api.query(database, "SELECT name FROM sqlite_master WHERE type='table' "
-                      "AND name NOT GLOB 'sqlite_*' AND name NOT GLOB '_cf_*' ORDER BY name")
-    if tables:
+    objects = api.query(database, "SELECT name FROM sqlite_master "
+                        "WHERE name NOT GLOB 'sqlite_*' AND name NOT GLOB '_cf_*' ORDER BY name")
+    if objects:
         raise ValueError("target is not empty; refuse migrations or synthetic qualification on an existing database")
 
 
@@ -87,10 +87,11 @@ def rejected(api, database, operation, payloads, name):
     except CloudError as error:
         # An unavailable API also leaves unchanged state: it is not rollback proof.
         # The provider transport must positively classify a SQLite constraint.
-        expected = ("CHECK constraint failed: ok = 1", "qualification: late publication failure")
+        expected = ("qualification: late publication failure" if name == "late_publication_failure"
+                    else "CHECK constraint failed: ok = 1")
         messages = [item.get("message", "") for item in getattr(error, "provider_errors", ())
                     if isinstance(item, dict)]
-        if not any(token in message for message in messages for token in expected):
+        if not any(expected in message for message in messages):
             raise ValueError("inconclusive rejection (not a classified SQLite constraint): " + name) from error
     else:
         raise ValueError("expected qualification batch was accepted: " + name)
