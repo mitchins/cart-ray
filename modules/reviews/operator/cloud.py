@@ -15,7 +15,15 @@ class NoRedirect(urllib.request.HTTPRedirectHandler):
 
 
 class CloudError(RuntimeError):
-    """A bounded provider operation failed without exposing request credentials."""
+    """Safe public diagnostic with bounded provider evidence kept out of its text."""
+
+    def __init__(self, message, *, provider_errors=()):
+        super().__init__(message)
+        self.provider_errors = tuple(
+            {"code": item.get("code"), "message": item["message"][:4096]}
+            for item in list(provider_errors)[:16]
+            if isinstance(item, dict) and isinstance(item.get("message"), str)
+        )
 
 
 def error_codes(value):
@@ -47,15 +55,18 @@ class API:
                     return response.headers.get("Content-Type"), body
         except urllib.error.HTTPError as error:
             try:
-                codes = error_codes(json.loads(error.read(65536)))
+                payload = json.loads(error.read(65536))
+                codes = error_codes(payload)
+                details = payload.get("errors", []) if isinstance(payload, dict) else []
             except (ValueError, TypeError):
-                codes = []
+                codes, details = [], []
             remedy = (
                 "; account resource limit: supply approved capacity then resume"
                 if any(code in (7406, 10072) for code in codes)
                 else ""
             )
-            raise CloudError(f"Cloudflare {method} {path}: HTTP {error.code}, provider codes {codes}{remedy}") from None
+            raise CloudError(f"Cloudflare {method} {path}: HTTP {error.code}, provider codes {codes}{remedy}",
+                             provider_errors=details if isinstance(details, list) else []) from None
         except (urllib.error.URLError, TimeoutError):
             raise CloudError(f"Cloudflare {method} {path}: unavailable; retry the same command") from None
         try:
@@ -66,7 +77,8 @@ class API:
             raise CloudError(f"Cloudflare {method} {path}: malformed provider response")
         if result.get("success") is not True:
             codes = error_codes(result)
-            raise CloudError(f"Cloudflare {method} {path}: provider codes {codes}")
+            raise CloudError(f"Cloudflare {method} {path}: provider codes {codes}",
+                             provider_errors=result.get("errors", []) if isinstance(result.get("errors"), list) else [])
         return result if envelope else result.get("result")
 
     def queue_listing(self):

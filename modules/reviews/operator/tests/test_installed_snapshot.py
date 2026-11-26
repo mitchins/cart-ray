@@ -86,7 +86,8 @@ def test_exact_target_is_verified_and_receipt_is_immutable(target):
     installation.verifier.assert_called_with("inspect")
     assert installation.api.batches == 2
     receipts = list((installation.directory / "review-snapshot-receipts").glob("*.json"))
-    assert len(receipts) == 1 and receipts[0].stat().st_mode & 0o777 == 0o600
+    assert len(receipts) == 1
+    assert receipts[0].stat().st_mode & 0o777 == 0o600
     assert "body" not in receipts[0].read_text()
     assert "Good" not in receipts[0].read_text()
 
@@ -214,8 +215,9 @@ def test_duplicate_approval_keys_rejected_even_with_matching_digest(target):
     install, snapshot, approval = target
     path = install.directory / "approval.json"
     path.write_text(json.dumps(approval)[:-1] + ',"environment":"test"}')
+    approval_hash = hashlib.sha256(path.read_bytes()).hexdigest()
     with pytest.raises(ValueError, match="duplicate"):
-        installed_snapshot.apply(install, snapshot, path, hashlib.sha256(path.read_bytes()).hexdigest())
+        installed_snapshot.apply(install, snapshot, path, approval_hash)
     assert install.api.batches == 0
 
 
@@ -223,6 +225,7 @@ def test_oversized_approval_is_rejected_before_provider_work(target):
     install, snapshot, _ = target
     path = install.directory / "approval.json"
     path.write_bytes(b" " * 16_385)
+    approval_hash = hashlib.sha256(path.read_bytes()).hexdigest()
     with pytest.raises(ValueError, match="supported import size"):
-        installed_snapshot.apply(install, snapshot, path, hashlib.sha256(path.read_bytes()).hexdigest())
+        installed_snapshot.apply(install, snapshot, path, approval_hash)
     assert install.api.batches == 0
