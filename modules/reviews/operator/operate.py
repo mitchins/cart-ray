@@ -107,6 +107,7 @@ def validate_config(config):
         "store_key",
         "subject_map",
         "subject_details",
+        "store_review_subject",
         "review_invitation_default_checked",
         "storefront_origin",
         "success_path",
@@ -226,8 +227,22 @@ def validate_config(config):
             raise ValueError("invalid merchant inputs fingerprint")
     elif any(k in config for k in ("merchant_inputs_sha256", "store_key", "subject_map", "subject_details")):
         raise ValueError("merchant identity requires merchant inputs")
-    elif config.get("review_invitation_default_checked", True) is not True:
+    elif ("store_review_subject" not in config
+          and config.get("review_invitation_default_checked", True) is not True):
         raise ValueError("custom invitation checkbox default requires a merchant inputs package")
+    if "store_review_subject" in config:
+        from cartray.order_reviews import StoreReviewSubject
+        subject = StoreReviewSubject.parse(json.dumps(config["store_review_subject"]))
+        if subject is None:
+            raise ValueError("store_review_subject must be an explicit subject object")
+        products = config.get("subject_details", [
+            ("acorn-growing-kit", "/products/acorn-growing-kit/", "Acorn growing kit"),
+            ("woodland-planter", "/products/woodland-planter/", "Woodland planter"),
+        ])
+        if (subject.subject_id in config.get("subject_map", {}).values()
+                or any(subject.subject_id == item[0] or subject.path.casefold() == item[1].casefold()
+                       for item in products)):
+            raise ValueError("store review subject collides with a product subject")
     if "post_purchase_config" in config:
         if config.get("post_purchase_email_provider", "smtp2go") not in PROVIDER_KEYS:
             raise ValueError("unsupported post-purchase email provider")
@@ -245,7 +260,7 @@ def validate_config(config):
         raise ValueError("post-purchase fingerprint requires a protected action file")
     return {
         "reviews_enabled": True,
-        "review_invitation_default_checked": True,
+        "review_invitation_default_checked": "store_review_subject" not in config,
         "merchant_name": "Squirrel’s Acorn Store",
         "merchant_contact": "Contact the test merchant",
         "delay_seconds": 0,
@@ -832,6 +847,10 @@ class Installation(PostPurchaseOperator):
                 raise ValueError('shared-route subject declaration differs from the approved installer mapping')
         if not set(self.config["subject_map"]).issubset(storefront["productPaths"]):
             raise ValueError("review subject mapping refers to an unauthorised commerce product")
+        store_subject = self.config.get("store_review_subject")
+        if store_subject is not None and any(store_subject["path"].casefold() == route.casefold()
+                                             for route in storefront["productPaths"].values()):
+            raise ValueError("store review subject route collides with a merchant product")
         prefixes = {}
         for route in storefront["productPaths"].values():
             register_path(route, prefixes)
@@ -957,9 +976,13 @@ class Installation(PostPurchaseOperator):
 
     def catalogue_config(self):
         return {key: self.state['config'][key] for key in
-                ('merchant_inputs', 'merchant_inputs_sha256', 'preflight_lock', 'subject_map', 'subject_details')}
+                ('merchant_inputs', 'merchant_inputs_sha256', 'preflight_lock', 'subject_map', 'subject_details',
+                 'store_review_subject') if key in self.state['config']}
 
     def use_catalogue_config(self, values):
+        if 'store_review_subject' not in values:
+            self.state['config'].pop('store_review_subject', None)
+            self.config.pop('store_review_subject', None)
         self.state['config'].update(values)
         self.config.update(values)
         for key in ('merchant_inputs', 'preflight_lock'):
@@ -974,8 +997,15 @@ class Installation(PostPurchaseOperator):
             for key in previous['subject_map'].keys() & candidate['subject_map'].keys():
                 if previous['subject_map'][key] != candidate['subject_map'][key]:
                     raise ValueError('an existing product cannot be reassigned to another review subject')
+            if (previous.get('store_review_subject') is not None
+                    and previous['store_review_subject'] != candidate.get('store_review_subject')):
+                raise ValueError('an existing store review subject cannot change identity, path or name')
             old_details = {row[0]: row[1:] for row in previous['subject_details']}
             owners = {row[1].casefold(): row[0] for row in previous['subject_details']}
+            store_subject = candidate.get('store_review_subject')
+            if store_subject is not None and (store_subject['subject_id'] in old_details
+                                               or store_subject['path'].casefold() in owners):
+                raise ValueError('store review subject collides with a retained product subject')
             if any(path.casefold() in owners and owners[path.casefold()] != subject
                    for subject, path, _label in candidate['subject_details']):
                 raise ValueError('a retained canonical path belongs to another review subject')
@@ -1009,9 +1039,10 @@ class Installation(PostPurchaseOperator):
                 or 'merchant_inputs' not in self.config):
             raise ValueError('finish deployment and pause before reconfiguring the catalogue')
         fields = {'merchant_inputs', 'preflight_lock', 'subject_map', 'subject_details'}
-        if not isinstance(values, dict) or set(values) != fields:
-            raise ValueError('catalogue configuration requires only merchant_inputs, preflight_lock, '
-                             'subject_map, subject_details')
+        if (not isinstance(values, dict) or not fields <= values.keys()
+                or values.keys() - fields - {'store_review_subject'}):
+            raise ValueError('catalogue configuration requires merchant_inputs, preflight_lock, '
+                             'subject_map, subject_details and optional store_review_subject')
         candidate = validate_config({**self.config, **values})
         self.check_catalogue_subjects(candidate)
         source = Path(candidate['merchant_inputs']).resolve(strict=True)
@@ -1041,7 +1072,9 @@ class Installation(PostPurchaseOperator):
                 '--product-assets', str(destination / 'commerce/product-assets'),
                 '--output', str(Path(temporary) / 'catalogue.py'),
             ])
-        replacement = {**values, 'merchant_inputs': str(destination.relative_to(self.directory)),
+        replacement = {**values, **({'store_review_subject': candidate['store_review_subject']}
+                                    if 'store_review_subject' in candidate else {}),
+                       'merchant_inputs': str(destination.relative_to(self.directory)),
                        'merchant_inputs_sha256': checksum,
                        'preflight_lock': str(lock_target.relative_to(self.directory))}
         self.use_catalogue_config(replacement)
@@ -1107,7 +1140,8 @@ class Installation(PostPurchaseOperator):
         identity = {key: self.config[key] for key in fields}
         identity.update({key: self.config[key] for key in ("storefront_origin", "success_path", "cancel_path",
                                                          "webhook_url", "source_mode", "source_api_path",
-                                                         "post_purchase_config_sha256", "fulfilment", "review_requests")
+                                                         "post_purchase_config_sha256", "fulfilment", "review_requests",
+                                                         "store_review_subject")
                          if key in self.config})
         if "post_purchase_email_provider" in self.config:
             identity["post_purchase_email_provider"] = self.config["post_purchase_email_provider"]
@@ -1400,11 +1434,16 @@ class Installation(PostPurchaseOperator):
             ("woodland-planter", "/products/woodland-planter/", "Woodland planter"),
         ])
         store = self.config.get("store_key", "acorn-store")
+        store_subject = self.config.get("store_review_subject")
+        if store_subject is not None:
+            self.check_installed_store_subject(store_subject)
+            subjects = [*subjects, (store_subject["subject_id"], store_subject["path"], store_subject["name"])]
         for subject, path, label in subjects:
+            kind = "store" if store_subject is not None and subject == store_subject["subject_id"] else "product"
             self.api.query(
                 self.db("reviews"),
-                "INSERT INTO review_subjects VALUES (?,'test',?,'product',?) ON CONFLICT DO NOTHING",
-                [store, subject, path],
+                "INSERT INTO review_subjects VALUES (?,'test',?,?,?) ON CONFLICT DO NOTHING",
+                [store, subject, kind, path],
             )
             self.api.query(
                 self.db("reviews"),
@@ -1418,6 +1457,24 @@ class Installation(PostPurchaseOperator):
                 "VALUES (?,'test',?,0,0,0,0) ON CONFLICT DO NOTHING",
                 [store, subject],
             )
+
+        if store_subject is not None and not self.check_installed_store_subject(store_subject):
+            raise ValueError("store review subject was not installed; retry the same configuration")
+
+    def check_installed_store_subject(self, subject):
+        rows = self.api.query(
+            self.db("reviews"),
+            "SELECT s.subject_id,s.kind,s.canonical_path,n.public_name FROM review_subjects s "
+            "LEFT JOIN review_subject_display_names n USING(store_key,environment,subject_id) "
+            "WHERE s.store_key=? AND s.environment='test' AND "
+            "(s.subject_id=? OR lower(s.canonical_path)=?)",
+            [self.config.get("store_key", "acorn-store"), subject["subject_id"], subject["path"].casefold()],
+        )
+        if any(row["subject_id"] != subject["subject_id"] or row["kind"] != "store"
+               or row["canonical_path"] != subject["path"]
+               or row["public_name"] not in (None, subject["name"]) for row in rows):
+            raise ValueError("installed store review identity, kind, path or name conflicts with configuration")
+        return bool(rows and rows[0]["public_name"] == subject["name"])
 
     def check_retained_storefront(self, build):
         output = self.directory / 'releases' / build.get('release_id', build['commit']) / 'storefront'
@@ -1496,7 +1553,8 @@ class Installation(PostPurchaseOperator):
                 start = source.index(STOREFRONT_CONFIG_PREFIX) + len(STOREFRONT_CONFIG_PREFIX)
                 public, end = json.JSONDecoder().raw_decode(source[start:])
                 from cartray.store import review_invitation_disclosure
-                version, wording = review_invitation_disclosure()
+                version, wording = review_invitation_disclosure(
+                    version="review-invitation-v4" if "store_review_subject" in self.config else "review-invitation-v3")
                 public.update(reviewInvitationsEnabled=review_requests_enabled(self.config),
                               reviewInvitationDefaultChecked=self.config['review_invitation_default_checked'],
                               reviewInvitationWordingVersion=version, reviewInvitationWording=wording)

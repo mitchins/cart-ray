@@ -182,6 +182,9 @@ def graph(
             CARTRAY_REVIEW_SETTINGS=json.dumps(preferences),
             CARTRAY_REVIEW_SUBJECT_MAPS=mapping,
         )
+        if "store_review_subject" in config:
+            nodes["source"]["vars"]["CARTRAY_STORE_REVIEW_SUBJECT"] = json.dumps(
+                config["store_review_subject"], separators=(",", ":"))
         nodes["reviews"] = {
             "main": "modules/reviews/src/worker.py",
             "python": True,

@@ -28,7 +28,7 @@ TEST_PUBLIC_KEY_SPKI_B64 = "MCowBQYDK2VwAyEAmjCIMxYDlWSJsqHfrQZ+nVkoUEXEiajZ00z2
 TEST_PAYLOAD = b"cartray-worker-webcrypto-smoke-v1"
 
 
-async def order_reviews_journey(db, *, enrichment_timeout=False):
+async def order_reviews_journey(db, *, enrichment_timeout=False, store_mode=None):
     """Real D1/native submission, synthetic mail: the link works BEFORE acceptance."""
     import hashlib
     import hmac
@@ -46,8 +46,10 @@ async def order_reviews_journey(db, *, enrichment_timeout=False):
                OrderItem(product_key='REVIEW-B',quantity=1,stripe_price_id='price_b',unit_amount_minor=1,
                          fulfilment_resources=('smoke-external',))),
         items_digest='sha256:'+'2'*64,currency='aud',subtotal_minor=3,
-        review_invitation_opt_in=True,review_invitation_policy_enabled=True,
-        review_invitation_default_selected=True)
+        review_invitation_opt_in=store_mode != 'declined',review_invitation_policy_enabled=True,
+        review_invitation_default_selected=store_mode is None,
+        review_invitation_wording_version=('review-invitation-v4' if store_mode in ('accepted','declined')
+            else 'review-invitation-v1' if store_mode == 'legacy-v1' else 'review-invitation-v3'))
     store = D1OrderStore(db)
     await store.start_or_load(order, nonce='reviews', now=now)
     await store.attach_redirect(order.order_id, CheckoutRedirect('cs_test_'+suffix,'https://stripe.test'), now=now)
@@ -66,6 +68,11 @@ async def order_reviews_journey(db, *, enrichment_timeout=False):
             .bind(subject,'/'+subject+'/').run())
         await (db.prepare("INSERT OR IGNORE INTO review_subject_display_names VALUES ('smoke-store','test',?,?)")
             .bind(subject,subject).run())
+    if store_mode:
+        await db.prepare("INSERT OR IGNORE INTO review_subjects "
+            "VALUES ('smoke-store','test','store-review','store','/reviews/')").run()
+        await db.prepare("INSERT OR IGNORE INTO review_subject_display_names "
+            "VALUES ('smoke-store','test','store-review','Smoke Store')").run()
     messages = []
     evidence_calls = [0]
     class Mail:
@@ -90,6 +97,10 @@ async def order_reviews_journey(db, *, enrichment_timeout=False):
         CARTRAY_RECIPIENT_HASH_KEY=key,CARTRAY_INSTALLATION_ID='smoke-install',
         CARTRAY_REVIEW_SETTINGS=json.dumps({'timing':'both','delay_days':0,'priorities':['REVIEW-A']}),
         CARTRAY_REVIEW_SUBJECT_MAPS=json.dumps({'smoke-review-version':{'REVIEW-A':'review-a','REVIEW-B':'review-b'}}))
+    if store_mode:
+        env.CARTRAY_STORE_REVIEW_SUBJECT = json.dumps(
+            {'subject_id':'store-review','path':'/reviews/','name':'Smoke Store'})
+        env.CARTRAY_REVIEW_SETTINGS = json.dumps({'timing':'receipt','priorities':['REVIEW-A']})
     env.CARTRAY_ORDER_ACCESS_MODE = 'test'
     env.CARTRAY_ORDER_ACCESS_KEY = 'a'*32
     env.CARTRAY_RESOURCE_CONFIG = '{}'
@@ -100,6 +111,74 @@ async def order_reviews_journey(db, *, enrichment_timeout=False):
 
     env.CHECKOUT_STATUS_RATE_LIMITER = SimpleNamespace(limit=allow)
     await _drain_post_purchase(env)
+    if store_mode:
+        if len(messages)!=1 or messages[0]['type']!='order_confirmation' or not messages[0].get('access_url'):
+            return False
+        message = await order_reviews.first(db,
+            'SELECT * FROM order_review_messages WHERE order_id=?',order.order_id)
+        if store_mode in ('legacy-v1','legacy-v3'):
+            subjects = _results(await db.prepare(
+                "SELECT subject_id FROM acquisition_invitation_subjects WHERE acquisition_id=? ORDER BY subject_id")
+                .bind(order.order_id).all())
+            if [row['subject_id'] for row in subjects]!=['review-a','review-b']:
+                return False
+            try:
+                await redeem_purchase(db,store='smoke-store',environment='test',subject='store-review',
+                    token=message['invitation_token'],request_key='legacy_store_'+suffix,author='Buyer',
+                    title='',body='Must not widen',rating=5,reviewer_key_secret=b'r'*32,now=now,
+                    random_token=lambda:secrets.token_hex(32))
+            except ValueError:
+                return True
+            return False
+        if store_mode=='declined':
+            if message is not None or messages[0].get('reviews'):
+                return False
+        else:
+            if not message or not messages[0].get('reviews'):
+                return False
+            await order_reviews.unsubscribe(db,'smoke-store','test',message['unsubscribe_token'],now)
+            if await order_reviews.permitted(db,'smoke-store','test',order.order_id,message['recipient_hash']):
+                return False
+        # Deliberate accountless access remains valid after email opt-out or suppression.
+        token = messages[0]['access_url'].split('#token=')[1]
+        env.CARTRAY_POST_PURCHASE_MODE = 'disabled'
+        body = json.dumps({'token':token})
+        raw = Request.new('https://shop.example/order-access',to_js({'method':'POST',
+            'headers':{'cf-connecting-ip':'192.0.2.1','content-type':'application/json',
+                       'content-length':str(len(body.encode()))},'body':body},dict_converter=Object.fromEntries))
+        response = await create_app()(raw,env)
+        if response.status!=200:
+            return False
+        data = await response.json()
+        if hasattr(data,'to_py'):
+            data = data.to_py()
+        if len(data['items'])!=2 or not data.get('reviews',{}).get('url'):
+            return False
+        bearer = data['reviews']['url'].split('invitation=')[1].split('&')[0]
+        subjects = _results(await db.prepare(
+            "SELECT subject_id FROM acquisition_invitation_subjects WHERE acquisition_id=? ORDER BY subject_id")
+            .bind(order.order_id).all())
+        if [row['subject_id'] for row in subjects]!=['review-a','review-b','store-review']:
+            return False
+        invitation = await order_reviews.first(db,
+            'SELECT expires_at FROM acquisition_invitations WHERE acquisition_id=?',order.order_id)
+        if invitation['expires_at']!=-1:
+            return False
+        async def submit(key):
+            return await redeem_purchase(db,store='smoke-store',environment='test',subject='store-review',
+                token=bearer,request_key=key,author='Buyer',title='',body='A useful shop',rating=5,
+                reviewer_key_secret=b'r'*32,now=now,random_token=lambda:secrets.token_hex(32))
+        submitted = await submit('store_once_'+suffix)
+        if submitted['status']!='pending' or await submit('store_once_'+suffix)!=submitted:
+            return False
+        try:
+            await submit('store_again_'+suffix)
+        except ValueError:
+            pass
+        else:
+            return False
+        await _drain_post_purchase(env)
+        return len(messages)==1
     if enrichment_timeout:
         if len(messages)!=1 or messages[0].get('reviews') or not messages[0].get('access_url'):
             return False
@@ -313,9 +392,12 @@ class Default(WorkerEntrypoint):
         session_rows = _results(session)
         reviews_ok = await order_reviews_journey(self.env.DB)
         review_timeout_ok = await order_reviews_journey(self.env.DB,enrichment_timeout=True)
+        store_reviews_ok = all([await order_reviews_journey(self.env.DB,store_mode=mode)
+                                for mode in ('accepted','declined','legacy-v3','legacy-v1')])
         result = {
             "order_reviews": reviews_ok,
             "order_review_timeout": review_timeout_ok,
+            "store_reviews": store_reviews_ok,
             "d1_batch_owner": first.owner,
             "first_confirmation": confirmed is False,
             "lease_rejected": lease_rejected,
@@ -332,6 +414,7 @@ class Default(WorkerEntrypoint):
         expected = {
             "order_reviews": True,
             "order_review_timeout": True,
+            "store_reviews": True,
             "d1_batch_owner": True,
             "first_confirmation": True,
             "lease_rejected": True,

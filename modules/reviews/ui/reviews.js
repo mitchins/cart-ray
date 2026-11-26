@@ -152,7 +152,7 @@
       data.subjects.sort((a,b) => Number(featured.includes(b.subject_id)) - Number(featured.includes(a.subject_id)));
       content.replaceChildren(element("p", `Your invitation from ${data.store_name}`), ...data.subjects.map(subject => formFor(subject, data.draft_scope)));
       content.dataset.crState="ready"; content.setAttribute("aria-busy","false");
-      message.textContent = confirmation || "Choose a product to review. Reviews are checked before they appear publicly.";
+      message.textContent = confirmation || "Choose what to review. Reviews are checked before they appear publicly.";
     } catch (_) { if(version!==loadVersion)return; settle("unavailable", "We couldn't reach the store. Please try again shortly.", true); }
   }
   load();

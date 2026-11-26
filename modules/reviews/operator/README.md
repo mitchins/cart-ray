@@ -330,3 +330,63 @@ A compatible rollback uses the recorded release and its retained branding snapsh
 For an existing test installation, see [APPROVED_SNAPSHOTS.md](APPROVED_SNAPSHOTS.md)
 for the explicitly authorised `apply-review-snapshot` operation. This is separate from
 native Reviews setup and requires exact artifact, target and content approval.
+
+## Optional store reviews
+
+A merchant may add one first-class store subject through normal installation inputs:
+
+```json
+{
+  "store_review_subject": {
+    "subject_id": "merchant-store",
+    "path": "/reviews/",
+    "name": "Merchant shop"
+  },
+  "review_invitation_default_checked": false
+}
+```
+
+The subject is independent of commerce offer IDs and product mappings. Normal provisioning
+seeds its existing native `kind=store` row, display name and publication counters in the
+same merchant D1. It cannot collide with a product identity/path or be retargeted across
+retained releases. The host storefront owns the canonical display page; CartRay does not
+require an Astro product/store page generator or a second review application.
+
+For a retained installation, add the input through the existing **OFF**
+`reconfigure-catalogue` workflow, then normal build/deploy/verify. This code change does
+not authorise deployment to an existing UAT installation. No migration, new database,
+Worker, queue, email provider, activation control or historical enrolment is introduced.
+
+Configured store builds use disclosure `review-invitation-v4`:
+
+> I'm happy to receive invitations to review this shop and the products I purchase.
+
+New store-feature configurations default unchecked unless a merchant explicitly retains
+another checkbox preference. Nonconfigured merchants keep their existing product-only
+v3 wording and configured checkbox defaults. A cached browser sending only the legacy
+boolean retains v1 scope. Existing v1/v2/v3 grants, pending checkout identities and issued
+invitation subject sets are never widened by adding this configuration.
+
+For a paid, independently confirmed CartRay order after the existing activation fence,
+a newly issued v4 capability includes the store once plus each distinct eligible purchased
+product subject. Repeated quantities do not add review slots. A later paid order has its
+own store-review slot. Free orders, unpurchased products and external/legacy purchases do
+not acquire verified eligibility from configuration alone.
+
+Email permission, suppression and timing still govern solicitation through the one
+order-confirmation provider and optional follow-up. Featured/priority selection never
+removes other authorised choices from the native review page. A declined v4 checkbox
+records that the scope was presented; it is **not** a positive communication grant.
+Through an already valid accountless order-access link, a v4 purchaser may deliberately
+review even after declining or unsubscribing from requests. This path does not send email,
+re-grant notification consent or arm a new follow-up. It still requires the confirmed paid
+order, trusted server-side recipient evidence and unrevoked order/capability authority.
+Consumed or withdrawn review subjects cannot be submitted again. The same native page
+continues to provide existing review management. Resource access survives Reviews failure.
+
+Store submission, moderation, replies, revision history, withdrawal, publication and
+recovery use the existing native APIs. Public consumers can read the configured store
+subject separately from product subjects. **Do not place store ratings in Product
+`aggregateRating` JSON-LD** or combine them with product ratings or unrelated testimonials.
+Historical snapshot/privacy approval remains a separate operation; configuring a store
+subject does not import or publish historical content.

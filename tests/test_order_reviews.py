@@ -68,16 +68,23 @@ def purchase(fixture_catalogue, monkeypatch, request):
     order = gateway.requests[0].order_id
     from cartray.store import review_invitation_disclosure
 
+    variant = getattr(request, 'param', None)
     version, wording = review_invitation_disclosure(version=(
-        'review-invitation-v1' if getattr(request,'param',None)=='v1' else
-        'review-invitation-v2' if getattr(request,'param',None)=='restricted-v2' else 'review-invitation-v3'))
-    db.conn.execute("INSERT INTO review_invitation_checkout_choices VALUES (?,1,1,?,?,90)", (order, version, wording))
-    db.conn.execute(
-        "INSERT INTO review_invitation_checkout_grants "
-        "(order_id,wording_version,wording,granted_at,merchant_default_selected,selection_basis,request_limit) "
-        "VALUES (?,?,?,90,1,'preselected_acceptance',?)",
-        (order, version, wording, 1 if getattr(request,'param',None)=='restricted-v2' else None),
-    )
+        'review-invitation-v4' if variant in ('v4', 'v4-declined') else
+        'review-invitation-v1' if variant == 'v1' else
+        'review-invitation-v2' if variant == 'restricted-v2' else 'review-invitation-v3'))
+    selected = int(variant != 'v4-declined')
+    default = int(variant not in ('v4', 'v4-declined'))
+    db.conn.execute("INSERT INTO review_invitation_checkout_choices VALUES (?,?,?,?,?,90)",
+                    (order, selected, default, version, wording))
+    if selected:
+        db.conn.execute(
+            "INSERT INTO review_invitation_checkout_grants "
+            "(order_id,wording_version,wording,granted_at,merchant_default_selected,selection_basis,request_limit) "
+            "VALUES (?,?,?,90,?,?,?)",
+            (order, version, wording, default, 'preselected_acceptance' if default else 'express_opt_in',
+             1 if variant == 'restricted-v2' else None),
+        )
     db.conn.commit()
     assert (
         run(

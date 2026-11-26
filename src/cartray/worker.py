@@ -824,6 +824,8 @@ async def _order_access_review_links(env, merchant, token, items):
     )
     if not scope:
         return None
+    store_subject = order_reviews.StoreReviewSubject.parse(getattr(env, "CARTRAY_STORE_REVIEW_SUBJECT", None))
+    voluntary = bool(store_subject and await order_reviews.store_scope_disclosed(env.DB, scope['order_id']))
     message = await order_reviews.first(env.DB,
         "SELECT * FROM order_review_messages WHERE merchant_id=? AND environment='test' AND order_id=?",
         merchant, scope['order_id'])
@@ -838,8 +840,8 @@ async def _order_access_review_links(env, merchant, token, items):
                     'session_id':scope['external_session_id'], 'access_url':None,
                     'items':[{'product_key':item['product_key'],'quantity':item['quantity'],
                               'title':item['product_key']} for item in items]}
-        message = await _prepare_order_reviews(env, envelope, access_only=True)
-    return await _review_message_links(env, message) if message else None
+        message = await _prepare_order_reviews(env, envelope, access_only=True, voluntary=voluntary)
+    return await _review_message_links(env, message, voluntary=voluntary) if message else None
 
 
 async def _receipt_reviews(env, envelope):
@@ -847,10 +849,11 @@ async def _receipt_reviews(env, envelope):
     return await _review_message_links(env, message, receipt=True) if message else None
 
 
-async def _prepare_order_reviews(env, envelope, *, access_only=False):
+async def _prepare_order_reviews(env, envelope, *, access_only=False, voluntary=False):
     settings = order_reviews.ReviewSettings.parse(getattr(env, "CARTRAY_REVIEW_SETTINGS", "{}"))
     mapping = json.loads(getattr(env, "CARTRAY_REVIEW_SUBJECT_MAPS", "{}"))
-    if settings.timing == "off" or not mapping:
+    store_subject = order_reviews.StoreReviewSubject.parse(getattr(env, "CARTRAY_STORE_REVIEW_SUBJECT", None))
+    if (settings.timing == "off" and not voluntary) or (not mapping and not store_subject):
         return None
     if access_only:
         # Restore access only: do not arm another email or change the receipt.
@@ -869,13 +872,15 @@ async def _prepare_order_reviews(env, envelope, *, access_only=False):
         key_version=getattr(env, "CARTRAY_RECIPIENT_HASH_KEY_VERSION", "key1"),
         installation=_required_env(env, "CARTRAY_INSTALLATION_ID"),
         subject_map=mapping,
+        store_subject=store_subject,
+        voluntary=voluntary,
         settings=settings,
         now=int(time.time()),
     )
 
 
-async def _review_message_links(env, message, *, receipt=False):
-    if not await order_reviews.permitted(
+async def _review_message_links(env, message, *, receipt=False, voluntary=False):
+    if not voluntary and not await order_reviews.permitted(
         env.DB, message["merchant_id"], "test", message["order_id"], message["recipient_hash"]
     ):
         return None
@@ -917,7 +922,7 @@ async def _review_message_links(env, message, *, receipt=False):
             )
             selection = saved[column]
     subjects = json.loads(selection)
-    if not subjects:
+    if not subjects and not voluntary:
         return None
     origin = _origin(_required_env(env, "CARTRAY_STOREFRONT_ORIGIN"))
     return {

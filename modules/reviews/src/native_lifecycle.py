@@ -1633,7 +1633,8 @@ async def handle_write(request, env, path):
             .bind(store, environment, token_hash, now)
             .all()
         )[0]["count"]
-        if not subjects or len(subjects) != expected or len(subjects) > 100:
+        # At most 100 purchased product subjects plus one store subject.
+        if not subjects or len(subjects) != expected or len(subjects) > 101:
             return fail(404, "invitation unavailable")
         private_acquisition = subjects[0]["private_acquisition"]
         draft_scope = hmac.new(
