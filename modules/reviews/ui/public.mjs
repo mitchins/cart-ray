@@ -183,7 +183,19 @@ export function reviewSummaryText(summary) {
 }
 
 function line(doc, tag, text, parent, className="") { const node = doc.createElement(tag); node.className=className; node.textContent = text; parent.append(node); return node; }
-export function renderContribution(item, parent, doc, budget) {
+function decorate(parent, renderer, values, doc, className, customClass) {
+  if (typeof renderer !== 'function') return;
+  const visual = doc.createElement('span');
+  visual.className = className;
+  visual.setAttribute('aria-hidden', 'true');
+  // Merchant presentation is optional; failure must retain the numeric fallback.
+  try { renderer(visual, Object.freeze(values), doc); } catch { return; }
+  if (!visual.hasChildNodes()) return;
+  parent.append(visual);
+  parent.className += ' ' + customClass;
+}
+
+export function renderContribution(item, parent, doc, budget, {renderRating} = {}) {
   // The public API caps historical contributions at 200 and returns at most
   // one native staff reply per result. An explicit stack handles deep trees.
   const pending = [{ item, parent, root: true }];
@@ -195,7 +207,13 @@ export function renderContribution(item, parent, doc, budget) {
     if (next.root) {
       if (typeof value.title === 'string' && value.title) line(doc, 'h3', value.title, node);
       const stars=Number.isInteger(value.rating) && value.rating>=1 && value.rating<=5 ? ` · ${value.rating} of 5 stars` : '';
-      line(doc, 'p', (value.author || 'Anonymous') + stars, node, 'cr-review-author');
+      const author = line(doc, 'p', value.author || 'Anonymous', node, 'cr-review-author');
+      if (stars) {
+        const rating = line(doc, 'span', '', author, 'cr-review-rating');
+        line(doc, 'span', stars, rating, 'cr-review-rating-text');
+        decorate(rating, renderRating, {rating:value.rating, maxRating:5}, doc,
+          'cr-review-rating-visual', 'cr-review-rating--custom');
+      }
       if (value.verification === 'cartray_verified_acquisition') line(doc, 'p', 'Verified purchase', node, 'cr-review-verification');
       line(doc, 'p', value.body, node, 'cr-review-body');
     } else {
@@ -206,7 +224,7 @@ export function renderContribution(item, parent, doc, budget) {
   }
 }
 
-export function attachReviews(config, doc = document) {
+export function attachReviews(config, doc = document, {renderRating, renderSummary} = config?.reviewPresentation ?? {}) {
   const subject = config?.reviewSubjects?.[config.productKey];
   if (!config?.reviewsEnabled || !subject || !validSubject(subject)) return;
   const section = doc.querySelector('#reviews'), status = doc.querySelector('#reviews-status');
@@ -230,10 +248,15 @@ export function attachReviews(config, doc = document) {
       lastRead=Date.now();
       const fragment = doc.createDocumentFragment();
       const budget = { remaining: 220 }; // 200 historical + 10 native reviews + their replies.
-      for (const item of result.page.contributions) renderContribution(item, fragment, doc, budget);
+      for (const item of result.page.contributions) renderContribution(item, fragment, doc, budget, {renderRating});
       list.append(fragment);
       announce('ready',result.summary);
-      status.textContent = reviewSummaryText(result.summary);
+      status.textContent = '';
+      const summary = line(doc, 'span', '', status, 'cr-review-summary');
+      line(doc, 'span', reviewSummaryText(result.summary), summary, 'cr-review-summary-text');
+      decorate(summary, renderSummary, {average:result.summary.rating.average,
+        ratedCount:result.summary.rating.rated_count, contributionCount:result.summary.contribution_count,
+        maxRating:5}, doc, 'cr-review-summary-visual', 'cr-review-summary--custom');
       cursor = result.page.next_after; snapshot = result.summary.snapshot_id;
       more.hidden = !result.page.has_more;
     } catch {
