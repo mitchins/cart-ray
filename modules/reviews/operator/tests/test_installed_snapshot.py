@@ -52,7 +52,8 @@ def target(tmp_path):
     installation = SimpleNamespace(
         config={"reviews_enabled": True, "account_id": api.account, "namespace": "merchant-test",
                 "store_key": "example-store"},
-        state={"environment": "test", "installation": "merchant-test"}, directory=tmp_path,
+        state={"environment": "test", "installation": "merchant-test", "deployment": {"complete": True}},
+        directory=tmp_path,
         api=api, db=Mock(return_value="bound-database"), assert_resources=Mock(), verifier=Mock(),
     )
     snapshot = MODULE / "tests/fixtures/approved-synthetic.json"
@@ -78,7 +79,7 @@ def test_exact_target_is_verified_and_receipt_is_immutable(target):
     first = apply(target)
     assert first["readback"] == {
         "snapshot_id": "one", "revision": 1, "digest": target[2]["snapshot_sha256"],
-        "subjects": 1, "reviews": 3, "replies": 1,
+        "subjects": 1, "reviews": 3, "replies": 1, "aliases": 0, "titles": 0, "provenance": 1,
     }
     assert apply(target) == first
     installation.assert_resources.assert_called()
@@ -190,3 +191,38 @@ def test_ignored_contribution_aborts_count_guard_before_commit(target):
     assert db.execute("SELECT COUNT(*) FROM review_contributions").fetchone()[0] == 0
     assert db.execute("SELECT COUNT(*) FROM review_snapshots").fetchone()[0] == 0
     assert not (target[0].directory / "review-snapshot-receipts").exists()
+
+
+def test_undeployed_inventory_has_useful_diagnostic(target):
+    target[0].state.pop("deployment")
+    with pytest.raises(ValueError, match="deploy and verify"):
+        apply(target)
+    assert target[0].api.batches == 0
+
+
+def test_missing_provenance_is_rejected_inside_transaction(target):
+    db = target[0].api.connection
+    db.executescript("CREATE TRIGGER skip_provenance BEFORE INSERT ON review_snapshot_provenance "
+                     "BEGIN SELECT RAISE(IGNORE); END;")
+    with pytest.raises(sqlite3.IntegrityError):
+        apply(target)
+    assert db.execute("SELECT COUNT(*) FROM review_publications").fetchone()[0] == 0
+    assert db.execute("SELECT COUNT(*) FROM review_snapshots").fetchone()[0] == 0
+
+
+def test_duplicate_approval_keys_rejected_even_with_matching_digest(target):
+    install, snapshot, approval = target
+    path = install.directory / "approval.json"
+    path.write_text(json.dumps(approval)[:-1] + ',"environment":"test"}')
+    with pytest.raises(ValueError, match="duplicate"):
+        installed_snapshot.apply(install, snapshot, path, hashlib.sha256(path.read_bytes()).hexdigest())
+    assert install.api.batches == 0
+
+
+def test_oversized_approval_is_rejected_before_provider_work(target):
+    install, snapshot, _ = target
+    path = install.directory / "approval.json"
+    path.write_bytes(b" " * 16_385)
+    with pytest.raises(ValueError, match="supported import size"):
+        installed_snapshot.apply(install, snapshot, path, hashlib.sha256(path.read_bytes()).hexdigest())
+    assert install.api.batches == 0

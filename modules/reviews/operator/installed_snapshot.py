@@ -121,19 +121,25 @@ def application_batch(snapshot, statements, approval):
         "SELECT p.snapshot_id,p.revision,s.digest,"
         f"(SELECT COUNT(*) FROM review_snapshot_subjects WHERE {snapshot_scope}) AS subjects,"
         f"(SELECT COUNT(*) FROM review_contributions WHERE {snapshot_scope} AND kind='review') AS reviews,"
-        f"(SELECT COUNT(*) FROM review_contributions WHERE {snapshot_scope} AND kind='reply') AS replies "
+        f"(SELECT COUNT(*) FROM review_contributions WHERE {snapshot_scope} AND kind='reply') AS replies,"
+        f"(SELECT COUNT(*) FROM review_subject_aliases WHERE {snapshot_scope}) AS aliases,"
+        f"(SELECT COUNT(*) FROM review_import_titles WHERE {snapshot_scope}) AS titles,"
+        f"(SELECT COUNT(*) FROM review_snapshot_provenance WHERE {snapshot_scope}) AS provenance "
         "FROM review_publications p JOIN review_snapshots s USING(store_key,environment,snapshot_id) "
         f"WHERE p.store_key={literal(store)} AND p.environment={literal(environment)};"
     )
     expected = target | {"subjects": len(snapshot["subjects"]),
                          "reviews": sum(c["kind"] == "review" for c in snapshot["contributions"]),
-                         "replies": sum(c["kind"] == "reply" for c in snapshot["contributions"])}
+                         "replies": sum(c["kind"] == "reply" for c in snapshot["contributions"]),
+                         "aliases": sum(len(s.get("aliases", [])) for s in snapshot["subjects"]),
+                         "titles": sum(c.get("title") is not None for c in snapshot["contributions"]), "provenance": 1}
     # Counts are checked inside the transaction, not merely after publication.
     count_guard = (
         "INSERT INTO review_import_guard SELECT CASE WHEN EXISTS(SELECT 1 FROM (" + readback.rstrip(";")
         + ") WHERE snapshot_id=" + literal(target["snapshot_id"])
         + f" AND revision={target['revision']} AND digest={literal(target['digest'])}"
-        + f" AND subjects={expected['subjects']} AND reviews={expected['reviews']} AND replies={expected['replies']})"
+        + f" AND subjects={expected['subjects']} AND reviews={expected['reviews']} AND replies={expected['replies']}"
+        + f" AND aliases={expected['aliases']} AND titles={expected['titles']} AND provenance=1)"
         + " THEN 1 ELSE 0 END;"
     )
     return [guard, *statements, count_guard, "DELETE FROM review_import_guard;", readback], expected
@@ -150,6 +156,8 @@ def apply(installation, snapshot_path, approval_path, expected_approval_sha256):
             or type(approval["publication_revision"]) is not int
             or snapshot["publication_revision"] != approval["publication_revision"]):
         raise ValueError("snapshot identity/revision differs from approval")
+    if not installation.state.get("deployment", {}).get("complete"):
+        raise ValueError("installation has no complete deployment; deploy and verify before applying a snapshot")
     installation.assert_resources()
     # Read-only verification of actual deployments, bindings and migration checksums.
     installation.verifier("inspect")

@@ -66,7 +66,9 @@ it is still current. A later publication prevents replaying an older approval.
 Successful readback produces a protected `0600`, non-overwritten local receipt at
 `$INSTALL/review-snapshot-receipts/$APPROVAL_SHA256.json`. It records the exact target,
 approval and snapshot digests, predecessor, publication identity, subject/review/reply
-counts and timestamp. It contains no review prose, recipient address or capabilities.
+counts (including aliases, titles and provenance) and timestamp. It contains no review prose, recipient address or capabilities.
+`expected_publication` records approved intent, not an observed predecessor: an exact
+retry can establish the current target without proving which invocation first applied it.
 Retain it with the approved files. These local receipts are not cryptographic signatures
 or immutable cloud audit records. Retry cannot replace a different existing receipt.
 
