@@ -119,18 +119,22 @@ class API:
                 return rows
         raise CloudError("resource list exceeds operator bound")
 
-    def query(self, database, sql, params=()):
-        result = self.request(f"d1/database/{database}/query", "POST", {"sql": sql, "params": list(params)})
-        if (
-            not isinstance(result, list)
-            or not result
-            or any(not isinstance(row, dict) or row.get("success") is not True for row in result)
-        ):
+    def query_results(self, database, body):
+        result = self.request(f"d1/database/{database}/query", "POST", body)
+        if (not isinstance(result, list) or not result
+                or any(not isinstance(row, dict) or row.get("success") is not True for row in result)):
             raise CloudError("D1 operator query did not succeed")
-        rows = result[0].get("results", [])
-        if not isinstance(rows, list) or any(not isinstance(row, dict) for row in rows):
+        rows = [row.get("results", []) for row in result]
+        if any(not isinstance(batch, list) or any(not isinstance(row, dict) for row in batch) for batch in rows):
             raise CloudError("D1 operator query returned malformed rows")
         return rows
+
+    def batch(self, database, statements):
+        """Keep generated statements in one explicit REST batch, without file chunking."""
+        return self.query_results(database, {"batch": [{"sql": sql} for sql in statements]})
+
+    def query(self, database, sql, params=()):
+        return self.query_results(database, {"sql": sql, "params": list(params)})[0]
 
     def upload(self, name, modules, metadata, create=False):
         boundary = "----cartray-operator-" + secrets.token_hex(16)

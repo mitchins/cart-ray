@@ -195,3 +195,13 @@ def test_queue_pagination_uses_provider_total_pages_and_includes_later_queues():
     with patch.object(api, "request", return_value={"result": first, "result_info": {"total_pages": 1}}) as request:
         assert api.listing("queues") == first
     request.assert_called_once_with("queues?page=1", envelope=True)
+
+
+def test_explicit_batch_is_one_request_and_keeps_statement_readbacks():
+    api = cloud.API("a" * 32, "private-key")
+    response = [{"success": True, "results": []}, {"success": True, "results": [{"n": 1}]}]
+    with patch.object(api, "request", return_value=response) as request:
+        assert api.batch("selected", ["INSERT INTO known VALUES (1);", "SELECT COUNT(*) n FROM known;"]) == [
+            [], [{"n": 1}]]
+        request.assert_called_once_with("d1/database/selected/query", "POST", {"batch": [
+            {"sql": "INSERT INTO known VALUES (1);"}, {"sql": "SELECT COUNT(*) n FROM known;"}]})

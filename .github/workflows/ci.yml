@@ -55,6 +55,8 @@ jobs:
         run: |
           uv build modules/reviews --wheel --out-dir /tmp/cartray-reviews-wheel
           uv run python modules/reviews/tests/verify_wheel.py /tmp/cartray-reviews-wheel
+      - name: Qualify installed snapshot atomic import on Workerd D1
+        run: uv run python modules/reviews/tests/installed_snapshot_workerd.py
       - name: Exercise Reviews installer, ingestion and Workerd D1 API
         run: uv run python modules/reviews/tests/workerd_integration.py
       - name: Qualify stalled uploads against direct Workerd

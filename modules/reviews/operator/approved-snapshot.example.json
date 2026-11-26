@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "account_id": "REPLACE_WITH_VERIFIED_ACCOUNT_ID",
+  "database_id": "REPLACE_WITH_INSTALLED_D1_UUID",
+  "installation_id": "merchant-test",
+  "store_key": "merchant",
+  "environment": "test",
+  "snapshot_sha256": "REPLACE_WITH_EXACT_APPROVED_SNAPSHOT_SHA256",
+  "snapshot_id": "approved-snapshot-1",
+  "publication_revision": 1,
+  "expected_publication": null,
+  "approval_ref": "REPLACE_WITH_REVIEW_APPROVAL_REFERENCE"
+}
