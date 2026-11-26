@@ -399,9 +399,11 @@ unexpected v4 request against a product-only server is limited to product-only v
 checkout can proceed and its original request fingerprint remains pinned. Enabling the
 feature later cannot widen that order or reinterpret its pending retry.
 
-After any v4 checkout choice exists (including an unchecked one or a pending order),
-**schema compatibility alone is insufficient for application rollback**. The installer
-checks actual D1 state before changing configuration or publishing older Workers. It
+Once store reviews are configured or deployed, or any v4 checkout choice exists
+(including an unchecked one or a pending order), **schema compatibility alone is
+insufficient for application rollback**. The installer checks retained configuration
+and actual D1 state before changing configuration or publishing older Workers. An
+empty v4 count alone cannot authorise an older target while checkout can still accept v4. It
 requires a release marked `store_review_contract: 1` retaining the same configured store
 subject. A pre-store release such as `aa0f640` is not a supported backend rollback:
 its checkout parser rejects v4, its order-access implementation lacks voluntary v4 access,

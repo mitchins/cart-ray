@@ -154,6 +154,8 @@ def main():
                 shop_choice.press("Space")
                 check(engine + " declined shop invitation leaves checkout available",
                       not shop_choice.is_checked() and page.locator("#checkout").is_enabled())
+                page.screenshot(path=str(shots / f"connected-{prefix}{engine}-store-permission-mobile.png"),
+                                full_page=True)
                 page.unroute("**/storefront-config.js", enable_store_permission)
                 requests = []
                 attempts = []
@@ -456,6 +458,7 @@ def main():
                 page.locator("[data-product-chooser] button").filter(has_text="The Shop").click()
                 shop_form = page.locator("#content > form:visible")
                 check(engine + " featured product does not hide shop review", "The Shop" in shop_form.inner_text())
+                page.screenshot(path=str(shots / f"connected-{prefix}{engine}-store-review-mobile.png"), full_page=True)
                 shop_form.locator('input[name="rating-stars"][value="5"]').check()
                 with page.expect_response(lambda response: response.url.endswith("/reviews/v1/contributions")):
                     shop_form.locator('button[type="submit"]').click()

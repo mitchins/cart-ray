@@ -1377,6 +1377,7 @@ class Installation(PostPurchaseOperator):
             progress = {"commit": build["commit"], "release_id": release_id, "versions": {}, "complete": False}
             self.state["deployment"] = progress
         progress["catalogue_config"] = build.get("catalogue_config")
+        progress["store_review_subject"] = build.get("store_review_subject")
         # Validate every retained artifact before any runtime mutation.
         for role in self.roles:
             self.artifact_modules(role, build)
@@ -1914,7 +1915,7 @@ class Installation(PostPurchaseOperator):
         return result
 
     def check_store_review_rollback(self, release):
-        """Do not deploy a pre-v4 backend after an actual v4 checkout choice exists."""
+        """Keep v4-capable checkout compatible even while email processing is paused."""
         from cartray.models import STORE_REVIEW_WORDING_VERSION
         rows = self.api.query(
             self.db("commerce"),
@@ -1923,15 +1924,26 @@ class Installation(PostPurchaseOperator):
         )
         if not rows or rows[0].get("present") not in (0, 1):
             raise ValueError("cannot verify store-review rollback compatibility; inspect the commerce database")
-        if not rows[0]["present"]:
+        current = self.config.get("store_review_subject")
+        deployment = self.state.get("deployment", {})
+        deployed = [deployment.get("store_review_subject"),
+                    (deployment.get("catalogue_config") or {}).get("store_review_subject")]
+        source_version = deployment.get("versions", {}).get("source")
+        if source_version:
+            for previous in self.state["releases"]:
+                if previous.get("versions", {}).get("source") == source_version:
+                    deployed.extend([previous.get("store_review_subject"),
+                                     (previous.get("catalogue_config") or {}).get("store_review_subject")])
+        if not rows[0]["present"] and current is None and not any(deployed):
             return
         catalogue = release.get("catalogue_config")
         retained = (catalogue.get("store_review_subject") if isinstance(catalogue, dict)
                     else release.get("store_review_subject"))
-        current = self.config.get("store_review_subject")
         if (type(release.get("store_review_contract")) is not int or release["store_review_contract"] != 1
-                or current is None or retained != current):
-            raise ValueError("v4 shop/product checkout choices exist: rollback requires a store-review-capable "
+                or current is None or retained != current
+                or any(subject is not None and subject != current for subject in deployed)):
+            raise ValueError("shop/product reviews are configured, deployed or recorded: rollback requires a "
+                             "store-review-capable "
                              "release retaining the same store subject; use a compatible release or forward fix; "
                              "databases and issued capabilities are not rewound")
 
@@ -2007,6 +2019,7 @@ class Installation(PostPurchaseOperator):
             "versions": dict(versions),
             "complete": True,
             "sending": release_sending,
+            "store_review_subject": release.get("store_review_subject"),
         }
         if self.has_post_purchase:
             self.state["deployment"]["post_purchase_disabled_versions"] = {

@@ -144,7 +144,6 @@ def record_checkout_choice(connection, *, version, suffix):
 
 def test_v4_checkout_blocks_pre_store_rollback_before_any_mutation(tmp_path):
     install, cloud = migrated(tmp_path)
-    install.config['store_review_subject'] = dict(SUBJECT)
     install.migrate()
     connection = cloud.databases[install.db('commerce')][1]
     old_release = {'commit': 'a' * 40}
@@ -156,7 +155,7 @@ def test_v4_checkout_blocks_pre_store_rollback_before_any_mutation(tmp_path):
     before_state = json.loads(json.dumps(install.state))
     before_data = list(connection.iterdump())
     before_writes = cloud.writes
-    with pytest.raises(ValueError, match='v4 shop/product checkout choices exist'):
+    with pytest.raises(ValueError, match='configured, deployed or recorded'):
         install.rollback(0)
     assert install.state == before_state
     assert list(connection.iterdump()) == before_data
@@ -203,3 +202,53 @@ def test_compatible_v4_application_rollback_preserves_checkout_and_store_records
     assert install.vault() == original_keys
     assert list(connection.iterdump()) == before
     assert set(provider.active) == {'acorn-operator-test-source', 'acorn-operator-test-reviews'}
+
+
+@pytest.mark.parametrize('configured', ['current', 'deployment', 'deployed-release'])
+def test_configured_store_prevents_checkout_race_with_incompatible_rollback(tmp_path, configured):
+    install, cloud = migrated(tmp_path)
+    install.migrate()
+    connection = cloud.databases[install.db('commerce')][1]
+    old_release = {'commit': 'a' * 40}
+    install.state['releases'] = [old_release]
+    if configured == 'current':
+        install.config['store_review_subject'] = dict(SUBJECT)
+    elif configured == 'deployment':
+        install.state['deployment'] = {'catalogue_config': {'store_review_subject': SUBJECT}}
+    else:
+        install.state['deployment'] = {'versions': {'source': 'store-capable-version'}}
+        install.state['releases'].append({'versions': {'source': 'store-capable-version'},
+                                          'store_review_subject': SUBJECT})
+    query = cloud.query
+    raced = []
+
+    def checkout_after_query(database, sql, params=()):
+        result = query(database, sql, params)
+        if 'SELECT EXISTS(SELECT 1 FROM review_invitation_checkout_choices' in sql:
+            assert result == [{'present': 0}]
+            # A real checkout commits just after the read. Paused email does not stop checkout.
+            record_checkout_choice(connection, version='review-invitation-v4', suffix='racing')
+            raced.append(True)
+        return result
+
+    cloud.query = checkout_after_query
+    def prohibit_publish(*_):
+        pytest.fail('incompatible backend must be rejected before deployment')
+    cloud.publish = prohibit_publish
+    original_state = json.loads(json.dumps(install.state))
+    with pytest.raises(ValueError, match='configured, deployed or recorded'):
+        install.rollback(0)
+    assert raced == [True]
+    assert install.state == original_state
+    assert connection.execute('SELECT COUNT(*) FROM review_invitation_checkout_choices').fetchone()[0] == 1
+
+
+def test_configured_store_rejects_old_release_even_before_first_checkout(tmp_path):
+    install, cloud = migrated(tmp_path)
+    install.config['store_review_subject'] = dict(SUBJECT)
+    install.migrate()
+    with pytest.raises(ValueError, match='configured, deployed or recorded'):
+        install.check_store_review_rollback({'commit': 'a' * 40})
+    install.check_store_review_rollback({'store_review_contract': 1, 'store_review_subject': SUBJECT})
+    assert cloud.query(install.db('commerce'),
+                       'SELECT COUNT(*) n FROM review_invitation_checkout_choices') == [{'n': 0}]
