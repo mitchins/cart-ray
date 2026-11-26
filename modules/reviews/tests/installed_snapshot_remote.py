@@ -7,8 +7,10 @@ separate owner approval. It never provisions, deletes or binds cloud resources.
 import argparse
 import hashlib
 import json
+import os
 import re
 import sys
+import tempfile
 import time
 from pathlib import Path
 
@@ -102,9 +104,21 @@ def rejected(api, database, operation, payloads, name):
         raise ValueError("REST batch was not atomic; retained database requires inspection: " + name)
 
 
-def qualify(api, database, database_name, receipt_path):
-    if receipt_path.suffix != ".json" or receipt_path.exists():
+
+def preflight_receipt(receipt_path):
+    """Prove protected receipt staging works before reading or changing cloud state."""
+    if receipt_path.suffix != ".json" or receipt_path.exists() or receipt_path.is_symlink():
         raise ValueError("supply a new .json receipt path; existing receipts are never overwritten")
+    receipt_path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    with tempfile.NamedTemporaryFile(mode="wb", prefix=".snapshot-receipt-check-", dir=receipt_path.parent) as stream:
+        os.fchmod(stream.fileno(), 0o600)
+        stream.write(b"receipt-write-preflight\n")
+        stream.flush()
+        os.fsync(stream.fileno())
+
+
+def qualify(api, database, database_name, receipt_path):
+    preflight_receipt(receipt_path)
     assert_empty_target(api, database, database_name)
     fixture_path = MODULE / "tests/fixtures/approved-synthetic.json"
     original = json.loads(fixture_path.read_bytes())

@@ -211,9 +211,10 @@ def test_provider_evidence_is_bounded_and_not_in_public_error_text():
     detail = 'qualification: late publication failure; confidential-provider-detail'
     response = urllib.error.HTTPError('https://provider', 400, 'Rejected', {}, io.BytesIO(json.dumps({
         'errors': [{'code': 7500, 'message': detail}]}).encode()))
+    api = cloud.API('a' * 32, 'private-key')
     with patch.object(cloud.urllib.request, 'build_opener', return_value=Opener(response)):
         with pytest.raises(cloud.CloudError) as caught:
-            cloud.API('a' * 32, 'private-key').batch('selected', ['SELECT 1;'])
+            api.batch('selected', ['SELECT 1;'])
     assert caught.value.provider_errors == ({'code': 7500, 'message': detail},)
     assert 'confidential' not in str(caught.value)
     assert 'private-key' not in str(caught.value)

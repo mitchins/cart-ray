@@ -193,3 +193,46 @@ def test_swapped_late_failure_error_records_hold(api, tmp_path):
     receipt = json.loads(path.read_text())
     assert receipt["status"] == "HOLD"
     assert "late_failure_rollback" not in receipt["results"]
+
+
+def test_receipt_parent_file_fails_before_any_provider_call(tmp_path):
+    parent = tmp_path / "not-a-directory"
+    parent.write_text("retained file")
+    api = Mock()
+    with pytest.raises(FileExistsError):
+        runner.qualify(api, DATABASE, NAME, parent / "receipt.json")
+    assert api.mock_calls == []
+
+
+def test_unwritable_receipt_staging_fails_before_any_provider_call(tmp_path, monkeypatch):
+    api = Mock()
+    monkeypatch.setattr(runner.tempfile, "NamedTemporaryFile", Mock(side_effect=PermissionError("not writable")))
+    with pytest.raises(PermissionError, match="not writable"):
+        runner.qualify(api, DATABASE, NAME, tmp_path / "receipt.json")
+    assert api.mock_calls == []
+
+
+def test_broken_receipt_symlink_is_rejected_before_any_provider_call(tmp_path):
+    path = tmp_path / "receipt.json"
+    path.symlink_to(tmp_path / "missing-destination.json")
+    api = Mock()
+    with pytest.raises(ValueError, match="never overwritten"):
+        runner.qualify(api, DATABASE, NAME, path)
+    assert api.mock_calls == []
+    assert path.is_symlink()
+
+
+def test_receipt_preflight_creates_private_parent_and_cleans_staging(tmp_path, monkeypatch):
+    path = tmp_path / "private" / "receipt.json"
+    real_fsync = runner.os.fsync
+    checked = []
+
+    def check_fsync(fd):
+        checked.append(runner.os.fstat(fd).st_mode & 0o777)
+        return real_fsync(fd)
+
+    monkeypatch.setattr(runner.os, "fsync", check_fsync)
+    runner.preflight_receipt(path)
+    assert checked == [0o600]
+    assert path.parent.stat().st_mode & 0o777 == 0o700
+    assert list(path.parent.iterdir()) == []

@@ -26,12 +26,16 @@ class CloudError(RuntimeError):
         )
 
 
+def provider_error_details(value):
+    """Normalize bounded provider evidence for both HTTP and envelope failures."""
+    errors = value.get("errors", []) if isinstance(value, dict) else []
+    return errors if isinstance(errors, list) else []
+
+
 def error_codes(value):
     """Extract bounded numeric provider codes without trusting response shapes."""
-    errors = value.get("errors", []) if isinstance(value, dict) else []
-    if not isinstance(errors, list):
-        return []
-    return [item["code"] for item in errors if isinstance(item, dict) and type(item.get("code")) is int]
+    return [item["code"] for item in provider_error_details(value)
+            if isinstance(item, dict) and type(item.get("code")) is int]
 
 
 class API:
@@ -57,7 +61,7 @@ class API:
             try:
                 payload = json.loads(error.read(65536))
                 codes = error_codes(payload)
-                details = payload.get("errors", []) if isinstance(payload, dict) else []
+                details = provider_error_details(payload)
             except (ValueError, TypeError):
                 codes, details = [], []
             remedy = (
@@ -66,7 +70,7 @@ class API:
                 else ""
             )
             raise CloudError(f"Cloudflare {method} {path}: HTTP {error.code}, provider codes {codes}{remedy}",
-                             provider_errors=details if isinstance(details, list) else []) from None
+                             provider_errors=details) from None
         except (urllib.error.URLError, TimeoutError):
             raise CloudError(f"Cloudflare {method} {path}: unavailable; retry the same command") from None
         try:
@@ -78,7 +82,7 @@ class API:
         if result.get("success") is not True:
             codes = error_codes(result)
             raise CloudError(f"Cloudflare {method} {path}: provider codes {codes}",
-                             provider_errors=result.get("errors", []) if isinstance(result.get("errors"), list) else [])
+                             provider_errors=provider_error_details(result))
         return result if envelope else result.get("result")
 
     def queue_listing(self):
