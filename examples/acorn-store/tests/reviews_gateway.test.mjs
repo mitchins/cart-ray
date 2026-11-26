@@ -53,3 +53,18 @@ test('customer POST forwards only required protocol headers and body',async()=>{
  const response=await gateway.fetch(request('/reviews/v1/contributions',{headers,body:'{"rating":5}'}),e);
  assert.equal(response.status,200);assert.equal(observed,1);
 });
+
+test('merchant store-review landing stays static while API and private paths stay bounded',async()=>{
+ const e=env();let assets=0;let reviews=0;
+ e.ASSETS={fetch:async request=>{assets++;return new Response(request.method==='HEAD'?null:'merchant store reviews');}};
+ e.REVIEWS_API={fetch:async()=>{reviews++;return new Response('unexpected');}};
+ e.REVIEWS_PUBLIC=e.REVIEWS_API;
+ for (const method of ['GET','HEAD']) for (const query of ['', '?source=browser']) {
+  const result=await gateway.fetch(new Request(origin+'/reviews/'+query,{method}),e);
+  assert.equal(result.status,200);
+ }
+ assert.equal(assets,4);assert.equal(reviews,0);
+ for (const path of ['/reviews/','/reviews/v1/unrelated','/reviews-admin/v1/subjects'])
+  assert.equal((await gateway.fetch(request(path),e)).status,404);
+ assert.equal(assets,4);assert.equal(reviews,0);
+});

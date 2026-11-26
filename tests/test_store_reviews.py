@@ -178,7 +178,8 @@ def test_later_paid_order_has_its_own_store_review(purchase, fixture_catalogue):
     review(db, invitation(db, first_order), 'merchant-store', 'first-purchase-store')
     gateway = FakePaymentGateway(redirects={"prior": CheckoutRedirect("prior", "https://checkout.invalid/prior")})
     store = D1OrderStore(db)
-    checkout = CheckoutService(fixture_catalogue, store, gateway, review_invitations_enabled=True)
+    checkout = CheckoutService(fixture_catalogue, store, gateway, review_invitations_enabled=True,
+                               store_review_subject="merchant-store")
     redirect = run(checkout.checkout(CheckoutRequest('later-paid-order', fixture_catalogue.version,
         (CanonicalItem('TEST-BUNDLE', 1),), review_invitation_opt_in=True,
         review_invitation_wording_version='review-invitation-v4')))
@@ -287,3 +288,47 @@ def test_order_access_keeps_management_link_when_every_subject_is_consumed(purch
     assert data['reviews']['subjects'] == []
     run(worker._drain_post_purchase(env))
     assert len(sent) == 1
+
+
+def test_client_v4_before_store_configuration_stays_product_only_on_upgrade(purchase, fixture_catalogue):
+    db, env, _, _ = purchase
+    gateway = FakePaymentGateway(redirects={"prior": CheckoutRedirect("prior", "https://checkout.invalid/prior")})
+    store = D1OrderStore(db)
+    checkout = CheckoutService(fixture_catalogue, store, gateway, review_invitations_enabled=True)
+    request = CheckoutRequest('early-v4-client', fixture_catalogue.version, (CanonicalItem('TEST-BUNDLE', 1),),
+                              review_invitation_opt_in=True, review_invitation_wording_version='review-invitation-v4')
+    redirect = run(checkout.checkout(request))
+    order = gateway.requests[0].order_id
+    assert db.conn.execute('SELECT wording_version FROM review_invitation_checkout_choices WHERE order_id=?',
+                            (order,)).fetchone()[0] == 'review-invitation-v3'
+    checkout.store_review_subject = 'merchant-store'
+    assert run(checkout.checkout(request)) == redirect  # Configuration changes do not reinterpret a pending order.
+    assert len(gateway.requests) == 1
+    run(store.confirm_settlement(order_id=order, session_id=redirect.session_id, event_id='evt_early_v4',
+        payload={'id': 'evt_early_v4'}, payload_sha256='sha256:early-v4', payment_status='paid',
+        amount_total_minor=100, now=2_000_000_000))
+    enable_store(db, env)
+    run(worker._drain_post_purchase(env))
+    assert not run(order_reviews.store_scope_disclosed(db, order))
+    with pytest.raises(ValueError):
+        review(db, invitation(db, order), 'merchant-store', 'premature-scope')
+
+
+def test_confirmed_free_order_never_acquires_store_review_authority(purchase, fixture_catalogue):
+    db, env, _, _ = purchase
+    enable_store(db, env)
+    gateway = FakePaymentGateway(redirects={"prior": CheckoutRedirect("prior", "https://checkout.invalid/prior")})
+    store = D1OrderStore(db)
+    checkout = CheckoutService(fixture_catalogue, store, gateway, review_invitations_enabled=True,
+                               store_review_subject="merchant-store")
+    redirect = run(checkout.checkout(CheckoutRequest('free-store-no-entitlement', fixture_catalogue.version,
+        (CanonicalItem('TEST-FREE', 1),), review_invitation_opt_in=True,
+        review_invitation_wording_version='review-invitation-v4')))
+    order = gateway.requests[0].order_id
+    run(store.confirm_settlement(order_id=order, session_id=redirect.session_id, event_id='evt_free_store',
+        payload={'id': 'evt_free_store'}, payload_sha256='sha256:free-store', payment_status='no_payment_required',
+        amount_total_minor=0, now=2_000_000_000))
+    run(worker._drain_post_purchase(env))
+    assert not run(order_reviews.store_scope_disclosed(db, order))
+    assert db.conn.execute('SELECT COUNT(*) FROM acquisition_invitations WHERE acquisition_id=?',
+                            (order,)).fetchone()[0] == 0

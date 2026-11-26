@@ -416,6 +416,10 @@ async def checkout_service_from_environment(env) -> CheckoutService:
         client,
         CheckoutMetadataSealer(environment, _required_env(env, "CARTRAY_SIGNING_KEY_ID"), signer),
     )
+    try:
+        store_subject = order_reviews.StoreReviewSubject.parse(getattr(env, "CARTRAY_STORE_REVIEW_SUBJECT", None))
+    except (ValueError, TypeError):
+        store_subject = None  # Optional Reviews configuration must not block checkout.
     return CheckoutService(
         catalogue,
         D1OrderStore(env.DB),
@@ -424,6 +428,7 @@ async def checkout_service_from_environment(env) -> CheckoutService:
         cancel_url,
         review_invitations_enabled=_automatic_invitation_enabled(env),
         review_invitation_default_selected=getattr(env, "CARTRAY_REVIEW_INVITATION_DEFAULT", None) == "checked",
+        store_review_subject=store_subject.subject_id if store_subject else None,
     )
 
 

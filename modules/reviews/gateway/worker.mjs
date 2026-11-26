@@ -28,7 +28,9 @@ export default {async fetch(request, env) {
     try { return await env.CARTRAY_SOURCE.fetch(new Request(target, init)); }
     catch { return unavailable(503); }
   }
-  const reviewRoute = url.pathname.startsWith('/reviews/');
+  // The merchant may own a static store-review landing page at this canonical path.
+  const staticReviews = url.pathname === '/reviews/' && ['GET','HEAD'].includes(request.method);
+  const reviewRoute = url.pathname.startsWith('/reviews/') && !staticReviews;
   if (!reviewRoute) {
     if (url.pathname.startsWith('/reviews-admin/') || url.pathname.startsWith('/reviews-internal/')) return unavailable(404);
     return env.ASSETS?.fetch ? env.ASSETS.fetch(request) : unavailable(503);

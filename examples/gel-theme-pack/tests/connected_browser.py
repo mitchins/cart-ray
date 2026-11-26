@@ -449,6 +449,8 @@ def main():
                 page.route("**/reviews/v1/invitation", mixed_invitation)
                 page.goto(args.origin + "/review/#invitation=" + token + "&featured=kit")
                 page.wait_for_selector("[data-product-chooser]")
+                check(engine + " native review choices accessible label",
+                      page.locator("#content").get_attribute("aria-label") == "Your review choices")
                 check(engine + " mixed invitation keeps shop and both products",
                       page.locator("[data-product-chooser] button").count() == 3)
                 page.locator("[data-product-chooser] button").filter(has_text="The Shop").click()

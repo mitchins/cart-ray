@@ -118,3 +118,88 @@ def test_store_subject_route_cannot_hide_a_non_reviewable_product(tmp_path):
                             store_review_subject=SUBJECT | {"path": "/products/one/"})
     with pytest.raises(ValueError, match="collides with a merchant product"):
         install.verify_merchant_inputs()
+
+
+def record_checkout_choice(connection, *, version, suffix):
+    """Use the actual order store to retain an immutable checkout choice/grant."""
+    import asyncio
+
+    from cartray.models import CheckoutOrder, OrderItem
+    from cartray.store import SqliteOrderStore
+
+    order = CheckoutOrder(
+        order_id='rollback-order-' + suffix, checkout_request_id='rollback-request-' + suffix,
+        request_fingerprint='rollback-fingerprint-' + suffix, manifest_version='sha256:' + 'a' * 64,
+        items=(OrderItem(product_key='PAID-ITEM', quantity=1, stripe_price_id='price_test',
+                         unit_amount_minor=100, fulfilment_resources=()),),
+        items_digest='sha256:' + 'b' * 64, currency='aud', subtotal_minor=100,
+        review_invitation_opt_in=True, review_invitation_policy_enabled=True,
+        review_invitation_default_selected=False, review_invitation_wording_version=version,
+    )
+    asyncio.run(SqliteOrderStore(connection).start_or_load(order, nonce='checkout', now=100))
+    assert connection.execute(
+        'SELECT wording_version FROM review_invitation_checkout_grants WHERE order_id=?',
+        (order.order_id,)).fetchone()[0] == version
+
+
+def test_v4_checkout_blocks_pre_store_rollback_before_any_mutation(tmp_path):
+    install, cloud = migrated(tmp_path)
+    install.config['store_review_subject'] = dict(SUBJECT)
+    install.migrate()
+    connection = cloud.databases[install.db('commerce')][1]
+    old_release = {'commit': 'a' * 40}
+    install.check_store_review_rollback(old_release)
+    record_checkout_choice(connection, version='review-invitation-v3', suffix='legacy')
+    install.check_store_review_rollback(old_release)
+    record_checkout_choice(connection, version='review-invitation-v4', suffix='shop')
+    install.state['releases'] = [old_release]
+    before_state = json.loads(json.dumps(install.state))
+    before_data = list(connection.iterdump())
+    before_writes = cloud.writes
+    with pytest.raises(ValueError, match='v4 shop/product checkout choices exist'):
+        install.rollback(0)
+    assert install.state == before_state
+    assert list(connection.iterdump()) == before_data
+    assert cloud.writes == before_writes
+
+
+@pytest.mark.parametrize('release', [
+    {'store_review_contract': 1},
+    {'store_review_contract': True, 'store_review_subject': SUBJECT},
+    {'store_review_contract': 1, 'store_review_subject': SUBJECT | {'subject_id': 'other-store'}},
+    {'store_review_contract': 1, 'catalogue_config': {'store_review_subject': SUBJECT | {'path': '/other/'}}},
+    {'store_review_contract': 1, 'store_review_subject': SUBJECT, 'catalogue_config': {}},
+])
+def test_v4_rollback_requires_compatible_code_and_same_retained_store(tmp_path, release):
+    install, cloud = migrated(tmp_path)
+    install.config['store_review_subject'] = dict(SUBJECT)
+    install.migrate()
+    connection = cloud.databases[install.db('commerce')][1]
+    record_checkout_choice(connection, version='review-invitation-v4', suffix='shop')
+    with pytest.raises(ValueError, match='same store subject'):
+        install.check_store_review_rollback(release)
+
+
+def test_compatible_v4_application_rollback_preserves_checkout_and_store_records(tmp_path):
+    from test_lifecycle import build_at, lifecycle
+
+    install, provider, database, _, _ = lifecycle(tmp_path)
+    install.config['store_review_subject'] = dict(SUBJECT)
+    install.state['config']['store_review_subject'] = dict(SUBJECT)
+    first = build_at(install, 'a' * 40)
+    assert first['store_review_contract'] == 1 and first['store_review_subject'] == SUBJECT
+    install.deploy()
+    install.verify()
+    build_at(install, 'b' * 40)
+    install.deploy()
+    install.verify()
+    connection = database.databases[install.db('commerce')][1]
+    record_checkout_choice(connection, version='review-invitation-v4', suffix='shop')
+    before = list(connection.iterdump())
+    original_keys = install.vault()
+    result = install.rollback(-2)
+    assert result['rollback_commit'] == 'a' * 40 and result['database_rewind'] is False
+    assert install.config['store_review_subject'] == SUBJECT
+    assert install.vault() == original_keys
+    assert list(connection.iterdump()) == before
+    assert set(provider.active) == {'acorn-operator-test-source', 'acorn-operator-test-reviews'}

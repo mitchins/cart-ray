@@ -536,7 +536,8 @@ def test_same_source_rebuild_retains_both_catalogues_and_rollback_storefront(tmp
     install.state['releases'] = [{**first, 'versions': {'source': 'v1'}, 'sending': False},
                                  {**second, 'versions': {'source': 'v2'}, 'sending': False}]
     published = []
-    install.api = SimpleNamespace(publish=lambda name, version: published.append(version))
+    install.api = SimpleNamespace(publish=lambda name, version: published.append(version),
+                                  query=lambda database, sql, params=(): [{"present": 0}])
     monkeypatch.setattr(install, 'verifier', lambda mode: {'revision': 0})
     storefront = []
     monkeypatch.setattr(install, 'deploy_storefront', lambda release: storefront.append(

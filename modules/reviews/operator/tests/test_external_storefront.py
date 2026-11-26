@@ -133,7 +133,8 @@ def backend_for_visibility(p, visibility):
     nodes, _ = graph(p)
     bindings = [{**b, **({"database_id": b["id"]} if b["type"] == "d1" else {})}
                 for b in nodes["source"]["bindings"]]
-    p.api = SimpleNamespace(request=lambda *args: visibility,
+    p.api = SimpleNamespace(query=lambda database, sql, params=(): [{"present": 0}],
+                            request=lambda *args: visibility,
                             version=lambda name: {"id": "v1", "resources": {"bindings": bindings}})
     p.check_schema = lambda: None
     p.vault = lambda: {}

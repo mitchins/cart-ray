@@ -5,6 +5,7 @@
   const featured = (new URLSearchParams(location.hash.slice(1)).get("featured") || "").split(",");
   const message = document.querySelector("#message");
   const content = document.querySelector("#content");
+  content.setAttribute("aria-label", "Your review choices");
   const unavailable = "This invitation is unavailable. It may have expired or already been replaced. Please contact the store for help.";
   const element = (tag, text) => {
     const node = document.createElement(tag);

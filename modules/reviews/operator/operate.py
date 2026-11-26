@@ -1281,6 +1281,9 @@ class Installation(PostPurchaseOperator):
             "commit": commit,
             "release_id": release_id,
             "resource_config_encoding": "bounded-secrets-v1",
+            "store_review_contract": 1,
+            **({"store_review_subject": self.config["store_review_subject"]}
+               if "store_review_subject" in self.config else {}),
             "resource_config_sha256": resource_hash,
             "catalogue_config": self.catalogue_config() if "merchant_inputs" in self.config else None,
             "merchant_inputs_sha256": self.config.get("merchant_inputs_sha256"),
@@ -1910,15 +1913,38 @@ class Installation(PostPurchaseOperator):
         atomic_json(self.directory / "receipt.json", result)
         return result
 
+    def check_store_review_rollback(self, release):
+        """Do not deploy a pre-v4 backend after an actual v4 checkout choice exists."""
+        from cartray.models import STORE_REVIEW_WORDING_VERSION
+        rows = self.api.query(
+            self.db("commerce"),
+            "SELECT EXISTS(SELECT 1 FROM review_invitation_checkout_choices WHERE wording_version=?) AS present",
+            [STORE_REVIEW_WORDING_VERSION],
+        )
+        if not rows or rows[0].get("present") not in (0, 1):
+            raise ValueError("cannot verify store-review rollback compatibility; inspect the commerce database")
+        if not rows[0]["present"]:
+            return
+        catalogue = release.get("catalogue_config")
+        retained = (catalogue.get("store_review_subject") if isinstance(catalogue, dict)
+                    else release.get("store_review_subject"))
+        current = self.config.get("store_review_subject")
+        if (type(release.get("store_review_contract")) is not int or release["store_review_contract"] != 1
+                or current is None or retained != current):
+            raise ValueError("v4 shop/product checkout choices exist: rollback requires a store-review-capable "
+                             "release retaining the same store subject; use a compatible release or forward fix; "
+                             "databases and issued capabilities are not rewound")
+
     def rollback(self, index):
         if self.state.get("post_purchase_provider_migration"):
             raise ValueError("finish credential reconfiguration and OFF deployment before rollback")
         self.require_post_purchase_off()
         self.check_schema()
-        self.pin_suppression()
         if not self.state["releases"] or not -len(self.state["releases"]) <= index < len(self.state["releases"]):
             raise ValueError("requested compatible release is not in this installation inventory")
         release = self.state["releases"][index]
+        self.check_store_review_rollback(release)
+        self.pin_suppression()
         self.check_resource_config_compatibility(release)
         if (
             release["schema"] != self.state.get("migration_ledgers")
