@@ -153,6 +153,7 @@ def capture_build(install, commit):
              "suppression_key_fingerprint": install.state["secret_fingerprints"]["recipient_hash"],
              "merchant_config_sha256": install.merchant_config_hash(),
              "merchant_inputs_sha256": install.config["merchant_inputs_sha256"],
+             "catalogue_config": install.catalogue_config(),
              "merchant_lock_sha256": digest(Path(install.config["preflight_lock"]).read_bytes()),
              "post_purchase_config_sha256": install.config["post_purchase_config_sha256"],
              "post_purchase_vault_fingerprints": {
@@ -836,6 +837,21 @@ def test_branding_refresh_uses_recorded_old_bindings_then_deploys_new_presentati
     assert install.state['post_purchase_modes'] == OFF
     assert install.state['resources'] == before_resources
     assert install.vault_path.read_bytes() == before_vault
+    assert install.post_purchase_fence()['activation_watermark'] == 7
+    old_release = len(install.state['releases']) - 1
+    old_binding = nodes['source']['vars']['CARTRAY_ORDER_ACCESS_PRESENTATION']
+    with_logo = {**branding, 'logo_path': '/assets/approved-logo.svg', 'heading_font': 'editorial'}
+    install.refresh_merchant_clients(with_logo)
+    install.check_current_post_purchase_off()
+    capture_build(install, 'logo')
+    install.deploy()
+    logo_nodes, _ = graph(install)
+    assert json.loads(logo_nodes['source']['vars']['CARTRAY_ORDER_ACCESS_PRESENTATION']) == with_logo
+    assert install.rollback(old_release)['database_rewind'] is False
+    restored_nodes, _ = graph(install)
+    assert restored_nodes['source']['vars']['CARTRAY_ORDER_ACCESS_PRESENTATION'] == old_binding
+    assert install.vault_path.read_bytes() == before_vault
+    assert install.state['resources'] == before_resources
     assert install.post_purchase_fence()['activation_watermark'] == 7
 
 
