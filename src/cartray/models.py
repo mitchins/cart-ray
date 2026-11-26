@@ -47,6 +47,7 @@ class CatalogProduct:
 
 
 REVIEW_INVITATION_WORDING_VERSION = "review-invitation-v3"
+STORE_REVIEW_WORDING_VERSION = "review-invitation-v4"
 
 
 @dataclass(frozen=True)
@@ -77,7 +78,8 @@ class CheckoutRequest:
             request_id = payload["checkout_request_id"]
             manifest_version = payload["manifest_version"]
             wording = payload.get('review_invitation_wording_version', 'review-invitation-v1')
-            if wording not in ('review-invitation-v1', 'review-invitation-v2', REVIEW_INVITATION_WORDING_VERSION):
+            if wording not in ('review-invitation-v1', 'review-invitation-v2',
+                               REVIEW_INVITATION_WORDING_VERSION, STORE_REVIEW_WORDING_VERSION):
                 raise TypeError
             opt_in = payload.get("review_invitation_opt_in", False)
             if not isinstance(opt_in, bool):

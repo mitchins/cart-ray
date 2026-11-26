@@ -197,7 +197,9 @@ def test_cached_build_and_deploy_reject_changed_merchant_configuration(tmp_path)
 
 @pytest.mark.parametrize("timing", ["receipt", "followup", "both"])
 @pytest.mark.parametrize("shared_mail", [False, True])
-def test_merchant_reviews_require_correct_subject_pages_and_native_clients(tmp_path, monkeypatch, shared_mail, timing):
+@pytest.mark.parametrize("store_reviews", [False, True])
+def test_merchant_reviews_require_correct_subject_pages_and_native_clients(
+        tmp_path, monkeypatch, shared_mail, timing, store_reviews):
     source = merchant(tmp_path / "source")
     site = source / "storefront"
     page = site / "products/one/index.html"
@@ -222,7 +224,9 @@ def test_merchant_reviews_require_correct_subject_pages_and_native_clients(tmp_p
             '<script type="module" src="/theme/review-presenter.mjs"></script>'
         )
     installation = plan_merchant(tmp_path, source, reviews=True, mapped=True,
-                                 review_invitation_default_checked=False, review_requests={"timing":timing})
+                                 review_invitation_default_checked=False, review_requests={"timing":timing},
+                                 **({"store_review_subject": {"subject_id": "merchant-store", "path": "/reviews/",
+                                                            "name": "Merchant shop"}} if store_reviews else {}))
     installation.verify_merchant_inputs()
     calls = []
 
@@ -232,6 +236,9 @@ def test_merchant_reviews_require_correct_subject_pages_and_native_clients(tmp_p
 
         def query(self, *args):
             calls.append(("query", args))
+            if args[1].startswith("SELECT s.subject_id"):
+                return [{"subject_id": "merchant-store", "kind": "store", "canonical_path": "/reviews/",
+                         "public_name": "Merchant shop"}]
 
     installation.api = Cloud()
     installation.credentials = {"cloudflare_api_token": "test-token"}
@@ -252,8 +259,12 @@ def test_merchant_reviews_require_correct_subject_pages_and_native_clients(tmp_p
     installation.deploy_storefront({"commit": "test-release"})
     output = installation.directory / "releases/test-release/storefront"
     deployed = (output / "storefront-config.js").read_text()
-    assert '"reviewInvitationWordingVersion": "review-invitation-v3"' in deployed
-    assert "I'm happy to receive invitations to review products I purchase." in deployed
+    version = "review-invitation-v4" if store_reviews else "review-invitation-v3"
+    assert '"reviewInvitationWordingVersion": "' + version + '"' in deployed
+    disclosure = ("I'm happy to receive invitations to review this shop and the products I purchase."
+                  if store_reviews else "I'm happy to receive invitations to review products I purchase.")
+    assert disclosure in deployed
+    assert ("CARTRAY_STORE_REVIEW_SUBJECT" in nodes["source"]["vars"]) is store_reviews
     assert "CARTRAY_REVIEW_INVITATION_LIMIT" not in nodes["source"]["vars"]
     assert '"storeName": "Merchant"' in deployed
     assert '"MERCHANT-ONE": "product-one"' in deployed
@@ -525,7 +536,8 @@ def test_same_source_rebuild_retains_both_catalogues_and_rollback_storefront(tmp
     install.state['releases'] = [{**first, 'versions': {'source': 'v1'}, 'sending': False},
                                  {**second, 'versions': {'source': 'v2'}, 'sending': False}]
     published = []
-    install.api = SimpleNamespace(publish=lambda name, version: published.append(version))
+    install.api = SimpleNamespace(publish=lambda name, version: published.append(version),
+                                  query=lambda database, sql, params=(): [{"present": 0}])
     monkeypatch.setattr(install, 'verifier', lambda mode: {'revision': 0})
     storefront = []
     monkeypatch.setattr(install, 'deploy_storefront', lambda release: storefront.append(

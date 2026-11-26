@@ -219,7 +219,7 @@ export async function handle(request, env, fetcher = fetch) {
           !/^\/(?:[A-Za-z0-9_-]+\/)*review-unsubscribe$/.test(stop.pathname) ||
           !/^\?token=[a-f0-9]{64}$/.test(stop.search) ||
           !/^#invitation=[a-f0-9]{64}(?:&featured=[A-Za-z0-9_,%.-]+)?$/.test(landing.hash) ||
-          !Array.isArray(reviews.subjects) || !reviews.subjects.length || reviews.subjects.length > 100 ||
+          !Array.isArray(reviews.subjects) || !reviews.subjects.length || reviews.subjects.length > 101 ||
           reviews.subjects.some(x => !identifier.test(x)) ||
           typeof env.MERCHANT_CONTACT !== 'string' || !env.MERCHANT_CONTACT.trim() ||
           env.MERCHANT_CONTACT.length > 200 || /[\x00-\x1f\x7f]/.test(env.MERCHANT_CONTACT)) throw new Error('review content unavailable');
@@ -227,7 +227,7 @@ export async function handle(request, env, fetcher = fetch) {
         {name:'List-Unsubscribe-Post',value:'List-Unsubscribe=One-Click'}];
       const titles = reviews.subjects.map(subject => reviews.names?.[subject] || subject);
       const invitation = `Share your experience with ${env.MERCHANT_NAME}: ${landing}\n` +
-        `Featured products: ${titles.join(', ')}\n` +
+        `Review choices: ${titles.join(', ')}\n` +
         `Stop review requests: ${stop}\nContact: ${env.MERCHANT_CONTACT}`;
       text = body.type === 'review_followup' ? invitation : text + '\n\n' + invitation;
     } else if (body.type === 'review_followup') throw new Error('review content unavailable');

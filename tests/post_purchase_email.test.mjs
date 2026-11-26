@@ -296,3 +296,19 @@ test('legacy fallback rejects Unicode before case conversion',async()=>{
  assert.equal((await handle(request(),{...env,APPROVED_TEST_RECIPIENT:'kate@example.test'},p.fetch)).status,422);
  assert.equal(p.calls.length,2);
 });
+
+test('one hundred purchased products plus store fit both consolidated message types',async()=>{
+  const subjects=[...Array.from({length:100},(_,i)=>`product-${i}`),'merchant-store'];
+  const reviews={url:'https://shop.example/review/#invitation='+'a'.repeat(64),
+    unsubscribe_url:'https://shop.example/review-unsubscribe?token='+'b'.repeat(64),subjects};
+  for (const type of ['order_confirmation','review_followup']) {
+    const p=provider();
+    const response=await handle(request({...body,type,reviews}),{...env,MERCHANT_CONTACT:'help@example.test'},p.fetch);
+    assert.equal(response.status,200);
+    const sent=JSON.parse(p.calls.at(-1).init.body);
+    assert.ok(sent.text_body.includes(reviews.url));
+    assert.match(sent.text_body,/merchant-store/);
+    assert.match(sent.text_body,/Review choices:/);
+    assert.equal(p.calls.filter(call=>call.url.includes('/email/send')).length,1);
+  }
+});

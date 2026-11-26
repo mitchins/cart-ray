@@ -15,7 +15,15 @@ from .canonical import (
 from .catalogue import Catalogue
 from .errors import CheckoutValidationError
 from .gateway import PaymentGateway
-from .models import CheckoutOrder, CheckoutRedirect, CheckoutRequest, CheckoutSpec, OrderItem
+from .models import (
+    REVIEW_INVITATION_WORDING_VERSION,
+    STORE_REVIEW_WORDING_VERSION,
+    CheckoutOrder,
+    CheckoutRedirect,
+    CheckoutRequest,
+    CheckoutSpec,
+    OrderItem,
+)
 from .store import SqliteOrderStore
 
 
@@ -28,6 +36,7 @@ class CheckoutService:
     cancel_url: str = "https://store.invalid/checkout-cancelled/"
     review_invitations_enabled: bool = False
     review_invitation_default_selected: bool = False
+    store_review_subject: str | None = None
 
     async def checkout(self, request: CheckoutRequest) -> CheckoutRedirect:
         # The browser may request an opt-in, but cannot enable the merchant's
@@ -104,6 +113,12 @@ class CheckoutService:
             )
         order_items = tuple(items)
         digest_items = tuple(CanonicalItem(item.product_key, item.quantity) for item in order_items)
+        wording_version = request.review_invitation_wording_version
+        if wording_version == STORE_REVIEW_WORDING_VERSION and not self.store_review_subject:
+            # A client cannot opt a product-only installation into shop scope.
+            # Keep the original request fingerprint so pending retries retain
+            # their immutable recorded scope even after configuration changes.
+            wording_version = REVIEW_INVITATION_WORDING_VERSION
         return CheckoutOrder(
             order_id="cr_" + uuid4().hex,
             checkout_request_id=request.checkout_request_id,
@@ -120,9 +135,9 @@ class CheckoutService:
             # independently enforce one confirmation and at most one follow-up.
             review_invitation_request_limit={
                 "review-invitation-v1": 1, "review-invitation-v2": 2
-            }.get(request.review_invitation_wording_version),
+            }.get(wording_version),
             review_invitation_default_selected=self.review_invitation_default_selected,
-            review_invitation_wording_version=request.review_invitation_wording_version,
+            review_invitation_wording_version=wording_version,
         )
 
 

@@ -53,11 +53,11 @@ export function presentNativeReviews(page, doc=document) {
       let chooser=content.querySelector('[data-product-chooser]');
       if(!chooser) {
         chooser=doc.createElement('div');chooser.dataset.productChooser='';chooser.className='review-tabs cr-subject-selector';
-        chooser.setAttribute('role','group');chooser.setAttribute('aria-label','Choose a purchased product to review');
+        chooser.setAttribute('role','group');chooser.setAttribute('aria-label','Choose what to review');
         content.querySelector('p')?.after(chooser);
         forms.forEach((form,index)=>{
           const button=doc.createElement('button');button.type='button';button.className='review-tab cr-button cr-button--secondary';
-          button.textContent=form.querySelector('h2')?.textContent||`Product ${index+1}`;
+          button.textContent=form.querySelector('h2')?.textContent||`Review choice ${index+1}`;
           button.addEventListener('click',()=>{selected=index;update();});chooser.append(button);
         });
       }

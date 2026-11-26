@@ -11,7 +11,30 @@ import re
 import secrets
 from dataclasses import dataclass, replace
 
-from cartray.store import _results
+from cartray.merchant_contract import merchant_path
+from cartray.models import STORE_REVIEW_WORDING_VERSION
+from cartray.store import _results, review_invitation_disclosure
+
+
+@dataclass(frozen=True)
+class StoreReviewSubject:
+    subject_id: str
+    path: str
+    name: str
+
+    @classmethod
+    def parse(cls, raw=None):
+        value = json.loads(raw) if isinstance(raw, str) else raw
+        if value is None or value == {}:
+            return None
+        if (not isinstance(value, dict) or set(value) != {"subject_id", "path", "name"}
+                or not isinstance(value["subject_id"], str)
+                or not re.fullmatch(r"[a-z0-9-]{1,128}", value["subject_id"])
+                or not isinstance(value["name"], str) or not value["name"].strip()
+                or len(value["name"]) > 200 or any(ord(c) < 32 or ord(c) == 127 for c in value["name"])):
+            raise ValueError("invalid store review subject")
+        merchant_path(value["path"], product=value["path"] != "/reviews/")
+        return cls(**value)
 
 
 @dataclass(frozen=True)
@@ -119,8 +142,18 @@ async def outstanding(db, merchant, environment, order):
     return [row["subject_id"] for row in rows]
 
 
+async def store_scope_disclosed(db, order):
+    """A declined v4 choice records displayed scope, never a communication grant."""
+    version, wording = review_invitation_disclosure(version=STORE_REVIEW_WORDING_VERSION)
+    return bool(await first(db, """SELECT c.order_id FROM review_invitation_checkout_choices c
+        JOIN checkout_sessions s USING(order_id) WHERE c.order_id=? AND c.wording_version=? AND c.wording=?
+        AND c.recorded_at>0 AND c.recorded_at<=s.settled_at AND s.settlement_state='confirmed'
+        AND s.stripe_payment_status='paid' AND s.stripe_amount_total_minor>0""", order, version, wording))
+
+
 async def prepare(
-    db, *, merchant, environment, order, email, hash_secret, key_version, installation, subject_map, settings, now
+    db, *, merchant, environment, order, email, hash_secret, key_version, installation, subject_map, settings, now,
+    store_subject=None, voluntary=False,
 ):
     """Caller supplies an independently verified Stripe recipient, never browser fields."""
     if environment != "test" or len(hash_secret) < 32 or settings.timing == "off":
@@ -146,7 +179,10 @@ async def prepare(
     if not pinned or not hmac.compare_digest(pinned["key_check"], check):
         raise ValueError("restore the installed recipient suppression key")
     recipient = recipient_hash(hash_secret, merchant, environment, email)
-    if not await permitted(db, merchant, environment, order, recipient):
+    disclosed = bool(store_subject and await store_scope_disclosed(db, order))
+    if voluntary and not disclosed:
+        return None
+    if not voluntary and not await permitted(db, merchant, environment, order, recipient):
         return None
     purchase = await first(
         db,
@@ -170,6 +206,8 @@ async def prepare(
     )
     mapping = subject_map.get(purchase["manifest_version"], {})
     subjects = sorted({mapping[row["product_key"]] for row in rows if row["product_key"] in mapping})
+    if disclosed:
+        subjects = sorted(set(subjects) | {store_subject.subject_id})
     if not subjects:
         return None
     existing_invitation = await first(
@@ -194,12 +232,13 @@ async def prepare(
         return None
     grant = await first(db, "SELECT wording_version,request_limit FROM review_invitation_checkout_grants "
                         "WHERE order_id=?", order)
-    historical_limit = grant['request_limit']
-    if grant['wording_version'] == 'review-invitation-v1':
+    grant = grant or {}
+    historical_limit = grant.get('request_limit')
+    if grant.get('wording_version') == 'review-invitation-v1':
         historical_limit = 1
-    elif grant['wording_version'] == 'review-invitation-v2':
+    elif grant.get('wording_version') == 'review-invitation-v2':
         historical_limit = historical_limit or 2
-    if settings.timing == 'both' and grant['wording_version'] in (
+    if settings.timing == 'both' and grant.get('wording_version') in (
         'review-invitation-v1', 'review-invitation-v2'
     ) and historical_limit == 1:
         settings = replace(settings, timing='receipt')
@@ -234,11 +273,14 @@ async def prepare(
             hashlib.sha256(token.encode()).hexdigest(),
         )
     )
-    statements.append(
-        db.prepare("INSERT INTO native_guard SELECT CASE WHEN EXISTS(" + _PERMISSION_SQL + ") THEN 1 ELSE 0 END").bind(
-            *permission_values(merchant, environment, order, recipient)
+    if not voluntary:
+        statements.append(
+            db.prepare(
+                "INSERT INTO native_guard SELECT CASE WHEN EXISTS(" + _PERMISSION_SQL + ") THEN 1 ELSE 0 END"
+            ).bind(
+                *permission_values(merchant, environment, order, recipient)
+            )
         )
-    )
     # A guard makes the capability and message winner atomic under concurrency.
     statements.insert(
         1,
@@ -253,6 +295,11 @@ async def prepare(
             merchant, environment, order, hashlib.sha256(token.encode()).hexdigest(), recipient
         )
     )
+    if disclosed:
+        statements.append(db.prepare("""INSERT INTO native_guard SELECT CASE WHEN EXISTS(
+            SELECT 1 FROM review_subjects WHERE store_key=? AND environment=? AND subject_id=?
+            AND kind='store' AND canonical_path=?) THEN 1 ELSE 0 END""").bind(
+                merchant, environment, store_subject.subject_id, store_subject.path))
     for subject in subjects:
         statements.append(db.prepare("""INSERT INTO native_guard SELECT CASE WHEN EXISTS(
             SELECT 1 FROM review_subjects s JOIN review_subject_display_names n USING(store_key,environment,subject_id)

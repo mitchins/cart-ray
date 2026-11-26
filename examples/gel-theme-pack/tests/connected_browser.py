@@ -131,6 +131,32 @@ def main():
                 check(engine + " keyboard review permission can be restored", choice.is_checked())
                 page.screenshot(path=str(shots / f"connected-{prefix}{engine}-permission-mobile.png"), full_page=True)
                 page.unroute("**/storefront-config.js", enable_review_permission)
+                shop_wording = "I'm happy to receive invitations to review this shop and the products I purchase."
+
+                def enable_store_permission(route):
+                    response = route.fetch()
+                    extra = {"checkoutEnabled": True, "reviewInvitationsEnabled": True,
+                             "reviewInvitationDefaultChecked": False,
+                             "reviewInvitationWordingVersion": "review-invitation-v4",
+                             "reviewInvitationWording": shop_wording}
+                    route.fulfill(response=response,
+                                  body=response.text() + "\nObject.assign(window.CARTRAY_STOREFRONT,"
+                                  + json.dumps(extra) + ");")
+
+                page.route("**/storefront-config.js", enable_store_permission)
+                page.reload()
+                shop_choice = page.get_by_role("checkbox", name=shop_wording)
+                shop_choice.wait_for()
+                check(engine + " shop and product invitation defaults unchecked", not shop_choice.is_checked())
+                shop_choice.focus()
+                shop_choice.press("Space")
+                check(engine + " keyboard shop invitation opt-in", shop_choice.is_checked())
+                shop_choice.press("Space")
+                check(engine + " declined shop invitation leaves checkout available",
+                      not shop_choice.is_checked() and page.locator("#checkout").is_enabled())
+                page.screenshot(path=str(shots / f"connected-{prefix}{engine}-store-permission-mobile.png"),
+                                full_page=True)
+                page.unroute("**/storefront-config.js", enable_store_permission)
                 requests = []
                 attempts = []
 
@@ -250,6 +276,10 @@ def main():
                 )
                 page.screenshot(path=str(shots / f"connected-{prefix}{engine}-withdraw-dialog.png"), full_page=True)
                 page.keyboard.press("Escape")
+                # The dialog close event restores focus in a separate browser task.
+                # Await the required state rather than racing an immediate evaluation.
+                page.wait_for_function("""()=>!document.querySelector('#confirm-dialog').open &&
+                    document.activeElement===document.querySelector('[data-cr-action="withdraw"]')""", timeout=2000)
                 check(
                     engine + " dialog escape restores focus",
                     page.evaluate("document.activeElement.textContent==='Withdraw review'"),
@@ -415,6 +445,31 @@ def main():
                 page.unroute("**/checkout-status?*")
                 page.unroute("**/storefront-config.js", policy_source)
                 page.unroute("**/site-config.js", policy_theme)
+                def mixed_invitation(route):
+                    route.fulfill(json={"store_name": "The Shop", "draft_scope": "mixed-store-scope",
+                        "subjects": [
+                            {"subject_id": "shop", "public_name": "The Shop", "progress": "available"},
+                            {"subject_id": "kit", "public_name": names[0], "progress": "available"},
+                            {"subject_id": "planter", "public_name": names[1], "progress": "available"}]})
+
+                page.route("**/reviews/v1/invitation", mixed_invitation)
+                page.goto(args.origin + "/review/#invitation=" + token + "&featured=kit")
+                page.wait_for_selector("[data-product-chooser]")
+                check(engine + " mixed review chooser has a generic accessible name",
+                      page.get_by_role("group", name="Choose what to review", exact=True).count() == 1)
+                check(engine + " native review choices accessible label",
+                      page.locator("#content").get_attribute("aria-label") == "Your review choices")
+                check(engine + " mixed invitation keeps shop and both products",
+                      page.locator("[data-product-chooser] button").count() == 3)
+                page.locator("[data-product-chooser] button").filter(has_text="The Shop").click()
+                shop_form = page.locator("#content > form:visible")
+                check(engine + " featured product does not hide shop review", "The Shop" in shop_form.inner_text())
+                page.screenshot(path=str(shots / f"connected-{prefix}{engine}-store-review-mobile.png"), full_page=True)
+                shop_form.locator('input[name="rating-stars"][value="5"]').check()
+                with page.expect_response(lambda response: response.url.endswith("/reviews/v1/contributions")):
+                    shop_form.locator('button[type="submit"]').click()
+                check(engine + " shop uses same native submission endpoint", attempts[-1][1]["subject_id"] == "shop")
+                page.unroute("**/reviews/v1/invitation", mixed_invitation)
                 if errors:
                     print(json.dumps({"script_errors": errors}), flush=True)
                 check(engine + " no script errors", not errors)

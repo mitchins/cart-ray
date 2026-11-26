@@ -330,3 +330,124 @@ A compatible rollback uses the recorded release and its retained branding snapsh
 For an existing test installation, see [APPROVED_SNAPSHOTS.md](APPROVED_SNAPSHOTS.md)
 for the explicitly authorised `apply-review-snapshot` operation. This is separate from
 native Reviews setup and requires exact artifact, target and content approval.
+
+## Optional store reviews
+
+A merchant may add one first-class store subject through normal installation inputs:
+
+```json
+{
+  "store_review_subject": {
+    "subject_id": "merchant-store",
+    "path": "/reviews/",
+    "name": "Merchant shop"
+  },
+  "review_invitation_default_checked": false
+}
+```
+
+The subject is independent of commerce offer IDs and product mappings. Normal provisioning
+seeds its existing native `kind=store` row, display name and publication counters in the
+same merchant D1. It cannot collide with a product identity/path or be retargeted across
+retained releases. The host storefront owns the canonical display page; CartRay does not
+require an Astro product/store page generator or a second review application.
+
+For a retained installation, add the input through the existing **OFF**
+`reconfigure-catalogue` workflow, then normal build/deploy/verify. Its `merchant_inputs`
+must name an approved catalogue package **outside** `$INSTALL` (for example the merchant
+working copy); overlapping installation/input paths are rejected. The command snapshots
+that package into the installation. First-time store
+enablement requires an explicit `review_invitation_default_checked` boolean in that
+request (use `false` for an unchecked disclosure); a persisted legacy default is not
+treated as an explicit merchant choice. The choice is retained through retries and
+compatible rollback. This code change does
+not authorise deployment to an existing UAT installation. No migration, new database,
+Worker, queue, email provider, activation control or historical enrolment is introduced.
+
+Configured store builds use disclosure `review-invitation-v4`:
+
+> I'm happy to receive invitations to review this shop and the products I purchase.
+
+New store-feature configurations default unchecked unless a merchant explicitly retains
+another checkbox preference. Nonconfigured merchants keep their existing product-only
+v3 wording and configured checkbox defaults. A cached browser sending only the legacy
+boolean retains v1 scope. Existing v1/v2/v3 grants, pending checkout identities and issued
+invitation subject sets are never widened by adding this configuration.
+
+For a paid, independently confirmed CartRay order after the existing activation fence,
+a newly issued v4 capability includes the store once plus each distinct eligible purchased
+product subject. Repeated quantities do not add review slots. A later paid order has its
+own store-review slot. Free orders, unpurchased products and external/legacy purchases do
+not acquire verified eligibility from configuration alone.
+
+Email permission, suppression and timing still govern solicitation through the one
+order-confirmation provider and optional follow-up. Featured/priority selection never
+removes other authorised choices from the native review page. A declined v4 checkbox
+records that the scope was presented; it is **not** a positive communication grant.
+Through an already valid accountless order-access link, a v4 purchaser may deliberately
+review even after declining or unsubscribing from requests. This path does not send email,
+re-grant notification consent or arm a new follow-up. It still requires the confirmed paid
+order, trusted server-side recipient evidence and unrevoked order/capability authority.
+Consumed or withdrawn review subjects cannot be submitted again. The same native page
+continues to provide existing review management. Resource access survives Reviews failure.
+
+Store submission, moderation, replies, revision history, withdrawal, publication and
+recovery use the existing native APIs. Public consumers can read the configured store
+subject separately from product subjects. **Do not place store ratings in Product
+`aggregateRating` JSON-LD** or combine them with product ratings or unrelated testimonials.
+Historical snapshot/privacy approval remains a separate operation; configuring a store
+subject does not import or publish historical content.
+
+
+### Store-review rollout and rollback compatibility
+
+The source server must have a validated store subject before it records v4 scope. An
+unexpected v4 request against a product-only server is limited to product-only v3;
+checkout can proceed and its original request fingerprint remains pinned. Enabling the
+feature later cannot widen that order or reinterpret its pending retry.
+
+Once store reviews are configured or deployed, or any v4 checkout choice exists
+(including an unchecked one or a pending order), **schema compatibility alone is
+insufficient for application rollback**. The installer checks retained configuration
+and actual D1 state before changing configuration or publishing older Workers. An
+empty v4 count alone cannot authorise an older target while checkout can still accept v4. It
+requires a release marked `store_review_contract: 1` retaining the same configured store
+subject. A pre-store release such as `aa0f640` is not a supported backend rollback:
+its checkout parser rejects v4, its order-access implementation lacks voluntary v4 access,
+and its native invitation reader rejects the 101-subject boundary. This assessment is
+source/test evidence, not a hosted test of those old binaries. Small existing capabilities
+use an otherwise unchanged subject-kind-agnostic protocol; that is not whole-feature
+rollback qualification.
+
+The external host may roll back static frontend assets while retaining the compatible
+backend/configuration, or deploy a compatible forward fix. Old cart clients continue
+recording their original product-only scope. Never rewind D1, drop grants, regenerate
+keys, reopen an uncertain claim or resend history to roll back presentation.
+
+### Refreshing an existing merchant's clients
+
+Use the merchant package and existing supported workflow, not a reference
+storefront build or manual JavaScript substitutions:
+
+```sh
+uv run python modules/reviews/operator/operate.py --directory "$INSTALL" --credentials "$CREDS" pause
+# If first enabling store reviews, reconfigure-catalogue using an approved EXTERNAL
+# merchant_inputs package plus its catalogue/lock/mappings and store_review_subject.
+# Set review_invitation_default_checked explicitly (false for the EP unchecked setting).
+# Subsequent build --refresh-clients uses the resulting retained installation snapshot.
+uv run python modules/reviews/operator/operate.py --directory "$INSTALL" --credentials "$CREDS" \
+  build --refresh-clients
+uv run python modules/reviews/operator/operate.py --directory "$INSTALL" --credentials "$CREDS" deploy
+uv run python modules/reviews/operator/operate.py --directory "$INSTALL" --credentials "$CREDS" verify
+uv run python modules/reviews/operator/operate.py --directory "$INSTALL" --credentials "$CREDS" doctor
+```
+
+`--refresh-clients` copies the complete supported CORE_CLIENT_FILES and REVIEW_CLIENT_FILES
+set from this pinned release into a new retained-input snapshot. It preserves the merchant's
+commerce catalogue, resource bindings and branding. The store build emits v4 wording/version
+and the configured default into `storefront-config.js`; `site-config.js` remains the merchant's
+normal theme configuration. The native review client also owns the generic review-region
+label, so retained merchant review HTML does not need hand editing for store choices.
+The generated gateway must include the static GET/HEAD `/reviews/` pass-through. The host
+owns that page's content and deployment. Obtain approved deployment separately; the commands
+above describe the supported process rather than authorising changes to any retained UAT.

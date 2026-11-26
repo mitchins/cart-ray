@@ -184,7 +184,8 @@ def deployed(tmp_path, monkeypatch, request):
                      "CREATE TABLE outbox(id INTEGER PRIMARY KEY, order_id TEXT, event_type TEXT);"
                      "CREATE TABLE cartray_operator_migrations(namespace TEXT, position INT, path TEXT, checksum TEXT);"
                      "INSERT INTO cartray_operator_migrations VALUES ('commerce', 1, 'fixture', 'hash');")
-    for migration in ("0006_post_purchase_actions.sql", "0007_post_purchase_checkpoint.sql"):
+    for migration in ("0005_review_invitation_checkout_grants.sql", "0006_post_purchase_actions.sql",
+                      "0007_post_purchase_checkpoint.sql"):
         db.executescript((ROOT / "migrations" / migration).read_text())
     api = Backend(db)
     if options.get('source_mode')=='public':
