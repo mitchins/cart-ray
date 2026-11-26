@@ -290,3 +290,99 @@ def test_explicit_store_reconfiguration_retains_choice_on_retry_resume_and_snaps
     assert resumed.config['review_invitation_default_checked'] is True
     resumed.use_catalogue_config(current)
     assert resumed.config['review_invitation_default_checked'] is checked
+
+
+def test_public_first_store_reconfigure_keeps_legacy_off_default_until_new_deploy(tmp_path, monkeypatch):
+    """Exercise the existing installed source through first enable, retry and resume."""
+    import shutil
+    from copy import deepcopy
+    from pathlib import Path
+    from types import SimpleNamespace
+
+    import test_post_purchase_operator as fixture
+    from merchant_inputs import REVIEW_CLIENT_FILES
+    from operate import ROOT, Installation, atomic_json, digest
+    from test_merchant_inputs import catalogue_revision
+
+    def native_clients(package):
+        site = package / 'storefront'
+        for target, source in REVIEW_CLIENT_FILES.items():
+            shutil.copyfile(ROOT / source, site / target)
+        (site / 'review').mkdir()
+        for filename, mode in (('index.html', 'review'), ('manage.html', 'manage')):
+            (site / 'review' / filename).write_text(
+                f'<section data-native-review="{mode}"><div id="content"></div><p id="message"></p></section>'
+                '<dialog id="confirm-dialog"><button data-dialog-cancel></button>'
+                '<button data-dialog-confirm></button></dialog>'
+                '<script type="module" src="/theme/review-presenter.mjs"></script>')
+
+    handoff = fixture.handoff
+    capture = fixture.capture_build
+
+    def with_reviews(directory):
+        options = handoff(directory)
+        options['reviews_enabled'] = True
+        native_clients(Path(options['merchant_inputs']))
+        return options
+
+    def with_reviews_artifact(installation, commit):
+        build = capture(installation, commit)
+        artifact = installation.directory / 'releases' / commit / 'reviews/bundle/worker.py'
+        artifact.parent.mkdir(parents=True)
+        artifact.write_text('# fixture native reviews artifact')
+        build['artifacts']['reviews'] = {'worker.py': digest(artifact.read_bytes())}
+        atomic_json(artifact.parents[2] / 'build.json', build)
+        return build
+
+    monkeypatch.setattr(fixture, 'handoff', with_reviews)
+    monkeypatch.setattr(fixture, 'capture_build', with_reviews_artifact)
+    # Existing fixture isolates version/binding deployment, not migration/key provisioning.
+    monkeypatch.setattr(Installation, 'check_schema', lambda *_: None)
+    monkeypatch.setattr(Installation, 'pin_suppression', lambda *_: None)
+    context = fixture.deployed.__wrapped__(tmp_path, monkeypatch, SimpleNamespace(param='public'))
+    try:
+        install, api, db = next(context)
+        for migration in sorted((ROOT / 'modules/reviews/migrations').glob('*.sql')):
+            db.executescript(migration.read_text())
+
+        def schema_query(database, sql, params=()):
+            assert database == 'database'
+            result = [dict(row) for row in db.execute(sql, params)]
+            db.commit()
+            return result
+
+        api.query = schema_query
+        old_version = install.state['deployment']['versions']['source']
+        old_snapshot = install.state['deployment']['catalogue_config']
+        assert old_snapshot and old_snapshot.pop('review_invitation_default_checked') is True
+        matching = install.state['releases'][-1]
+        assert matching['catalogue_config'].pop('review_invitation_default_checked', True) is True
+        assert next(binding['text'] for binding in api.version(install.name('source'))['resources']['bindings']
+                    if binding['name'] == 'CARTRAY_REVIEW_INVITATION_DEFAULT') == 'checked'
+        install.save()
+        values = catalogue_revision(tmp_path / 'replacement', second=False)
+        native_clients(Path(values['merchant_inputs']))
+        values.update(subject_map={}, subject_details=[], store_review_subject=SUBJECT,
+                      review_invitation_default_checked=False)
+        install.reconfigure_catalogue(values)
+        assert install.config['review_invitation_default_checked'] is False
+        assert install.state['deployment']['catalogue_config']['review_invitation_default_checked'] is True
+        assert matching['catalogue_config']['review_invitation_default_checked'] is True
+        # Retry/resume must still compare the old actually deployed OFF binding as checked.
+        install.reconfigure_catalogue(values)
+        install = Installation(install.directory, deepcopy(fixture.CREDS), api)
+        install.check_current_post_purchase_off()
+        assert install.config['review_invitation_default_checked'] is False
+        with_reviews_artifact(install, 'store-enabled')
+        install.deploy()
+        assert install.state['deployment']['versions']['source'] != old_version
+        assert next(binding['text'] for binding in api.version(install.name('source'))['resources']['bindings']
+                    if binding['name'] == 'CARTRAY_REVIEW_INVITATION_DEFAULT') == 'unchecked'
+        install.deploy()
+        install.check_current_post_purchase_off()
+        assert install.state['deployment']['catalogue_config']['review_invitation_default_checked'] is False
+    finally:
+        try:
+            next(context)
+        except StopIteration:
+            pass

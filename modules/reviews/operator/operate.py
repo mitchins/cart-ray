@@ -1095,13 +1095,20 @@ class Installation(PostPurchaseOperator):
             raise
         # Keep prior OFF releases and their input snapshots for application rollback.
         deployment = self.state.get('deployment', {})
-        if deployment and not deployment.get('catalogue_config'):
-            deployment['catalogue_config'] = previous
+        if deployment:
+            installed = deployment.get('catalogue_config')
+            legacy_previous = {key: value for key, value in previous.items()
+                               if key != 'review_invitation_default_checked'}
+            if not installed or installed == legacy_previous:
+                deployment['catalogue_config'] = previous
         for release in self.state['releases']:
             if (release.get('merchant_inputs_sha256') == previous['merchant_inputs_sha256']
                     and release.get('merchant_config_sha256') == previous_config_hash
                     and release.get('merchant_lock_sha256') == previous_lock_hash):
-                release.setdefault('catalogue_config', previous)
+                if not release.get('catalogue_config'):
+                    release['catalogue_config'] = previous
+                release['catalogue_config'].setdefault('review_invitation_default_checked',
+                                    previous['review_invitation_default_checked'])
         self.state.pop('build', None)
         self.save()
         return {'catalogue_version': json.loads(lock_bytes)['catalogue_version'],
