@@ -276,6 +276,10 @@ def main():
                 )
                 page.screenshot(path=str(shots / f"connected-{prefix}{engine}-withdraw-dialog.png"), full_page=True)
                 page.keyboard.press("Escape")
+                # The dialog close event restores focus in a separate browser task.
+                # Await the required state rather than racing an immediate evaluation.
+                page.wait_for_function("""()=>!document.querySelector('#confirm-dialog').open &&
+                    document.activeElement===document.querySelector('[data-cr-action="withdraw"]')""", timeout=2000)
                 check(
                     engine + " dialog escape restores focus",
                     page.evaluate("document.activeElement.textContent==='Withdraw review'"),
@@ -451,6 +455,8 @@ def main():
                 page.route("**/reviews/v1/invitation", mixed_invitation)
                 page.goto(args.origin + "/review/#invitation=" + token + "&featured=kit")
                 page.wait_for_selector("[data-product-chooser]")
+                check(engine + " mixed review chooser has a generic accessible name",
+                      page.get_by_role("group", name="Choose what to review", exact=True).count() == 1)
                 check(engine + " native review choices accessible label",
                       page.locator("#content").get_attribute("aria-label") == "Your review choices")
                 check(engine + " mixed invitation keeps shop and both products",
