@@ -17,6 +17,7 @@ def test_branded_order_page_is_escaped_and_exactly_hash_authorized():
     assert 'href="/contact-us/"' in page
     assert "'unsafe-inline'" not in csp
     assert 'style-src' in csp
+    assert 'img-src' not in csp
     for tag in ('script', 'style'):
         body = page.split('<' + tag + '>', 1)[1].split('</' + tag + '>', 1)[0]
         digest = base64.b64encode(hashlib.sha256(body.encode()).digest()).decode()
@@ -54,7 +55,7 @@ def test_operator_binding_encoding_and_renderer_limit_agree_for_long_unicode_bra
 @pytest.mark.parametrize('logo', ['https://outside.test/logo.svg', '//outside.test/logo.svg',
     '/assets/../logo.svg', '/assets//logo.svg', '/logo.svg?token=private', '/logo.svg#private',
     '/assets/logo.html', '/assets/%2e%2e/logo.svg', '/assets/logo.svg\n',
-    '/brand/logo.ſvg', '/assets/loKo.svg', 1, True, []])
+    '/brand/logo.ſvg', '/assets/loKo.svg', None, 1, True, []])
 def test_order_logo_rejects_non_static_or_non_local_values(logo):
     with pytest.raises(ValueError, match='logo'):
         validate_order_presentation({'logo_path': logo})

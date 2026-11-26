@@ -112,7 +112,7 @@ def main():
                     assert (page.get_by_role('img', name='Reference merchant').get_attribute('src')
                             == '/assets/merchant-logo.svg')
                     assert 'Georgia' in page.locator('h1').evaluate('e=>getComputedStyle(e).fontFamily')
-                    assert page.locator('.cr-order-resources[aria-label="Purchased resources"] li').count() == 3
+                    assert page.get_by_role('list', name='Purchased resources').locator('li').count() == 3
                     assert page.locator('.cr-resource-name').all_inner_texts() == [
                         'External dummy resource', 'Pending file', long_name]
                     assert page.get_by_role("link", name="Contact the store").get_attribute("href") == "/contact-us/"

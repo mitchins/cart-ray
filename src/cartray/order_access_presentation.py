@@ -33,7 +33,7 @@ def validate_order_presentation(value):
     if not isinstance(result['accent'], str) or not re.fullmatch(r'#[0-9a-fA-F]{6}', result['accent']):
         raise ValueError("order access accent must be a six-digit hex colour")
     logo = result.get('logo_path')
-    if logo is not None and (not isinstance(logo, str) or len(logo) > 512
+    if 'logo_path' in result and (not isinstance(logo, str) or len(logo) > 512
             or not re.fullmatch(r'/[A-Za-z0-9_./-]+\.(?:svg|png|jpe?g|webp)', logo, re.IGNORECASE | re.ASCII)
             or any(part in ('', '.', '..') for part in logo.split('/')[1:])):
         raise ValueError('order access logo must be an approved same-origin static image path')
@@ -123,7 +123,7 @@ Loading your order…</section>__CONTACT__</main>
     if(!data.items.length){const empty=document.createElement('p');
       empty.textContent='No purchased resources are currently listed.';content.append(empty);}
     for (const [itemIndex, item] of data.items.entries()) {
-      const section = document.createElement('section'), heading = document.createElement('h2');
+      const section = document.createElement('article'), heading = document.createElement('h2');
       const header = document.createElement('header'); header.className='cr-order-item-header';
       section.className='cr-order-item'; heading.className='cr-order-item-title';
       heading.id=`cr-order-item-${itemIndex}`;heading.textContent=item.title;
@@ -131,7 +131,7 @@ Loading your order…</section>__CONTACT__</main>
       const quantity = document.createElement('p'); quantity.className='cr-order-quantity';
       quantity.textContent = `Quantity: ${item.quantity}`;header.append(heading,quantity);section.append(header);
       const resources = document.createElement('ul');resources.className='cr-order-resources';
-      resources.setAttribute('aria-label','Purchased resources');
+      resources.setAttribute('role','list');resources.setAttribute('aria-label','Purchased resources');
       for (const resource of item.resources) {
         const form = document.createElement('form'); form.className='cr-resource-form';
         form.method = 'post'; form.action = location.pathname;
