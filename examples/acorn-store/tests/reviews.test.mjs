@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import {readFile} from 'node:fs/promises';
 import { attachReviews, renderContribution, reviewsPage } from '../reviews.mjs';
 
 const summary = { subject_id: 'acorn-growing-kit', snapshot_id: 'native-1', rating: { average: 4, rated_count: 1 }, contribution_count: 2 };
@@ -86,12 +87,13 @@ function presentationDocument() {
     set textContent(value) { this.text=value;this.children=[]; },
     get textContent() { return (this.text || '') + this.children.map(child=>child.textContent).join(''); },
     setAttribute(name,value) { this.attributes[name]=value; },
-    append(child) { this.children.push(child); }, hasChildNodes() { return !!this.children.length || !!this.text; },
+    append(child) { this.children.push(child); },
+    get childElementCount() { return this.children.filter(child=>child.tag).length; },
     replaceChildren() { this.text='';this.children=[]; },
     addEventListener(_name,callback) { this.click=callback;this.listeners=(this.listeners || 0)+1; },
     removeEventListener() {} });
   const nodes=Object.fromEntries(['reviews','reviews-status','review-list','reviews-more'].map(id=>[id,element('div')]));
-  return {nodes, querySelector:id=>nodes[id.slice(1)], createElement:element, createDocumentFragment:()=>element('fragment')};
+  return {nodes, querySelector:id=>nodes[id.slice(1)], createElement:element, createTextNode:text=>({textContent:text}), createDocumentFragment:()=>element('fragment')};
 }
 
 const ratedReview={author:'Reviewer',body:'Useful',rating:4,replies:[{author:'Staff',body:'Thanks',rating:5,replies:[]}]};
@@ -171,7 +173,7 @@ test('empty or throwing summary renderers never mark fallback text as replaced',
   const originalFetch=globalThis.fetch;
   globalThis.fetch=fakeFetch([]);
   try {
-    for(const renderSummary of [()=>{}, ()=>'<svg/>', visual=>{visual.textContent='partial';throw Error('bad visual');}]) {
+    for(const renderSummary of [()=>{}, ()=>'<svg/>', (visual,_value,document)=>visual.append(document.createTextNode('')), visual=>{visual.textContent='partial';throw Error('bad visual');}]) {
       const doc=presentationDocument();
       const controller=attachReviews({reviewsEnabled:true,productKey:'p',reviewSubjects:{p:'acorn-growing-kit'}},doc,{renderSummary});
       await new Promise(resolve=>setImmediate(resolve));
@@ -202,6 +204,34 @@ test('automatic mount accepts presentation callbacks without a second reader or 
     assert.equal(doc.nodes['reviews-status'].children[0].className,'cr-review-summary cr-review-summary--custom');
     assert.equal(doc.nodes['review-list'].children[0].children[0].children[0].children[0].className,
       'cr-review-rating cr-review-rating--custom');
+  } finally {
+    globalThis.fetch=original.fetch;
+    if(original.window===undefined)delete globalThis.window;else globalThis.window=original.window;
+    if(original.document===undefined)delete globalThis.document;else globalThis.document=original.document;
+  }
+});
+
+
+test('connected product mount reads document-level presentation without changing the other client bridge',async()=>{
+  const doc=presentationDocument(), requests=[];
+  const original={fetch:globalThis.fetch,window:globalThis.window,document:globalThis.document};
+  globalThis.fetch=fakeFetch(requests,[summary,{...page,contributions:[ratedReview]}]);
+  globalThis.window=Object.assign(new EventTarget(),{CARTRAY_STOREFRONT:{reviewsEnabled:true,
+    reviewPresentation:{renderRating:(v,_data,d)=>v.append(d.createElement('svg')),
+      renderSummary:(v,_data,d)=>v.append(d.createElement('svg'))}}});
+  doc.defaultView=globalThis.window;
+  const select=doc.querySelector;
+  doc.querySelector=id=>id==='#product-data' ? {textContent:JSON.stringify({review_subject:'acorn-growing-kit'})} : select(id);
+  globalThis.document=doc;
+  try {
+    const bridge=await readFile(new URL('../../gel-theme-pack/src/connected-public-reviews.mjs',import.meta.url),'utf8');
+    const native=new URL('../../../modules/reviews/ui/public.mjs?connected-presentation-test',import.meta.url).href;
+    await import('data:text/javascript,'+encodeURIComponent(bridge.replace("'./reviews.mjs'",JSON.stringify(native))));
+    await new Promise(resolve=>setImmediate(resolve));
+    assert.equal(requests.length,2);
+    assert.equal(doc.nodes['review-list'].children.length,1);
+    assert.equal(doc.nodes['reviews-more'].listeners,1);
+    assert.equal(doc.nodes['reviews-status'].children[0].className,'cr-review-summary cr-review-summary--custom');
   } finally {
     globalThis.fetch=original.fetch;
     if(original.window===undefined)delete globalThis.window;else globalThis.window=original.window;

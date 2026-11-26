@@ -190,7 +190,7 @@ function decorate(parent, renderer, values, doc, className, customClass) {
   visual.setAttribute('aria-hidden', 'true');
   // Merchant presentation is optional; failure must retain the numeric fallback.
   try { renderer(visual, Object.freeze(values), doc); } catch { return; }
-  if (!visual.hasChildNodes()) return;
+  if (!visual.childElementCount && !visual.textContent.trim()) return;
   parent.append(visual);
   parent.className += ' ' + customClass;
 }
@@ -224,7 +224,8 @@ export function renderContribution(item, parent, doc, budget, {renderRating} = {
   }
 }
 
-export function attachReviews(config, doc = document, {renderRating, renderSummary} = config?.reviewPresentation ?? {}) {
+export function attachReviews(config, doc = document, {renderRating, renderSummary} =
+    config?.reviewPresentation ?? doc.defaultView?.CARTRAY_STOREFRONT?.reviewPresentation ?? {}) {
   const subject = config?.reviewSubjects?.[config.productKey];
   if (!config?.reviewsEnabled || !subject || !validSubject(subject)) return;
   const section = doc.querySelector('#reviews'), status = doc.querySelector('#reviews-status');

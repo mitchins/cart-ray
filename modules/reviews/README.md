@@ -189,7 +189,9 @@ For pages using the automatic mount, assign the same callback object to
 `window.CARTRAY_STOREFRONT.reviewPresentation` **before** loading `public.mjs`
 (or its generated `theme/reviews.mjs`). For example, assign it in the host entry module
 then use `await import('/theme/reviews.mjs')`. That existing automatic mount reads the
-callbacks; do not call `attachReviews` again. Hosts already mounting explicitly can use
+callbacks; do not call `attachReviews` again. The connected product bridge also reads
+this document-level callback object when constructing its subject-scoped config, so it
+does not need another mount or client update. Hosts already mounting explicitly can use
 the third argument above. Mount once through the existing entry point. `renderContribution` also accepts an optional
 fifth `{renderRating}` argument. Callback data is immutable and contains only validated
 public numbers. Individual hooks run only for rated root contributions, never unrated
