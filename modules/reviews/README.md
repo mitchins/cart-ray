@@ -166,3 +166,64 @@ The retired JavaScript producer, consumer, due scheduler, initial sender, recove
 post-checkout verification Workers are removed. Their old qualification receipts remain history;
 new ordinary order processing is exercised by `tests/test_order_reviews.py` and the connected
 Workerd/D1 smoke test.
+
+## Public rating presentation hooks
+
+A host already mounting native public product reviews may pass optional synchronous
+presentation callbacks to the same client, without changing the API or backend:
+
+```js
+attachReviews(config, document, {
+  renderRating(visual, {rating, maxRating}, doc) {
+    visual.append(drawStars(doc, rating, maxRating));
+  },
+  renderSummary(visual, {average, ratedCount, contributionCount, maxRating}, doc) {
+    // average is null when ratedCount is zero; do not draw a fabricated rating.
+    if (ratedCount) visual.append(drawSummary(doc, average, maxRating, ratedCount, contributionCount));
+  },
+});
+```
+
+`drawStars`/`drawSummary` are host functions returning DOM nodes, not CartRay APIs.
+For pages using the automatic mount, assign the same callback object to
+`window.CARTRAY_STOREFRONT.reviewPresentation` **before** loading `public.mjs`
+(or its generated `theme/reviews.mjs`). For example, assign it in the host entry module
+then use `await import('/theme/reviews.mjs')`. That existing automatic mount reads the
+callbacks; do not call `attachReviews` again. The connected product bridge also reads
+this document-level callback object when constructing its subject-scoped config, so it
+does not need another mount or client update. Hosts already mounting explicitly can use
+the third argument above. Mount once through the existing entry point. `renderContribution` also accepts an optional
+fifth `{renderRating}` argument. Callback data is immutable and contains only validated
+public numbers. Individual hooks run only for rated root contributions, never unrated
+contributions or staff replies. Summary hooks receive the validated average and independent
+rated/contribution counts, including `null`/zero for unrated summaries.
+
+The client retains native text and owns these stable spans:
+
+- `.cr-review-rating` wraps `.cr-review-rating-text` and the optional
+  `.cr-review-rating-visual`. The author is outside this wrapper.
+- `.cr-review-summary` wraps `.cr-review-summary-text` (the complete numeric/count
+  summary) and the optional `.cr-review-summary-visual`.
+- A callback which adds DOM content gets the corresponding `--custom` modifier on
+  its wrapper: `.cr-review-rating--custom` or `.cr-review-summary--custom`.
+  Throwing callbacks, empty containers and ignored return strings do not get it.
+
+Visual containers have `aria-hidden="true"`; use decorative SVG and place any sighted
+average/count labels inside that container. The native text supplies the one accessible
+numeric label, including counts. Hosts can hide that text **visually only after successful
+custom rendering**, for example:
+
+```css
+.cr-review-rating--custom > .cr-review-rating-text,
+.cr-review-summary--custom > .cr-review-summary-text {
+  position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+  overflow: hidden; clip-path: inset(50%); white-space: nowrap; border: 0;
+}
+```
+
+Do not use `display:none`, `hidden` or `aria-hidden` on the native text. With no hook,
+empty output or a thrown exception, readable numeric output remains. These callbacks
+must be synchronous and presentation-only; return values are not inserted as HTML.
+Request counts, snapshot validation, pagination, cache/freshness, invalidation events and
+unavailability handling are unchanged. Updating this client is compatible with the
+existing `8614ca6` backend; it does not require a Worker deployment, purchase or email.
