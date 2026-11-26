@@ -16,6 +16,13 @@ ORDER_HEADING_FONTS = {
 }
 
 
+def _validate_logo_path(logo):
+    if (not isinstance(logo, str) or len(logo) > 512
+            or not re.fullmatch(r'/[a-z0-9_./-]+\.(?:svg|png|jpe?g|webp)', logo, re.IGNORECASE | re.ASCII)
+            or any(part in ('', '.', '..') for part in logo.split('/')[1:])):
+        raise ValueError('order access logo must be an approved same-origin static image path')
+
+
 def validate_order_presentation(value):
     if (not isinstance(value, dict)
             or value.keys() - {"name", "home_path", "contact_path", "accent", "logo_path", "heading_font"}):
@@ -32,11 +39,8 @@ def validate_order_presentation(value):
             merchant_path(path)
     if not isinstance(result['accent'], str) or not re.fullmatch(r'#[0-9a-fA-F]{6}', result['accent']):
         raise ValueError("order access accent must be a six-digit hex colour")
-    logo = result.get('logo_path')
-    if 'logo_path' in result and (not isinstance(logo, str) or len(logo) > 512
-            or not re.fullmatch(r'/[A-Za-z0-9_./-]+\.(?:svg|png|jpe?g|webp)', logo, re.IGNORECASE | re.ASCII)
-            or any(part in ('', '.', '..') for part in logo.split('/')[1:])):
-        raise ValueError('order access logo must be an approved same-origin static image path')
+    if 'logo_path' in result:
+        _validate_logo_path(result['logo_path'])
     if 'heading_font' in result and (not isinstance(result['heading_font'], str)
                                       or result['heading_font'] not in ORDER_HEADING_FONTS):
         raise ValueError('invalid order access heading font')

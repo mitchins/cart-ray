@@ -97,3 +97,13 @@ def test_optional_logo_and_curated_font_have_exact_csp_without_remote_fonts(font
         assert "'sha256-" + digest + "'" in csp
     assert 'cr-order-resources' in page
     assert 'cr-resource-name' in page
+
+
+@pytest.mark.parametrize('logo', ['/assets/logo.svg', '/Assets/Logo.SVG', '/_astro/approved-a.123.PNG'])
+def test_logo_paths_keep_their_case_with_ascii_case_insensitive_extensions(logo):
+    assert validate_order_presentation({'logo_path': logo})['logo_path'] == logo
+
+
+def test_logo_path_length_is_bounded_before_rendering():
+    with pytest.raises(ValueError, match='logo'):
+        validate_order_presentation({'logo_path': '/assets/' + 'x' * 513 + '.svg'})
