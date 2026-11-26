@@ -25,6 +25,8 @@ def main():
                 "home_path": "/catalogue/",
                 "contact_path": "/contact-us/",
                 "accent": "#001b35",
+                "logo_path": "/assets/merchant-logo.svg",
+                "heading_font": "editorial",
             }
         )
     )
@@ -32,12 +34,16 @@ def main():
     calls = []
     unavailable = [False]
     empty = [False]
+    long_name = 'Approved-' + 'x' * 155 + '.pdf'
 
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self):
-            body = html if self.path == "/order-access" else "Approved external dummy resource"
+            logo = self.path == "/assets/merchant-logo.svg"
+            body = ('<svg xmlns="http://www.w3.org/2000/svg" width="200" height="50" viewBox="0 0 200 50">'
+                    '<rect width="200" height="50" fill="#001b35"/></svg>') if logo else (
+                        html if self.path == "/order-access" else "Approved external dummy resource")
             self.send_response(200)
-            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Type", "image/svg+xml" if logo else "text/html; charset=utf-8")
             if self.path == "/order-access":
                 self.send_header("Content-Security-Policy", csp)
             self.end_headers()
@@ -67,6 +73,7 @@ def main():
                                 "resources": [
                                     {"name": "External dummy resource", "index": "0.0", "available": True},
                                     {"name": "Pending file", "index": "0.1", "available": False},
+                                    {"name": long_name, "index": "0.2", "available": True},
                                 ],
                             }
                         ]
@@ -101,6 +108,13 @@ def main():
                     page.goto(origin + "/order-access#token=" + "a" * 43)
                     page.wait_for_selector("[data-cr-state=ready]")
                     assert page.get_by_role("button", name="Pending file").is_disabled()
+                    page.wait_for_function("document.querySelector('.cr-order-logo').naturalWidth>0")
+                    assert (page.get_by_role('img', name='Reference merchant').get_attribute('src')
+                            == '/assets/merchant-logo.svg')
+                    assert 'Georgia' in page.locator('h1').evaluate('e=>getComputedStyle(e).fontFamily')
+                    assert page.locator('.cr-order-resources[aria-label="Purchased resources"] li').count() == 3
+                    assert page.locator('.cr-resource-name').all_inner_texts() == [
+                        'External dummy resource', 'Pending file', long_name]
                     assert page.get_by_role("link", name="Contact the store").get_attribute("href") == "/contact-us/"
                     for name, width in [("desktop", 1440), ("mobile", 390), ("narrow", 320)]:
                         page.set_viewport_size({"width": width, "height": 900})
