@@ -681,3 +681,24 @@ def test_legacy_mapping_conflict_is_rejected_before_inventory_save(tmp_path):
         install.reconfigure_catalogue(values)
     assert install.state_path.read_bytes() == before
     assert 'catalogue_config' not in install.state['releases'][0]
+
+
+@pytest.mark.parametrize('cap', [0, -1, True, 1.5, 101, None])
+def test_merchant_rejects_invalid_presentation_quantity_cap(tmp_path, cap):
+    source = merchant(tmp_path / 'source')
+    path = source / 'storefront/site-config.js'
+    theme = javascript_json(path, 'window.CARTRAY_THEME = ')
+    theme['catalogue']['products'][0]['cart_quantity_limit'] = cap
+    path.write_text('window.CARTRAY_THEME = ' + json.dumps(theme) + ';')
+    with pytest.raises(ValueError, match='cart_quantity_limit'):
+        validate(source, ROOT)
+
+
+@pytest.mark.parametrize('cap', [1, 3])
+def test_merchant_accepts_per_product_presentation_quantity_cap(tmp_path, cap):
+    source = merchant(tmp_path / 'source')
+    path = source / 'storefront/site-config.js'
+    theme = javascript_json(path, 'window.CARTRAY_THEME = ')
+    theme['catalogue']['products'][0]['cart_quantity_limit'] = cap
+    path.write_text('window.CARTRAY_THEME = ' + json.dumps(theme) + ';')
+    assert validate(source, ROOT)

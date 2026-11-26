@@ -26,3 +26,9 @@
 .cr-feedback{overflow-wrap:anywhere}.cr-field{min-width:0}.cr-field input,.cr-field textarea{max-width:100%}
 .cr-review{padding-block:24px;border-bottom:1px solid var(--color-rule)}
 .cr-review-reply{margin:16px 0 0 16px;padding:12px 16px;border-left:3px solid var(--color-rule)}
+
+/* Shared confirmation structure; merchant CSS can style these semantic hooks. */
+.cr-confirmation-items{list-style:none;padding:0;margin:1.25rem 0;border-block:1px solid var(--color-rule)}
+.cr-confirmation-item{padding:.75rem 0;overflow-wrap:anywhere}
+.cr-confirmation-item+.cr-confirmation-item{border-top:1px solid var(--color-rule)}
+.cart-quantity{font-size:.88rem;margin-block:.5rem}

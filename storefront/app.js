@@ -199,17 +199,17 @@ export function successReturnPath(pathname, state) {
   return state === "confirmed" || state === "expired" ? pathname : null;
 }
 
-export function confirmedCheckoutView(cleared, receipt, products = []) {
+export function confirmedCheckoutView(_cleared, receipt, products = []) {
   const verified = verifiedReceipt(receipt);
   // Current catalogue titles are display labels, not historical receipt data.
   const titles = new Map(products.map(product => [product.product_key, product.title]));
   return {
     checkoutLocked: false,
-    message: cleared ? "Order confirmed. Your cart is ready for another purchase." : "Order confirmed. Your cart was kept.",
+    message: "Your order is confirmed.",
     actionLabel: "Continue shopping",
     ...(verified ? { receipt: verified, purchasedItems: verified.items.map(item => {
       const title = titles.get(item.product_key);
-      const label = typeof title === "string" && title.trim() ? `${title} (${item.product_key})` : item.product_key;
+      const label = typeof title === "string" && title.trim() && title.trim() !== item.product_key ? title : "Purchased item";
       return `${label} × ${item.quantity} (${money(item.unit_amount_minor, verified.currency)} each)`;
     }),
     } : {}),

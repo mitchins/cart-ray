@@ -8,7 +8,7 @@ import shutil
 from pathlib import Path
 from urllib.parse import urlsplit
 
-from cartray.merchant_contract import merchant_path, product_route_groups, register_path
+from cartray.merchant_contract import cart_quantity_limit, merchant_path, product_route_groups, register_path
 
 from .src import templates
 
@@ -53,6 +53,8 @@ def install(
         api_origin = api_origin.rstrip("/")
     source_ids, paths, prefixes = set(), set(), {}
     for offer in offers:
+        if "cart_quantity_limit" in offer:
+            cart_quantity_limit(offer["cart_quantity_limit"])
         if (
             not re.fullmatch(r"[A-Z0-9-]{1,64}", offer["product_key"])
             or not merchant_path(offer["path"], product=True)
@@ -105,6 +107,7 @@ def install(
             "image": offer["image"],
             "image_alt": offer["image_alt"],
             "category": offer["category"],
+            **({"cart_quantity_limit": offer["cart_quantity_limit"]} if "cart_quantity_limit" in offer else {}),
         }
         for offer in offers
     ]

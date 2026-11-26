@@ -55,8 +55,8 @@ test("receipt survives pending polling and is independent of a changed cart or a
     assert.deepEqual(result.receipt, confirmedReceipt);
     assert.deepEqual([...cart], [["TEST-SUPPORT-HOURS", 4]]);
     const view = confirmedCheckoutView(false, result.receipt);
-    assert.match(view.purchasedItems[0], /^ORIGINAL-PURCHASE × 2 /);
-    assert.match(view.purchasedItems[1], /^FREE-PURCHASE × 1 /);
+    assert.match(view.purchasedItems[0], /^Purchased item × 2 /);
+    assert.match(view.purchasedItems[1], /^Purchased item × 1 /);
     assert.ok(view.purchasedItems.every(line => !line.includes("TEST-SUPPORT-HOURS")));
   }
 });
@@ -79,22 +79,23 @@ test("status receipt is allowlisted and never exposed for non-confirmed states",
   assert.equal(await checkoutStatus({}, "cs_test_receipt", fetchResult({state: "confirmed", receipt})), "confirmed");
 });
 
-test("receipt labels resolve by durable key without replacing quantities, prices or missing keys", () => {
+test("receipt labels resolve by durable key without exposing keys or replacing authoritative quantities and prices", () => {
   const products = [
     { product_key: "ORIGINAL-PURCHASE", title: "Friendly purchase", quantity: 99, amount_minor: 1 },
     { product_key: "UNPURCHASED", title: "Changed cart item", quantity: 4, amount_minor: 999 },
   ];
   const before = structuredClone(confirmedReceipt);
   const view = confirmedCheckoutView(false, confirmedReceipt, products);
-  assert.match(view.purchasedItems[0], /^Friendly purchase \(ORIGINAL-PURCHASE\) × 2 .*12\.50/);
-  assert.match(view.purchasedItems[1], /^FREE-PURCHASE × 1 .*0\.00/);
+  assert.match(view.purchasedItems[0], /^Friendly purchase × 2 .*12\.50/);
+  assert.match(view.purchasedItems[1], /^Purchased item × 1 .*0\.00/);
   assert.ok(view.purchasedItems.every(line => !line.includes("Changed cart item")));
   assert.deepEqual(view.receipt, before);
+  assert.ok(view.purchasedItems.every(line => !line.includes("ORIGINAL-PURCHASE") && !line.includes("FREE-PURCHASE")));
   products[0].quantity = 1; products[0].amount_minor = 50000;
   assert.deepEqual(confirmedCheckoutView(false, confirmedReceipt, products), view);
-  for (const title of ["", "  ", undefined, 123]) {
+  for (const title of ["", "  ", undefined, 123, "ORIGINAL-PURCHASE"]) {
     assert.match(confirmedCheckoutView(false, confirmedReceipt, [{product_key: "ORIGINAL-PURCHASE", title}])
-      .purchasedItems[0], /^ORIGINAL-PURCHASE × 2 /);
+      .purchasedItems[0], /^Purchased item × 2 /);
   }
 });
 
@@ -264,7 +265,7 @@ test("return orchestration clears only the correlated unchanged cart and enables
   assert.equal(successReturnPath("/", confirmed.state), "/");
   assert.deepEqual(confirmedCheckoutView(confirmed.cleared), {
     checkoutLocked: false,
-    message: "Order confirmed. Your cart is ready for another purchase.",
+    message: "Your order is confirmed.",
     actionLabel: "Continue shopping",
   });
   const freshCheckout = await createCheckoutAndStorePending({
@@ -308,7 +309,7 @@ test("a cart changed during checkout creation cannot be cleared by that checkout
   assert.deepEqual([...loadPersistedCart(storage, catalogue).cart], [["TEST-SUPPORT-HOURS", 1], ["TEST-TEMPLATE", 1]]);
   assert.deepEqual(confirmedCheckoutView(result.cleared), {
     checkoutLocked: false,
-    message: "Order confirmed. Your cart was kept.",
+    message: "Your order is confirmed.",
     actionLabel: "Continue shopping",
   });
 });

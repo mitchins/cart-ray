@@ -77,10 +77,11 @@ def main():
                 page.wait_for_selector(".cart-line")
                 check(
                     engine + " authoritative quantity maximum",
-                    page.locator('[data-quantity][data-step="1"]').first.is_disabled(),
+                    page.locator('[data-quantity-fixed]').count() == 2
+                    and page.locator('[data-quantity]').count() == 0,
                 )
                 page.evaluate("window.CARTRAY_THEME.gel.identity.currency='USD'")
-                page.locator('[data-quantity][data-step="-1"]').first.click()
+                page.locator('[data-remove]').first.click()
                 check(engine + " quantity removal", page.locator("[data-cart-count]").inner_text() == "1")
 
                 expected_subtotal = page.evaluate(
@@ -261,9 +262,12 @@ def main():
                 page.screenshot(path=str(shots / f"connected-{prefix}{engine}-withdraw-result-mobile.png"))
                 for action, width in [("edit", 390), ("edit", 320), ("edit", 1440), ("withdraw", 320)]:
                     page.set_viewport_size({"width": width, "height": 844})
+                    reads_before = sum(url.endswith('/read') for url in requests)
+                    page.goto('about:blank')  # One fresh document; do not interrupt a second load with reload().
                     page.goto(args.origin + "/review/manage.html#review=" + token + "&token=" + "b" * 64)
-                    page.reload()  # The same fragment URL otherwise keeps the previous terminal document.
                     page.wait_for_selector('input[name="rating-stars"]')
+                    check(engine + " one management read per fixture " + action + str(width),
+                          sum(url.endswith('/read') for url in requests) == reads_before + 1)
                     long_management_page()
                     if action == "edit":
                         page.locator('[data-cr-action=edit]').click()
@@ -347,13 +351,72 @@ def main():
                     pending[2].fulfill(json=value)
                     page.wait_for_selector("#content textarea")
                     page.locator("#content textarea").fill("Keep this new draft")
-                    pending[1].fulfill(status=503, json={"error": "late failure"})
+                    with page.expect_request_finished(lambda request: request == pending[1].request):
+                        pending[1].fulfill(status=503, json={"error": "late failure"})
                     page.evaluate("document.readyState")
                     check(
                         engine + " late retry cannot erase edited form " + mode,
                         page.locator("#content textarea").input_value() == "Keep this new draft",
                     )
                     page.unroute(pattern)
+                # Explicit client-policy fixture: backend max3, download cap1, consulting uncapped.
+                def policy_source(route):
+                    response = route.fetch()
+                    route.fulfill(response=response, body=response.text() +
+                        "\n{const keys=" + json.dumps(keys) + ";"
+                        "for(const p of window.CARTRAY_STOREFRONT.previewCatalogue.products)"
+                        "if(keys.includes(p.product_key))p.max_quantity=3;}")
+
+                def policy_theme(route):
+                    response = route.fetch()
+                    route.fulfill(response=response, body=response.text() +
+                        "\n{const keys=" + json.dumps(keys) + ";"
+                        "for(const p of window.CARTRAY_THEME.catalogue.products){"
+                        "if(p.product_key===keys[0])p.cart_quantity_limit=1;"
+                        "if(p.product_key===keys[1])delete p.cart_quantity_limit;}}")
+
+                page.route("**/storefront-config.js", policy_source)
+                page.route("**/site-config.js", policy_theme)
+                page.evaluate("localStorage.clear()")
+                page.goto(args.origin + "/")
+                page.wait_for_selector('.product-card')
+                page.locator(f'[data-add="{keys[0]}"]').click()
+                page.locator(f'[data-add="{keys[0]}"]').click()
+                page.locator(f'[data-add="{keys[1]}"]').click()
+                page.goto(args.origin + "/cart/")
+                page.wait_for_selector('.cart-line')
+                download = page.locator('.cart-line').filter(has=page.locator(f'[data-remove="{keys[0]}"]'))
+                consulting = page.locator('.cart-line').filter(has=page.locator(f'[data-remove="{keys[1]}"]'))
+                check(engine + " download presentation cap hides stepper",
+                      download.locator('[data-quantity]').count() == 0)
+                check(engine + " repeated download add stays one",
+                      download.locator('[data-quantity-fixed]').inner_text() == 'Quantity: 1')
+                plus = consulting.locator('[data-step="1"]')
+                plus.focus()
+                plus.press('Enter')
+                consulting.locator('[data-step="1"]').click()
+                check(engine + " uncapped consulting retains authoritative stepper",
+                      consulting.locator('output').inner_text() == '3'
+                      and consulting.locator('[data-step="1"]').is_disabled())
+                page.screenshot(path=str(shots / f"connected-{prefix}{engine}-cart-single-unit.png"), full_page=True)
+                purchased = page.evaluate(
+                    "key=>window.CARTRAY_STOREFRONT.previewCatalogue.products.find(p=>p.product_key===key)", keys[0]
+                )
+                receipt = {"currency": purchased["currency"], "items": [
+                    {"product_key": keys[0], "quantity": 2, "unit_amount_minor": 1750}]}
+                page.route("**/checkout-status?*",
+                           lambda route: route.fulfill(json={"state": "confirmed", "receipt": receipt}))
+                page.goto(args.origin + "/purchase-return/?checkout=complete&session_id=cs_test_presentation")
+                page.wait_for_selector('.cr-confirmation-item')
+                label = page.locator('.cr-confirmation-item').inner_text()
+                check(engine + " confirmation uses title without internal key",
+                      purchased['title'] in label and keys[0] not in label and '× 2' in label)
+                page.screenshot(path=str(shots / f"connected-{prefix}{engine}-confirmation-label.png"), full_page=True)
+                page.unroute("**/checkout-status?*")
+                page.unroute("**/storefront-config.js", policy_source)
+                page.unroute("**/site-config.js", policy_theme)
+                if errors:
+                    print(json.dumps({"script_errors": errors}), flush=True)
                 check(engine + " no script errors", not errors)
                 context.close()
                 completed_engines.append(engine)

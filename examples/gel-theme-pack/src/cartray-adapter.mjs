@@ -25,16 +25,28 @@ export async function createAdapter(config) {
     attempt=null;
     try {storage?.removeItem(attemptKey);} catch { /* storage is optional */ }
   }
+  const params=new URLSearchParams(location.search);
   const local=new Map(config.catalogue.products.map(p=>[p.product_key,p]));
   // Theme content contributes presentation only, never a price, product identity or review entitlement.
   const products=catalogue.products.map(p=>{
     const presentation=local.get(p.product_key) || {};
-    return {...presentation,...p,images:Array.isArray(p.images)?p.images:[],image:p.image_url || presentation.image,image_alt:p.image_alt || presentation.image_alt || '',
+    const cap=presentation.cart_quantity_limit;
+    if(cap!==undefined && (!Number.isSafeInteger(cap) || cap<1 || cap>100))
+      throw new Error('Invalid product presentation quantity limit.');
+    return {...presentation,...p,max_quantity:Math.min(p.max_quantity,cap ?? p.max_quantity),images:Array.isArray(p.images)?p.images:[],image:p.image_url || presentation.image,image_alt:p.image_alt || presentation.image_alt || '',
       slug:presentation.slug,path:source.productPaths?.[p.product_key],category:presentation.category || 'Products',
       review_subject:source.reviewSubjects?.[p.product_key] || null};
   });
+  // Presentation limits may narrow an editable cart, never reinterpret a frozen request/return.
+  function reconcileEditableCart() {
+    let changed=false;
+    for(const product of products)if(cart.get(product.product_key)>product.max_quantity){
+      cart.set(product.product_key,product.max_quantity);changed=true;
+    }
+    if(changed){revision++;persistCart(storage,catalogue.version,cart,revision);}
+  }
+  if(!attempt && params.get('checkout')!=='complete')reconcileEditableCart();
   let returnResult=null;
-  const params=new URLSearchParams(location.search);
   const adapter={
     preview:false, products, currency:[...currencies][0], state:{permission:attempt ? attempt.permission : source.reviewInvitationDefaultChecked===true},
     permissionEnabled:source.reviewInvitationsEnabled===true,
@@ -84,6 +96,7 @@ export async function createAdapter(config) {
         if(error.checkoutStatus===400){
           attempt=null;this.attemptPending=false;
           try {storage?.removeItem(attemptKey);} catch { /* storage is optional */ }
+          reconcileEditableCart();
         }
         this.checkoutLocked=false;throw error;
       }
@@ -99,6 +112,8 @@ export async function createAdapter(config) {
       const view=result.state==='confirmed'?confirmedCheckoutView(result.cleared,result.receipt,products):result.state==='expired'?expiredCheckoutView():unconfirmedCheckoutView(result.state);
       this.checkoutLocked=view.checkoutLocked;
       if(result.cleared)revision=0;
+      // Return polling never reapplies cart preferences: another tab may own newer/frozen state.
+      // The next editable cart load applies its presentation cap before showing controls.
       if(result.state==='confirmed'||result.state==='expired')history.replaceState(null,'',location.pathname);
       returnResult={state:result.state||'unavailable',...view};return returnResult;
     },

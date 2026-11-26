@@ -454,14 +454,20 @@ def test_generic_connected_flow_rejects_protocol_relative_context_and_images(tmp
         flows.install(tmp_path, ROOT, {}, "minimal", [{**offer, "image": "//attacker.example/image.png"}])
     with pytest.raises(ValueError, match="HTTPS origin"):
         flows.install(tmp_path, ROOT, {}, "minimal", [offer], api_origin="https://example.test@attacker.test/path")
+    for cap in (0, True, 1.5, 101, None):
+        with pytest.raises(ValueError, match="cart_quantity_limit"):
+            flows.install(tmp_path, ROOT, {}, "minimal", [{**offer, "cart_quantity_limit": cap}])
     (tmp_path / "theme").mkdir()
     monkeypatch.setattr(flows.templates, "simple_page", lambda *args: "content")
     monkeypatch.setattr(flows.templates, "page_shell", lambda *args, **kwargs:
                         '<body class="test"><script src="/site-config.js" defer></script>'
                         '<script type="module" src="/theme/app.mjs"></script></body>')
-    flows.install(tmp_path, ROOT, {"identity": {"name": "Merchant"}}, "minimal", [offer],
+    flows.install(tmp_path, ROOT, {"identity": {"name": "Merchant"}}, "minimal", [{**offer, "cart_quantity_limit": 1}],
                   api_origin="https://checkout.example.test/")
     assert 'apiBaseUrl = "https://checkout.example.test"' in (tmp_path / "storefront-config.js").read_text()
+    site = (tmp_path / 'site-config.js').read_text()
+    theme = json.JSONDecoder().raw_decode(site.split('window.CARTRAY_THEME = ', 1)[1])[0]
+    assert theme['catalogue']['products'][0]['cart_quantity_limit'] == 1
 
 
 def test_connected_flow_uses_explicit_merchant_path(tmp_path, monkeypatch):

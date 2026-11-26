@@ -22,6 +22,22 @@ class GelTests(unittest.TestCase):
     def setUp(self):
         self.gel = json.loads((ROOT / "gel/squirrel.json").read_text())
 
+    def test_optional_cart_cap_is_validated_without_reinterpreting_preview_maximum(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp) / 'catalogue.json'
+            catalogue = json.loads((ROOT / 'content/squirrel.json').read_text())
+            original = catalogue['products'][0]['max_quantity']
+            for value in (1, 100):
+                catalogue['products'][0]['cart_quantity_limit'] = value
+                source.write_text(json.dumps(catalogue))
+                load_inputs(ROOT / 'gel/squirrel.json', source)
+                self.assertEqual(catalogue['products'][0]['max_quantity'], original)
+            for value in (0, 101, True, None, 1.5):
+                catalogue['products'][0]['cart_quantity_limit'] = value
+                source.write_text(json.dumps(catalogue))
+                with self.assertRaisesRegex(ValueError, 'cart_quantity_limit'):
+                    load_inputs(ROOT / 'gel/squirrel.json', source)
+
     def test_shared_styles_do_not_include_reference_merchant_assets(self):
         with tempfile.TemporaryDirectory() as tmp:
             output = Path(tmp) / "northline"
