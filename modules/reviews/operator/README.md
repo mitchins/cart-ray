@@ -353,7 +353,10 @@ retained releases. The host storefront owns the canonical display page; CartRay 
 require an Astro product/store page generator or a second review application.
 
 For a retained installation, add the input through the existing **OFF**
-`reconfigure-catalogue` workflow, then normal build/deploy/verify. First-time store
+`reconfigure-catalogue` workflow, then normal build/deploy/verify. Its `merchant_inputs`
+must name an approved catalogue package **outside** `$INSTALL` (for example the merchant
+working copy); overlapping installation/input paths are rejected. The command snapshots
+that package into the installation. First-time store
 enablement requires an explicit `review_invitation_default_checked` boolean in that
 request (use `false` for an unchecked disclosure); a persisted legacy default is not
 treated as an explicit merchant choice. The choice is retained through retries and
@@ -423,13 +426,15 @@ keys, reopen an uncertain claim or resend history to roll back presentation.
 
 ### Refreshing an existing merchant's clients
 
-Use the retained merchant package and existing supported workflow, not a reference
+Use the merchant package and existing supported workflow, not a reference
 storefront build or manual JavaScript substitutions:
 
 ```sh
 uv run python modules/reviews/operator/operate.py --directory "$INSTALL" --credentials "$CREDS" pause
-# If first enabling store reviews, reconfigure-catalogue with the retained catalogue/lock/
-# mappings plus the optional store_review_subject; preserve the merchant's unchecked setting.
+# If first enabling store reviews, reconfigure-catalogue using an approved EXTERNAL
+# merchant_inputs package plus its catalogue/lock/mappings and store_review_subject.
+# Set review_invitation_default_checked explicitly (false for the EP unchecked setting).
+# Subsequent build --refresh-clients uses the resulting retained installation snapshot.
 uv run python modules/reviews/operator/operate.py --directory "$INSTALL" --credentials "$CREDS" \
   build --refresh-clients
 uv run python modules/reviews/operator/operate.py --directory "$INSTALL" --credentials "$CREDS" deploy
