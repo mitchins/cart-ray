@@ -33,8 +33,8 @@ def sort_day(source_date):
         return None
 
 
-def import_snapshot(data, *, digest, store, environment):
-    """Validate fully and use one atomic D1 batch for content and pointer."""
+def snapshot_statements(data, *, digest, store, environment):
+    """Validate and compile the existing guarded publication batch without executing it."""
     snapshot = load_snapshot(data, expected_sha256=digest, store=store, environment=environment)
     if len(snapshot["contributions"]) > 200 or len(snapshot["subjects"]) > 200:
         raise ValueError("snapshot exceeds local import batch limit")
@@ -204,6 +204,12 @@ def import_snapshot(data, *, digest, store, environment):
         "DO UPDATE SET snapshot_id=excluded.snapshot_id,revision=excluded.revision;",
         "DELETE FROM review_import_guard;",
     ]
+    return snapshot, lines
+
+
+def import_snapshot(data, *, digest, store, environment):
+    """Apply the validated publication batch to the legacy disposable local database."""
+    _, lines = snapshot_statements(data, digest=digest, store=store, environment=environment)
     with tempfile.NamedTemporaryFile(mode="w", suffix=".sql") as file:
         file.write("\n".join(lines))
         file.flush()

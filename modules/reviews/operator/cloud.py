@@ -15,15 +15,27 @@ class NoRedirect(urllib.request.HTTPRedirectHandler):
 
 
 class CloudError(RuntimeError):
-    """A bounded provider operation failed without exposing request credentials."""
+    """Safe public diagnostic with bounded provider evidence kept out of its text."""
+
+    def __init__(self, message, *, provider_errors=()):
+        super().__init__(message)
+        self.provider_errors = tuple(
+            {"code": item.get("code"), "message": item["message"][:4096]}
+            for item in list(provider_errors)[:16]
+            if isinstance(item, dict) and isinstance(item.get("message"), str)
+        )
+
+
+def provider_error_details(value):
+    """Normalize bounded provider evidence for both HTTP and envelope failures."""
+    errors = value.get("errors", []) if isinstance(value, dict) else []
+    return errors if isinstance(errors, list) else []
 
 
 def error_codes(value):
     """Extract bounded numeric provider codes without trusting response shapes."""
-    errors = value.get("errors", []) if isinstance(value, dict) else []
-    if not isinstance(errors, list):
-        return []
-    return [item["code"] for item in errors if isinstance(item, dict) and type(item.get("code")) is int]
+    return [item["code"] for item in provider_error_details(value)
+            if isinstance(item, dict) and type(item.get("code")) is int]
 
 
 class API:
@@ -47,15 +59,18 @@ class API:
                     return response.headers.get("Content-Type"), body
         except urllib.error.HTTPError as error:
             try:
-                codes = error_codes(json.loads(error.read(65536)))
+                payload = json.loads(error.read(65536))
+                codes = error_codes(payload)
+                details = provider_error_details(payload)
             except (ValueError, TypeError):
-                codes = []
+                codes, details = [], []
             remedy = (
                 "; account resource limit: supply approved capacity then resume"
                 if any(code in (7406, 10072) for code in codes)
                 else ""
             )
-            raise CloudError(f"Cloudflare {method} {path}: HTTP {error.code}, provider codes {codes}{remedy}") from None
+            raise CloudError(f"Cloudflare {method} {path}: HTTP {error.code}, provider codes {codes}{remedy}",
+                             provider_errors=details) from None
         except (urllib.error.URLError, TimeoutError):
             raise CloudError(f"Cloudflare {method} {path}: unavailable; retry the same command") from None
         try:
@@ -66,7 +81,8 @@ class API:
             raise CloudError(f"Cloudflare {method} {path}: malformed provider response")
         if result.get("success") is not True:
             codes = error_codes(result)
-            raise CloudError(f"Cloudflare {method} {path}: provider codes {codes}")
+            raise CloudError(f"Cloudflare {method} {path}: provider codes {codes}",
+                             provider_errors=provider_error_details(result))
         return result if envelope else result.get("result")
 
     def queue_listing(self):
@@ -119,18 +135,22 @@ class API:
                 return rows
         raise CloudError("resource list exceeds operator bound")
 
-    def query(self, database, sql, params=()):
-        result = self.request(f"d1/database/{database}/query", "POST", {"sql": sql, "params": list(params)})
-        if (
-            not isinstance(result, list)
-            or not result
-            or any(not isinstance(row, dict) or row.get("success") is not True for row in result)
-        ):
+    def query_results(self, database, body):
+        result = self.request(f"d1/database/{database}/query", "POST", body)
+        if (not isinstance(result, list) or not result
+                or any(not isinstance(row, dict) or row.get("success") is not True for row in result)):
             raise CloudError("D1 operator query did not succeed")
-        rows = result[0].get("results", [])
-        if not isinstance(rows, list) or any(not isinstance(row, dict) for row in rows):
+        rows = [row.get("results", []) for row in result]
+        if any(not isinstance(batch, list) or any(not isinstance(row, dict) for row in batch) for batch in rows):
             raise CloudError("D1 operator query returned malformed rows")
         return rows
+
+    def batch(self, database, statements):
+        """Keep generated statements in one explicit REST batch, without file chunking."""
+        return self.query_results(database, {"batch": [{"sql": sql} for sql in statements]})
+
+    def query(self, database, sql, params=()):
+        return self.query_results(database, {"sql": sql, "params": list(params)})[0]
 
     def upload(self, name, modules, metadata, create=False):
         boundary = "----cartray-operator-" + secrets.token_hex(16)

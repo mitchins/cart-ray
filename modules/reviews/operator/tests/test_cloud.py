@@ -195,3 +195,29 @@ def test_queue_pagination_uses_provider_total_pages_and_includes_later_queues():
     with patch.object(api, "request", return_value={"result": first, "result_info": {"total_pages": 1}}) as request:
         assert api.listing("queues") == first
     request.assert_called_once_with("queues?page=1", envelope=True)
+
+
+def test_explicit_batch_is_one_request_and_keeps_statement_readbacks():
+    api = cloud.API("a" * 32, "private-key")
+    response = [{"success": True, "results": []}, {"success": True, "results": [{"n": 1}]}]
+    with patch.object(api, "request", return_value=response) as request:
+        assert api.batch("selected", ["INSERT INTO known VALUES (1);", "SELECT COUNT(*) n FROM known;"]) == [
+            [], [{"n": 1}]]
+        request.assert_called_once_with("d1/database/selected/query", "POST", {"batch": [
+            {"sql": "INSERT INTO known VALUES (1);"}, {"sql": "SELECT COUNT(*) n FROM known;"}]})
+
+
+def test_provider_evidence_is_bounded_and_not_in_public_error_text():
+    detail = 'qualification: late publication failure; confidential-provider-detail'
+    response = urllib.error.HTTPError('https://provider', 400, 'Rejected', {}, io.BytesIO(json.dumps({
+        'errors': [{'code': 7500, 'message': detail}]}).encode()))
+    api = cloud.API('a' * 32, 'private-key')
+    with patch.object(cloud.urllib.request, 'build_opener', return_value=Opener(response)):
+        with pytest.raises(cloud.CloudError) as caught:
+            api.batch('selected', ['SELECT 1;'])
+    assert caught.value.provider_errors == ({'code': 7500, 'message': detail},)
+    assert 'confidential' not in str(caught.value)
+    assert 'private-key' not in str(caught.value)
+    bounded = cloud.CloudError('safe', provider_errors=[{'code': 7500, 'message': 'x' * 5000}] * 20)
+    assert len(bounded.provider_errors) == 16
+    assert len(bounded.provider_errors[0]['message']) == 4096

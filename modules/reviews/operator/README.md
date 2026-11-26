@@ -324,3 +324,9 @@ workflow. No provisioning or migrations are needed. Compare retained records/key
 restore only the previously authorized TEST mode through the existing explicit activation.
 Do not deploy this native renderer merely to consume an independent static cart/client update.
 A compatible rollback uses the recorded release and its retained branding snapshot, never a D1 rewind.
+
+## Approved historical snapshot publication
+
+For an existing test installation, see [APPROVED_SNAPSHOTS.md](APPROVED_SNAPSHOTS.md)
+for the explicitly authorised `apply-review-snapshot` operation. This is separate from
+native Reviews setup and requires exact artifact, target and content approval.

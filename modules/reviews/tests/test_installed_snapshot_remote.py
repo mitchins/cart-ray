@@ -1,0 +1,238 @@
+"""The opt-in remote runner is prepared safely without using cloud credentials."""
+
+import importlib.util
+import json
+import sqlite3
+import sys
+from pathlib import Path
+from unittest.mock import Mock
+
+import pytest
+
+MODULE = Path(__file__).resolve().parents[1]
+spec = importlib.util.spec_from_file_location("snapshot_remote_runner", MODULE / "tests/installed_snapshot_remote.py")
+runner = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(runner)
+
+ACCOUNT = "a" * 32
+DATABASE = "11111111-2222-3333-4444-555555555555"
+NAME = "cartray-snapshot-proof-synthetic-test"
+
+
+class SQLiteAPI(runner.API):
+    """Exercise the exact API.batch wire shape; this does not model hosted atomicity."""
+
+    def __init__(self):
+        super().__init__(ACCOUNT, "private-not-printed")
+        self.db = sqlite3.connect(":memory:")
+        self.db.row_factory = sqlite3.Row
+        self.writes = 0
+
+    def request(self, path, method="GET", data=None, **_kwargs):
+        assert path.startswith("d1/database/" + DATABASE)
+        if method == "GET":
+            return {"uuid": DATABASE, "name": NAME}
+        if "batch" not in data:
+            return [{"success": True, "results": [dict(row) for row in self.db.execute(data["sql"])]}]
+        self.writes += 1
+        self.db.execute("BEGIN")
+        try:
+            result = [{"success": True, "results": [dict(row) for row in self.db.execute(item["sql"])]}
+                      for item in data["batch"]]
+            self.db.commit()
+            return result
+        except sqlite3.IntegrityError as error:
+            self.db.rollback()
+            raise runner.CloudError("D1 test SQL rejection", provider_errors=[{"message": str(error)}]) from None
+
+
+@pytest.fixture
+def api():
+    value = SQLiteAPI()
+    yield value
+    value.db.close()
+
+
+def test_synthetic_full_protocol_without_remote_calls(api, tmp_path):
+    path = tmp_path / "receipt.json"
+    receipt = runner.qualify(api, DATABASE, NAME, path)
+    assert receipt["status"] == "PASS"
+    assert all(receipt["results"].values())
+    assert receipt["fixture_id"] == "approved-synthetic.json"
+    assert len(receipt["fixture_sha256"]) == 64
+    assert receipt["payloads"]["original"]["sha256"] == receipt["payloads"]["replay"]["sha256"]
+    assert "private-not-printed" not in path.read_text()
+    assert "body" not in path.read_text()
+    assert path.stat().st_mode & 0o777 == 0o600
+    with pytest.raises(ValueError, match="never overwritten"):
+        runner.qualify(api, DATABASE, NAME, path)
+
+
+def test_nonempty_target_is_rejected_without_writing(api, tmp_path):
+    api.db.execute("CREATE TABLE existing_customer_data (id TEXT)")
+    with pytest.raises(ValueError, match="not empty"):
+        runner.qualify(api, DATABASE, NAME, tmp_path / "receipt.json")
+    assert api.writes == 0
+
+
+def test_actual_target_identity_is_checked_before_schema_access(api):
+    api.request = Mock(return_value={"uuid": "wrong", "name": NAME})
+    with pytest.raises(ValueError, match="identity"):
+        runner.assert_empty_target(api, DATABASE, NAME)
+    api.request.assert_called_once()
+
+
+@pytest.mark.parametrize("account,database,name,ack", [
+    (ACCOUNT, DATABASE, NAME, False), ("wrong", DATABASE, NAME, True),
+    (ACCOUNT, "wrong", NAME, True), (ACCOUNT, DATABASE, "merchant-production", True),
+])
+def test_target_arguments_require_disposable_scope(account, database, name, ack):
+    with pytest.raises(ValueError, match="explicit disposable"):
+        runner.target_arguments(account, database, name, ack)
+
+
+def test_private_credential_file_is_required(tmp_path):
+    file = tmp_path / "credentials.json"
+    file.write_text(json.dumps({"cloudflare_api_token": "test-token"}))
+    file.chmod(0o600)
+    assert runner.credentials(file) == "test-token"
+    file.chmod(0o644)
+    with pytest.raises(ValueError, match="chmod 600"):
+        runner.credentials(file)
+    file.chmod(0o600)
+    file.write_text(json.dumps({"cloudflare_api_token": "test-token", "stripe_test_key": "unneeded"}))
+    with pytest.raises(ValueError, match="only cloudflare_api_token"):
+        runner.credentials(file)
+
+
+@pytest.mark.parametrize("error", [
+    runner.CloudError("network unavailable"),
+    runner.CloudError("provider error", provider_errors=[{"code": 7500, "message": "internal platform error"}]),
+    runner.CloudError("provider error", provider_errors=[{"message": "SQLITE_CONSTRAINT"}]),
+])
+def test_generic_failure_cannot_count_as_atomicity_proof(error):
+    api = Mock()
+    api.batch.side_effect = error
+    api.query.return_value = []
+    with pytest.raises(ValueError, match="inconclusive rejection"):
+        runner.rejected(api, DATABASE, {"sql": ["synthetic"], "expected": {}}, {}, "negative")
+
+
+def test_failure_receipt_retains_hold_without_leaking_provider_message(api, tmp_path):
+    original = api.batch
+
+    def fail(sql_database, sql):
+        if any("review_publications VALUES" in item for item in sql):
+            raise runner.CloudError("unavailable", provider_errors=[{"message": "private provider diagnostic"}])
+        return original(sql_database, sql)
+
+    api.batch = fail
+    receipt = tmp_path / "held.json"
+    with pytest.raises(runner.CloudError):
+        runner.qualify(api, DATABASE, NAME, receipt)
+    value = json.loads(receipt.read_text())
+    assert value["status"] == "HOLD"
+    assert value["failure"] == "unavailable"
+    assert "private provider diagnostic" not in receipt.read_text()
+
+
+def test_cli_requires_explicit_acknowledgement(monkeypatch):
+    monkeypatch.setattr(sys, "argv", ["installed_snapshot_remote.py"])
+    with pytest.raises(SystemExit):
+        runner.main([])
+
+
+@pytest.mark.parametrize("schema", [
+    "CREATE VIEW existing_view AS SELECT 1 id",
+    "CREATE TABLE xcf_customer_data (id TEXT)",
+    "CREATE TABLE _cfXcustomer_data (id TEXT)",
+])
+def test_any_user_schema_object_is_rejected_before_first_write(api, tmp_path, schema):
+    api.db.execute(schema)
+    with pytest.raises(ValueError, match="not empty"):
+        runner.qualify(api, DATABASE, NAME, tmp_path / "receipt.json")
+    assert api.writes == 0
+
+
+def test_legitimate_internal_prefix_does_not_hide_unrelated_schema(api):
+    api.db.execute("CREATE TABLE _cf_METADATA (id TEXT)")
+    runner.assert_empty_target(api, DATABASE, NAME)
+    api.db.execute("CREATE VIEW visible_to_operator AS SELECT 1 id")
+    with pytest.raises(ValueError, match="not empty"):
+        runner.assert_empty_target(api, DATABASE, NAME)
+    assert api.writes == 0
+
+
+@pytest.mark.parametrize("scenario,wrong_message", [
+    ("late_publication_failure", "CHECK constraint failed: ok = 1"),
+    ("silent_skip_count_guard", "qualification: late publication failure"),
+    ("conflicting_digest", "qualification: late publication failure"),
+])
+def test_constraint_from_wrong_scenario_is_inconclusive(scenario, wrong_message):
+    api = Mock()
+    api.batch.side_effect = runner.CloudError("SQL rejected", provider_errors=[{"message": wrong_message}])
+    api.query.return_value = []
+    with pytest.raises(ValueError, match="inconclusive rejection"):
+        runner.rejected(api, DATABASE, {"sql": ["synthetic"], "expected": {}}, {}, scenario)
+
+
+def test_swapped_late_failure_error_records_hold(api, tmp_path):
+    original = api.batch
+
+    def swap_late_failure(database, sql):
+        late_snapshot = "CAST(X'7468726565' AS TEXT)"
+        if (any(late_snapshot in statement for statement in sql)
+                and any("review_publications VALUES" in statement for statement in sql)):
+            raise runner.CloudError("SQL rejected", provider_errors=[{"message": "CHECK constraint failed: ok = 1"}])
+        return original(database, sql)
+
+    api.batch = swap_late_failure
+    path = tmp_path / "swapped-error.json"
+    with pytest.raises(ValueError, match="inconclusive rejection"):
+        runner.qualify(api, DATABASE, NAME, path)
+    receipt = json.loads(path.read_text())
+    assert receipt["status"] == "HOLD"
+    assert "late_failure_rollback" not in receipt["results"]
+
+
+def test_receipt_parent_file_fails_before_any_provider_call(tmp_path):
+    parent = tmp_path / "not-a-directory"
+    parent.write_text("retained file")
+    api = Mock()
+    with pytest.raises(FileExistsError):
+        runner.qualify(api, DATABASE, NAME, parent / "receipt.json")
+    assert api.mock_calls == []
+
+
+def test_unwritable_receipt_staging_fails_before_any_provider_call(tmp_path, monkeypatch):
+    api = Mock()
+    monkeypatch.setattr(runner.tempfile, "NamedTemporaryFile", Mock(side_effect=PermissionError("not writable")))
+    with pytest.raises(PermissionError, match="not writable"):
+        runner.qualify(api, DATABASE, NAME, tmp_path / "receipt.json")
+    assert api.mock_calls == []
+
+
+def test_broken_receipt_symlink_is_rejected_before_any_provider_call(tmp_path):
+    path = tmp_path / "receipt.json"
+    path.symlink_to(tmp_path / "missing-destination.json")
+    api = Mock()
+    with pytest.raises(ValueError, match="never overwritten"):
+        runner.qualify(api, DATABASE, NAME, path)
+    assert api.mock_calls == []
+    assert path.is_symlink()
+
+
+def test_receipt_preflight_creates_private_parent_and_cleans_staging(tmp_path, monkeypatch):
+    path = tmp_path / "private" / "receipt.json"
+    real_fsync = runner.os.fsync
+    checked = []
+
+    def check_fsync(fd):
+        checked.append(runner.os.fstat(fd).st_mode & 0o777)
+        return real_fsync(fd)
+
+    monkeypatch.setattr(runner.os, "fsync", check_fsync)
+    runner.preflight_receipt(path)
+    assert checked == [0o600]
+    assert path.parent.stat().st_mode & 0o777 == 0o700
+    assert list(path.parent.iterdir()) == []

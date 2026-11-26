@@ -2141,6 +2141,10 @@ def main():
     activation.add_argument("--enable-test-delivery", action="store_true")
     rollback = commands.add_parser("rollback", help="compatible recorded Worker versions only; never rewind D1")
     rollback.add_argument("--release", type=int, default=-2, help="inventory release index (default previous)")
+    snapshot = commands.add_parser("apply-review-snapshot", help="explicit approved test-only snapshot application")
+    snapshot.add_argument("--snapshot", type=Path, required=True)
+    snapshot.add_argument("--approval", type=Path, required=True)
+    snapshot.add_argument("--approval-sha256", required=True)
     request = commands.add_parser("request", help="operator-side call to the existing private Reviews service")
     request.add_argument("--path", required=True)
     request.add_argument("--method", choices=["GET", "POST"], default="GET")
@@ -2188,6 +2192,9 @@ def main():
                     if args.merchant_inputs:
                         installation.update_merchant_inputs(args.merchant_inputs)
                     result = installation.build()
+                elif args.command == "apply-review-snapshot":
+                    from installed_snapshot import apply
+                    result = apply(installation, args.snapshot, args.approval, args.approval_sha256)
                 elif args.command == "request":
                     result = installation.private(
                         "REVIEWS",
